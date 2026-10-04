@@ -20,15 +20,24 @@ export default function AdminDashboard({ onBackToApp }) {
   
   // Modal Nhập Kho Nhanh
   const [isInwardModalOpen, setIsInwardModalOpen] = useState(false);
-  const [selectedIngredient, setSelectedIngredient] = useState('');
+  const [selectedMaterial, setSelectedMaterial] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState('');
+  const [branches, setBranches] = useState([]);
   const [inwardQuantity, setInwardQuantity] = useState('');
   const [inwardCost, setInwardCost] = useState('');
+  const [inwardExpired, setInwardExpired] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const authHeaders = () => ({
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
+  });
 
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/dashboard/stats`);
+      const res = await fetch(`${API_BASE}/admin/dashboard/stats`, { headers: authHeaders() });
       const result = await res.json();
       if (result.success) {
         setData(result.data);
@@ -40,34 +49,54 @@ export default function AdminDashboard({ onBackToApp }) {
     }
   };
 
+  const fetchBranches = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/branches`, { headers: authHeaders() });
+      const result = await res.json();
+      if (result.success && result.data.length > 0) {
+        setBranches(result.data);
+        setSelectedBranch(String(result.data[0].id));
+      }
+    } catch (error) {
+      console.error('Lỗi tải chi nhánh:', error);
+    }
+  };
+
   useEffect(() => {
     fetchStats();
+    fetchBranches();
   }, []);
 
   const handleInwardSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedIngredient || !inwardQuantity) {
-      return alert('Vui lòng chọn nguyên liệu và nhập số lượng');
+    if (!selectedMaterial || !inwardQuantity || !selectedBranch) {
+      return alert('Vui lòng chọn chi nhánh, nguyên liệu và nhập số lượng');
+    }
+    if (!inwardCost) {
+      return alert('Vui lòng nhập đơn giá vốn của lô hàng');
     }
 
     setIsSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/admin/inventory/inward`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
-          ingredient_id: Number(selectedIngredient),
+          branch_id: Number(selectedBranch),
+          material_id: Number(selectedMaterial),
           quantity: Number(inwardQuantity),
-          cost_per_unit: inwardCost ? Number(inwardCost) : null,
+          unit_cost: Number(inwardCost),
+          expired_at: inwardExpired || null,
         }),
       });
       const result = await res.json();
       if (result.success) {
         alert(result.message);
         setIsInwardModalOpen(false);
-        setSelectedIngredient('');
+        setSelectedMaterial('');
         setInwardQuantity('');
         setInwardCost('');
+        setInwardExpired('');
         fetchStats();
       } else {
         alert(result.message || 'Lỗi nhập kho');
@@ -90,7 +119,7 @@ export default function AdminDashboard({ onBackToApp }) {
   const overview = data?.overview || {};
   const topProducts = data?.top_products || [];
   const lowStockAlerts = data?.low_stock_alerts || [];
-  const allIngredients = data?.all_ingredients || [];
+  const allMaterials = data?.all_materials || [];
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-800">
@@ -248,17 +277,17 @@ export default function AdminDashboard({ onBackToApp }) {
                   Tồn kho tất cả nguyên vật liệu đều an toàn!
                 </div>
               ) : (
-                lowStockAlerts.map((ing) => (
-                  <div key={ing.id} className="p-3 bg-red-50 border border-red-200 rounded-xl space-y-1.5">
+                lowStockAlerts.map((mat) => (
+                  <div key={mat.id} className="p-3 bg-red-50 border border-red-200 rounded-xl space-y-1.5">
                     <div className="flex justify-between items-center text-xs font-bold text-red-900">
-                      <span>{ing.name}</span>
-                      <span>{Number(ing.current_stock).toLocaleString('vi-VN')} {ing.unit}</span>
+                      <span>{mat.name}</span>
+                      <span>{Number(mat.current_stock).toLocaleString('vi-VN')} {mat.unit}</span>
                     </div>
                     <div className="flex justify-between items-center text-[11px] text-red-700">
-                      <span>Mức tối thiểu: {Number(ing.min_stock_alert).toLocaleString('vi-VN')} {ing.unit}</span>
+                      <span>Mức tối thiểu: {Number(mat.minimum_stock).toLocaleString('vi-VN')} {mat.unit}</span>
                       <button
                         onClick={() => {
-                          setSelectedIngredient(ing.id);
+                          setSelectedMaterial(mat.id);
                           setIsInwardModalOpen(true);
                         }}
                         className="underline font-bold hover:text-red-900"
@@ -290,25 +319,25 @@ export default function AdminDashboard({ onBackToApp }) {
                   <th className="p-3">Đơn vị</th>
                   <th className="p-3">Tồn kho hiện tại</th>
                   <th className="p-3">Ngưỡng cảnh báo</th>
-                  <th className="p-3">Đơn giá vốn</th>
+                  <th className="p-3">Loại</th>
                   <th className="p-3 text-right">Trạng thái</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {allIngredients.map((ing) => {
-                  const isLow = Number(ing.current_stock) <= Number(ing.min_stock_alert);
+                {allMaterials.map((mat) => {
+                  const isLow = Number(mat.current_stock) <= Number(mat.minimum_stock);
                   return (
-                    <tr key={ing.id} className="hover:bg-slate-50">
-                      <td className="p-3 font-bold text-slate-800">{ing.name}</td>
-                      <td className="p-3 text-slate-500">{ing.unit}</td>
+                    <tr key={mat.id} className="hover:bg-slate-50">
+                      <td className="p-3 font-bold text-slate-800">{mat.name}</td>
+                      <td className="p-3 text-slate-500">{mat.unit}</td>
                       <td className="p-3 font-semibold text-slate-900">
-                        {Number(ing.current_stock).toLocaleString('vi-VN')}
+                        {Number(mat.current_stock).toLocaleString('vi-VN')}
                       </td>
                       <td className="p-3 text-slate-500">
-                        {Number(ing.min_stock_alert).toLocaleString('vi-VN')}
+                        {Number(mat.minimum_stock).toLocaleString('vi-VN')}
                       </td>
                       <td className="p-3 text-slate-600">
-                        {Number(ing.cost_per_unit || 0).toLocaleString('vi-VN')} đ
+                        {mat.type === 'raw' ? 'Thô' : mat.type === 'semi_finished' ? 'Bán thành phẩm' : 'Tiêu hao'}
                       </td>
                       <td className="p-3 text-right">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -333,17 +362,32 @@ export default function AdminDashboard({ onBackToApp }) {
             <h3 className="font-bold text-slate-900 text-base">Phiếu Nhập Nguyên Liệu Vào Kho</h3>
             <form onSubmit={handleInwardSubmit} className="space-y-3 text-xs">
               <div>
+                <label className="font-semibold text-slate-700 block mb-1">Chi nhánh nhập kho (*):</label>
+                <select
+                  value={selectedBranch}
+                  onChange={(e) => setSelectedBranch(e.target.value)}
+                  className="w-full p-2 border rounded-lg bg-white"
+                  required
+                >
+                  <option value="">-- Chọn chi nhánh --</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="font-semibold text-slate-700 block mb-1">Chọn nguyên vật liệu (*):</label>
                 <select
-                  value={selectedIngredient}
-                  onChange={(e) => setSelectedIngredient(e.target.value)}
+                  value={selectedMaterial}
+                  onChange={(e) => setSelectedMaterial(e.target.value)}
                   className="w-full p-2 border rounded-lg bg-white"
                   required
                 >
                   <option value="">-- Chọn nguyên liệu --</option>
-                  {allIngredients.map((ing) => (
-                    <option key={ing.id} value={ing.id}>
-                      {ing.name} ({ing.unit}) - Hiện tồn: {Number(ing.current_stock).toLocaleString('vi-VN')}
+                  {allMaterials.map((mat) => (
+                    <option key={mat.id} value={mat.id}>
+                      {mat.name} ({mat.unit}) - Hiện tồn: {Number(mat.current_stock).toLocaleString('vi-VN')}
                     </option>
                   ))}
                 </select>
@@ -362,21 +406,32 @@ export default function AdminDashboard({ onBackToApp }) {
                     className="w-full p-2 pr-14 border rounded-lg font-bold text-blue-600"
                     required
                   />
-                  {selectedIngredient && (
+                  {selectedMaterial && (
                     <span className="absolute right-3 top-2.5 text-slate-400 font-bold text-sm pointer-events-none">
-                      {allIngredients.find(ing => ing.id.toString() === selectedIngredient.toString())?.unit}
+                      {allMaterials.find(mat => mat.id.toString() === selectedMaterial.toString())?.unit}
                     </span>
                   )}
                 </div>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Đơn giá vốn mới (không bắt buộc):</label>
+                <label className="font-semibold text-slate-700 block mb-1">Đơn giá vốn của lô hàng (*):</label>
                 <input
                   type="number"
                   placeholder="Đơn giá nhập..."
                   value={inwardCost}
                   onChange={(e) => setInwardCost(e.target.value)}
+                  className="w-full p-2 border rounded-lg"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Hạn sử dụng (nếu có):</label>
+                <input
+                  type="date"
+                  value={inwardExpired}
+                  onChange={(e) => setInwardExpired(e.target.value)}
                   className="w-full p-2 border rounded-lg"
                 />
               </div>

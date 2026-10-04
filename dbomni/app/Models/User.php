@@ -22,7 +22,6 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'role', // Giữ lại cột role cũ tạm thời để tránh lỗi các tính năng đã code trước đó
     ];
 
     /**

@@ -9,20 +9,20 @@ use Illuminate\Http\JsonResponse;
 class MenuController extends Controller
 {
     /**
-     * Lấy toàn bộ thực đơn kèm danh mục và tùy chọn cho Zalo Mini App
+     * Lấy toàn bộ thực đơn kèm danh mục và tùy chọn cho Zalo Mini App.
+     *
+     * Gói 1 (2026-10-04): Sửa orderBy('order') -> orderBy('sort_order') cho khớp
+     * schema bảng categories; xóa query thừa không dùng tới.
      */
     public function index(): JsonResponse
     {
         $menu = Category::where('is_active', true)
-            ->orderBy('order', 'asc')
+            ->orderBy('sort_order', 'asc')
             ->with(['products' => function ($query) {
                 $query->where('is_active', true)
-                      ->with('options');
+                    ->with('options');
             }])
             ->get();
-
-        // Eager load cả products và options của từng product
-        $categories = \App\Models\Category::with(['products.options'])->get();
 
         return response()->json([
             'success' => true,

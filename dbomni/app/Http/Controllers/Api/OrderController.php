@@ -3,27 +3,28 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Batch;
 use App\Models\Order;
-use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\ProductOption;
-use App\Models\Recipe;
-use App\Models\Shift;
 use App\Models\Voucher;
+use App\Services\InventoryService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use App\Services\InventoryService;
 
 class OrderController extends Controller
 {
     /**
-     * Tiếp nhận đơn hàng từ Zalo Mini App / POS, tính toán Voucher và trừ tồn kho tự động (BOM + FIFO)
+     * Tiếp nhận đơn hàng từ Zalo Mini App / POS, tính toán Voucher và trừ tồn kho tự động (BOM + FIFO).
+     *
+     * Gói 1 (2026-10-04):
+     * - Sửa $product->price -> $product->base_price (khớp schema).
+     * - Lưu đủ product_name/price/note vào order_items (bảng yêu cầu NOT NULL).
+     * - Trừ kho qua InventoryService (1 nơi duy nhất, trừ TRỰC TIẾP khi bán).
      */
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, InventoryService $inventoryService): JsonResponse
     {
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
@@ -36,54 +37,36 @@ class OrderController extends Controller
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.product_option_id' => 'nullable|exists:product_options,id',
             'items.*.quantity' => 'required|integer|min:1',
+            'items.*.note' => 'nullable|string|max:255',
         ]);
 
         try {
-            $order = DB::transaction(function () use ($validated) {
+            $order = DB::transaction(function () use ($validated, $inventoryService) {
                 $subtotal = 0;
                 $orderItemsData = [];
-                $materialDeductions = [];
 
-                // 1. Tính giá món và tổng hợp định lượng nguyên liệu cần trừ
+                // 1. Tính giá món
                 foreach ($validated['items'] as $item) {
                     $product = Product::findOrFail($item['product_id']);
-                    $option = !empty($item['product_option_id']) 
-                        ? ProductOption::findOrFail($item['product_option_id']) 
+                    $option = !empty($item['product_option_id'])
+                        ? ProductOption::findOrFail($item['product_option_id'])
                         : null;
 
-                    $unitPrice = $product->price + ($option ? $option->additional_price : 0);
+                    $unitPrice = $product->base_price + ($option ? $option->additional_price : 0);
                     $itemTotal = $unitPrice * $item['quantity'];
                     $subtotal += $itemTotal;
 
                     $orderItemsData[] = [
                         'product_id' => $product->id,
                         'product_option_id' => $option ? $option->id : null,
-                        'quantity' => $item['quantity'],
+                        'product_name' => $product->name,
+                        'price' => $product->base_price,
                         'unit_price' => $unitPrice,
+                        'quantity' => $item['quantity'],
+                        'subtotal' => $itemTotal,
                         'total_price' => $itemTotal,
+                        'note' => $item['note'] ?? null,
                     ];
-
-                    // Bóc tách công thức món chính
-                    $recipes = Recipe::where('product_id', $product->id)
-                        ->whereNull('product_option_id')
-                        ->get();
-
-                    foreach ($recipes as $recipe) {
-                        $needed = $recipe->quantity * $item['quantity'];
-                        $materialDeductions[$recipe->material_id] = ($materialDeductions[$recipe->material_id] ?? 0) + $needed;
-                    }
-
-                    // Bóc tách công thức tùy chọn / size (nếu có)
-                    if ($option) {
-                        $optionRecipes = Recipe::where('product_id', $product->id)
-                            ->where('product_option_id', $option->id)
-                            ->get();
-
-                        foreach ($optionRecipes as $recipe) {
-                            $needed = $recipe->quantity * $item['quantity'];
-                            $materialDeductions[$recipe->material_id] = ($materialDeductions[$recipe->material_id] ?? 0) + $needed;
-                        }
-                    }
                 }
 
                 // 2. Tính toán chiết khấu Voucher (nếu có)
@@ -128,53 +111,28 @@ class OrderController extends Controller
 
                 $finalAmount = $subtotal - $discountAmount;
 
-                // 3. Khấu trừ tồn kho theo lô (FIFO: Hạn dùng gần nhất trừ trước)
-                foreach ($materialDeductions as $materialId => $quantityNeeded) {
-                    $batches = Batch::where('branch_id', $validated['branch_id'])
-                        ->where('material_id', $materialId)
-                        ->where('status', 'active')
-                        ->where('current_quantity', '>', 0)
-                        ->orderByRaw('expired_at IS NULL, expired_at ASC')
-                        ->orderBy('id', 'ASC')
-                        ->lockForUpdate()
-                        ->get();
-
-                    $totalAvailable = $batches->sum('current_quantity');
-                    if ($totalAvailable < $quantityNeeded) {
-                        throw new Exception("Nguyên vật liệu mã #{$materialId} không đủ tồn kho để đáp ứng đơn hàng.");
-                    }
-
-                    $remainingToDeduct = $quantityNeeded;
-                    foreach ($batches as $batch) {
-                        if ($remainingToDeduct <= 0) break;
-
-                        if ($batch->current_quantity >= $remainingToDeduct) {
-                            $batch->current_quantity -= $remainingToDeduct;
-                            if ($batch->current_quantity == 0) {
-                                $batch->status = 'exhausted';
-                            }
-                            $batch->save();
-                            $remainingToDeduct = 0;
-                        } else {
-                            $remainingToDeduct -= $batch->current_quantity;
-                            $batch->current_quantity = 0;
-                            $batch->status = 'exhausted';
-                            $batch->save();
-                        }
-                    }
-                }
+                // 3. Trừ kho trực tiếp khi bán (BOM + FIFO). Ném Exception nếu thiếu hàng.
+                $inventoryService->deductStock(
+                    $validated['branch_id'],
+                    array_map(fn($i) => [
+                        'product_id' => $i['product_id'],
+                        'product_option_id' => $i['product_option_id'] ?? null,
+                        'quantity' => $i['quantity'],
+                    ], $validated['items'])
+                );
 
                 // 4. Liên kết ca làm việc đang mở (nếu có)
-                $branchId = $validated['branch_id'] ?? 1;
-                $activeShift = \App\Models\Shift::where('branch_id', $branchId)
+                $activeShift = \App\Models\Shift::where('branch_id', $validated['branch_id'])
                     ->where('status', 'open')
                     ->latest()
                     ->first();
 
                 // 5. Tạo hóa đơn
                 $order = Order::create([
+                    'user_id' => $request->user()->id,
                     'branch_id' => $validated['branch_id'],
                     'shift_id' => $activeShift ? $activeShift->id : null,
+                    'order_number' => 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
                     'code' => 'HD-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
                     'customer_name' => $validated['customer_name'] ?? 'Khách lẻ',
                     'customer_phone' => $validated['customer_phone'] ?? null,
@@ -211,9 +169,12 @@ class OrderController extends Controller
     }
 
     /**
-     * Cập nhật tiến độ pha chế / trạng thái đơn hàng (KDS Workflow)
+     * Cập nhật tiến độ pha chế / trạng thái đơn hàng (KDS Workflow).
+     *
+     * Gói 1: BỎ trừ kho tại đây — kho đã trừ trực tiếp khi tạo đơn (store),
+     * trừ thêm lần nữa sẽ bị double-deduction.
      */
-    public function updateStatus(Request $request, string $id, InventoryService $inventoryService)
+    public function updateStatus(Request $request, string $id)
     {
         $request->validate([
             'status' => 'required|in:pending,processing,ready,completed,cancelled'
@@ -221,14 +182,8 @@ class OrderController extends Controller
 
         // Tìm đơn theo code hoặc id kèm theo danh sách món (items)
         $order = Order::with('items')->where('code', $id)->orWhere('id', $id)->firstOrFail();
-        $previousStatus = $order->status;
         $order->status = $request->status;
         $order->save();
-
-        // Tự động trừ kho nguyên liệu định lượng khi đơn chuyển sang completed
-        if ($request->status === 'completed' && $previousStatus !== 'completed') {
-            $inventoryService->deductStockForOrder($order);
-        }
 
         return response()->json([
             'success' => true,
@@ -238,9 +193,9 @@ class OrderController extends Controller
     }
 
     /**
-     * Hủy đơn hàng và tự động hoàn trả nguyên vật liệu vào kho
+     * Hủy đơn hàng và tự động hoàn trả nguyên vật liệu vào kho.
      */
-    public function cancel(Request $request, int $id): JsonResponse
+    public function cancel(Request $request, int $id, InventoryService $inventoryService): JsonResponse
     {
         $validated = $request->validate([
             'reason' => 'required|string|max:255',
@@ -250,7 +205,7 @@ class OrderController extends Controller
         $shouldRestock = $validated['restock'] ?? true;
 
         try {
-            $order = DB::transaction(function () use ($id, $validated, $shouldRestock) {
+            $order = DB::transaction(function () use ($id, $validated, $shouldRestock, $inventoryService) {
                 $order = Order::with('items')->lockForUpdate()->findOrFail($id);
 
                 if ($order->status === 'cancelled') {
@@ -259,44 +214,14 @@ class OrderController extends Controller
 
                 // Hoàn trả nguyên vật liệu theo BOM nếu restock = true
                 if ($shouldRestock) {
-                    $materialDeductions = [];
-
-                    foreach ($order->items as $item) {
-                        $recipes = Recipe::where('product_id', $item->product_id)
-                            ->whereNull('product_option_id')
-                            ->get();
-
-                        foreach ($recipes as $recipe) {
-                            $needed = $recipe->quantity * $item->quantity;
-                            $materialDeductions[$recipe->material_id] = ($materialDeductions[$recipe->material_id] ?? 0) + $needed;
-                        }
-
-                        if ($item->product_option_id) {
-                            $optionRecipes = Recipe::where('product_id', $item->product_id)
-                                ->where('product_option_id', $item->product_option_id)
-                                ->get();
-
-                            foreach ($optionRecipes as $recipe) {
-                                $needed = $recipe->quantity * $item->quantity;
-                                $materialDeductions[$recipe->material_id] = ($materialDeductions[$recipe->material_id] ?? 0) + $needed;
-                            }
-                        }
-                    }
-
-                    foreach ($materialDeductions as $materialId => $quantity) {
-                        $batch = Batch::where('branch_id', $order->branch_id)
-                            ->where('material_id', $materialId)
-                            ->orderBy('id', 'desc')
-                            ->first();
-
-                        if ($batch) {
-                            $batch->current_quantity += $quantity;
-                            if ($batch->status === 'exhausted' && $batch->current_quantity > 0) {
-                                $batch->status = 'active';
-                            }
-                            $batch->save();
-                        }
-                    }
+                    $inventoryService->restock(
+                        $order->branch_id ?? 1,
+                        $order->items->map(fn($item) => [
+                            'product_id' => $item->product_id,
+                            'product_option_id' => $item->product_option_id,
+                            'quantity' => $item->quantity,
+                        ])->toArray()
+                    );
                 }
 
                 $order->status = 'cancelled';
@@ -320,6 +245,27 @@ class OrderController extends Controller
                 'message' => $e->getMessage(),
             ], 400);
         }
+    }
+
+    /**
+     * Đơn hàng đang hoạt động cho màn hình KDS (polling mỗi 3s từ frontend).
+     */
+    public function kdsOrders(Request $request): JsonResponse
+    {
+        $request->validate([
+            'branch_id' => 'required|exists:branches,id',
+        ]);
+
+        $orders = Order::with(['items.product', 'items.option'])
+            ->where('branch_id', $request->branch_id)
+            ->whereIn('status', ['pending', 'processing', 'ready'])
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $orders,
+        ]);
     }
 
     /**
