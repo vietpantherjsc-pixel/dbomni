@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+/* 1. Biến màu & font chuẩn toàn app */
+:root {
+  --color-brand: #059669;
+  --color-brand-hover: #047857;
+}
+
+/* 2. Utility ẩn thanh cuộn */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 3. Thiết lập các UI Class dùng lại (Reusable CSS Classes) */
+@utility mobile-shell {
+  width: 100%;
+  max-width: 420px;
+  height: 100vh;
+  background-color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  position: relative;
+  @media (min-width: 640px) {
+    height: 860px;
+    border-radius: 36px;
+    border: 1px solid #334155;
+  }
+}
+
+@utility btn-primary {
+  background-color: var(--color-brand);
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 1rem;
+  transition: all 0.2s;
+  box-shadow: 0 4px 6px -1px rgba(5, 150, 105, 0.2);
+  &:hover {
+    background-color: var(--color-brand-hover);
+  }
+  &:active {
+    transform: scale(0.98);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+@utility btn-icon-round {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  background-color: var(--color-brand);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: all 0.15s;
+  &:hover {
+    background-color: var(--color-brand-hover);
+  }
+}
+
+@utility card-surface {
+  background-color: #ffffff;
+  border: 1px solid #f1f5f9;
+  border-radius: 1.5rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.02);
+  transition: border-color 0.2s, transform 0.15s;
+  &:hover {
+    border-color: #a7f3d0;
+  }
+  &:active {
+    transform: scale(0.99);
+  }
+}
+
+@utility badge-emerald {
+  font-size: 9px;
+  font-weight: 700;
+  color: #047857;
+  background-color: #ecfdf5;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.375rem;
+  flex-shrink: 0;
+}
+
+@utility modal-sheet {
+  background-color: #ffffff;
+  border-top-left-radius: 2rem;
+  border-top-right-radius: 2rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
