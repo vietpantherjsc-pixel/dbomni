@@ -17,6 +17,13 @@ import {
 
 const API_BASE = 'http://localhost/api';
 
+// Gói 1 (2026-10-04): fetch không tự gắn token như axios -> gắn thủ công
+const authHeaders = () => ({
+  'Accept': 'application/json',
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
+});
+
 export default function PosScreen({ onBackToApp }) {
   // Trạng thái Ca làm việc
   const [shift, setShift] = useState(null);
@@ -61,7 +68,7 @@ export default function PosScreen({ onBackToApp }) {
 
   const fetchCurrentShift = async () => {
     try {
-      const res = await fetch(`${API_BASE}/shifts/current`);
+      const res = await fetch(`${API_BASE}/shifts/current`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success && data.is_open) {
         setShift(data.data);
@@ -75,7 +82,7 @@ export default function PosScreen({ onBackToApp }) {
 
   const fetchMenu = async () => {
     try {
-      const res = await fetch(`${API_BASE}/menu`);
+      const res = await fetch(`${API_BASE}/menu`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) {
         setCategories(data.data);
@@ -92,7 +99,7 @@ export default function PosScreen({ onBackToApp }) {
     try {
       const res = await fetch(`${API_BASE}/shifts/open`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ cashier_name: cashierName, opening_cash: Number(openingCash) })
       });
       const data = await res.json();
@@ -112,7 +119,7 @@ export default function PosScreen({ onBackToApp }) {
     try {
       const res = await fetch(`${API_BASE}/shifts/${shift.id}/close`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ closing_cash_actual: Number(closingCashActual) })
       });
       const data = await res.json();
@@ -131,7 +138,7 @@ export default function PosScreen({ onBackToApp }) {
     try {
       const res = await fetch(`${API_BASE}/shifts/${shift.id}/expense`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ amount: Number(expenseAmount), reason: expenseReason })
       });
       const data = await res.json();
@@ -276,7 +283,7 @@ export default function PosScreen({ onBackToApp }) {
 
       const res = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();

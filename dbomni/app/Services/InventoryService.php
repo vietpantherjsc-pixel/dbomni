@@ -2,60 +2,121 @@
 
 namespace App\Services;
 
-use App\Models\Order;
-use App\Models\Ingredient;
+use App\Models\Batch;
 use App\Models\Recipe;
-use App\Models\InventoryLog;
+use Exception;
 use Illuminate\Support\Facades\DB;
 
+// Gói 1 (2026-10-04): Viết lại hoàn toàn theo hệ materials + batches.
+// - Trừ kho TRỰC TIẾP khi bán hàng (đúng spec v2 PH4), theo FIFO (lô hết hạn trước trừ trước).
+// - Tính cả định mức của tùy chọn (size/topping), không chỉ món chính.
+// - Hoàn kho khi hủy đơn: cộng trả vào lô mới nhất.
 class InventoryService
 {
     /**
-     * Tự động trừ nguyên vật liệu thô khi đơn hàng hoàn tất pha chế
+     * Tính tổng định mức nguyên liệu cần cho các dòng món.
+     *
+     * @param array $lines [['product_id' => int, 'product_option_id' => int|null, 'quantity' => int]]
+     * @return array [material_id => quantity]
      */
-    public function deductStockForOrder(Order $order): void
+    public function calculateNeeds(array $lines): array
     {
-        DB::transaction(function () use ($order) {
-            foreach ($order->items as $item) {
-                $recipes = Recipe::where('product_id', $item->product_id)->get();
+        $needs = [];
 
-                foreach ($recipes as $recipe) {
-                    $totalDeduct = $recipe->amount * $item->quantity;
+        foreach ($lines as $line) {
+            $productId = $line['product_id'];
+            $optionId = $line['product_option_id'] ?? null;
+            $qty = $line['quantity'];
 
-                    // Khóa dòng để tránh tranh chấp dữ liệu khi nhiều đơn bấm cùng lúc
-                    $ingredient = Ingredient::lockForUpdate()->find($recipe->ingredient_id);
-                    if ($ingredient) {
-                        $ingredient->current_stock -= $totalDeduct;
-                        $ingredient->save();
+            // Định mức của món chính
+            $recipes = Recipe::where('product_id', $productId)
+                ->whereNull('product_option_id')
+                ->get();
+            foreach ($recipes as $recipe) {
+                $needs[$recipe->material_id] = ($needs[$recipe->material_id] ?? 0) + $recipe->quantity * $qty;
+            }
 
-                        // Ghi lại lịch sử trừ kho
-                        InventoryLog::create([
-                            'ingredient_id' => $ingredient->id,
-                            'type' => 'auto_order',
-                            'quantity_change' => -$totalDeduct,
-                            'stock_after' => $ingredient->current_stock,
-                            'note' => "Trừ tự động từ đơn {$order->code} ({$item->quantity} món)",
-                        ]);
+            // Định mức của tùy chọn (VD: Size L +1 ly, thêm trân châu +30g)
+            if ($optionId) {
+                $optionRecipes = Recipe::where('product_id', $productId)
+                    ->where('product_option_id', $optionId)
+                    ->get();
+                foreach ($optionRecipes as $recipe) {
+                    $needs[$recipe->material_id] = ($needs[$recipe->material_id] ?? 0) + $recipe->quantity * $qty;
+                }
+            }
+        }
+
+        return $needs;
+    }
+
+    /**
+     * Trừ kho theo FIFO cho 1 chi nhánh. Ném Exception khi không đủ tồn kho.
+     *
+     * @param array $lines [['product_id' => int, 'product_option_id' => int|null, 'quantity' => int]]
+     */
+    public function deductStock(int $branchId, array $lines): void
+    {
+        $needs = $this->calculateNeeds($lines);
+
+        DB::transaction(function () use ($branchId, $needs) {
+            foreach ($needs as $materialId => $qtyNeeded) {
+                // Khóa dòng để tránh tranh chấp khi nhiều đơn bấm cùng lúc
+                $batches = Batch::where('branch_id', $branchId)
+                    ->where('material_id', $materialId)
+                    ->where('status', 'active')
+                    ->where('current_quantity', '>', 0)
+                    ->orderByRaw('expired_at IS NULL, expired_at ASC')
+                    ->orderBy('id', 'ASC')
+                    ->lockForUpdate()
+                    ->get();
+
+                if ($batches->sum('current_quantity') < $qtyNeeded) {
+                    throw new Exception("Nguyên vật liệu #{$materialId} không đủ tồn kho để đáp ứng đơn hàng.");
+                }
+
+                $remaining = $qtyNeeded;
+                foreach ($batches as $batch) {
+                    if ($remaining <= 0) {
+                        break;
                     }
+                    $deduct = min((float) $batch->current_quantity, $remaining);
+                    $batch->current_quantity -= $deduct;
+                    if ((float) $batch->current_quantity == 0) {
+                        $batch->status = 'exhausted';
+                    }
+                    $batch->save();
+                    $remaining -= $deduct;
                 }
             }
         });
     }
 
     /**
-     * Tính toán giá vốn (COGS) của 1 sản phẩm dựa trên công thức nguyên liệu
+     * Hoàn trả nguyên liệu vào lô mới nhất khi hủy đơn.
+     *
+     * @param array $lines [['product_id' => int, 'product_option_id' => int|null, 'quantity' => int]]
      */
-    public function calculateProductCost(int $productId): float
+    public function restock(int $branchId, array $lines): void
     {
-        $recipes = Recipe::with('ingredient')->where('product_id', $productId)->get();
-        $totalCost = 0;
+        $needs = $this->calculateNeeds($lines);
 
-        foreach ($recipes as $recipe) {
-            if ($recipe->ingredient) {
-                $totalCost += ($recipe->amount * $recipe->ingredient->cost_per_unit);
+        DB::transaction(function () use ($branchId, $needs) {
+            foreach ($needs as $materialId => $qty) {
+                $batch = Batch::where('branch_id', $branchId)
+                    ->where('material_id', $materialId)
+                    ->orderBy('id', 'desc')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($batch) {
+                    $batch->current_quantity += $qty;
+                    if ($batch->status === 'exhausted' && (float) $batch->current_quantity > 0) {
+                        $batch->status = 'active';
+                    }
+                    $batch->save();
+                }
             }
-        }
-
-        return round($totalCost, 2);
+        });
     }
 }

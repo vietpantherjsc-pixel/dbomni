@@ -153,8 +153,12 @@ class MenuDemoSeeder extends Seeder
         foreach ($products as $item) {
             $productPayload = [
                 'category_id' => $categoryMap[$item['cat_name']],
-                'price' => $item['price'],
             ];
+
+            // Gói 1: bảng products dùng base_price (không phải price)
+            if (Schema::hasColumn('products', 'base_price')) {
+                $productPayload['base_price'] = $item['price'];
+            }
 
             // Tự động gán các cột nếu bảng products có tồn tại
             if (Schema::hasColumn('products', 'description')) {
