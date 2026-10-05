@@ -14,4 +14,10 @@ class ProductOption extends Model
     {
         return $this->belongsTo(Product::class);
     }
+
+    // Gói 8c: Tùy chọn thuộc về một nhóm tùy chọn
+    public function group(): BelongsTo
+    {
+        return $this->belongsTo(OptionGroup::class, 'option_group_id');
+    }
 }

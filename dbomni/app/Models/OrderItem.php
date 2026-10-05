@@ -22,6 +22,8 @@ class OrderItem extends Model
         'quantity',
         'subtotal',
         'total_price',
+        'discount_amount',
+        'options', // Gói 7c: [{name, price}]
         'note',
     ];
 
@@ -30,6 +32,8 @@ class OrderItem extends Model
         'unit_price' => 'decimal:2',
         'subtotal' => 'decimal:2',
         'total_price' => 'decimal:2',
+        'discount_amount' => 'decimal:2',
+        'options' => 'array',
     ];
 
     // Một chi tiết thuộc về một đơn hàng

@@ -92,7 +92,77 @@ class AdminDashboardController extends Controller
                 'top_products' => $topProducts,
                 'low_stock_alerts' => $lowStockAlerts,
                 'all_materials' => $stockData->values(),
+                'sapo' => $this->sapoOverview($request, $branchId),
             ]
         ]);
+    }
+
+    /**
+     * Gói 2 (2026-10-04): Số liệu kiểu Sapo cho trang Tổng quan.
+     * - range: today | 7d | 30d
+     * - Các chỉ số chưa có dữ liệu (giảm giá, thuế, khách hàng) trả về null -> frontend hiện "N/A".
+     */
+    private function sapoOverview(Request $request, $branchId): array
+    {
+        $range = $request->query('range', 'today');
+        $from = match ($range) {
+            '7d' => now()->subDays(6)->startOfDay(),
+            '30d' => now()->subDays(29)->startOfDay(),
+            default => now()->startOfDay(),
+        };
+
+        $baseQuery = Order::where('created_at', '>=', $from);
+        if ($branchId) {
+            $baseQuery->where('branch_id', $branchId);
+        }
+
+        $validOrders = (clone $baseQuery)->where('status', '!=', 'cancelled')->get();
+        $cancelledTotal = (clone $baseQuery)->where('status', 'cancelled')->sum('total_amount');
+
+        $grossSales = (float) $validOrders->sum('total_amount');
+        $ordersCount = $validOrders->count();
+        $totalItems = $ordersCount > 0
+            ? (float) OrderItem::whereIn('order_id', $validOrders->pluck('id'))->sum('quantity')
+            : 0;
+
+        // Dữ liệu biểu đồ: theo giờ (today) hoặc theo ngày (7d/30d)
+        $chartData = [];
+        if ($range === 'today') {
+            for ($h = 0; $h < 24; $h++) {
+                $hourRevenue = $validOrders
+                    ->filter(fn($o) => (int) $o->created_at->format('H') === $h)
+                    ->sum('total_amount');
+                $chartData[] = [
+                    'label' => sprintf('%02d:00', $h),
+                    'revenue' => (float) $hourRevenue,
+                ];
+            }
+        } else {
+            $days = $range === '7d' ? 7 : 30;
+            for ($d = $days - 1; $d >= 0; $d--) {
+                $date = now()->subDays($d)->startOfDay();
+                $dayRevenue = $validOrders
+                    ->filter(fn($o) => $o->created_at >= $date && $o->created_at < $date->copy()->addDay())
+                    ->sum('total_amount');
+                $chartData[] = [
+                    'label' => $date->format('d/m'),
+                    'revenue' => (float) $dayRevenue,
+                ];
+            }
+        }
+
+        return [
+            'range' => $range,
+            'gross_sales' => $grossSales,          // Tiền hàng
+            'cancelled_total' => (float) $cancelledTotal, // Hoàn hủy
+            'discount_total' => null,              // Giảm giá: chưa có dữ liệu
+            'tax_total' => null,                  // Thuế phí: chưa có dữ liệu
+            'revenue' => $grossSales,             // Doanh thu gồm thuế
+            'customers_count' => null,            // Số khách hàng: chưa có CRM
+            'orders_count' => $ordersCount,       // Số hóa đơn
+            'avg_items_per_order' => $ordersCount > 0 ? round($totalItems / $ordersCount, 1) : 0,
+            'avg_revenue_per_order' => $ordersCount > 0 ? round($grossSales / $ordersCount) : 0,
+            'chart' => $chartData,
+        ];
     }
 }

@@ -1,16 +1,36 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/admin/Dashboard';
 import Products from './pages/admin/Products';
+import OptionGroups from './pages/admin/OptionGroups';
+import Menus from './pages/admin/Menus';
 import Categories from './pages/admin/Categories';
+import ComingSoon from './pages/admin/ComingSoon';
+import OnlineConfig from './pages/admin/OnlineConfig';
+import Orders from './pages/admin/Orders';
+import Inventory from './pages/admin/Inventory';
+import Customers from './pages/admin/Customers';
+import MemberTiers from './pages/admin/MemberTiers';
+import Promotions from './pages/admin/Promotions';
+import Tables from './pages/admin/Tables';
+import PosScreen from './components/PosScreen';
+import KdsScreen from './KdsScreen';
+import Settings from './pages/admin/Settings';
+import PriceLists from './pages/admin/PriceLists';
 
-// =====================================================================
-// Các Component màn hình hiển thị phụ (Sẽ tách dần ở các bước sau)
-// =====================================================================
-const PosScreen = () => <div className="p-8"><h1 className="text-2xl font-bold">Màn hình Thu ngân (POS)</h1></div>;
-const KdsScreen = () => <div className="p-8"><h1 className="text-2xl font-bold">Màn hình Bếp/Pha chế (KDS)</h1></div>;
+// Gói 1 (2026-10-04): bọc 2 màn hình để nút "Về App" điều hướng được
+// (component thật cần prop onBackToApp / onBackToClient).
+const PosScreenRoute = () => {
+    const navigate = useNavigate();
+    return <PosScreen onBackToApp={() => navigate('/admin')} />;
+};
+
+const KdsScreenRoute = () => {
+    const navigate = useNavigate();
+    return <KdsScreen onBackToClient={() => navigate('/admin')} />;
+};
 
 // =====================================================================
 // Component Bảo vệ Tuyến đường (Private Route)
@@ -64,12 +84,112 @@ const App = () => {
                             </PrivateRoute>
                         } 
                     />
+
+                    <Route
+                        path="/admin/option-groups"
+                        element={
+                            <PrivateRoute>
+                                <OptionGroups />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    <Route
+                        path="/admin/menus"
+                        element={
+                            <PrivateRoute>
+                                <Menus />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    <Route
+                        path="/admin/orders"
+                        element={
+                            <PrivateRoute>
+                                <Orders />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    {/* Gói 3 (2026-10-04): trang quản lý bàn */}
+                    <Route
+                        path="/admin/tables"
+                        element={
+                            <PrivateRoute>
+                                <Tables />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    {/* Gói 5 (2026-10-05): CRM + Khuyến mại */}
+                    <Route path="/admin/customers" element={<PrivateRoute><Customers /></PrivateRoute>} />
+                    <Route path="/admin/member-tiers" element={<PrivateRoute><MemberTiers /></PrivateRoute>} />
+                    <Route path="/admin/promotions" element={<PrivateRoute><Promotions /></PrivateRoute>} />
+
+                    {/* Gói 4 (2026-10-04): trang Kho hàng thật */}
+                    <Route
+                        path="/admin/inventory"
+                        element={
+                            <PrivateRoute>
+                                <Inventory />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    {/* Gói 7p: trang Thiết lập thật (màu chủ đạo) */}
+                    <Route
+                        path="/admin/settings"
+                        element={
+                            <PrivateRoute>
+                                <Settings />
+                            </PrivateRoute>
+                        }
+                    />
+                    {/* Gói 8a: trang Kênh bán hàng */}
+                    <Route
+                        path="/admin/price-lists"
+                        element={
+                            <PrivateRoute>
+                                <PriceLists />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    {/* Gói 2 (2026-10-04): các mục menu Sapo chưa phát triển -> trang ComingSoon */}
+                    {[
+                        ['/admin/reports', 'Báo cáo'],
+                        ['/admin/bookings', 'Đặt lịch'],
+                        ['/admin/staff', 'Nhân viên'],
+                        ['/admin/transactions', 'Thu chi'],
+                        ['/admin/attendance', 'Chấm công'],
+                        ['/admin/integrations', 'Đối tác tích hợp'],
+                        ['/admin/qr-order', 'QR Order'],
+                    ].map(([path, title]) => (
+                        <Route
+                            key={path}
+                            path={path}
+                            element={
+                                <PrivateRoute>
+                                    <ComingSoon title={title} />
+                                </PrivateRoute>
+                            }
+                        />
+                    ))}
+                    <Route
+                        path="/admin/online"
+                        element={
+                            <PrivateRoute>
+                                <OnlineConfig />
+                            </PrivateRoute>
+                        }
+                    />
                     
                     <Route 
                         path="/pos" 
                         element={
                             <PrivateRoute>
-                                <PosScreen />
+                                <PosScreenRoute />
                             </PrivateRoute>
                         } 
                     />
@@ -78,7 +198,7 @@ const App = () => {
                         path="/kds" 
                         element={
                             <PrivateRoute>
-                                <KdsScreen />
+                                <KdsScreenRoute />
                             </PrivateRoute>
                         } 
                     />

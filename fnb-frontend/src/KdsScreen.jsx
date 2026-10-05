@@ -12,6 +12,7 @@ export default function KdsScreen({ onBackToClient }) {
   const [loading, setLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedBranch, setSelectedBranch] = useState(1);
+  const [branches, setBranches] = useState([]); // Gói 10d: dropdown chọn chi nhánh
   const previousOrderCount = useRef(0);
 
   // Phát âm thanh chuông báo khi có đơn hàng mới đổ về
@@ -59,6 +60,16 @@ export default function KdsScreen({ onBackToClient }) {
     return () => clearInterval(timer);
   }, [selectedBranch]);
 
+  // Gói 10d: nạp danh sách chi nhánh cho dropdown
+  useEffect(() => {
+    axios.get(`${API_BASE}/branches`)
+      .then((res) => {
+        const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+        setBranches(list);
+      })
+      .catch(() => {});
+  }, []);
+
   // Cập nhật trạng thái đơn hàng (pending -> processing -> ready -> completed)
   const handleUpdateStatus = async (orderCode, nextStatus) => {
     try {
@@ -94,9 +105,21 @@ export default function KdsScreen({ onBackToClient }) {
             <ChefHat className="w-6 h-6" />
             <span>KDS BARISTA MONITOR</span>
           </div>
-          <span className="text-xs bg-slate-800 text-slate-300 px-3 py-1 rounded-full border border-slate-700 flex items-center gap-1.5">
-            <Store className="w-3.5 h-3.5 text-emerald-500" /> Chi nhánh {selectedBranch}
-          </span>
+          {/* Gói 10d: dropdown chọn chi nhánh (trước đây chỉ là nhãn, không bấm được) */}
+          <label className="text-xs bg-slate-800 text-slate-300 px-3 py-1 rounded-full border border-slate-700 flex items-center gap-1.5 cursor-pointer hover:border-emerald-500/50">
+            <Store className="w-3.5 h-3.5 text-emerald-500" />
+            <select
+              value={selectedBranch}
+              onChange={(e) => setSelectedBranch(Number(e.target.value))}
+              className="bg-transparent outline-none cursor-pointer text-slate-200 font-semibold [&>option]:text-slate-900"
+            >
+              {branches.length > 0 ? branches.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              )) : (
+                <option value={selectedBranch}>Chi nhánh {selectedBranch}</option>
+              )}
+            </select>
+          </label>
         </div>
 
         <div className="flex items-center gap-3">

@@ -1,79 +1,305 @@
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import '../../styles/matcha.css';
+import { loadTheme } from '../../utils/theme';
+import { loadNumberSettings } from '../../utils/number';
+import axios from 'axios';
+
+// =====================================================================
+// Gói 7d (2026-10-05): Redesign theo phong cách B (Matcha).
+// - Sidebar xanh matcha đậm + nền kem, font Inter (vietnamese)
+// - Bo góc 8px, kicker in hoa, số tabular — tối giản kiểu Nhật
+// =====================================================================
+
+const Icon = ({ name, className = 'w-5 h-5' }) => {
+    const paths = {
+        home: <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />,
+        chart: <path d="M4 20V10m6 10V4m6 16v-7m4 7H2" />,
+        receipt: <path d="M6 2h12a1 1 0 0 1 1 1v18l-3-2-2 2-2-2-2 2-2-2-3 2V3a1 1 0 0 1 1-1zm3 7h6m-6 4h6" />,
+        tag: <path d="M20 12l-8 8-9-9V4a1 1 0 0 1 1-1h7l9 9zM7.5 7.5h.01" />,
+        calendar: <path d="M8 2v4m8-4v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />,
+        table: <path d="M3 5h18v3H3zM5 8v11m4-11v11m6-11v11m4-11v11" />,
+        users: <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" />,
+        user: <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m16 0h-2m-12 0H4m14-16a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" />,
+        percent: <path d="M19 5 5 19m14-14h.01M5 5h.01M9 3h6a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z" />,
+        box: <path d="m21 8-9-5-9 5v8l9 5 9-5V8zM3 8l9 5 9-5m-9 5v9" />,
+        wallet: <path d="M20 7H4a2 2 0 0 1 0-4h14v4m0 0v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5m18 2h-3a1 1 0 0 0 0 2h3v0z" />,
+        clock: <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-16v6l4 2" />,
+        plug: <path d="M9 7V2m6 5V2M7 7h10v4a5 5 0 0 1-10 0V7zm5 9v5" />,
+        globe: <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z" />,
+        qr: <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zm10 0h3v3h-3zm3 3h3v3h-3z" />,
+        gear: <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.4 7.4 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.4 7.4 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z" />,
+        pos: <path d="M4 7h16v9H4zM4 7l2-3h12l2 3M8 20h8m-4-4v4M7 11h.01M11 11h.01M15 11h.01" />,
+        kitchen: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6V13.87zM6 17h12" />,
+        bell: <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9m-4.3 13a2 2 0 0 1-3.4 0" />,
+        menu: <path d="M4 6h16M4 12h16M4 18h16" />,
+        chevron: <path d="m9 18 6-6-6-6" />,
+        logout: <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9" />,
+    };
+    return (
+        <svg
+            className={className}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
+            {paths[name] || paths.home}
+        </svg>
+    );
+};
+
+// Menu chính (copy Sapo, trừ Kế toán/Thuế) + submenu
+const mainMenu = [
+    { path: '/admin', label: 'Tổng quan', icon: 'home' },
+    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart', children: ['Báo cáo doanh thu', 'Báo cáo kho'] },
+    { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt', children: ['Hóa đơn bán hàng', 'Hóa đơn điện tử'] },
+    { path: '/admin/products', label: 'Mặt hàng', icon: 'tag', children: [
+        { label: 'Danh sách mặt hàng', path: '/admin/products' },
+        { label: 'Danh mục', path: '/admin/categories' },
+        { label: 'Thực đơn', path: '/admin/menus' },
+        { label: 'Nhóm tùy chọn', path: '/admin/option-groups' },
+    ] },
+    { path: '/admin/bookings', label: 'Đặt lịch', icon: 'calendar' },
+    { path: '/admin/tables', label: 'Bàn', icon: 'table' },
+    { path: '/admin/staff', label: 'Nhân viên', icon: 'users' },
+    { path: '/admin/customers', label: 'Khách hàng', icon: 'user', children: [
+        { label: 'Danh sách khách hàng', path: '/admin/customers' },
+        { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
+    ] },
+    { path: '/admin/promotions', label: 'Khuyến mại', icon: 'percent' },
+    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: ['Tồn kho', 'Nhập kho', 'Kiểm kho'] },
+    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: ['Phiếu thu', 'Phiếu chi'] },
+    { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', children: ['Bảng chấm công', 'Tính lương'] },
+];
+
+const channelMenu = [
+    { path: '/admin/price-lists', label: 'Kênh bán hàng', icon: 'tag' },
+    { path: '/admin/integrations', label: 'Đối tác tích hợp', icon: 'plug' },
+    { path: '/admin/online', label: 'Bán online', icon: 'globe', children: ['Đơn online', 'Cấu hình'] },
+    { path: '/admin/qr-order', label: 'QR Order', icon: 'qr', children: ['Danh sách QR', 'Tạo QR'] },
+];
+
+// Nghiệp vụ bán hàng của hệ thống (giữ lại từ layout cũ)
+const opsMenu = [
+    { path: '/pos', label: 'Bán hàng (POS)', icon: 'pos' },
+    { path: '/kds', label: 'Bếp (KDS)', icon: 'kitchen' },
+];
 
 const AdminLayout = ({ children }) => {
     const { user, logout } = useAuth();
     const location = useLocation();
+    const navigate = useNavigate();
+    const [collapsed, setCollapsed] = useState(false);
+    const [openSub, setOpenSub] = useState(null); // path của menu đang mở submenu
 
-    const menuItems = [
-        { path: '/admin', label: 'Tổng quan', icon: '📊' },
-        { path: '/admin/categories', label: 'Danh mục', icon: '📁' },
-        { path: '/admin/products', label: 'Mặt hàng', icon: '☕' },
-        { path: '/admin/inventory', label: 'Kho vận', icon: '📦' },
-        { path: '/pos', label: 'Thu ngân (POS)', icon: '💻' },
-        { path: '/kds', label: 'Bếp (KDS)', icon: '🍳' },
-    ];
+    // Gói 7d: gắn theme Matcha cho body
+    useEffect(() => {
+        document.body.classList.add('m-theme');
+        return () => document.body.classList.remove('m-theme');
+    }, []);
+
+    // Gói 7p: áp màu chủ đạo do Đại Vương pick (localStorage trước, server sau)
+    // Gói 8f: nạp cấu hình số thập phân
+    useEffect(() => {
+        loadTheme(axios);
+        loadNumberSettings(axios);
+    }, []);
+
+    const isActive = (path) => {
+        if (path === '/admin') return location.pathname === '/admin';
+        return location.pathname === path || location.pathname.startsWith(path + '/');
+    };
+
+    // Gói 7m: kiểm tra có submenu nào đang active không
+    const isChildActive = (item) => {
+        if (!Array.isArray(item.children)) return false;
+        return item.children.some((child) => {
+            const to = typeof child === 'string' ? item.path : (child.path || item.path);
+            return location.pathname === to || location.pathname.startsWith(to + '/');
+        });
+    };
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login');
+    };
+
+    const renderItem = (item) => {
+        const selfActive = isActive(item.path);
+        const childActive = isChildActive(item);
+        const active = selfActive || childActive;
+        const hasSub = Array.isArray(item.children) && item.children.length > 0;
+        // Gói 7m: submenu đang active -> menu mẹ luôn mở rộng (không cho thu gọn) + highlight
+        const expanded = childActive || openSub === item.path || (hasSub && selfActive && openSub === null);
+
+        const mainRow = hasSub ? (
+            <button
+                onClick={() => {
+                    if (childActive) return; // đang ở trang con: giữ mở, không cho thu gọn
+                    setOpenSub(expanded && openSub === item.path ? null : item.path);
+                }}
+                title={collapsed ? item.label : undefined}
+                className={`m-nav-item w-full ${active ? 'active' : ''} ${collapsed ? 'justify-center px-0' : ''}`}
+            >
+                <Icon name={item.icon} className="w-[18px] h-[18px] shrink-0" />
+                {!collapsed && <span className="flex-1 truncate text-left">{item.label}</span>}
+                {!collapsed && (
+                    <Icon
+                        name="chevron"
+                        className={`w-3.5 h-3.5 opacity-60 transition-transform ${expanded ? 'rotate-90' : ''}`}
+                    />
+                )}
+            </button>
+        ) : (
+            <Link
+                to={item.path}
+                title={collapsed ? item.label : undefined}
+                className={`m-nav-item ${active ? 'active' : ''} ${collapsed ? 'justify-center px-0' : ''}`}
+            >
+                <Icon name={item.icon} className="w-[18px] h-[18px] shrink-0" />
+                {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+            </Link>
+        );
+
+        return (
+            <div key={item.path}>
+                {mainRow}
+                {hasSub && expanded && !collapsed && (
+                    <div className="mt-0.5 mb-1 space-y-0.5">
+                        {item.children.map((child) => {
+                            // Gói 5: child có thể là string (link về trang cha) hoặc {label, path}
+                            // Gói 7l: mục con không thụt vào (tránh nhảy dòng), full-width như mục chính
+                            const label = typeof child === 'string' ? child : child.label;
+                            const to = typeof child === 'string' ? item.path : (child.path || item.path);
+                            const childActive = location.pathname === to;
+                            return (
+                                <Link
+                                    key={label}
+                                    to={to}
+                                    className={`m-nav-item ${childActive ? 'active' : ''}`}
+                                >
+                                    {label}
+                                </Link>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderMenu = (items) => (
+        <div className="space-y-[2px]">{items.map(renderItem)}</div>
+    );
 
     return (
-        <div className="flex h-screen bg-gray-100">
-            {/* Sidebar */}
-            <div className="w-64 bg-gray-800 text-white flex flex-col shadow-lg z-10">
-                <div className="p-5 bg-gray-900 flex items-center justify-center border-b border-gray-700">
-                    <h1 className="text-2xl font-bold tracking-widest text-blue-400">VIBE OMNI</h1>
+        <div className="flex h-screen" style={{ background: 'var(--m-bg)' }}>
+            {/* ============ SIDEBAR ============ */}
+            <aside
+                className={`m-sidebar flex flex-col shrink-0 transition-all duration-200 z-20 ${
+                    collapsed ? 'w-14' : 'w-[216px]'
+                }`}
+            >
+                {/* Logo */}
+                <div className="h-[56px] flex items-center justify-center border-b border-white/10 shrink-0">
+                    {!collapsed ? (
+                        <span className="text-[19px] font-extrabold tracking-tight flex items-center gap-2">
+                            <span style={{ color: 'var(--m-accent)' }}>DBOmni</span>
+                            <span className="m-stamp">POS</span>
+                        </span>
+                    ) : (
+                        <span className="text-lg font-extrabold" style={{ color: 'var(--m-accent)' }}>D</span>
+                    )}
                 </div>
-                <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
-                    {menuItems.map((item) => {
-                        const isActive = location.pathname === item.path;
-                        return (
-                            <Link
-                                key={item.path}
-                                to={item.path}
-                                className={`flex items-center px-4 py-3 rounded-lg transition-all duration-200 ${
-                                    isActive 
-                                        ? 'bg-blue-600 text-white shadow-md' 
-                                        : 'text-gray-400 hover:bg-gray-700 hover:text-gray-100'
-                                }`}
-                            >
-                                <span className="mr-3 text-lg">{item.icon}</span>
-                                <span className="font-medium">{item.label}</span>
-                            </Link>
-                        );
-                    })}
-                </nav>
-                <div className="p-4 bg-gray-900 text-xs text-gray-500 text-center border-t border-gray-700">
-                    Phiên bản 1.0.0
-                </div>
-            </div>
 
-            {/* Main Content Area */}
-            <div className="flex-1 flex flex-col overflow-hidden relative">
-                {/* Header */}
-                <header className="bg-white shadow-sm border-b border-gray-200 px-8 py-4 flex items-center justify-between z-10">
-                    <h2 className="text-xl font-bold text-gray-800">
-                        {menuItems.find(i => i.path === location.pathname)?.label || 'Bảng điều khiển'}
-                    </h2>
-                    <div className="flex items-center space-x-6">
-                        <div className="flex flex-col items-end">
-                            <span className="text-sm font-bold text-gray-800">{user?.name}</span>
-                            <span className="text-xs text-blue-600 capitalize">{user?.roles?.join(', ')}</span>
+                {/* Chọn chi nhánh */}
+                {!collapsed ? (
+                    <button className="m-nav-item mx-2.5 mt-2.5 justify-between" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                        <span className="truncate font-medium">DBOmni - CN-Q1</span>
+                        <Icon name="chevron" className="w-3.5 h-3.5 rotate-90 opacity-60" />
+                    </button>
+                ) : (
+                    <div className="mx-auto mt-2.5 w-8 h-8 rounded-lg bg-white/5" />
+                )}
+
+                {/* Menu */}
+                <nav className="m-scroll flex-1 overflow-y-auto px-2.5 py-3 space-y-4">
+                    <div>{renderMenu(mainMenu)}</div>
+
+                    {!collapsed && (
+                        <div className="m-kicker px-3" style={{ color: 'rgba(185,196,216,0.6)' }}>
+                            Kênh bán hàng
                         </div>
-                        <button 
-                            onClick={logout}
-                            className="bg-red-50 text-red-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-red-100 transition-colors border border-red-200 shadow-sm"
+                    )}
+                    <div className={collapsed ? '' : '-mt-2.5'}>{renderMenu(channelMenu)}</div>
+
+                    {!collapsed && (
+                        <div className="m-kicker px-3" style={{ color: 'rgba(185,196,216,0.6)' }}>
+                            Nghiệp vụ
+                        </div>
+                    )}
+                    <div className={collapsed ? '' : '-mt-2.5'}>{renderMenu(opsMenu)}</div>
+                </nav>
+
+                {/* Thiết lập (đáy) */}
+                <div className="p-2.5 border-t border-white/10">
+                    {renderItem({ path: '/admin/settings', label: 'Thiết lập', icon: 'gear' })}
+                </div>
+            </aside>
+
+            {/* ============ MAIN ============ */}
+            <div className="flex-1 flex flex-col min-w-0">
+                {/* Topbar */}
+                <header className="m-topbar h-[56px] flex items-center justify-between px-4 shrink-0 z-10">
+                    <div className="flex items-center gap-2.5">
+                        <button
+                            onClick={() => setCollapsed(!collapsed)}
+                            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
+                            title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
                         >
-                            Đăng xuất
+                            <Icon name="menu" className="w-5 h-5" />
+                        </button>
+                        <span className="text-[14px] font-semibold" style={{ color: 'var(--m-ink)' }}>
+                            DBOmni - CN-Q1
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 relative" title="Thông báo">
+                            <Icon name="bell" className="w-5 h-5" />
+                        </button>
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-lg text-white flex items-center justify-center text-[13px] font-bold" style={{ background: 'var(--m-primary)' }}>
+                                {(user?.name || 'A').charAt(0).toUpperCase()}
+                            </div>
+                            <div className="hidden sm:block leading-tight">
+                                <div className="text-[12.5px] font-semibold" style={{ color: 'var(--m-ink)' }}>{user?.name || 'Quản trị'}</div>
+                                <div className="text-[10.5px] capitalize" style={{ color: 'var(--m-ink-faint)' }}>
+                                    {(user?.roles || []).join(', ') || 'Nhân viên'}
+                                </div>
+                            </div>
+                        </div>
+                        <button
+                            onClick={handleLogout}
+                            className="flex items-center gap-1 text-[12.5px] px-2 py-1.5 rounded-lg hover:bg-red-50"
+                            style={{ color: 'var(--m-ink-soft)' }}
+                            title="Đăng xuất"
+                        >
+                            <Icon name="logout" className="w-4 h-4" />
+                            <span className="hidden md:inline">Đăng xuất</span>
                         </button>
                     </div>
                 </header>
 
-                {/* Page Content */}
-                <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-8">
-                    {children}
-                </main>
+                {/* Nội dung trang */}
+                <main className="flex-1 overflow-y-auto m-scroll">{children}</main>
             </div>
         </div>
     );
 };
 
 export default AdminLayout;
+export { Icon };

@@ -14,6 +14,7 @@ class Recipe extends Model
         'product_option_id',
         'material_id',
         'quantity',
+        'kind', // Gói 8c: ingredient | packaging
     ];
 
     protected $casts = [

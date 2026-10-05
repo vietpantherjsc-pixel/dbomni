@@ -20,7 +20,11 @@ class MenuController extends Controller
             ->orderBy('sort_order', 'asc')
             ->with(['products' => function ($query) {
                 $query->where('is_active', true)
-                    ->with('options');
+                    ->where('is_service_fee', false) // Gói 6: ẩn món "Phí dịch vụ" (hệ thống tự tính)
+                    ->with(['options', 'optionGroups' => function ($q) {
+                        // Gói 7b: nhóm tùy chọn (Size/Độ ngọt/Đá/Topping) kèm options
+                        $q->where('is_active', true)->with(['options' => fn($qq) => $qq->orderBy('id')]);
+                    }]);
             }])
             ->get();
 

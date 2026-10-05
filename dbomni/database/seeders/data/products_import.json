@@ -1,0 +1,1817 @@
+[
+ {
+  "name": "Trà Me Daybreak (Thêm Me Hạt Dẻo)",
+  "slug": "trà-me-daybreak-thêm-me-hạt-dẻo",
+  "sku": "TMDA-SIZEM",
+  "image": "/images/products/trà-me-daybreak-thêm-me-hạt-dẻo.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Thức uống đã bao gồm topping me hạt dẻo. Trà me, thức uống thanh mát, giải nhiệt với vị chua thanh của me kết hợp vị thơm của trà",
+  "prices": {
+   "nha_hang": 52000.0,
+   "grabfood": 52000.0,
+   "shopeefood": 52000.0,
+   "greenfood": 52000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Lài Quýt Elder (Trân Châu Trắng)",
+  "slug": "trà-lài-quýt-elder-trân-châu-trắng",
+  "sku": "TLQEA-SIZEM",
+  "image": "/images/products/trà-lài-quýt-elder-trân-châu-trắng.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Thức uống đã bao gồm topping Trân Châu Trắng. Trà lài thanh nhẹ kết hợp cùng vị chua và hương thơm của quýt sẽ mang đến hương vị đặc biệt.",
+  "prices": {
+   "nha_hang": 50000.0,
+   "grabfood": 50000.0,
+   "shopeefood": 50000.0,
+   "greenfood": 50000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Lài Vải",
+  "slug": "trà-lài-vải",
+  "sku": "TLVA-SIZEM",
+  "image": "/images/products/trà-lài-vải.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Trà lài vải thơm chua ngọt. Topping vải ngâm",
+  "prices": {
+   "nha_hang": 50000.0,
+   "grabfood": 50000.0,
+   "shopeefood": 50000.0,
+   "greenfood": 50000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Lục Trà Kem Muối",
+  "slug": "lục-trà-kem-muối",
+  "sku": "LTKMA-SIZEM",
+  "image": "/images/products/lục-trà-kem-muối.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Lục trà lài thơm đậm kết hợp cùng lớp kem muối sánh mịn phía trên. Bạn lưu ý: nếu chọn mức ngọt ít, vị trà sẽ đậm hơn ạ.",
+  "prices": {
+   "nha_hang": 40000.0,
+   "grabfood": 40000.0,
+   "shopeefood": 40000.0,
+   "greenfood": 40000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Hồng Trà Kem Muối",
+  "slug": "hồng-trà-kem-muối",
+  "sku": "HTKMA-SIZEM",
+  "image": "/images/products/hồng-trà-kem-muối.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Hồng trà thơm kết hợp cùng lớp kem muối sánh mịn phía trên. Bạn lưu ý: nếu chọn mức ngọt ít, vị trà sẽ đậm hơn ạ.",
+  "prices": {
+   "nha_hang": 40000.0,
+   "grabfood": 40000.0,
+   "shopeefood": 40000.0,
+   "greenfood": 40000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Lục Trà Lài Sữa",
+  "slug": "lục-trà-lài-sữa",
+  "sku": "LTLSA-SIZEM",
+  "image": "/images/products/lục-trà-lài-sữa.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA ĐẬM VỊ - 39K 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Vị trà lài sữa nhẹ nhàng với hương thơm tinh tế của hoa lài hòa quyện cùng vị béo ngậy của sữa, là lựa chọn hoàn hảo nếu bạn muốn thưởng thức một thức uống không quá ngọt. Bạn lưu ý: nếu chọn mức ngọt ít, vị trà sẽ đậm hơn ạ.",
+  "prices": {
+   "nha_hang": 45000.0,
+   "grabfood": 45000.0,
+   "shopeefood": 45000.0,
+   "greenfood": 45000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Hồng Trà Sữa",
+  "slug": "hồng-trà-sữa",
+  "sku": "HTSA-SIZEM",
+  "image": "/images/products/hồng-trà-sữa.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA ĐẬM VỊ - 39K 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Hồng trà sữa thơm, không quá đậm sẽ khiến bạn nhớ đến hương vị trà sữa của tuổi thơ. Bạn lưu ý: nếu chọn mức ngọt ít, vị trà sẽ đậm hơn ạ.",
+  "prices": {
+   "nha_hang": 45000.0,
+   "grabfood": 45000.0,
+   "shopeefood": 45000.0,
+   "greenfood": 45000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Sữa Ô Long",
+  "slug": "trà-sữa-ô-long",
+  "sku": "TSOLA-SIZEM",
+  "image": "/images/products/trà-sữa-ô-long.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA ĐẬM VỊ - 39K 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Trà sữa ô long đậm vị, chát nhẹ ở vị đầu nhưng hậu vị ngọt. Nếu không quen uống vị trà đậm đắng, bạn chọn mức ngọt cao trên 50% nhé ạ. Bạn lưu ý: nếu chọn mức ngọt ít, vị trà sẽ đậm hơn ạ.",
+  "prices": {
+   "nha_hang": 45000.0,
+   "grabfood": 45000.0,
+   "shopeefood": 45000.0,
+   "greenfood": 45000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Latte (Đài Loan)",
+  "slug": "matcha-latte-đài-loan",
+  "sku": "MLLA-SIZES",
+  "image": "/images/products/matcha-latte-đài-loan.jpg",
+  "category": "Matcha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Vị trà xanh Đài thơm bùi, kết hợp với sữa thanh ngọt. Nếu muốn thưởng thức vị trà Matcha đậm đắng nhẹ, bạn chọn món \"Matcha Latte Nhật\" nhé",
+  "prices": {
+   "nha_hang": 39000.0,
+   "grabfood": 39000.0,
+   "shopeefood": 39000.0,
+   "greenfood": 39000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Latte (Nhật Bản)",
+  "slug": "matcha-latte-nhật-bản",
+  "sku": "MLBA-SIZES",
+  "image": "/images/products/matcha-latte-nhật-bản.jpg",
+  "category": "Matcha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Vị trà xanh Nhật đậm, thơm kết hợp với sữa thanh ngọt. Nếu muốn thưởng thức vị trà Matcha Đài nhẹ nhàng hơn, bạn chọn món \"Matcha Latte Đài\" nhé",
+  "prices": {
+   "nha_hang": 45000.0,
+   "grabfood": 45000.0,
+   "shopeefood": 45000.0,
+   "greenfood": 45000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Sữa Tươi",
+  "slug": "cà-phê-sữa-tươi",
+  "sku": "CPSTA-SIZES",
+  "image": "/images/products/cà-phê-sữa-tươi.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Sữa tươi thanh ngọt kết hợp với vị đắng nhẹ của cà phê mang đến thức uống cà phê nhẹ nhàng. Thức uống phù hợp cho bạn thích uống cà phê nhưng không quá đắng",
+  "prices": {
+   "nha_hang": 39000.0,
+   "grabfood": 39000.0,
+   "shopeefood": 39000.0,
+   "greenfood": 39000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Bạc Sỉu",
+  "slug": "bạc-sỉu",
+  "sku": "BSA-SIZES",
+  "image": "/images/products/bạc-sỉu.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Sự kết hợp hoàn hảo giữa cà phê và sữa đặc, sữa tươi  mang đến hương vị thơm ngon béo ngậy",
+  "prices": {
+   "nha_hang": 39000.0,
+   "grabfood": 39000.0,
+   "shopeefood": 39000.0,
+   "greenfood": 39000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Kem Muối",
+  "slug": "cà-phê-kem-muối",
+  "sku": "CPKMA-SIZES",
+  "image": "/images/products/cà-phê-kem-muối.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Lớp kem muối sánh mịn trên nền cà phê sữa đậm đà. Nếu muốn điều chỉnh nền cà phê nhiều/ ít ngọt bạn note cho quán ở dưới nhé!",
+  "prices": {
+   "nha_hang": 42000.0,
+   "grabfood": 42000.0,
+   "shopeefood": 42000.0,
+   "greenfood": 42000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Sữa Đá",
+  "slug": "cà-phê-sữa-đá",
+  "sku": "CPSA-SIZES",
+  "image": "/images/products/cà-phê-sữa-đá.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cà phê đen nguyên chất kết hợp với sữa đặc tạo vị ngọt dịu nhẹ pha quyện với độ đắng vừa của cà phê.",
+  "prices": {
+   "nha_hang": 39000.0,
+   "grabfood": 39000.0,
+   "shopeefood": 39000.0,
+   "greenfood": 39000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Đen Đá",
+  "slug": "cà-phê-đen-đá",
+  "sku": "CPA-SIZES",
+  "image": "/images/products/cà-phê-đen-đá.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cà phê đen nguyên chất pha phin. Cà phê được rang mộc để giữ được hương vị của hạt cà phê.",
+  "prices": {
+   "nha_hang": 35000.0,
+   "grabfood": 35000.0,
+   "shopeefood": 35000.0,
+   "greenfood": 35000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cacao Sữa",
+  "slug": "cacao-sữa",
+  "sku": "CSA-SIZEM",
+  "image": "/images/products/cacao-sữa.jpg",
+  "category": "Cacao",
+  "menus": [
+   "Bán APP",
+   "🍫 CACAO ĐẬM VỊ - NẠP MOOD NGÀY MỚI🌟"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cacao nguyên chất thơm ngon kết hợp với sữa nguyên kem ngon béo.",
+  "prices": {
+   "nha_hang": 50000.0,
+   "grabfood": 50000.0,
+   "shopeefood": 50000.0,
+   "greenfood": 50000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trân Châu Đen Dẻo",
+  "slug": "trân-châu-đen-dẻo",
+  "sku": "TCD",
+  "image": "/images/products/trân-châu-đen-dẻo.jpg",
+  "category": "Topping",
+  "menus": [
+   "✨ THÊM TOPPING - THÊM NIỀM VUI✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Trân châu đen dẻo truyền thống, toping được để trong hũ riêng.",
+  "prices": {
+   "nha_hang": 10000.0,
+   "grabfood": 10000.0,
+   "shopeefood": 10000.0,
+   "greenfood": 10000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Sữa Yến Mạch",
+  "slug": "cà-phê-sữa-yến-mạch",
+  "sku": "CAPHESUAYENMACH",
+  "image": "/images/products/cà-phê-sữa-yến-mạch.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Kết hợp sữa yến mạch Oatside với cà phê nguyên chất thượng hạng. Khi bạn muốn một ly cà phê bùi hơn ngọt ngào hơn một chút, giảm đi vị đắng một chút, thì cà phê sữa yến mạch chính là lựa chọn hoàn hảo.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Sữa Yến Mạch (Nhật Bản)",
+  "slug": "matcha-sữa-yến-mạch-nhật-bản",
+  "sku": "MSYMB",
+  "image": "/images/products/matcha-sữa-yến-mạch-nhật-bản.jpg",
+  "category": "Matcha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Kết hợp sữa yến mạch Oatside với Matcha Nhật Bản thượng hạng. Khi bạn muốn một ly Matcha Latte thơm bùi hơn một chút, thì Matcha sữa yến mạch chính là lựa chọn hoàn hảo.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cacao Sữa Yến Mạch",
+  "slug": "cacao-sữa-yến-mạch",
+  "sku": "CACAOSUAYENMACH",
+  "image": "/images/products/cacao-sữa-yến-mạch.jpg",
+  "category": "Cacao",
+  "menus": [
+   "Bán APP",
+   "🍫 CACAO ĐẬM VỊ - NẠP MOOD NGÀY MỚI🌟"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cacao nguyên chất thơm ngon kết hợp cùng sữa yến mạch Oatside bùi béo. Vị đắng của cacao được sữa yến mạch làm dịu đi, hài hòa hơn",
+  "prices": {
+   "nha_hang": 52000.0,
+   "grabfood": 52000.0,
+   "shopeefood": 52000.0,
+   "greenfood": 52000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Houjicha Latte",
+  "slug": "houjicha-latte",
+  "sku": "HL",
+  "image": "/images/products/houjicha-latte.jpg",
+  "category": "Houjicha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Houjicha là một loại trà rang từ trà xanh của Nhật Bản, Houjicha có hương vị rất thơm mùi hạt rang, hơi ngọt và hương gỗ và hương thơm caramel, có hàm lượng caffeine thấp hơn các loại trà xanh khác và nó là một lựa chọn tuyệt vời để uống trà chiều hay uống vào buổi tối",
+  "prices": {
+   "nha_hang": 55000.0,
+   "grabfood": 55000.0,
+   "shopeefood": 55000.0,
+   "greenfood": 55000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Houjicha Sữa Yến Mạch",
+  "slug": "houjicha-sữa-yến-mạch",
+  "sku": "HOUJICHASUAYENMACH",
+  "image": "/images/products/houjicha-sữa-yến-mạch.jpg",
+  "category": "Houjicha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Houjicha là một loại trà rang từ trà xanh của Nhật Bản, Houjicha có hương vị rất thơm mùi hạt rang, hơi ngọt và hương gỗ và hương thơm caramel, có hàm lượng caffeine thấp hơn các loại trà xanh khác và nó là một lựa chọn tuyệt vời để uống trà chiều hay uống vào buổi tối",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Nước Dừa",
+  "slug": "matcha-nước-dừa",
+  "sku": "CM",
+  "image": "/images/products/matcha-nước-dừa.jpg",
+  "category": "Matcha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Coconut Matcha/ Matcha Nước Dừa – Ngon như một kỳ nghỉ\nSự hòa quyện giữa nước dừa thanh mát và matcha Nhật Bản thơm dịu, mang đến ly nước giải nhiệt đầy sảng khoái, vừa nhẹ nhàng vừa tinh tế. Nhấp một ngụm là thấy ngay hơi thở thiên nhiên!",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Houjicha Nước Dừa",
+  "slug": "houjicha-nước-dừa",
+  "sku": "COCONUTHOUJICHA",
+  "image": "/images/products/houjicha-nước-dừa.jpg",
+  "category": "Houjicha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Coconut Houjicha / Houjicha Nước Dừa – Hương vị của sự tĩnh lặng\nSự hòa quyện giữa nước dừa thanh mát và houjicha rang thơm dịu mang đến ly nước đầy chiều sâu, nhẹ nhàng mà cuốn hút. Vị ngọt tự nhiên gặp gỡ hương trà rang Nhật Bản, tạo cảm giác như đang thư giãn bên bờ biển trong một chiều thu!",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Kem Buôn Mê",
+  "slug": "cà-phê-kem-buôn-mê",
+  "sku": "CPKBM",
+  "image": "/images/products/cà-phê-kem-buôn-mê.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Lớp kem đặc biệt đến từ vùng đất Buôn Mê với vị đậm đà từ cà phê, thơm béo từ cacao và chút mặt của muối. Nền cà phê sữa đầm đà. Nếu muốn điều chỉnh nền cà phê nhiều/ít ngọt bạn note cho quán ở dưới nhé",
+  "prices": {
+   "nha_hang": 42000.0,
+   "grabfood": 42000.0,
+   "shopeefood": 42000.0,
+   "greenfood": 42000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Cold Whisk",
+  "slug": "matcha-cold-whisk",
+  "sku": "MCW",
+  "image": "/images/products/matcha-cold-whisk.jpg",
+  "category": "Matcha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Matcha Cold Whisk – Matcha Nhật Bản được đánh lạnh với sữa Yến Mạch kết hợp với nền sữa tươi nguyên kem, mỗi ngụm mang đến cảm giác béo nhẹ, đậm vị Matcha. Nền ngọt: Sữa đặc.",
+  "prices": {
+   "nha_hang": 65000.0,
+   "grabfood": 65000.0,
+   "shopeefood": 65000.0,
+   "greenfood": 65000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Houjicha Cold Whisk",
+  "slug": "houjicha-cold-whisk",
+  "sku": "HCW",
+  "image": "/images/products/houjicha-cold-whisk.jpg",
+  "category": "Houjicha",
+  "menus": [
+   "Bán APP",
+   "🌟 TRẠM MATCHA - HOUJICHA🍵"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Houjicha Cold Whisk – Trà rang Houjicha được đánh lạnh với sữa Yến Mạch kết hợp với nền sữa tươi nguyên kem, mỗi ngụm mang đến cảm giác béo nhẹ, thơm vị trà rang. Nền ngọt: Sữa đặc.",
+  "prices": {
+   "nha_hang": 65000.0,
+   "grabfood": 65000.0,
+   "shopeefood": 65000.0,
+   "greenfood": 65000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Hồng Trà Sữa Tươi",
+  "slug": "hồng-trà-sữa-tươi",
+  "sku": "HTST",
+  "image": "/images/products/hồng-trà-sữa-tươi.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA TƯƠI KHÔNG BỘT BÉO 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Hồng trà thượng hạng kết hợp cùng với Sữa Yến Mạch và Sữa tươi nguyên kem, không sử dụng kem béo thực vật, phù hợp khi muốn giảm ngọt mà không bị quá đậm vị trà. Nền ngọt: Sữa Đặc, Đường.",
+  "prices": {
+   "nha_hang": 55000.0,
+   "grabfood": 55000.0,
+   "shopeefood": 55000.0,
+   "greenfood": 55000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Ô Long Sữa Tươi",
+  "slug": "ô-long-sữa-tươi",
+  "sku": "OLST",
+  "image": "/images/products/ô-long-sữa-tươi.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA TƯƠI KHÔNG BỘT BÉO 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Trà Ô Long đặc biệt kết hợp cùng với Sữa Yến Mạch và Sữa tươi nguyên kem, không sử dụng kem béo thực vật, phù hợp khi muốn giảm ngọt mà không bị quá đậm vị trà. Vị chát nhẹ, thơm. Nền ngọt: Sữa Đặc, Đường.",
+  "prices": {
+   "nha_hang": 55000.0,
+   "grabfood": 55000.0,
+   "shopeefood": 55000.0,
+   "greenfood": 55000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Lục Trà Lài Sữa Tươi",
+  "slug": "lục-trà-lài-sữa-tươi",
+  "sku": "LTLST",
+  "image": "/images/products/lục-trà-lài-sữa-tươi.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA TƯƠI KHÔNG BỘT BÉO 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Trà Xanh Lài đậm trà kết hợp cùng với Sữa Yến Mạch và Sữa tươi nguyên kem, không sử dụng kem béo thực vật, phù hợp khi muốn giảm ngọt mà không bị quá chát vị trà xanh. Nền ngọt: Sữa Đặc, Đường.",
+  "prices": {
+   "nha_hang": 55000.0,
+   "grabfood": 55000.0,
+   "shopeefood": 55000.0,
+   "greenfood": 55000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cacao Bạc Hà",
+  "slug": "cacao-bạc-hà",
+  "sku": "CBH",
+  "image": "/images/products/cacao-bạc-hà.jpg",
+  "category": "Cacao",
+  "menus": [
+   "Bán APP",
+   "🍫 CACAO ĐẬM VỊ - NẠP MOOD NGÀY MỚI🌟"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cacao nguyên chất thượng hạng đậm đà kết hợp với bạc hà the mát, hòa quyện cùng sữa tươi nguyên kem. Nền ngọt: Sữa đặc.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Nước Dừa",
+  "slug": "cà-phê-nước-dừa",
+  "sku": "CPND",
+  "image": "/images/products/cà-phê-nước-dừa.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Nước Dừa thanh mát kết hợp cùng cà phê đậm đà được Daybreak chọn lọc, phối trộn theo công thức đặc biệt mang đến cách thưởng thức cà phê mới lạ. Nền ngọt: Đường nước.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Hạnh Nhân",
+  "slug": "cà-phê-hạnh-nhân",
+  "sku": "CPHN",
+  "image": "/images/products/cà-phê-hạnh-nhân.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Cà phê nguyên chất đậm đà đặc biệt của Daybreak kết hợp với Hạnh Nhân thơm ngọt, phù hợp gu uống cà phê đắng nhẹ, hạnh nhân ngọt và bùi. Nền ngọt: Đường nước.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Quýt",
+  "slug": "cà-phê-quýt",
+  "sku": "CPQ",
+  "image": "/images/products/cà-phê-quýt.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Hòa quyện vị đắng nhẹ của cà phê cùng hương quýt tươi mát, mang đến trải nghiệm độc đáo vừa ngọt ngào vừa sảng khoái. Mỗi ngụm là sự bùng nổ hương vị, đánh thức giác quan và tạo cảm giác mới lạ đầy hứng khởi. Nền ngọt: Đường",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Bạc Hà",
+  "slug": "cà-phê-bạc-hà",
+  "sku": "CPBH",
+  "image": "/images/products/cà-phê-bạc-hà.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Sự kết hợp tinh tế giữa cà phê đậm đà và vị bạc hà mát lạnh, đem lại cảm giác tươi mới, sảng khoái tức thì. Hương thơm dịu nhẹ cùng vị mát lành giúp bạn tỉnh táo, thư giãn và đầy năng lượng cho ngày dài.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Đặc Biệt",
+  "slug": "sandwich-nướng-đặc-biệt",
+  "sku": "SANDWICHNUONGACBIET",
+  "image": "/images/products/sandwich-nướng-đặc-biệt.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp dăm bông, xúc xích, chà bông, phô mai và dưa leo tươi mát, vị béo mặn hài hòa, đậm vị và dễ ăn. Lưu ý: đơn mang đi bánh có thể giảm độ giòn.",
+  "prices": {
+   "nha_hang": 60000.0,
+   "grabfood": 60000.0,
+   "shopeefood": 60000.0,
+   "greenfood": 60000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Dăm Bông Chà Bông",
+  "slug": "sandwich-nướng-dăm-bông-chà-bông",
+  "sku": "SANDWICHNUONGDAMBONGCHABO",
+  "image": "/images/products/sandwich-nướng-dăm-bông-chà-bông.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp dăm bông, chà bông và dưa leo tươi mát, vị đậm đà hài hòa, thơm ngon khi dùng nóng. Lưu ý: đơn mang đi bánh có thể giảm độ giòn",
+  "prices": {
+   "nha_hang": 48000.0,
+   "grabfood": 48000.0,
+   "shopeefood": 48000.0,
+   "greenfood": 48000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Dăm Bông Phô Mai",
+  "slug": "sandwich-nướng-dăm-bông-phô-mai",
+  "sku": "SANDWICHNUONGDAMBONGPHOMA",
+  "image": "/images/products/sandwich-nướng-dăm-bông-phô-mai.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp dăm bông và phô mai béo mặn hài hòa. Lưu ý: đơn mang đi bánh có thể giảm độ giòn.",
+  "prices": {
+   "nha_hang": 53000.0,
+   "grabfood": 53000.0,
+   "shopeefood": 53000.0,
+   "greenfood": 53000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Dăm Bông Xúc Xích",
+  "slug": "sandwich-nướng-dăm-bông-xúc-xích",
+  "sku": "SNDBXX",
+  "image": "/images/products/sandwich-nướng-dăm-bông-xúc-xích.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp dăm bông, xúc xích và dưa leo tươi mát, vị béo mặn hài hòa và nóng hổi. Lưu ý: đơn mang đi bánh có thể giảm độ giòn",
+  "prices": {
+   "nha_hang": 53000.0,
+   "grabfood": 53000.0,
+   "shopeefood": 53000.0,
+   "greenfood": 53000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Xúc Xích Chà Bông",
+  "slug": "sandwich-nướng-xúc-xích-chà-bông",
+  "sku": "SANDWICHNUONGXUCXICHCHABO",
+  "image": "/images/products/sandwich-nướng-xúc-xích-chà-bông.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp xúc xích, chà bông và dưa leo tươi mát, vị đậm đà hài hòa, thơm ngon khi dùng nóng. Lưu ý: đơn mang đi bánh có thể giảm độ giòn",
+  "prices": {
+   "nha_hang": 48000.0,
+   "grabfood": 48000.0,
+   "shopeefood": 48000.0,
+   "greenfood": 48000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Xúc Xích Phô Mai",
+  "slug": "sandwich-nướng-xúc-xích-phô-mai",
+  "sku": "SANDWICHNUONGXUCXICHPHOMA",
+  "image": "/images/products/sandwich-nướng-xúc-xích-phô-mai.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp xúc xích, phô mai và dưa leo tươi mát, vị béo mặn hài hòa và hấp dẫn. Lưu ý: đơn mang đi bánh có thể giảm độ giòn.",
+  "prices": {
+   "nha_hang": 48000.0,
+   "grabfood": 48000.0,
+   "shopeefood": 48000.0,
+   "greenfood": 48000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sandwich Nướng Chà Bông",
+  "slug": "sandwich-nướng-chà-bông",
+  "sku": "SNCB",
+  "image": "/images/products/sandwich-nướng-chà-bông.jpg",
+  "category": "Sandwich Nướng",
+  "menus": [
+   "🥪 SANDWICH NƯỚNG 🍞"
+  ],
+  "unit": "Cái",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sandwich nướng với bánh vàng giòn, kẹp chà bông và dưa leo tươi mát, vị đậm đà hài hòa, thích hợp cho bữa ăn nhanh. Lưu ý: đơn mang đi bánh có thể giảm độ giòn",
+  "prices": {
+   "nha_hang": 32000.0,
+   "grabfood": 32000.0,
+   "shopeefood": 32000.0,
+   "greenfood": 32000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Hồng Trà Sốt Tắc",
+  "slug": "hồng-trà-sốt-tắc",
+  "sku": "HONGTRASOTTAC",
+  "image": "/images/products/hồng-trà-sốt-tắc.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Đã bao gồm 8% VAT] Hồng trà sốt tắc mang vị trà đậm của hồng trà thượng hạng hòa quyện cùng hương chua ngọt của sốt tắc \"home made\", tạo cảm giác thanh mát và dễ chịu. Đây là thức uống giải nhiệt lý tưởng, cân bằng giữa ngọt, chua và hậu vị trà nhẹ nhàng",
+  "prices": {
+   "nha_hang": 39000.0,
+   "grabfood": 39000.0,
+   "shopeefood": 39000.0,
+   "greenfood": 39000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Lục Trà Xoài",
+  "slug": "lục-trà-xoài",
+  "sku": "LTX",
+  "image": "/images/products/lục-trà-xoài.jpg",
+  "category": "Trà",
+  "menus": [
+   "Bán APP",
+   "❄️ TRÀ NGON MÁT LẠNH 🍊"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Lục Trà Xoài mang hương trà xanh nhài thanh mát kết hợp vị ngọt dịu của xoài, tạo cảm giác tươi mới, dễ chịu và đầy sảng khoái. Món uống có sẵn trân châu.",
+  "prices": {
+   "nha_hang": 50000.0,
+   "grabfood": 50000.0,
+   "shopeefood": 50000.0,
+   "greenfood": 50000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Lục Trà Sữa Xoài",
+  "slug": "lục-trà-sữa-xoài",
+  "sku": "LTSX",
+  "image": "/images/products/lục-trà-sữa-xoài.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "Bán APP",
+   "🧋TRÀ SỮA ĐẬM VỊ - 39K 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Lục Trà Sữa Xoài thơm hương nhài, béo nhẹ kết hợp vị ngọt dịu của xoài, tạo cảm giác tươi mới, dễ chịu và đầy sảng khoái. Món uống có sẵn trân châu. (Ly Giấy)",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Jelly Kim Cương Vị Phô Mai",
+  "slug": "jelly-kim-cương-vị-phô-mai",
+  "sku": "JKCVPM",
+  "image": "/images/products/jelly-kim-cương-vị-phô-mai.jpg",
+  "category": "Topping",
+  "menus": [
+   "✨ THÊM TOPPING - THÊM NIỀM VUI✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Jelly Kim Cương vị phô mai mềm mịn, béo ngậy, hương phô mai đậm đà, hòa quyện ngọt ngào, mang đến cảm giác thưởng thức mới lạ và hấp dẫn.",
+  "prices": {
+   "nha_hang": 12000.0,
+   "grabfood": 12000.0,
+   "shopeefood": 12000.0,
+   "greenfood": 12000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Jelly Kim Cương Vị Xoài",
+  "slug": "jelly-kim-cương-vị-xoài",
+  "sku": "JKCVX",
+  "image": "/images/products/jelly-kim-cương-vị-xoài.jpg",
+  "category": "Topping",
+  "menus": [
+   "✨ THÊM TOPPING - THÊM NIỀM VUI✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Jelly Kim Cương vị xoài vàng óng, mềm mát, hương xoài nhiệt đới ngọt dịu, chua nhẹ, mang lại cảm giác tươi mới, sảng khoái và đầy hấp dẫn khi thưởng thức.",
+  "prices": {
+   "nha_hang": 12000.0,
+   "grabfood": 12000.0,
+   "shopeefood": 12000.0,
+   "greenfood": 12000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Jasmine Matcha Cold Whisk",
+  "slug": "jasmine-matcha-cold-whisk",
+  "sku": "JMCW",
+  "image": "/images/products/jasmine-matcha-cold-whisk.jpg",
+  "category": "Matcha",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨",
+   "Bán APP"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Sự hòa quyện tinh tế giữa Trà xanh nhài thơm dịu và Matcha Nhật Bản đánh lạnh cùng sữa yến mạch, mang đến hương vị thanh mát, béo nhẹ, đầy sảng khoái.",
+  "prices": {
+   "nha_hang": 65000.0,
+   "grabfood": 65000.0,
+   "shopeefood": 65000.0,
+   "greenfood": 65000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cacao Oreo Kem Muối",
+  "slug": "cacao-oreo-kem-muối",
+  "sku": "COKM",
+  "image": "/images/products/cacao-oreo-kem-muối.jpg",
+  "category": "Cacao",
+  "menus": [
+   "💥 VŨ TRỤ OREO 🌑",
+   "Bán APP"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] hương vị ngọt ngào từ sữa tươi nguyên kem, cacao nguyên chất và kem muối béo mịn, nổi bật với vụn bánh Oreo giòn tan, thơm bùi, tạo cảm giác vừa quen thuộc vừa đầy hấp dẫn.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Oreo Kem Muối",
+  "slug": "matcha-oreo-kem-muối",
+  "sku": "MOKM",
+  "image": "/images/products/matcha-oreo-kem-muối.jpg",
+  "category": "Matcha",
+  "menus": [
+   "💥 VŨ TRỤ OREO 🌑",
+   "Bán APP"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Hương vị ngọt ngào từ sữa tươi nguyên kem, Matcha Nhật và kem muối béo mịn, nổi bật với vụn bánh Oreo giòn tan, thơm bùi, tạo cảm giác vừa quen thuộc vừa đầy hấp dẫn.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Oreo Kem Muối",
+  "slug": "cà-phê-oreo-kem-muối",
+  "sku": "CPOKM",
+  "image": "/images/products/cà-phê-oreo-kem-muối.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "💥 VŨ TRỤ OREO 🌑"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Hương vị ngọt ngào từ sữa tươi nguyên kem, Cà phê mộc chất lượng cao và kem muối béo mịn, nổi bật với vụn bánh Oreo giòn tan, thơm bùi, tạo cảm giác quen thuộc đầy hấp dẫn.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Houjicha Oreo Kem Muối",
+  "slug": "houjicha-oreo-kem-muối",
+  "sku": "HOKM",
+  "image": "/images/products/houjicha-oreo-kem-muối.jpg",
+  "category": "Houjicha",
+  "menus": [
+   "Bán APP",
+   "💥 VŨ TRỤ OREO 🌑"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Hương vị ngọt ngào từ sữa tươi nguyên kem, Trà rang Houjicha và kem muối béo mịn, nổi bật với vụn bánh Oreo giòn tan, thơm bùi, tạo cảm giác quen thuộc đầy hấp dẫn.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Jasmine Coffee",
+  "slug": "jasmine-coffee",
+  "sku": "JC",
+  "image": "/images/products/jasmine-coffee.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "Bán APP",
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Sự hòa quyện tinh tế giữa Trà xanh nhài thơm dịu, sữa tươi nguyên kem và Cà phê mộc hảo hạng mang đến hương vị thanh mát, béo nhẹ, đầy sảng khoái.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Nguyên Bản",
+  "slug": "cold-brew-nguyên-bản",
+  "sku": "CBNB",
+  "image": "/images/products/cold-brew-nguyên-bản.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt.",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Me",
+  "slug": "cold-brew-me",
+  "sku": "CBCV",
+  "image": "/images/products/cold-brew-me.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG, ngọt từ syrup. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt. Kết hợp Syrup me chua thanh tạo nên hương vị mới lạ, cuốn hút.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Hibiscus",
+  "slug": "cold-brew-hibiscus",
+  "sku": "COLDBREWHIBISCUS",
+  "image": "/images/products/cold-brew-hibiscus.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG, ngọt từ syrup. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt. Kết hợp Syrup Hibiscus mới lạ, thơm ngon.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Quýt",
+  "slug": "cold-brew-quýt",
+  "sku": "CBQ",
+  "image": "/images/products/cold-brew-quýt.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG, ngọt từ syrup. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt. Kết hợp Syrup Quýt chua thanh tạo nên hương vị mới lạ, cuốn hút.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Lý Chua Đen",
+  "slug": "cold-brew-lý-chua-đen",
+  "sku": "CBLC",
+  "image": "/images/products/cold-brew-lý-chua-đen.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG, ngọt từ syrup. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt. Kết hợp Syrup Lý Chua Đen, vị chua thanh trái mọng tạo nên hương vị mới lạ, cuốn hút.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Hibiscus",
+  "slug": "trà-hibiscus",
+  "sku": "TH",
+  "image": "/images/products/trà-hibiscus.jpg",
+  "category": "Trà",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Trà hibiscus có hương vị chua thanh mát, màu đỏ rực rỡ tự nhiên, mang lại cảm giác sảng khoái.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Vải Hibiscus",
+  "slug": "trà-vải-hibiscus",
+  "sku": "TVH",
+  "image": "/images/products/trà-vải-hibiscus.jpg",
+  "category": "Trà",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Trà hibiscus kết hợp syrup vải có hương vị chua thanh mát, màu đỏ rực rỡ tự nhiên, mang lại cảm giác sảng khoái.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Hibiscus Mãng Cầu",
+  "slug": "trà-hibiscus-mãng-cầu",
+  "sku": "THMC",
+  "image": "/images/products/trà-hibiscus-mãng-cầu.jpg",
+  "category": "Trà",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Trà hibiscus kết hợp mãng cầu có hương vị chua thanh mát, màu đỏ rực rỡ tự nhiên, mang lại cảm giác sảng khoái.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Quýt Sốt Tắc (Topping Múi Quýt)",
+  "slug": "trà-quýt-sốt-tắc-topping-múi-quýt",
+  "sku": "TQST",
+  "image": "/images/products/trà-quýt-sốt-tắc-topping-múi-quýt.jpg",
+  "category": "Trà",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Trà nhài quýt kết hợp với sốt tắc \"homemade\" có hương vị chua thanh mát, kèm múi quýt ngâm mọng nước.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Matcha Sữa Dừa",
+  "slug": "matcha-sữa-dừa",
+  "sku": "MSD",
+  "image": "/images/products/matcha-sữa-dừa.jpg",
+  "category": "Matcha",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Matcha Nhật kết hợp sữa tươi nguyên kem và cốt dừa thơm béo. Tạo ngọt: Đường & Sữa Đặc",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cacao Sữa Dừa",
+  "slug": "cacao-sữa-dừa",
+  "sku": "CSD",
+  "image": "/images/products/cacao-sữa-dừa.jpg",
+  "category": "Cacao",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Cacao nguyên chất thượng hạng kết hợp sữa tươi nguyên kem và cốt dừa thơm béo. Tạo ngọt: Đường & Sữa Đặc",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cà Phê Sữa Dừa",
+  "slug": "cà-phê-sữa-dừa",
+  "sku": "CPSD",
+  "image": "/images/products/cà-phê-sữa-dừa.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "🏆 BEST SELLER - MUST TRY ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Cà phê phin đậm đà kết hợp sữa tươi nguyên kem và cốt dừa thơm béo. Tạo ngọt: Đường & Sữa Đặc",
+  "prices": {
+   "nha_hang": 58000.0,
+   "grabfood": 58000.0,
+   "shopeefood": 58000.0,
+   "greenfood": 58000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Cold Brew Nước Dừa",
+  "slug": "cold-brew-nước-dừa",
+  "sku": "CBND",
+  "image": "/images/products/cold-brew-nước-dừa.jpg",
+  "category": "Cold Brew",
+  "menus": [
+   "Bán APP",
+   "☕️ COLD BREW - 100% ARABICA ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] KHÔNG ĐƯỜNG, ngọt từ nước dừa. Cold Brew nguyên bản từ 100% hạt Arabica Cầu Đất chất lượng cao, rang nhạt. Kết hợp nước dừa ngọt mát.",
+  "prices": {
+   "nha_hang": 62000.0,
+   "grabfood": 62000.0,
+   "shopeefood": 62000.0,
+   "greenfood": 62000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Mua 1 Tặng 1: Trà Sữa Ô Long Tặng Trà Sữa B'Lao",
+  "slug": "mua-1-tặng-1-trà-sữa-ô-long-tặng-trà-sữa-blao",
+  "sku": "MTTSOLTHTS",
+  "image": "/images/products/mua-1-tặng-1-trà-sữa-ô-long-tặng-trà-sữa-blao.jpg",
+  "category": "Combo Khuyến Mại",
+  "menus": [
+   "💥DEAL CHỚP NHOÁNG💥"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Giá đã bao gồm 8% VAT] Mua 1 Trà Sữa Ô Long Tặng 1 Trà Sữa B'Lao - Số lượng có hạn, nếu Combo hiển thị GIÁ GỐC có nghĩa là đã hết số lượng khuyến mại.\nTùy chọn Độ ngọt & Đá sẽ áp dụng chung cho 2 ly, Quý khách muốn tùy chỉnh vui lòng nhập vào phần ghi chú. Topping áp dụng cho 1 ly, Quý khách có thể chọn nhiều loại.",
+  "prices": {
+   "nha_hang": 90000.0,
+   "grabfood": 90000.0,
+   "shopeefood": 90000.0,
+   "greenfood": 90000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Thạch Sương Sáo",
+  "slug": "thạch-sương-sáo",
+  "sku": "TSS",
+  "image": "/images/products/thạch-sương-sáo.jpg",
+  "category": "Topping",
+  "menus": [
+   "✨ THÊM TOPPING - THÊM NIỀM VUI✨"
+  ],
+  "unit": "Hộp",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Thạch sương sáo ngọt nhẹ, thanh mát. Đóng gói trong hũ riêng.",
+  "prices": {
+   "nha_hang": 12000.0,
+   "grabfood": 12000.0,
+   "shopeefood": 12000.0,
+   "greenfood": 12000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Combo \"Sáng Tỉnh Táo\" (Cà Phê & Sandwich Nướng)",
+  "slug": "combo-sáng-tỉnh-táo-cà-phê-sandwich-nướng",
+  "sku": "TTP",
+  "image": "/images/products/combo-sáng-tỉnh-táo-cà-phê-sandwich-nướng.jpg",
+  "category": "Combo Tiết Kiệm",
+  "menus": [
+   "🥐 COMBO ĂN SÁNG TIẾT KIỆM 🥐"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Combo: 1 Cà phê + 1 Sandwich Nướng. Cú hích năng lượng hoàn hảo để khởi đầu ngày mới. Cà phê đậm vị kết hợp cùng bánh sandwich nướng ép nóng hổi. Khách nhớ chọn cà phê và loại bánh yêu thích ở mục Tùy chọn nhé!",
+  "prices": {
+   "nha_hang": 77000.0,
+   "grabfood": 77000.0,
+   "shopeefood": 77000.0,
+   "greenfood": 77000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Combo \"Ủ Lạnh & Nướng Giòn\" (Best Seller)",
+  "slug": "combo-ủ-lạnh-nướng-giòn-best-seller",
+  "sku": "CL",
+  "image": "/images/products/combo-ủ-lạnh-nướng-giòn-best-seller.jpg",
+  "category": "Combo Tiết Kiệm",
+  "menus": [
+   "🥐 COMBO ĂN SÁNG TIẾT KIỆM 🥐"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Combo: 1 Cold Brew + 1 Sandwich. Lựa chọn F5 tinh thần cực êm bụng cho dân văn phòng. Vị chua thanh, đắng nhẹ của cà phê ủ lạnh thủ công đi kèm bánh nướng nóng hổi giúp bạn vượt qua cơn buồn ngủ tức thì.",
+  "prices": {
+   "nha_hang": 90000.0,
+   "grabfood": 90000.0,
+   "shopeefood": 90000.0,
+   "greenfood": 90000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Combo \"Xanh Mướt & Giòn Tan\" (Bữa Xế Thanh Nhẹ)",
+  "slug": "combo-xanh-mướt-giòn-tan-bữa-xế-thanh-nhẹ",
+  "sku": "COMBOXANHMUOT",
+  "image": "/images/products/combo-xanh-mướt-giòn-tan-bữa-xế-thanh-nhẹ.jpg",
+  "category": "Combo Tiết Kiệm",
+  "menus": [
+   "🥐 COMBO ĂN SÁNG TIẾT KIỆM 🥐"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Combo: 1 Matcha + 1 Sandwich. Trạm chữa lành vị giác cho buổi chiều bận rộn. Matcha Uji Nhật Bản đậm vị, thanh tao kết hợp cùng bánh nướng giòn. Lựa chọn lý tưởng để no bụng mà không sợ cảm giác đầy hơi. Thời gian giao hàng có thể ảnh hưởng đến độ giòn của bánh.",
+  "prices": {
+   "nha_hang": 87000.0,
+   "grabfood": 87000.0,
+   "shopeefood": 87000.0,
+   "greenfood": 87000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Combo \"Trà Sữa Rôm Rả\" (Ăn Vặt Xế Chiều)",
+  "slug": "combo-trà-sữa-rôm-rả-ăn-vặt-xế-chiều",
+  "sku": "CSRRVXC",
+  "image": "/images/products/combo-trà-sữa-rôm-rả-ăn-vặt-xế-chiều.jpg",
+  "category": "Combo Tiết Kiệm",
+  "menus": [
+   "🌶️ ĂN VẶT LAI RAI - NHAI GIÒN RỤM 🌶️"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Combo: 1 Trà Sữa + 1 Bánh Tráng Trộn. Cứu đói giờ xế tuyệt hảo cho hội văn phòng. Chọn ngay vị trà sữa yêu thích kết hợp cùng bánh tráng trộn chua cay. Vừa uống trà sữa, vừa nhai bánh tráng giòn rụm!",
+  "prices": {
+   "nha_hang": 80000.0,
+   "grabfood": 80000.0,
+   "shopeefood": 80000.0,
+   "greenfood": 80000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Combo \"Thanh Mát Giải Nhiệt\" (F5 Giờ Làm)",
+  "slug": "combo-thanh-mát-giải-nhiệt-f5-giờ-làm",
+  "sku": "CMGNGL",
+  "image": "/images/products/combo-thanh-mát-giải-nhiệt-f5-giờ-làm.jpg",
+  "category": "Combo Tiết Kiệm",
+  "menus": [
+   "🌶️ ĂN VẶT LAI RAI - NHAI GIÒN RỤM 🌶️"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Combo: 1 Trà Tự Chọn + 1 Bánh Tráng Trộn. Nạp năng lượng nhưng không sợ đầy bụng. Trà trái cây chua chua ngọt ngọt thanh mát, giải nhiệt cực đã, nhâm nhi cùng bánh tráng lai rai.",
+  "prices": {
+   "nha_hang": 86000.0,
+   "grabfood": 86000.0,
+   "shopeefood": 86000.0,
+   "greenfood": 86000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Bánh Tráng Tỏi Bò Chua Cay",
+  "slug": "bánh-tráng-tỏi-bò-chua-cay",
+  "sku": "BTTBCC",
+  "image": "/images/products/bánh-tráng-tỏi-bò-chua-cay.jpg",
+  "category": "Bánh Tráng",
+  "menus": [
+   "🌶️ ĂN VẶT LAI RAI - NHAI GIÒN RỤM 🌶️"
+  ],
+  "unit": "Gói",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Sợi bánh tráng dai mềm thấm đẫm vị bò chua cay kích thích vị giác. Lựa chọn ăn vặt lai rai đánh bay cơn buồn ngủ giờ xế chiều, cực kỳ \"dính\" khi nhâm nhi cùng các dòng trà trái cây thanh mát để cân bằng vị giác.",
+  "prices": {
+   "nha_hang": 36000.0,
+   "grabfood": 36000.0,
+   "shopeefood": 36000.0,
+   "greenfood": 36000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Bánh Tráng Rong Biển Sấy Tỏi",
+  "slug": "bánh-tráng-rong-biển-sấy-tỏi",
+  "sku": "BTRBST",
+  "image": "/images/products/bánh-tráng-rong-biển-sấy-tỏi.jpg",
+  "category": "Bánh Tráng",
+  "menus": [
+   "🌶️ ĂN VẶT LAI RAI - NHAI GIÒN RỤM 🌶️"
+  ],
+  "unit": "Gói",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "[Cay nhẹ] Sự kết hợp bắt miệng giữa bánh tráng mềm và rong biển sấy giòn rụm, tẩm ướp gia vị mặn ngọt êm dịu cùng tỏi phi bùi béo. Món ăn vặt \"cứu đói\" nhẹ nhàng, rất hoàn hảo để nhai vui miệng khi thưởng thức cùng các món trà sữa đậm vị.",
+  "prices": {
+   "nha_hang": 36000.0,
+   "grabfood": 36000.0,
+   "shopeefood": 36000.0,
+   "greenfood": 36000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Sữa Tươi Cà Phê Sương Sáo",
+  "slug": "sữa-tươi-cà-phê-sương-sáo",
+  "sku": "STCPSS",
+  "image": "/images/products/sữa-tươi-cà-phê-sương-sáo.jpg",
+  "category": "Cà Phê",
+  "menus": [
+   "☕ CÀ PHÊ ĐẬM VỊ - TỈNH TÁO ✨"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Khởi đầu ngày mới tỉnh táo với một cú hích năng lượng độc đáo! Cà phê nguyên chất pha đậm đà hòa quyện cùng sữa tươi béo ngậy. Điểm nhấn nằm ở topping sương sáo mềm mượt thanh mát, cắn sần sật vui miệng giúp giải ngấy cực đỉnh.",
+  "prices": {
+   "nha_hang": 59000.0,
+   "grabfood": 59000.0,
+   "shopeefood": 59000.0,
+   "greenfood": 59000.0,
+   "online": 0
+  }
+ },
+ {
+  "name": "Trà Sữa B'Lao",
+  "slug": "trà-sữa-blao",
+  "sku": "TSB",
+  "image": "/images/products/trà-sữa-blao.jpg",
+  "category": "Trà Sữa",
+  "menus": [
+   "🧋TRÀ SỮA ĐẬM VỊ - 39K 🫖"
+  ],
+  "unit": "Ly",
+  "cost_price": 0,
+  "tax_code": "",
+  "barcode": "",
+  "print_label": true,
+  "description": "Mang trọn tinh hoa của vùng trà Bảo Lộc (B'Lao) trứ danh. Cốt trà thanh nhẹ tỏa hương thơm mộc mạc tinh tế.",
+  "prices": {
+   "nha_hang": 45000.0,
+   "grabfood": 45000.0,
+   "shopeefood": 45000.0,
+   "greenfood": 45000.0,
+   "online": 0
+  }
+ }
+]

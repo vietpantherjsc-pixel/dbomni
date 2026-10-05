@@ -1,0 +1,186 @@
+/* ==========================================================================
+   MATCHA DESIGN SYSTEM — Gói 7d (2026-10-05)
+   Gói 7o: đổi chủ đạo sang XANH DƯƠNG theo logo (navy + cam).
+   - Font: Inter (subset vietnamese đầy đủ)
+   - Bo góc nhỏ: 8px toàn hệ thống
+   ========================================================================== */
+
+:root {
+  /* Màu chủ đạo — xanh navy theo logo */
+  --m-bg: #F5F6FA;            /* nền xám-xanh nhạt */
+  --m-bg-soft: #FAFBFE;       /* nền panel nhạt */
+  --m-surface: #FFFFFF;       /* thẻ trắng */
+  --m-ink: #1E2A4E;           /* chữ chính (navy đen) */
+  --m-ink-soft: #5A6585;      /* chữ phụ */
+  --m-ink-faint: #9AA0B4;     /* chữ mờ */
+  --m-line: #E4E8F0;          /* viền */
+
+  --m-primary: #24305E;       /* xanh navy chủ đạo */
+  --m-primary-deep: #182142;  /* hover/active */
+  --m-accent: #8FA8D8;        /* xanh nhạt */
+  --m-accent-soft: #E9EEF9;   /* nền highlight xanh */
+  --m-stamp: #F5A623;         /* cam theo logo (điểm nhấn) */
+
+  --m-sidebar: #24305E;       /* sidebar navy */
+  --m-sidebar-ink: #B9C4D8;
+  --m-sidebar-active: #9DB4E4;
+
+  --m-success: #2E7D4F;
+  --m-warning: #B7791F;
+  --m-danger: #C0392B;
+
+  --m-radius: 8px;
+  --m-radius-sm: 4px;
+  --m-shadow: 0 1px 2px rgba(30, 42, 78, 0.06), 0 4px 12px rgba(30, 42, 78, 0.05);
+  --m-shadow-lg: 0 8px 28px rgba(30, 42, 78, 0.12);
+}
+
+body.m-theme {
+  background: var(--m-bg);
+  color: var(--m-ink);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Kicker: nhãn in hoa nhỏ ---- */
+.m-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--m-ink-faint);
+  font-weight: 600;
+}
+
+/* ---- Số liệu: tabular ---- */
+.m-num { font-variant-numeric: tabular-nums; }
+
+/* ---- Thẻ ---- */
+.m-card {
+  background: var(--m-surface);
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  box-shadow: var(--m-shadow);
+}
+
+/* ---- Nút ---- */
+.m-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: var(--m-radius);
+  font-size: 13px; font-weight: 600;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.m-btn:active { transform: translateY(1px); }
+.m-btn-primary { background: var(--m-primary); color: #fff; }
+.m-btn-primary:hover { background: var(--m-primary-deep); }
+.m-btn-ghost { background: transparent; border-color: var(--m-line); color: var(--m-ink); }
+.m-btn-ghost:hover { background: var(--m-bg-soft); }
+.m-btn-danger { background: var(--m-danger); color: #fff; }
+.m-btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ---- Form ---- */
+.m-input, .m-select, .m-textarea {
+  border: 1px solid var(--m-line);
+  border-radius: var(--m-radius);
+  padding: 8px 12px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--m-ink);
+  width: 100%;
+}
+.m-input:focus, .m-select:focus, .m-textarea:focus {
+  outline: none;
+  border-color: var(--m-accent);
+  box-shadow: 0 0 0 3px var(--m-accent-soft);
+}
+.m-label { font-size: 12px; font-weight: 600; color: var(--m-ink-soft); margin-bottom: 4px; display: block; }
+
+/* ---- Bảng ---- */
+.m-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+.m-table thead th {
+  text-align: left;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--m-ink-faint); font-weight: 600;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--m-line);
+  background: var(--m-bg-soft);
+}
+.m-table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--m-line); }
+.m-table tbody tr:last-child td { border-bottom: none; }
+.m-table tbody tr:hover { background: var(--m-bg-soft); }
+
+/* ---- Badge / trạng thái ---- */
+.m-badge {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.m-badge-green { background: var(--m-accent-soft); color: var(--m-primary-deep); }
+.m-badge-amber { background: #FBF3E2; color: var(--m-warning); }
+.m-badge-red { background: #FBEDEB; color: var(--m-danger); }
+.m-badge-gray { background: #F0EFE9; color: var(--m-ink-soft); }
+
+/* ---- Tabs ---- */
+.m-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--m-line); }
+.m-tab {
+  padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--m-ink-faint);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer;
+}
+.m-tab:hover { color: var(--m-ink); }
+.m-tab.active { color: var(--m-primary-deep); border-bottom-color: var(--m-primary); }
+
+/* ---- Sidebar ---- */
+.m-sidebar {
+  background: var(--m-sidebar);
+  color: var(--m-sidebar-ink);
+}
+.m-nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--m-radius);
+  font-size: 13px; color: var(--m-sidebar-ink);
+  cursor: pointer; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.m-nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.m-nav-item.active { background: rgba(157,190,140,0.16); color: var(--m-sidebar-active); font-weight: 600; }
+
+/* ---- Topbar ---- */
+.m-topbar {
+  background: var(--m-surface);
+  border-bottom: 1px solid var(--m-line);
+}
+
+/* ---- Modal / Drawer ---- */
+.m-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(30,42,78,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.m-modal {
+  background: var(--m-surface);
+  border-radius: var(--m-radius);
+  box-shadow: var(--m-shadow-lg);
+  max-width: 560px; width: calc(100% - 32px);
+  max-height: 90vh; overflow: auto;
+}
+.m-modal-head { padding: 16px 20px; border-bottom: 1px solid var(--m-line); font-weight: 700; }
+.m-modal-body { padding: 20px; }
+.m-modal-foot { padding: 14px 20px; border-top: 1px solid var(--m-line); display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---- Dấu triện đỏ (điểm nhấn thương hiệu) ---- */
+.m-stamp {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--m-stamp); color: #fff;
+  border-radius: var(--m-radius-sm);
+  font-size: 11px; font-weight: 700;
+  padding: 2px 8px; letter-spacing: 0.06em;
+}
+
+/* ---- Scrollbar mảnh ---- */
+.m-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.m-scroll::-webkit-scrollbar-thumb { background: #C6CFE2; border-radius: 3px; }
+.m-scroll::-webkit-scrollbar-track { background: transparent; }

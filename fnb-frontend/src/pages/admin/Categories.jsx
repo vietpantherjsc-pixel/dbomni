@@ -7,6 +7,7 @@ const Categories = () => {
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [editingId, setEditingId] = useState(null);
     const [formData, setFormData] = useState({
         name: '',
         slug: '',
@@ -38,13 +39,35 @@ const Categories = () => {
         setFormData({ ...formData, name, slug });
     };
 
+    const openAdd = () => {
+        setFormData({ name: '', slug: '', sort_order: 0, is_active: true });
+        setEditingId(null);
+        setIsModalOpen(true);
+    };
+
+    // Gói 8a: bấm vào dòng để sửa
+    const openEdit = (cat) => {
+        setFormData({ name: cat.name, slug: cat.slug, sort_order: cat.sort_order ?? 0, is_active: Boolean(cat.is_active) });
+        setEditingId(cat.id);
+        setIsModalOpen(true);
+    };
+
+    const closeModal = () => {
+        setIsModalOpen(false);
+        setEditingId(null);
+        setFormData({ name: '', slug: '', sort_order: 0, is_active: true });
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await axios.post('http://localhost/api/categories', formData);
-            setIsModalOpen(false);
-            setFormData({ name: '', slug: '', sort_order: 0, is_active: true });
+            if (editingId) {
+                await axios.put(`http://localhost/api/categories/${editingId}`, formData);
+            } else {
+                await axios.post('http://localhost/api/categories', formData);
+            }
+            closeModal();
             fetchCategories();
         } catch (error) {
             alert("Có lỗi xảy ra: " + (error.response?.data?.message || "Vui lòng thử lại"));
@@ -55,48 +78,50 @@ const Categories = () => {
 
     return (
         <AdminLayout>
-            <div className="flex justify-between items-center mb-6">
+            <div className="p-6 max-w-[1200px] mx-auto">
+            <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-800">Quản lý Danh mục</h1>
-                    <p className="text-gray-500 text-sm mt-1">Phân nhóm các mặt hàng để hiển thị trên POS và Menu</p>
+                    <h1 className="text-[22px] font-bold text-[var(--m-ink)]">Danh mục</h1>
+                    <p className="text-sm mt-1" style={{ color: 'var(--m-ink-soft)' }}>Phân nhóm các mặt hàng để hiển thị trên POS và Menu</p>
                 </div>
-                <button 
-                    onClick={() => setIsModalOpen(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition-colors"
+                <button
+                    onClick={openAdd}
+                    className="m-btn m-btn-primary"
                 >
                     + Thêm danh mục
                 </button>
             </div>
-            
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                <table className="w-full text-left border-collapse">
+
+            {/* Gói 7o: layout giống trang Mặt hàng */}
+            <div className="m-card overflow-hidden">
+                <table className="m-table">
                     <thead>
-                        <tr className="bg-gray-50 border-b border-gray-100 text-gray-500 text-sm uppercase tracking-wider">
-                            <th className="p-4 font-semibold">Tên danh mục</th>
-                            <th className="p-4 font-semibold">Đường dẫn (Slug)</th>
-                            <th className="p-4 font-semibold text-center">Thứ tự</th>
-                            <th className="p-4 font-semibold">Trạng thái</th>
-                            <th className="p-4 font-semibold text-right">Thao tác</th>
+                        <tr>
+                            <th className="whitespace-nowrap">Tên danh mục</th>
+                            <th className="whitespace-nowrap">Đường dẫn (Slug)</th>
+                            <th className="whitespace-nowrap text-center">Thứ tự</th>
+                            <th className="whitespace-nowrap">Trạng thái</th>
+                            <th className="whitespace-nowrap text-right">Thao tác</th>
                         </tr>
                     </thead>
-                    <tbody className="text-sm">
+                    <tbody>
                         {loading ? (
-                            <tr><td colSpan="5" className="p-8 text-center text-gray-500">Đang tải dữ liệu...</td></tr>
+                            <tr><td colSpan="5" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
                         ) : categories.length === 0 ? (
-                            <tr><td colSpan="5" className="p-8 text-center text-gray-500">Chưa có danh mục nào.</td></tr>
+                            <tr><td colSpan="5" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có danh mục nào.</td></tr>
                         ) : (
                             categories.map(cat => (
-                                <tr key={cat.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                                    <td className="p-4 font-medium text-gray-800">{cat.name}</td>
-                                    <td className="p-4 text-gray-500">{cat.slug}</td>
-                                    <td className="p-4 text-center font-medium">{cat.sort_order}</td>
-                                    <td className="p-4">
-                                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${cat.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                <tr key={cat.id} onClick={() => openEdit(cat)} className="cursor-pointer">
+                                    <td className="font-medium whitespace-nowrap">{cat.name}</td>
+                                    <td className="whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }}>{cat.slug}</td>
+                                    <td className="text-center font-medium m-num">{cat.sort_order}</td>
+                                    <td className="whitespace-nowrap">
+                                        <span className={`m-badge ${cat.is_active ? 'm-badge-green' : 'm-badge-gray'}`}>
                                             {cat.is_active ? 'Hiển thị' : 'Đang ẩn'}
                                         </span>
                                     </td>
-                                    <td className="p-4 text-right">
-                                        <button className="text-blue-500 hover:text-blue-700 mr-3">Sửa</button>
+                                    <td className="text-right whitespace-nowrap">
+                                        <button className="text-xs font-semibold hover:underline" style={{ color: 'var(--m-primary)' }} onClick={(e) => { e.stopPropagation(); openEdit(cat); }}>Sửa</button>
                                     </td>
                                 </tr>
                             ))
@@ -106,46 +131,49 @@ const Categories = () => {
             </div>
 
             {isModalOpen && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-xl shadow-lg w-full max-w-md p-6">
-                        <h2 className="text-xl font-bold text-gray-800 mb-4">Thêm danh mục mới</h2>
+                <div className="m-modal-backdrop" onClick={closeModal}>
+                    <div className="m-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="m-modal-head">{editingId ? "Sửa danh mục" : "Thêm danh mục mới"}</div>
                         <form onSubmit={handleSubmit}>
+                        <div className="m-modal-body">
                             <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Tên danh mục *</label>
-                                <input 
+                                <label className="m-label">Tên danh mục *</label>
+                                <input
                                     type="text" required value={formData.name} onChange={handleNameChange}
-                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-blue-500 focus:border-blue-500" 
+                                    className="m-input"
                                     placeholder="VD: Cà phê, Trà sữa..."
                                 />
                             </div>
                             <div className="mb-4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Thứ tự hiển thị</label>
-                                <input 
+                                <label className="m-label">Thứ tự hiển thị</label>
+                                <input
                                     type="number" value={formData.sort_order} onChange={(e) => setFormData({...formData, sort_order: e.target.value})}
-                                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-blue-500 focus:border-blue-500" 
+                                    className="m-input"
                                 />
-                                <span className="text-xs text-gray-500 mt-1">Số nhỏ hơn sẽ xếp lên trước (0, 1, 2...)</span>
+                                <span className="text-xs mt-1 block" style={{ color: 'var(--m-ink-faint)' }}>Số nhỏ hơn sẽ xếp lên trước (0, 1, 2...)</span>
                             </div>
-                            <div className="mb-6">
-                                <label className="flex items-center">
-                                    <input 
-                                        type="checkbox" checked={formData.is_active} 
-                                        onChange={(e) => setFormData({...formData, is_active: e.target.checked})} 
-                                        className="rounded text-blue-600 w-4 h-4 mr-2" 
+                            <div>
+                                <label className="flex items-center text-sm" style={{ color: 'var(--m-ink)' }}>
+                                    <input
+                                        type="checkbox" checked={formData.is_active}
+                                        onChange={(e) => setFormData({...formData, is_active: e.target.checked})}
+                                        className="w-4 h-4 mr-2 accent-[#24305E]"
                                     />
-                                    <span className="text-sm text-gray-700">Kích hoạt hiển thị</span>
+                                    Kích hoạt hiển thị
                                 </label>
                             </div>
-                            <div className="flex justify-end space-x-3 mt-6">
-                                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">Hủy</button>
-                                <button type="submit" disabled={isSubmitting} className={`px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg font-medium ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                    {isSubmitting ? 'Đang lưu...' : 'Lưu danh mục'}
+                        </div>
+                        <div className="m-modal-foot">
+                                <button type="button" onClick={closeModal} className="m-btn m-btn-ghost">Hủy</button>
+                                <button type="submit" disabled={isSubmitting} className="m-btn m-btn-primary" style={isSubmitting ? { opacity: 0.5 } : {}}>
+                                    {isSubmitting ? 'Đang lưu...' : (editingId ? 'Cập nhật' : 'Lưu danh mục')}
                                 </button>
-                            </div>
+                        </div>
                         </form>
                     </div>
                 </div>
             )}
+            </div>
         </AdminLayout>
     );
 };

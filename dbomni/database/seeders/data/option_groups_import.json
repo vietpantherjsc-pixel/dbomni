@@ -1,0 +1,662 @@
+{
+ "groups": [
+  {
+   "code": "size-g2",
+   "name": "Size - G2",
+   "type": "single",
+   "is_required": true,
+   "options": [
+    "Size M (500ml - Bao gồm Đá)",
+    "Size L (680ml - Bao gồm Đá)"
+   ]
+  },
+  {
+   "code": "size-g1",
+   "name": "Size - G1",
+   "type": "single",
+   "is_required": true,
+   "options": [
+    "Size S (360ml - Bao gồm Đá)",
+    "Size M (500ml - Bao gồm Đá)",
+    "Size L (680ml - Bao gồm Đá)"
+   ]
+  },
+  {
+   "code": "topping-san-trong-ly",
+   "name": "Topping Sẵn Trong Ly",
+   "type": "single",
+   "is_required": false,
+   "options": [
+    "Trân Châu 3Q Trắng",
+    "Jelly Vị Xoài",
+    "Không Topping",
+    "Trân Châu Đen Dẻo",
+    "Thạch Sương Sáo"
+   ]
+  },
+  {
+   "code": "do-ngot",
+   "name": "Độ Ngọt",
+   "type": "single",
+   "is_required": true,
+   "options": [
+    "100%",
+    "70%",
+    "50%",
+    "30%",
+    "Không Đường & Không Sữa Đặc",
+    "Không Đường",
+    "Không Sữa Đặc",
+    "120%",
+    "150%"
+   ]
+  },
+  {
+   "code": "topping",
+   "name": "Topping",
+   "type": "multiple",
+   "is_required": false,
+   "options": [
+    "Kem Muối",
+    "Kem Buồn Mê",
+    "Trân Châu Đen Dẻo",
+    "Trân Châu 3Q Trắng",
+    "Vải Ngâm",
+    "Jelly Vị Phô Mai",
+    "Jelly Vị Xoài",
+    "Vụn Bánh Oreo",
+    "Thạch Sương Sáo",
+    "Quýt Múi Ngâm Đường (5 Múi)"
+   ]
+  },
+  {
+   "code": "da",
+   "name": "ĐÁ (Giảm đá sẽ không đầy ly)",
+   "type": "single",
+   "is_required": true,
+   "options": [
+    "Đá Chung (Vị trí < 2km)",
+    "Ít Đá",
+    "Không Đá",
+    "Đá Riêng"
+   ]
+  },
+  {
+   "code": "them-matcha",
+   "name": "Thêm Matcha (Nhật Bản)",
+   "type": "multiple",
+   "is_required": false,
+   "options": [
+    "Thêm 2 Gram Matcha"
+   ]
+  },
+  {
+   "code": "them-houjicha",
+   "name": "Thêm Houjicha",
+   "type": "multiple",
+   "is_required": false,
+   "options": [
+    "Thêm 2 Gram Houjicha"
+   ]
+  },
+  {
+   "code": "them-ca-phe",
+   "name": "Thêm Cà Phê",
+   "type": "multiple",
+   "is_required": false,
+   "options": [
+    "Thêm 30ml Cà Phê"
+   ]
+  }
+ ],
+ "assignments": {
+  "Matcha Latte (Nhật Bản)": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "topping"
+  ],
+  "Cà Phê Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe"
+  ],
+  "Cà Phê Kem Buôn Mê": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe",
+   "topping"
+  ],
+  "Cold Brew Nước Dừa": [
+   "da",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Đen Đá": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Matcha Latte (Đài Loan)": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cà Phê Sữa Đá": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe",
+   "topping"
+  ],
+  "Cacao Oreo Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cold Brew Quýt": [
+   "da",
+   "size-g2",
+   "topping"
+  ],
+  "Jasmine Matcha Cold Whisk": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Combo \"Sáng Tỉnh Táo\" (Cà Phê & Sandwich Nướng)": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Combo \"Xanh Mướt & Giòn Tan\" (Bữa Xế Thanh Nhẹ)": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-matcha"
+  ],
+  "Cold Brew Me": [
+   "da",
+   "size-g2"
+  ],
+  "Bạc Sỉu": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe"
+  ],
+  "Cà Phê Sữa Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-ca-phe",
+   "topping"
+  ],
+  "Matcha Cold Whisk": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-matcha",
+   "topping"
+  ],
+  "Cà Phê Sữa Yến Mạch": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Oreo Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Matcha Nước Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-matcha",
+   "topping"
+  ],
+  "Mua 1 Tặng 1: Trà Sữa Ô Long Tặng Trà Sữa B'Lao": [
+   "da",
+   "do-ngot",
+   "topping"
+  ],
+  "Cà Phê Sữa Tươi": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe"
+  ],
+  "Cacao Sữa": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Nước Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Trà Quýt Sốt Tắc (Topping Múi Quýt)": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Kem Muối - CH": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cà Phê Hạnh Nhân": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Hồng Trà Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Sữa Yến Mạch - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Houjicha Cold Whisk": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-houjicha"
+  ],
+  "Houjicha Latte": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-houjicha"
+  ],
+  "Trà Sữa Ô Long": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Hồng Trà Sốt Tắc": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping",
+   "topping-san-trong-ly"
+  ],
+  "Jasmine Coffee": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Lục Trà Xoài": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping",
+   "topping-san-trong-ly"
+  ],
+  "Matcha Sữa Yến Mạch (Nhật Bản)": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Hibiscus": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Lài Quýt Elder (Trân Châu Trắng)": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cold Brew Nguyên Bản - CH": [
+   "da",
+   "size-g2"
+  ],
+  "Bạc Sỉu - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Houjicha Nước Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cacao Sữa Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Matcha Sữa Yến Mạch (Nhật Bản) - CH": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-matcha"
+  ],
+  "Combo \"Thanh Mát Giải Nhiệt\" (F5 Giờ Làm)": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cold Brew Hibiscus - CH": [
+   "da",
+   "size-g2"
+  ],
+  "Matcha Sữa Dừa - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Matcha Latte (Đài Loan) - CH": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Bạc Hà": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-ca-phe"
+  ],
+  "Cacao Sữa Yến Mạch": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Matcha Sữa Dừa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-matcha"
+  ],
+  "Cà Phê Quýt": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Matcha Cold Whisk - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Hạnh Nhân - CH": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Lục Trà Lài Sữa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cold Brew Quýt - CH": [
+   "da",
+   "size-g2"
+  ],
+  "Combo \"Ủ Lạnh & Nướng Giòn\" (Best Seller)": [
+   "da",
+   "size-g2"
+  ],
+  "Matcha Oreo Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Lài Vải": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Hồng Trà Sốt Tắc - CH": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Lục Trà Xoài - CH": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Sữa Đá - CH": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "topping"
+  ],
+  "Cold Brew Nước Dừa - CH": [
+   "da",
+   "size-g2"
+  ],
+  "Trà Hibiscus Mãng Cầu": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Houjicha Sữa Yến Mạch": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cold Brew Lý Chua Đen": [
+   "da",
+   "size-g2",
+   "topping"
+  ],
+  "Cold Brew Hibiscus": [
+   "da",
+   "size-g2"
+  ],
+  "Matcha Nước Dừa - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cacao Bạc Hà": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Trà Quýt Sốt Tắc - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Lục Trà Lài Sữa Tươi": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Hồng Trà Sữa Tươi": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Hibiscus Mãng Cầu - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Sữa Tươi - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Me Daybreak (Thêm Me Hạt Dẻo)": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Vải Hibiscus": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Lục Trà Lài Sữa Tươi - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Lục Trà Lài Sữa - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Đen Đá - CH": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cold Brew Me - CH": [
+   "da",
+   "size-g2"
+  ],
+  "Cà Phê Kem Buôn Mê - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Lục Trà Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Lục Trà Sữa Xoài": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Cà Phê Sữa Tươi (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g1",
+   "them-ca-phe",
+   "topping"
+  ],
+  "Cà Phê Sữa Yến Mạch (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "them-ca-phe"
+  ],
+  "Cold Brew Nguyên Bản": [
+   "da",
+   "size-g2"
+  ],
+  "Bạc Sỉu (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cà Phê Kem Muối (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cà Phê Kem Buôn Mê (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Cà Phê Nước Dừa - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Lài Quýt Elder (Trân Châu Trắng) - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Hồng Trà Sữa": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Trà Sữa B'Lao": [
+   "da",
+   "do-ngot",
+   "size-g2",
+   "topping"
+  ],
+  "Matcha Latte (Nhật Bản) - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cacao Sữa Yến Mạch - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cà Phê Đen Đá (Robusta)": [
+   "da",
+   "do-ngot",
+   "size-g1"
+  ],
+  "Trà Lài Vải - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Trà Me Daybreak (Thêm Me Hạt Dẻo) - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Mua 1 Tặng 1: Trà Sữa Ô Long Tặng Hồng Trà Sữa": [
+   "da",
+   "do-ngot",
+   "topping"
+  ],
+  "Houjicha Cold Whisk - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Cacao Sữa - CH": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Ô Long Sữa Tươi": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Houjicha Oreo Kem Muối": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ],
+  "Sữa Tươi Cà Phê Sương Sáo": [
+   "da",
+   "do-ngot",
+   "size-g2"
+  ]
+ }
+}
