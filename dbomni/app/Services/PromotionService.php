@@ -52,9 +52,15 @@ class PromotionService
                 continue;
             }
             // Khung giờ vàng
+            // Gói 13: hỗ trợ window qua đêm (vd 22:00–02:00): nếu to < from thì điều kiện OR
             if ($promo->time_from && $promo->time_to) {
                 $t = $now->format('H:i:s');
-                if ($t < $promo->time_from || $t > $promo->time_to) {
+                $from = $promo->time_from;
+                $to = $promo->time_to;
+                $inWindow = $to < $from
+                    ? ($t >= $from || $t <= $to)
+                    : ($t >= $from && $t <= $to);
+                if (!$inWindow) {
                     continue;
                 }
             }

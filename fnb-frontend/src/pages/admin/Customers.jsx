@@ -71,11 +71,11 @@ export default function Customers() {
 
     return (
         <AdminLayout>
-            <div>
+            <div className="p-5">
                 <div className="flex items-center justify-between mb-4">
                     <div>
-                        <h1 className="text-lg font-bold text-[#1f2937]">Khách hàng</h1>
-                        <p className="text-[13px] text-[#6b7280]">SĐT là mã định danh. Mã TV dùng cho QR quét tích điểm.</p>
+                        <h1 className="text-xl font-semibold text-gray-800">Khách hàng</h1>
+                        <p className="text-[13px] text-[#6b7280] mt-0.5">SĐT là mã định danh. Mã TV dùng cho QR quét tích điểm.</p>
                     </div>
                     <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
                         + Khách hàng

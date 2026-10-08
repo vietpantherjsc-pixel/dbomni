@@ -277,6 +277,9 @@ function GroupCheckout({ group, onDone, onBack }) {
   const [payment, setPayment] = useState('transfer');
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
+  // Gói 12b: KM phí ship cho đơn nhóm (lọc theo tổng tiền hàng của nhóm)
+  const [promos, setPromos] = useState([]);
+  const [promoId, setPromoId] = useState('');
 
   useEffect(() => {
     const g = getMyGroups()[group.code];
@@ -298,6 +301,38 @@ function GroupCheckout({ group, onDone, onBack }) {
 
   const shipFee = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
 
+  // Gói 12b: nạp KM phí ship đủ điều kiện theo tổng tiền hàng của đơn nhóm
+  useEffect(() => {
+    if (type !== 'delivery' || km == null || !shipCfg) { setPromos([]); return; }
+    const fee = calcShipFee(km, shipCfg);
+    if (fee <= 0) { setPromos([]); return; }
+    const t = setTimeout(() => {
+      api.eligiblePromotions({
+        subtotal: group.subtotal,
+        items: (group.items || []).map((it) => ({
+          product_id: it.product_id,
+          quantity: it.quantity,
+          line_total: it.unit_price * it.quantity,
+        })),
+        shipping_fee: fee,
+        channel: 'online',
+      }).then((list) => {
+        setPromos((list || []).filter((p) => p.is_shipping || p.type === 'shipping'));
+      }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [type, km, shipCfg, group.subtotal]);
+
+  // Reset KM đã chọn nếu không còn trong danh sách
+  useEffect(() => {
+    if (promoId && promos.length > 0 && !promos.some((p) => String(p.id) === String(promoId))) setPromoId('');
+  }, [promos]);
+
+  const promo = promos.find((p) => String(p.id) === String(promoId));
+  const isShipPromo = !!(promo && type === 'delivery');
+  const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
+  const grandTotal = Math.max(0, group.subtotal + shipFee - shipDisc);
+
   const place = async () => {
     if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
     if (type === 'delivery' && (!address.trim() || km == null)) { alert('Nhập địa chỉ và bấm "Tính khoảng cách".'); return; }
@@ -310,6 +345,7 @@ function GroupCheckout({ group, onDone, onBack }) {
         delivery_address: type === 'delivery' ? address.trim() : null,
         distance_km: type === 'delivery' ? km : null,
         payment_method: payment,
+        promotion_id: promoId || null, // Gói 12b: KM phí ship cho đơn nhóm
         note: note.trim() || null,
         referred_by: getRef() || null,
       });
@@ -364,12 +400,31 @@ function GroupCheckout({ group, onDone, onBack }) {
         <div className="dot" /><div><b>Thanh toán tại quán</b></div>
       </div>
 
+      {/* Gói 12b: chọn KM phí ship cho đơn nhóm */}
+      {type === 'delivery' && promos.length > 0 && (
+        <div className="zm-field">
+          <label>Khuyến mại phí ship</label>
+          <select value={promoId} onChange={(e) => setPromoId(e.target.value)}>
+            <option value="">Không dùng</option>
+            {promos.map((p) => (
+              <option key={p.id} value={p.id}>🚚 {p.name} (−{fmt(p.discount)}đ phí ship)</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="zm-field">
         <label>Ghi chú</label>
         <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ghi chú cho quán..." />
       </div>
 
-      <div className="zm-total-row grand"><span>Tổng cộng</span><span>{fmt(group.subtotal + shipFee)}đ</span></div>
+      {type === 'delivery' && shipFee > 0 && (
+        <div className="zm-total-row"><span>Phí ship (~{km}km)</span><span>{fmt(shipFee)}đ</span></div>
+      )}
+      {shipDisc > 0 && (
+        <div className="zm-total-row disc"><span>🚚 {promo.name}</span><span>−{fmt(shipDisc)}đ</span></div>
+      )}
+      <div className="zm-total-row grand"><span>Tổng cộng</span><span>{fmt(grandTotal)}đ</span></div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button className="zm-btn-outline" style={{ width: 120 }} onClick={onBack}>← Quay lại</button>

@@ -69,9 +69,9 @@ export default function MemberTiers() {
 
     return (
         <AdminLayout>
-            <div>
+            <div className="p-5">
                 <div className="flex items-center justify-between mb-1">
-                    <h1 className="text-lg font-bold text-[#1f2937]">Thẻ thành viên</h1>
+                    <h1 className="text-xl font-semibold text-gray-800">Thẻ thành viên</h1>
                     <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
                         + Hạng mới
                     </button>

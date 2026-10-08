@@ -31,6 +31,16 @@ export default function TrackOrder() {
 
   useEffect(() => { if (params.get('code')) lookup(params.get('code')); }, []);
 
+  // Gói 11: tự tải lại trạng thái mỗi 5s (không cần F5 tay)
+  useEffect(() => {
+    const cd = (params.get('code') || '').trim();
+    if (!cd) return;
+    const t = setInterval(() => {
+      api.trackOrder(cd).then(setOrder).catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+  }, []);
+
   const cancel = async () => {
     if (!confirm('Chắc chắn hủy đơn này?')) return;
     try {

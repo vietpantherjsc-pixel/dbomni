@@ -11,6 +11,8 @@ import { printBill, printLabels } from '../../utils/print';
 
 const TABS = [
     { key: 'all', label: 'Tất cả hóa đơn' },
+    // Gói 11: đơn Zalo chờ xác nhận (xác nhận ở KDS xong mới vào Hóa đơn)
+    { key: 'awaiting_confirm', label: '🕐 Chờ xác nhận (Zalo)' },
     { key: 'paid', label: 'Đã thanh toán' },
     { key: 'pending_payment', label: 'Chờ xác nhận thanh toán' },
     { key: 'cancelled', label: 'Đã hủy' },

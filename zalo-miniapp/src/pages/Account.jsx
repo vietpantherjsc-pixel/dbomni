@@ -2,32 +2,50 @@ import React, { useState } from 'react';
 import { api, fmt, getProfile, setProfile } from '../api';
 import { TabBar } from './Home';
 
+// Gói 11: Tài khoản đăng nhập bằng SĐT + Mã thành viên (bỏ tra cứu tự do bằng SĐT
+// để tránh lộ thông tin khách hàng). Mã TV in trên thẻ/quét QR tại quầy.
 export default function Account() {
   const [phone, setPhone] = useState(() => getProfile()?.phone || '');
+  const [memberCode, setMemberCode] = useState(() => getProfile()?.member_code || '');
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const lookup = async () => {
-    if (!phone.trim()) { alert('Nhập số điện thoại.'); return; }
+    if (!phone.trim() || !memberCode.trim()) { alert('Nhập số điện thoại và mã thành viên.'); return; }
     setLoading(true);
     try {
-      const c = await api.customerByPhone(phone.trim());
+      const c = await api.customerByPhone(phone.trim(), memberCode.trim());
       setCustomer(c);
-      if (c) setProfile({ name: c.name, phone: c.phone, member_code: c.member_code }); // Gói 9: giữ mã TV để share link
-      else alert('Chưa có thông tin thành viên với SĐT này. Đặt món 1 lần để tạo thẻ thành viên nhé!');
+      if (c) setProfile({ name: c.name, phone: c.phone, member_code: c.member_code });
+      else alert('SĐT hoặc mã thành viên không đúng. Mã TV in trên thẻ thành viên của bạn.');
     } catch (e) { alert(e.message); }
     finally { setLoading(false); }
+  };
+
+  const logout = () => {
+    setProfile(null);
+    setCustomer(null);
+    setPhone('');
+    setMemberCode('');
   };
 
   return (
     <div className="zm-page">
       <div className="zm-header"><h1>Tài khoản</h1></div>
-      <div className="zm-search">
-        <input placeholder="Nhập SĐT để xem điểm & hạng" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
-        <button className="zm-btn-outline" style={{ width: 'auto', padding: '10px 18px' }} onClick={lookup} disabled={loading}>
-          {loading ? '...' : 'Xem'}
-        </button>
-      </div>
+      {!customer && (
+        <>
+          <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+            <input placeholder="Số điện thoại" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
+            <input placeholder="Mã thành viên (VD: TV6BDAFA)" value={memberCode} onChange={(e) => setMemberCode(e.target.value)} style={{ textTransform: 'uppercase' }} />
+            <button className="zm-btn-primary" onClick={lookup} disabled={loading}>
+              {loading ? '...' : 'Đăng nhập'}
+            </button>
+          </div>
+          <div className="zm-note" style={{ margin: '0 16px' }}>
+            Đăng nhập bằng SĐT + mã thành viên (in trên thẻ của bạn) để xem điểm, hạng và lịch sử đơn hàng.
+          </div>
+        </>
+      )}
 
       {customer && (
         <div style={{ padding: '4px 16px' }}>
@@ -41,6 +59,8 @@ export default function Account() {
             </div>
           </div>
 
+          <button className="zm-btn-outline" style={{ marginTop: 12 }} onClick={logout}>Đăng xuất</button>
+
           <div className="zm-section-title" style={{ padding: '16px 0 8px' }}>Đơn gần đây</div>
           {customer.orders.length === 0 && <div className="zm-empty" style={{ padding: 20 }}>Chưa có đơn nào.</div>}
           {customer.orders.map((o) => (
@@ -49,11 +69,6 @@ export default function Account() {
               <span><b>{fmt(o.total_amount)}đ</b></span>
             </div>
           ))}
-        </div>
-      )}
-      {!customer && (
-        <div className="zm-note" style={{ margin: '0 16px' }}>
-          Nhập số điện thoại bạn đã dùng khi đặt món để xem điểm tích lũy, hạng thành viên và lịch sử đơn hàng.
         </div>
       )}
       <TabBar />

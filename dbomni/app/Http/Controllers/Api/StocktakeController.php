@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Batch;
 use App\Models\Material;
 use App\Models\Stocktake;
-use App\Services\InventoryService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,13 +15,27 @@ use Illuminate\Support\Facades\DB;
 // Luồng: tạo phiếu (chụp tồn hệ thống) -> nhập số thực đếm -> chốt (điều chỉnh kho).
 class StocktakeController extends Controller
 {
+    // Gói 19 (2026-10-09): Lịch sử kiểm kho — chốt phiếu chỉ GHI NHẬN chênh lệch,
+    // KHÔNG tự động điều chỉnh tồn kho (quản lý quyết định xử lý sau).
     public function index(Request $request): JsonResponse
     {
-        $query = Stocktake::with(['user', 'branch'])->orderByDesc('id');
+        $query = Stocktake::with(['user', 'branch', 'items'])
+            ->orderByDesc('checked_at')
+            ->orderByDesc('id');
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));
         }
-        return response()->json(['success' => true, 'data' => $query->limit(50)->get()]);
+        $list = $query->limit(50)->get()->map(function ($s) {
+            $arr = $s->toArray();
+            unset($arr['items']); // gọn payload danh sách
+            $arr['total_items'] = $s->items->count();
+            $arr['diff_items'] = $s->items->filter(function ($it) {
+                return $it->counted_qty !== null
+                    && abs((float) $it->counted_qty - (float) $it->system_qty) >= 0.005;
+            })->count();
+            return $arr;
+        });
+        return response()->json(['success' => true, 'data' => $list]);
     }
 
     public function show(int $id): JsonResponse
@@ -102,11 +115,16 @@ class StocktakeController extends Controller
         return response()->json(['success' => true, 'message' => 'Đã lưu số liệu kiểm đếm']);
     }
 
-    // Chốt phiếu: điều chỉnh kho theo chênh lệch
-    public function confirm(int $id, InventoryService $inventoryService): JsonResponse
+    // Chốt phiếu (Gói 19): ghi nhận chênh lệch vào lịch sử, KHÔNG tự động điều chỉnh kho.
+    // Nhận ngày-giờ kiểm từ client (mặc định = hiện tại).
+    public function confirm(int $id, Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'checked_at' => 'nullable|date',
+        ]);
+
         try {
-            $result = DB::transaction(function () use ($id, $inventoryService) {
+            $result = DB::transaction(function () use ($id, $validated) {
                 $stocktake = Stocktake::with('items.material')->lockForUpdate()->findOrFail($id);
 
                 if ($stocktake->status !== 'draft') {
@@ -118,44 +136,33 @@ class StocktakeController extends Controller
                     throw new Exception('Còn ' . $uncounted->count() . ' nguyên liệu chưa nhập số thực đếm.');
                 }
 
-                $adjustments = [];
+                $rows = [];
                 foreach ($stocktake->items as $item) {
                     $diff = (float) $item->counted_qty - (float) $item->system_qty;
-                    if (abs($diff) < 0.005) {
-                        continue; // không chênh lệch
-                    }
-
-                    if ($diff < 0) {
-                        // Thiếu: trừ kho FIFO
-                        $inventoryService->deductMaterials($stocktake->branch_id, [$item->material_id => abs($diff)]);
-                    } else {
-                        // Thừa: nhập lô điều chỉnh mới
-                        $inventoryService->addStock(
-                            $stocktake->branch_id,
-                            $item->material_id,
-                            $diff,
-                            'KK-' . date('Ymd') . '-' . strtoupper(\Illuminate\Support\Str::random(5))
-                        );
-                    }
-
-                    $adjustments[] = [
-                        'material' => $item->material->name,
+                    $rows[] = [
+                        'material_id' => $item->material_id,
+                        'name' => $item->material->name,
                         'unit' => $item->material->unit,
-                        'system' => (float) $item->system_qty,
-                        'counted' => (float) $item->counted_qty,
+                        'type' => $item->material->type,
+                        'system_qty' => (float) $item->system_qty,
+                        'counted_qty' => (float) $item->counted_qty,
                         'diff' => $diff,
                     ];
                 }
 
                 $stocktake->status = 'confirmed';
+                $stocktake->checked_at = $validated['checked_at'] ?? now();
                 $stocktake->save();
 
-                return $adjustments;
+                return [
+                    'stocktake' => $stocktake->fresh()->load(['user', 'branch']),
+                    'rows' => $rows,
+                ];
             });
 
             return response()->json([
                 'success' => true,
-                'message' => 'Đã chốt kiểm kê và điều chỉnh kho.',
+                'message' => 'Đã chốt kiểm kê và lưu lịch sử.',
                 'data' => $result,
             ]);
         } catch (Exception $e) {

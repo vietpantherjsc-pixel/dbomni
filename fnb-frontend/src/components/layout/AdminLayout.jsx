@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext';
 import '../../styles/matcha.css';
 import { loadTheme } from '../../utils/theme';
 import { loadNumberSettings } from '../../utils/number';
@@ -55,7 +56,11 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
 // Menu chính (copy Sapo, trừ Kế toán/Thuế) + submenu
 const mainMenu = [
     { path: '/admin', label: 'Tổng quan', icon: 'home' },
-    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart', children: ['Báo cáo doanh thu', 'Báo cáo kho'] },
+    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart', children: [
+        { label: 'Báo cáo doanh thu', path: '/admin/reports' },
+        { label: 'Báo cáo kho', path: '/admin/reports/inventory' },
+        { label: 'Báo cáo thu chi / PNL', path: '/admin/reports/pnl' },
+    ] },
     { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt', children: ['Hóa đơn bán hàng', 'Hóa đơn điện tử'] },
     { path: '/admin/products', label: 'Mặt hàng', icon: 'tag', children: [
         { label: 'Danh sách mặt hàng', path: '/admin/products' },
@@ -71,7 +76,7 @@ const mainMenu = [
         { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
     ] },
     { path: '/admin/promotions', label: 'Khuyến mại', icon: 'percent' },
-    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: ['Tồn kho', 'Nhập kho', 'Kiểm kho'] },
+    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box' },
     { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: ['Phiếu thu', 'Phiếu chi'] },
     { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', children: ['Bảng chấm công', 'Tính lương'] },
 ];
@@ -91,10 +96,24 @@ const opsMenu = [
 
 const AdminLayout = ({ children }) => {
     const { user, logout } = useAuth();
+    const { branchId, setBranchId } = useBranch();
     const location = useLocation();
     const navigate = useNavigate();
     const [collapsed, setCollapsed] = useState(false);
     const [openSub, setOpenSub] = useState(null); // path của menu đang mở submenu
+    // Gói 18: dropdown chọn chi nhánh
+    const [branches, setBranches] = useState([]);
+    const [branchOpen, setBranchOpen] = useState(false);
+
+    useEffect(() => {
+        axios.get('http://localhost/api/branches')
+            .then((r) => { if (r.data?.success) setBranches(r.data.data || []); })
+            .catch(() => {});
+    }, []);
+
+    const branchName = branchId === '0'
+        ? 'Tất cả chi nhánh'
+        : (branches.find((b) => String(b.id) === String(branchId))?.name || 'Chi nhánh ' + branchId);
 
     // Gói 7d: gắn theme Matcha cho body
     useEffect(() => {
@@ -216,12 +235,42 @@ const AdminLayout = ({ children }) => {
                     )}
                 </div>
 
-                {/* Chọn chi nhánh */}
+                {/* Chọn chi nhánh — Gói 18: dropdown thật, chọn từng CN hoặc tất cả */}
                 {!collapsed ? (
-                    <button className="m-nav-item mx-2.5 mt-2.5 justify-between" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                        <span className="truncate font-medium">DBOmni - CN-Q1</span>
-                        <Icon name="chevron" className="w-3.5 h-3.5 rotate-90 opacity-60" />
-                    </button>
+                    <div className="relative mx-2.5 mt-2.5">
+                        <button
+                            onClick={() => setBranchOpen(!branchOpen)}
+                            className="m-nav-item w-full justify-between"
+                            style={{ background: 'rgba(255,255,255,0.06)' }}
+                        >
+                            <span className="truncate font-medium">{branchName}</span>
+                            <Icon name="chevron" className={`w-3.5 h-3.5 opacity-60 transition-transform ${branchOpen ? '-rotate-90' : 'rotate-90'}`} />
+                        </button>
+                        {branchOpen && (
+                            <>
+                                <div className="fixed inset-0 z-30" onClick={() => setBranchOpen(false)} />
+                                <div className="absolute left-0 right-0 top-full mt-1 z-40 rounded-lg overflow-hidden shadow-xl border border-white/10 max-h-64 overflow-y-auto" style={{ background: '#1c2547' }}>
+                                    <button
+                                        onClick={() => { setBranchId('0'); setBranchOpen(false); }}
+                                        className={`w-full text-left px-3 py-2 text-[13px] hover:bg-white/10 ${branchId === '0' ? 'font-bold' : ''}`}
+                                        style={{ color: branchId === '0' ? 'var(--m-accent)' : '#e6ebf5' }}
+                                    >
+                                        {branchId === '0' ? '✓ ' : ''}Tất cả chi nhánh
+                                    </button>
+                                    {branches.map((b) => (
+                                        <button
+                                            key={b.id}
+                                            onClick={() => { setBranchId(b.id); setBranchOpen(false); }}
+                                            className={`w-full text-left px-3 py-2 text-[13px] hover:bg-white/10 ${String(branchId) === String(b.id) ? 'font-bold' : ''}`}
+                                            style={{ color: String(branchId) === String(b.id) ? 'var(--m-accent)' : '#e6ebf5' }}
+                                        >
+                                            {String(branchId) === String(b.id) ? '✓ ' : ''}{b.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
                 ) : (
                     <div className="mx-auto mt-2.5 w-8 h-8 rounded-lg bg-white/5" />
                 )}
@@ -264,7 +313,7 @@ const AdminLayout = ({ children }) => {
                             <Icon name="menu" className="w-5 h-5" />
                         </button>
                         <span className="text-[14px] font-semibold" style={{ color: 'var(--m-ink)' }}>
-                            DBOmni - CN-Q1
+                            {branchName}
                         </span>
                     </div>
                     <div className="flex items-center gap-3">

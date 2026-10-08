@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { BranchProvider } from './contexts/BranchContext';
 import Login from './pages/Login';
 import Dashboard from './pages/admin/Dashboard';
 import Products from './pages/admin/Products';
@@ -19,6 +20,9 @@ import PosScreen from './components/PosScreen';
 import KdsScreen from './KdsScreen';
 import Settings from './pages/admin/Settings';
 import PriceLists from './pages/admin/PriceLists';
+import Reports from './pages/admin/Reports'; // Gói 15: Báo cáo Giám đốc
+import ReportsInventory from './pages/admin/ReportsInventory'; // Gói 17: Báo cáo kho
+import ReportsPnl from './pages/admin/ReportsPnl'; // Gói 17: Báo cáo thu chi/PNL
 
 // Gói 1 (2026-10-04): bọc 2 màn hình để nút "Về App" điều hướng được
 // (component thật cần prop onBackToApp / onBackToClient).
@@ -51,6 +55,7 @@ const PrivateRoute = ({ children }) => {
 const App = () => {
     return (
         <AuthProvider>
+            <BranchProvider>
             <Router>
                 <Routes>
                     {/* Route Công khai */}
@@ -156,9 +161,34 @@ const App = () => {
                         }
                     />
 
+                    {/* Gói 15 (2026-10-08): Báo cáo Giám đốc (code từ demo v3 đã chốt) */}
+                    <Route
+                        path="/admin/reports"
+                        element={
+                            <PrivateRoute>
+                                <Reports />
+                            </PrivateRoute>
+                        }
+                    />
+                    {/* Gói 17 (2026-10-09): Báo cáo kho + Báo cáo thu chi/PNL */}
+                    <Route
+                        path="/admin/reports/inventory"
+                        element={
+                            <PrivateRoute>
+                                <ReportsInventory />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/reports/pnl"
+                        element={
+                            <PrivateRoute>
+                                <ReportsPnl />
+                            </PrivateRoute>
+                        }
+                    />
                     {/* Gói 2 (2026-10-04): các mục menu Sapo chưa phát triển -> trang ComingSoon */}
                     {[
-                        ['/admin/reports', 'Báo cáo'],
                         ['/admin/bookings', 'Đặt lịch'],
                         ['/admin/staff', 'Nhân viên'],
                         ['/admin/transactions', 'Thu chi'],
@@ -207,6 +237,7 @@ const App = () => {
                     <Route path="*" element={<Navigate to="/admin" replace />} />
                 </Routes>
             </Router>
+            </BranchProvider>
         </AuthProvider>
     );
 };

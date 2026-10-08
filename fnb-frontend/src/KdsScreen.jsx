@@ -1,13 +1,66 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 import { 
   ChefHat, Clock, CheckCircle2, AlertCircle, RefreshCw, 
-  Volume2, VolumeX, ArrowRight, Check, Coffee, Store
+  Volume2, VolumeX, ArrowRight, Check, Coffee, Store, ShoppingCart
 } from 'lucide-react';
 
 const API_BASE = 'http://localhost/api';
 
+// Gói 11: thẻ đơn dùng chung cho cột Nhận Đơn — hiện mã, giờ đặt, loại đơn, tổng tiền,
+// badge hẹn giờ, và nút hành động (Xác nhận / Bắt đầu pha chế) tùy trạng thái.
+function KdsOrderCard({ ord, elapsed, typeLabel, scheduledAt, action }) {
+  return (
+    <div className="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 space-y-3">
+      <div className="flex justify-between items-center text-xs">
+        <span className="font-mono font-extrabold text-emerald-400 text-sm">#{ord.code}</span>
+        <span className={`flex items-center gap-1 font-bold ${elapsed > 10 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
+          <Clock className="w-3.5 h-3.5" /> {elapsed} phút
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between text-xs">
+        {typeLabel ? (
+          <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 font-bold border border-sky-500/30">
+            {typeLabel}
+          </span>
+        ) : <span />}
+        <span className="font-mono font-extrabold text-slate-100">
+          {Number(ord.total_amount || 0).toLocaleString('vi-VN')}đ
+        </span>
+      </div>
+
+      {scheduledAt && (
+        <p className="text-[11px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/30 rounded-xl px-2.5 py-1.5">
+          📅 Hẹn: {new Date(scheduledAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+        </p>
+      )}
+
+      <div className="border-t border-slate-700/60 pt-2 space-y-1.5 text-xs">
+        {ord.items?.map((it) => (
+          <div key={it.id} className="flex justify-between">
+            <span className="font-bold text-slate-100">
+              {it.product?.name ?? it.product_name} {it.option ? `(${it.option.name})` : ''}{Object.values(it.options || {}).length ? ` (${Object.values(it.options).join(', ')})` : ''}
+            </span>
+            <span className="font-mono font-extrabold text-amber-400">x{it.quantity}</span>
+          </div>
+        ))}
+      </div>
+
+      {ord.note && (
+        <p className="text-[11px] bg-slate-900/80 text-amber-300/90 p-2 rounded-xl italic">
+          "{ord.note}"
+        </p>
+      )}
+
+      {action}
+    </div>
+  );
+}
+
 export default function KdsScreen({ onBackToClient }) {
+  const navigate = useNavigate(); // Gói 18: chuyển nhanh về POS
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -89,6 +142,31 @@ export default function KdsScreen({ onBackToClient }) {
   const processingOrders = orders.filter((o) => o.status === 'processing');
   const readyOrders = orders.filter((o) => o.status === 'ready');
 
+  // Gói 11: nhóm trong cột "Chờ pha chế" — đơn Zalo chưa xác nhận + đơn hẹn giờ riêng
+  const confirmGroup = pendingOrders.filter((o) => o.needs_confirm && !o.scheduled_at);
+  const scheduledGroup = pendingOrders
+    .filter((o) => o.scheduled_at)
+    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const normalPending = pendingOrders.filter((o) => !o.needs_confirm && !o.scheduled_at);
+
+  // Gói 11: xác nhận đã nhận tiền ngay tại KDS (đơn Zalo) — trừ kho, vào "Đang pha chế"
+  const handleConfirmPayment = async (orderId, orderCode) => {
+    if (!confirm(`Xác nhận đã nhận tiền đơn ${orderCode}? Đơn sẽ trừ kho và chuyển sang Đang pha chế.`)) return;
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${orderId}/confirm-payment`);
+      if (res.data?.success) fetchKdsOrders();
+      else alert(res.data?.message || 'Lỗi');
+    } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+  };
+
+  // Nhãn loại đơn online
+  const orderTypeLabel = (o) => {
+    if (o.scheduled_at) return 'Hẹn lấy';
+    if (o.order_type === 'delivery') return 'Giao đi';
+    if (o.order_type === 'takeaway') return 'Mang đi';
+    return o.order_type || '';
+  };
+
   // Tính thời gian chờ (phút)
   const getElapsedMinutes = (dateString) => {
     const diffMs = new Date() - new Date(dateString);
@@ -145,6 +223,16 @@ export default function KdsScreen({ onBackToClient }) {
             <span className="hidden sm:inline">Làm mới</span>
           </button>
 
+          {/* Gói 18: nút chuyển nhanh về POS, không cần thoát ra admin */}
+          <button
+            onClick={() => navigate('/pos')}
+            title="Về màn hình Bán hàng (POS)"
+            className="p-2 rounded-xl bg-orange-500/15 border border-orange-500/40 hover:bg-orange-500/25 text-orange-300 transition flex items-center gap-1.5 text-xs font-bold"
+          >
+            <ShoppingCart className="w-4 h-4" />
+            <span className="hidden sm:inline">POS</span>
+          </button>
+
           {/* Nút quay về màn hình Khách (Mini App) */}
           <button
             onClick={onBackToClient}
@@ -158,61 +246,86 @@ export default function KdsScreen({ onBackToClient }) {
       {/* 2. KHÔNG GIAN BẢNG KANBAN 3 CỘT */}
       <main className="flex-1 p-6 grid grid-cols-1 md:grid-cols-3 gap-6 overflow-hidden">
 
-        {/* CỘT 1: CHỜ TIẾP NHẬN (PENDING) */}
+        {/* CỘT 1: NHẬN ĐƠN (PENDING) — Gói 11: chia nhóm Chờ xác nhận / Hẹn giờ / thường */}
         <section className="bg-slate-900/90 rounded-3xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-amber-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-              <h2 className="font-extrabold text-sm text-amber-400 tracking-wider uppercase">Chờ Pha Chế</h2>
+              <h2 className="font-extrabold text-sm text-amber-400 tracking-wider uppercase">Nhận Đơn</h2>
             </div>
             <span className="text-xs font-mono font-bold bg-amber-500/20 text-amber-300 px-2.5 py-0.5 rounded-full">
               {pendingOrders.length}
             </span>
           </div>
 
-          <div className="flex-1 p-4 overflow-y-auto space-y-4 no-scrollbar">
-            {pendingOrders.length === 0 ? (
+          <div className="flex-1 p-4 overflow-y-auto space-y-5 no-scrollbar">
+            {pendingOrders.length === 0 && (
               <p className="text-xs text-slate-500 text-center py-10">Không có đơn hàng nào chờ</p>
-            ) : (
-              pendingOrders.map((ord) => {
-                const elapsed = getElapsedMinutes(ord.created_at);
-                return (
-                  <div key={ord.id} className="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 space-y-3">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-mono font-extrabold text-emerald-400 text-sm">#{ord.code}</span>
-                      <span className={`flex items-center gap-1 font-bold ${elapsed > 10 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
-                        <Clock className="w-3.5 h-3.5" /> {elapsed} phút
-                      </span>
-                    </div>
-
-                    <div className="border-t border-slate-700/60 pt-2 space-y-1.5 text-xs">
-                      {ord.items?.map((it) => (
-                        <div key={it.id} className="flex justify-between">
-                          <span className="font-bold text-slate-100">
-                            {it.product?.name} {it.option ? `(${it.option.name})` : ''}
-                          </span>
-                          <span className="font-mono font-extrabold text-amber-400">x{it.quantity}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {ord.note && (
-                      <p className="text-[11px] bg-slate-900/80 text-amber-300/90 p-2 rounded-xl italic">
-                        "{ord.note}"
-                      </p>
-                    )}
-
-                    <button
-                      onClick={() => handleUpdateStatus(ord.code, 'processing')}
-                      className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-md"
-                    >
-                      <span>Bắt đầu pha chế</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                );
-              })
             )}
+
+            {/* Nhóm 1: chờ xác nhận tiền (đơn Zalo) */}
+            {confirmGroup.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-[11px] font-extrabold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                  🕐 Chờ xác nhận ({confirmGroup.length})
+                </p>
+                {confirmGroup.map((ord) => (
+                  <KdsOrderCard key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)}
+                    typeLabel={orderTypeLabel(ord)}
+                    action={(
+                      <button
+                        onClick={() => handleConfirmPayment(ord.id, ord.code)}
+                        className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-md"
+                      >
+                        <Check className="w-4 h-4" /><span>Xác nhận đã nhận tiền</span>
+                      </button>
+                    )} />
+                ))}
+              </div>
+            )}
+
+            {/* Nhóm 2: đơn hẹn giờ */}
+            {scheduledGroup.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-[11px] font-extrabold text-violet-400 uppercase tracking-wider flex items-center gap-1.5">
+                  📅 Hẹn giờ ({scheduledGroup.length})
+                </p>
+                {scheduledGroup.map((ord) => (
+                  <KdsOrderCard key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)}
+                    typeLabel={orderTypeLabel(ord)}
+                    scheduledAt={ord.scheduled_at}
+                    action={ord.needs_confirm ? (
+                      <button
+                        onClick={() => handleConfirmPayment(ord.id, ord.code)}
+                        className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-md"
+                      >
+                        <Check className="w-4 h-4" /><span>Xác nhận đã nhận tiền</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleUpdateStatus(ord.code, 'processing')}
+                        className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-md"
+                      >
+                        <span>Bắt đầu pha chế</span><ArrowRight className="w-4 h-4" />
+                      </button>
+                    )} />
+                ))}
+              </div>
+            )}
+
+            {/* Nhóm 3: đơn thường đã xác nhận */}
+            {normalPending.map((ord) => (
+              <KdsOrderCard key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)}
+                typeLabel={orderTypeLabel(ord)}
+                action={(
+                  <button
+                    onClick={() => handleUpdateStatus(ord.code, 'processing')}
+                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-md"
+                  >
+                    <span>Bắt đầu pha chế</span><ArrowRight className="w-4 h-4" />
+                  </button>
+                )} />
+            ))}
           </div>
         </section>
 
@@ -245,7 +358,7 @@ export default function KdsScreen({ onBackToClient }) {
                     {ord.items?.map((it) => (
                       <div key={it.id} className="flex justify-between">
                         <span className="font-bold text-slate-100">
-                          {it.product?.name} {it.option ? `(${it.option.name})` : ''}
+                          {it.product?.name ?? it.product_name} {it.option ? `(${it.option.name})` : ''}{Object.values(it.options || {}).length ? ` (${Object.values(it.options).join(', ')})` : ''}
                         </span>
                         <span className="font-mono font-extrabold text-blue-400">x{it.quantity}</span>
                       </div>

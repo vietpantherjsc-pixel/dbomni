@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import AdminLayout from '../../components/layout/AdminLayout';
 
 // Gói 3 (2026-10-04): Quản lý bàn (bản gọn) — thêm/xóa/đổi trạng thái bàn.
 // AuthContext đã gắn Bearer token vào axios.defaults nên dùng axios trực tiếp.
@@ -59,8 +60,9 @@ export default function Tables() {
     };
 
     return (
-        <div>
-            <h1 className="text-lg font-bold text-[#1f2937] mb-1">Quản lý bàn</h1>
+        <AdminLayout>
+            <div className="p-5">
+            <h1 className="text-xl font-semibold text-gray-800 mb-1">Quản lý bàn</h1>
             <p className="text-[13px] text-[#6b7280] mb-4">Danh sách bàn phục vụ tại quán (bấm vào thẻ để đổi trạng thái trống/có khách).</p>
 
             <div className="flex gap-2 mb-4 max-w-md">
@@ -112,6 +114,7 @@ export default function Tables() {
                     ))}
                 </div>
             )}
-        </div>
+            </div>
+        </AdminLayout>
     );
 }

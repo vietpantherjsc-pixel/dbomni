@@ -27,9 +27,11 @@ export const api = {
   groupUpdateItem: (code, id, payload) => req(`/group-orders/${encodeURIComponent(code)}/items/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   groupRemoveItem: (code, id) => req(`/group-orders/${encodeURIComponent(code)}/items/${id}`, { method: 'DELETE' }),
   groupCheckout: (code, payload) => req(`/group-orders/${encodeURIComponent(code)}/checkout`, { method: 'POST', body: JSON.stringify(payload) }),
+  // Gói 11: nhận đơn POS vào tài khoản qua QR tích điểm
+  claimOrder: (code, payload) => req(`/orders/${encodeURIComponent(code)}/claim`, { method: 'POST', body: JSON.stringify(payload) }),
   shippingFee: (distance_km) => req('/shipping-fee', { method: 'POST', body: JSON.stringify({ distance_km }) }),
   eligiblePromotions: (payload) => req('/promotions/eligible', { method: 'POST', body: JSON.stringify(payload) }),
-  customerByPhone: (phone) => req(`/customer?phone=${encodeURIComponent(phone)}`),
+  customerByPhone: (phone, memberCode) => req(`/customer?phone=${encodeURIComponent(phone)}&member_code=${encodeURIComponent(memberCode)}`),
   createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   trackOrder: (code) => req(`/orders/${encodeURIComponent(code)}`),
   cancelOrder: (code) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST' }),

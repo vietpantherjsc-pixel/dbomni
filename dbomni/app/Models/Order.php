@@ -46,6 +46,9 @@ class Order extends Model
         'note',
         'cancel_reason',
         'cancelled_at',
+        'completed_at', // Gói 12a
+        'claim_token', // Gói 11: token QR tích điểm
+        'claim_expires_at', // Gói 11: hạn token QR tích điểm
     ];
 
     protected $casts = [
@@ -57,6 +60,8 @@ class Order extends Model
         'distance_km' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'cancelled_at' => 'datetime',
+        'completed_at' => 'datetime', // Gói 12a: mốc hoàn thành để giới hạn tra cứu Mini App 24h
+        'claim_expires_at' => 'datetime', // Gói 13: fix crash QR claim (isPast() trên string)
         'scheduled_at' => 'datetime',
         'stock_deducted' => 'boolean',
     ];

@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\OptionGroupController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\ProductionController;
 use App\Http\Controllers\Api\PromotionController;
+use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\StocktakeController;
 use App\Http\Controllers\Api\MenuController;
@@ -28,7 +29,8 @@ use App\Http\Controllers\Api\ShiftController;
 use App\Http\Controllers\Api\TableController;
 use App\Http\Controllers\Api\UploadController; // Gói 10f
 
-Route::post('/login', [AuthController::class, 'login']);
+// Gói 13: giới hạn 10 lần thử/phút chống dò mật khẩu
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 
 // BẮT BUỘC ĐĂNG NHẬP MỚI ĐƯỢC GỌI CÁC API DƯỚI ĐÂY
 // Gói 1 (2026-10-04): Route hóa toàn bộ controllers (trước đây 6/9 controller chưa có route).
@@ -51,10 +53,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // Chi nhánh (dropdown)
     Route::get('/branches', [BranchController::class, 'index']);
 
+    // Gói 15 (2026-10-08): Báo cáo Giám đốc — 1 endpoint trả đủ 4 tab
+    Route::get('/reports/overview', [ReportController::class, 'overview']);
+    // Gói 17: Báo cáo kho + Báo cáo thu chi/PNL
+    Route::get('/reports/inventory', [ReportController::class, 'inventory']);
+    Route::get('/reports/pnl', [ReportController::class, 'pnl']);
+
     // Đơn hàng
     Route::get('/orders', [OrderController::class, 'index']);
     Route::post('/orders', [OrderController::class, 'store']);
-    Route::get('/orders/history', [OrderController::class, 'history']);
+    // Gói 13: xóa GET /orders/history (endpoint chết, Gói 12a thay thế bằng rule 24h ở OnlineOrderController)
     Route::get('/orders/code/{code}', [OrderController::class, 'showByCode']);
     Route::patch('/orders/{id}/status', [OrderController::class, 'updateStatus']);
     Route::post('/orders/{id}/cancel', [OrderController::class, 'cancel']);
@@ -127,6 +135,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Gói 6: nhân viên xác nhận đơn online (đã nhận tiền -> trừ kho, vào KDS)
     Route::post('/orders/{id}/confirm-payment', [OnlineOrderController::class, 'confirmPayment']);
+    // Gói 11: tạo mã QR tích điểm cho đơn POS
+    Route::post('/orders/{id}/claim-qr', [OrderController::class, 'claimQr']);
 
     // Gói 6: cấu hình bán online
     Route::post('/branches', [BranchController::class, 'store']);
@@ -196,6 +206,8 @@ Route::prefix('online')->group(function () {
     Route::patch('/group-orders/{code}/items/{id}', [GroupOrderController::class, 'updateItem']);
     Route::delete('/group-orders/{code}/items/{id}', [GroupOrderController::class, 'removeItem']);
     Route::post('/group-orders/{code}/checkout', [GroupOrderController::class, 'checkout']);
+    // Gói 11: khách quét QR tích điểm để gán TV vào đơn POS (public, xác thực bằng token QR)
+    Route::post('/orders/{code}/claim', [OnlineOrderController::class, 'claim']);
     // Gói 7p: màu chủ đạo giao diện (public cho Mini App)
     Route::get('/theme', [SettingsController::class, 'publicTheme']);
     Route::post('/shipping-fee', [OnlineOrderController::class, 'shippingFee']);

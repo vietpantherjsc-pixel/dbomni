@@ -136,4 +136,25 @@ class LoyaltyService
             'note' => "Hoàn điểm do hủy đơn {$order->code}",
         ]);
     }
+
+    /**
+     * Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận tích điểm rồi hủy).
+     */
+    public function revokeEarn(Order $order): void
+    {
+        if (!$order->customer_id || $order->points_earned <= 0) {
+            return;
+        }
+        $customer = Customer::lockForUpdate()->findOrFail($order->customer_id);
+        $customer->points = max(0, $customer->points - $order->points_earned);
+        $customer->save();
+
+        PointTransaction::create([
+            'customer_id' => $customer->id,
+            'order_id' => $order->id,
+            'change' => -$order->points_earned,
+            'type' => 'revoke',
+            'note' => "Thu hồi điểm đã tích do hủy đơn {$order->code}",
+        ]);
+    }
 }

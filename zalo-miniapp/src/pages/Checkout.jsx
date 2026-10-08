@@ -21,6 +21,8 @@ export default function Checkout() {
   const [voucher, setVoucher] = useState('');
   const [points, setPoints] = useState(0);
   const [redeem, setRedeem] = useState(0);
+  // Gói 13: tỉ giá đổi điểm từ server (không hardcode). Mặc định 10đ = 1.000đ nếu server chưa trả.
+  const [redeemRate, setRedeemRate] = useState({ points: 10, amount: 1000 });
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
 
@@ -48,9 +50,14 @@ export default function Checkout() {
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.qty, line_total: l.unitPrice * l.qty })),
         shipping_fee: fee,
       };
-      api.customerByPhone(phone).then((c) => {
+      // Gói 13: truyền member_code từ profile (Gói 11 yêu cầu backend bắt buộc member_code)
+      api.customerByPhone(phone, getProfile()?.member_code || '').then((c) => {
         if (c) {
           setPoints(c.points || 0);
+          // Gói 13: lấy tỉ giá đổi điểm từ server
+          if (c.redeem_points && c.redeem_amount) {
+            setRedeemRate({ points: Number(c.redeem_points), amount: Number(c.redeem_amount) });
+          }
           return api.eligiblePromotions({ ...payload, customer_id: c.id });
         }
         return api.eligiblePromotions({ ...payload, channel: 'online' });
@@ -81,7 +88,7 @@ export default function Checkout() {
   const isShipPromo = !!(promo && (promo.is_shipping || promo.type === 'shipping') && type === 'delivery');
   const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
   const promoDisc = promo && !isShipPromo ? Number(promo.discount) : 0;
-  const pointDisc = Math.min(redeem, points) * 100; // 10 điểm = 1.000đ (mặc định)
+  const pointDisc = Math.min(redeem, points) * (redeemRate.amount / redeemRate.points); // Gói 13: tỉ giá từ server
   const total = Math.max(0, subtotal + shipFee - shipDisc - promoDisc - pointDisc);
 
   const place = async () => {
@@ -213,8 +220,8 @@ export default function Checkout() {
 
         <div style={{ margin: '8px 0 16px' }}>
           <div className="zm-total-row"><span>Tạm tính ({cart.reduce((s, l) => s + l.qty, 0)} món)</span><span>{fmt(subtotal)}đ</span></div>
-          {/* Gói 10c: chỉ hiện dòng phí khi giao hàng và phí (sau KM) > 0 — khớp backend */}
-          {type === 'delivery' && (shipFee - shipDisc) > 0 && <div className="zm-total-row"><span>Phí dịch vụ (ship ~{km ?? '?'}km)</span><span>{fmt(shipFee - shipDisc)}đ</span></div>}
+          {/* Hiện phí gốc, KM trừ ở dòng riêng — tránh nhìn như trừ 2 lần */}
+          {type === 'delivery' && shipFee > 0 && <div className="zm-total-row"><span>Phí dịch vụ (ship ~{km ?? '?'}km)</span><span>{fmt(shipFee)}đ</span></div>}
           {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
           {promoDisc > 0 && <div className="zm-total-row disc"><span>Khuyến mại</span><span>−{fmt(promoDisc)}đ</span></div>}
           {pointDisc > 0 && <div className="zm-total-row disc"><span>Đổi điểm</span><span>−{fmt(pointDisc)}đ</span></div>}

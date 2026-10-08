@@ -92,10 +92,11 @@ class GroupOrderController extends Controller
                     });
 
                 if ($existing) {
-                    $names = array_values(array_unique(array_merge(
+                    // Giữ tên người đặt trùng (không array_unique) theo yêu cầu nghiệp vụ
+                    $names = array_merge(
                         $existing->member_names ?? [],
                         [$memberName]
-                    )));
+                    );
                     $existing->update([
                         'quantity' => $existing->quantity + $v['quantity'],
                         'member_names' => $names,

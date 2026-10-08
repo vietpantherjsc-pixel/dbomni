@@ -178,12 +178,30 @@ class OnlineOrderController extends Controller
     // Thông tin tích điểm của KH theo SĐT
     public function customer(Request $request): JsonResponse
     {
-        $validated = $request->validate(['phone' => 'required|string|max:20']);
-        $customer = Customer::with('tier')->where('phone', $validated['phone'])->first();
+        // Gói 11: đăng nhập bằng SĐT + Mã TV (bỏ tra cứu tự do bằng SĐT để bảo mật)
+        $validated = $request->validate([
+            'phone' => 'required|string|max:20',
+            'member_code' => 'required|string|max:20',
+        ]);
+        $customer = Customer::with('tier')
+            ->where('phone', $validated['phone'])
+            ->where('member_code', $validated['member_code'])
+            ->first();
         if (!$customer) {
             return response()->json(['success' => true, 'data' => null]);
         }
-        $orders = $customer->orders()->limit(10)->get(['id', 'code', 'total_amount', 'status', 'payment_status', 'created_at']);
+        // Gói 12a: lịch sử Tài khoản ẩn đơn hoàn thành quá 24h (đơn chưa xong vẫn hiện kể cả qua ngày)
+        $cutoff = now()->subHours(24);
+        $orders = $customer->orders()
+            ->where(function ($q) use ($cutoff) {
+                $q->where('status', '!=', 'completed')
+                    ->orWhere('completed_at', '>', $cutoff)
+                    ->orWhere(function ($q2) use ($cutoff) {
+                        // Đơn cũ hoàn thành trước khi có cột completed_at: dùng updated_at làm mốc
+                        $q2->whereNull('completed_at')->where('updated_at', '>', $cutoff);
+                    });
+            })
+            ->limit(10)->get(['id', 'code', 'total_amount', 'status', 'payment_status', 'created_at']);
         return response()->json(['success' => true, 'data' => [
             'id' => $customer->id,
             'name' => $customer->name,
@@ -192,6 +210,9 @@ class OnlineOrderController extends Controller
             'points' => $customer->points,
             'total_spent' => (float) $customer->total_spent,
             'tier' => $customer->tier?->name,
+            // Gói 13: tỉ giá đổi điểm từ settings (frontend không hardcode)
+            'redeem_points' => max(1, (int) Setting::get('points_redeem_points', 10)),
+            'redeem_amount' => (float) Setting::get('points_redeem_amount', 1000),
             'orders' => $orders,
         ]]);
     }
@@ -458,12 +479,33 @@ class OnlineOrderController extends Controller
     }
 
     // Theo dõi đơn hàng theo mã (public)
+    /**
+     * Gói 12a: đơn có quá hạn tra cứu trên Mini App không?
+     * - Đơn chưa hoàn thành: luôn xem được (kể cả qua ngày).
+     * - Đơn đã hoàn thành: chỉ xem trong 24h kể từ completed_at.
+     */
+    private function isExpiredForMiniApp(Order $order): bool
+    {
+        if ($order->status !== 'completed') {
+            return false;
+        }
+        // Đơn cũ hoàn thành trước khi có cột completed_at: dùng updated_at làm mốc
+        $doneAt = $order->completed_at ?? $order->updated_at;
+        return $doneAt && $doneAt->lt(now()->subHours(24));
+    }
+
     public function track(string $code): JsonResponse
     {
         $order = Order::with(['items.product'])
             ->where('code', $code)
             ->where('online_channel', 'zalo')
             ->firstOrFail();
+
+        // Gói 12a: đơn hoàn thành quá 24h thì ẩn khỏi Mini App
+        // (server vẫn giữ đủ để tính điểm và hạng thành viên).
+        if ($this->isExpiredForMiniApp($order)) {
+            return response()->json(['success' => false, 'message' => 'Đơn đã quá hạn tra cứu.'], 404);
+        }
 
         return response()->json(['success' => true, 'data' => [
             'code' => $order->code,
@@ -485,10 +527,10 @@ class OnlineOrderController extends Controller
     }
 
     // KH hủy đơn đang chờ xác nhận
-    public function cancel(string $code): JsonResponse
+    public function cancel(string $code, LoyaltyService $loyaltyService): JsonResponse
     {
         try {
-            $order = DB::transaction(function () use ($code) {
+            $order = DB::transaction(function () use ($code, $loyaltyService) {
                 $order = Order::where('code', $code)->where('online_channel', 'zalo')->lockForUpdate()->firstOrFail();
                 if ($order->status !== 'pending' || $order->payment_status !== 'pending') {
                     throw new Exception('Đơn đang được chuẩn bị, không thể hủy online. Vui lòng gọi quán.');
@@ -498,17 +540,76 @@ class OnlineOrderController extends Controller
                 $order->cancelled_at = now();
                 $order->save();
 
-                // Hoàn điểm đã đổi
-                if ($order->points_redeemed > 0 && $order->customer_id) {
-                    $customer = Customer::lockForUpdate()->find($order->customer_id);
-                    if ($customer) {
-                        $customer->points += $order->points_redeemed;
-                        $customer->save();
-                    }
-                }
+                // Gói 13: hoàn điểm đã đổi qua LoyaltyService (ghi sổ PointTransaction)
+                // thay vì cộng thủ công. Đơn chưa xác nhận nên chưa tích điểm -> không cần revokeEarn.
+                $loyaltyService->refundRedeem($order);
                 return $order;
             });
             return response()->json(['success' => true, 'message' => 'Đã hủy đơn hàng.']);
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Gói 11: khách quét QR tích điểm trên Mini App để gán TV vào đơn POS.
+     * Token dùng 1 lần, hết hạn 15 phút. Trả về thông tin TV để POS hiển thị.
+     */
+    public function claim(Request $request, string $code, LoyaltyService $loyaltyService): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'claim_token' => 'required|string',
+                'member_code' => 'required|string|max:20',
+                'phone' => 'required|string|max:20',
+            ]);
+
+            $order = Order::where('code', $code)->firstOrFail();
+
+            if (!$order->claim_token || !hash_equals($order->claim_token, $validated['claim_token'])) {
+                throw new Exception('Mã QR không hợp lệ.');
+            }
+            if ($order->claim_expires_at && $order->claim_expires_at->isPast()) {
+                throw new Exception('Mã QR đã hết hạn. Nhờ thu ngân tạo mã mới.');
+            }
+            if (in_array($order->status, ['completed', 'cancelled'])) {
+                throw new Exception('Đơn đã hoàn thành/hủy, không gán được.');
+            }
+
+            $customer = Customer::where('member_code', $validated['member_code'])
+                ->where('phone', $validated['phone'])
+                ->first();
+            if (!$customer) {
+                throw new Exception('Không tìm thấy thành viên. Hãy đăng nhập Tài khoản trước.');
+            }
+            if ($order->customer_id && (int) $order->customer_id !== (int) $customer->id) {
+                throw new Exception('Đơn đã được gán cho thành viên khác.');
+            }
+
+            DB::transaction(function () use ($order, $customer, $loyaltyService) {
+                $order->customer_id = $customer->id;
+                // Đơn đã thanh toán mà chưa tích điểm → tích bù ngay
+                if ($order->payment_status === 'paid' && !$order->points_earned) {
+                    $order->points_earned = $loyaltyService->earnForOrder(
+                        $customer, $order, (float) $order->total_amount
+                    );
+                }
+                $order->claim_token = null;
+                $order->claim_expires_at = null;
+                $order->save();
+            });
+
+            $customer->load('tier');
+
+            return response()->json(['success' => true, 'data' => [
+                'order_code' => $order->code,
+                'member' => [
+                    'name' => $customer->name,
+                    'member_code' => $customer->member_code,
+                    'tier' => $customer->tier?->name,
+                    'points' => $customer->points,
+                ],
+            ]]);
         } catch (Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
@@ -561,9 +662,18 @@ class OnlineOrderController extends Controller
                 }
 
                 // Gói 9: thưởng điểm cho người giới thiệu (affiliate)
+                // Gói 13: chỉ trao cho ĐƠN ĐẦU TIÊN của khách (tránh trao lặp lại mọi đơn)
                 if (!empty($order->referred_by)) {
                     $referrer = Customer::where('member_code', $order->referred_by)->first();
-                    if ($referrer && $referrer->id !== $order->customer_id) {
+                    $isFirstOrder = $order->customer_id
+                        ? !Order::where('customer_id', $order->customer_id)
+                            ->where('id', '!=', $order->id)
+                            ->where(function ($q) {
+                                $q->where('payment_status', 'paid')->orWhere('stock_deducted', true);
+                            })
+                            ->exists()
+                        : true;
+                    if ($referrer && $referrer->id !== $order->customer_id && $isFirstOrder) {
                         $bonus = (int) Setting::get('ref_bonus_points', 100);
                         if ($bonus > 0) {
                             $loyaltyService->awardReferral($referrer, $order, $bonus);

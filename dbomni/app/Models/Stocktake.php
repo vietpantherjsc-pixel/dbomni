@@ -11,6 +11,10 @@ class Stocktake extends Model
 {
     protected $guarded = [];
 
+    protected $casts = [
+        'checked_at' => 'datetime', // Gói 19: ngày-giờ kiểm kho lúc chốt phiếu
+    ];
+
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);

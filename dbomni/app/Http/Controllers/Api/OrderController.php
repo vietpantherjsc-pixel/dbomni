@@ -30,11 +30,26 @@ class OrderController extends Controller
             ->orderBy('created_at', 'desc');
 
         $tab = $request->query('tab', 'all');
+        // Gói 11: đơn Zalo chờ xác nhận (chưa thu tiền) tách khỏi list chính —
+        // xác nhận xong (ở KDS) mới nhảy vào Hóa đơn.
+        $awaitingConfirm = function ($q) {
+            $q->where('online_channel', 'zalo')
+                ->where('payment_status', 'pending')
+                ->where('stock_deducted', false)
+                ->where('status', '!=', 'cancelled');
+        };
         match ($tab) {
             'paid' => $query->where('payment_status', 'paid')->where('status', '!=', 'cancelled'),
             'pending_payment' => $query->where('payment_status', 'pending'),
             'cancelled' => $query->where('status', 'cancelled'),
-            default => null,
+            'awaiting_confirm' => $awaitingConfirm($query),
+            default => $query->where(function ($q) {
+                // NOT (đơn chờ xác nhận)
+                $q->where('online_channel', '!=', 'zalo')
+                    ->orWhere('payment_status', '!=', 'pending')
+                    ->orWhere('stock_deducted', true)
+                    ->orWhere('status', 'cancelled');
+            }),
         };
 
         if ($request->filled('search')) {
@@ -120,8 +135,9 @@ class OrderController extends Controller
                         'product_id' => $product->id,
                         'product_option_id' => $option ? $option->id : null,
                         // Gói 8a: lưu danh sách tùy chọn nhóm đã chọn (để truy vết trừ kho)
+                        // Gói 13: thống nhất format [id => name] (giữ ID) như OnlineOrderController
                         'options' => !empty($item['option_ids'])
-                            ? array_values(ProductOption::whereIn('id', $item['option_ids'])->pluck('name', 'id')->toArray())
+                            ? ProductOption::whereIn('id', $item['option_ids'])->pluck('name', 'id')->toArray()
                             : null,
                         'product_name' => $product->name,
                         'price' => $product->base_price,
@@ -359,6 +375,10 @@ class OrderController extends Controller
         // Tìm đơn theo code hoặc id kèm theo danh sách món (items)
         $order = Order::with('items')->where('code', $id)->orWhere('id', $id)->firstOrFail();
         $order->status = $request->status;
+        // Gói 12a: ghi mốc hoàn thành để Mini App giới hạn tra cứu 24h
+        if ($request->status === 'completed' && !$order->completed_at) {
+            $order->completed_at = now();
+        }
         $order->save();
 
         // Gói 3c: đơn hoàn thành -> giải phóng bàn nếu không còn đơn hoạt động nào khác
@@ -396,11 +416,13 @@ class OrderController extends Controller
                 // Hoàn trả nguyên vật liệu theo BOM nếu restock = true
                 // Gói 3b: đơn held chưa từng trừ kho (stock_deducted=false) thì không có gì để hoàn.
                 if ($shouldRestock && $order->stock_deducted) {
+                    // Gói 13: hoàn cả topping/size (option_ids từ options [id => name])
                     $inventoryService->restock(
                         $order->branch_id ?? 1,
                         $order->items->map(fn($item) => [
                             'product_id' => $item->product_id,
                             'product_option_id' => $item->product_option_id,
+                            'option_ids' => $item->options ? array_keys((array) $item->options) : [],
                             'quantity' => $item->quantity,
                         ])->toArray()
                     );
@@ -414,6 +436,9 @@ class OrderController extends Controller
 
                 // Gói 5: hoàn điểm đã đổi khi hủy đơn
                 $loyaltyService->refundRedeem($order);
+
+                // Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận)
+                $loyaltyService->revokeEarn($order);
 
                 // Gói 3b: nếu là đơn lưu gắn bàn -> trả bàn về trống khi không còn đơn lưu nào khác
                 $this->releaseTableIfFree($order);
@@ -505,6 +530,7 @@ class OrderController extends Controller
                     $newOrder->items()->create([
                         'product_id' => $item->product_id,
                         'product_option_id' => $item->product_option_id,
+                        'options' => $item->options, // Gói 13: giữ topping/size đã chọn
                         'product_name' => $item->product_name,
                         'price' => $item->price,
                         'unit_price' => $item->unit_price,
@@ -559,7 +585,7 @@ class OrderController extends Controller
      * - Các trường hợp còn lại: tổng số món không đổi nên kho giữ nguyên.
      * Đơn đã hoàn thành / đã hủy: không được gộp.
      */
-    public function merge(Request $request, InventoryService $inventoryService): JsonResponse
+    public function merge(Request $request, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
     {
         $validated = $request->validate([
             'target_order_id' => 'required|exists:orders,id',
@@ -568,7 +594,7 @@ class OrderController extends Controller
         ]);
 
         try {
-            $result = DB::transaction(function () use ($validated, $inventoryService) {
+            $result = DB::transaction(function () use ($validated, $inventoryService, $loyaltyService) {
                 $target = Order::with('items')->lockForUpdate()->findOrFail($validated['target_order_id']);
 
                 if (in_array($target->status, ['cancelled', 'completed'])) {
@@ -591,12 +617,14 @@ class OrderController extends Controller
 
                     // Gói 3b: đơn nguồn đã trừ kho nhưng đơn đích là đơn lưu (chưa trừ)
                     // -> hoàn kho đơn nguồn để tránh trừ 2 lần khi đơn đích thanh toán.
+                    // Gói 13: hoàn cả topping/size (option_ids)
                     if ($src->stock_deducted && !$target->stock_deducted) {
                         $inventoryService->restock(
                             $src->branch_id,
                             $src->items->map(fn($item) => [
                                 'product_id' => $item->product_id,
                                 'product_option_id' => $item->product_option_id,
+                                'option_ids' => $item->options ? array_keys((array) $item->options) : [],
                                 'quantity' => $item->quantity,
                             ])->toArray()
                         );
@@ -605,6 +633,7 @@ class OrderController extends Controller
                     // Chuyển từng món sang đơn đích.
                     // Gói 3e: chỉ gộp dòng khi cùng món + tùy chọn + đơn giá + ghi chú
                     // và KHÔNG có chiết khấu từng món (dòng có chiết khấu giữ riêng để không sai tiền).
+                    // Gói 13: thêm so sánh options (topping/size đã chọn) để không gộp sai 2 dòng khác topping.
                     foreach ($src->items as $item) {
                         $existing = ((float) ($item->discount_amount ?? 0) === 0) ? $target->items->first(fn($i) =>
                             $i->product_id === $item->product_id
@@ -612,6 +641,7 @@ class OrderController extends Controller
                             && (float) $i->unit_price === (float) $item->unit_price
                             && $i->note === $item->note
                             && (float) ($i->discount_amount ?? 0) === 0
+                            && json_encode((array) ($i->options ?? [])) === json_encode((array) ($item->options ?? []))
                         ) : null;
                         if ($existing) {
                             $existing->quantity += $item->quantity;
@@ -627,6 +657,11 @@ class OrderController extends Controller
                     }
 
                     $mergedCodes[] = $src->code;
+
+                    // Gói 13: hoàn điểm đã đổi của đơn nguồn trước khi đánh cancelled
+                    // (đơn nguồn bị cancelled nhưng tiền món đã gộp sang đơn đích).
+                    $loyaltyService->refundRedeem($src);
+
                     $src->status = 'cancelled';
                     $src->payment_status = 'refunded';
                     $src->cancel_reason = 'Gộp vào đơn ' . $target->code;
@@ -693,11 +728,13 @@ class OrderController extends Controller
                 }
 
                 // Trừ kho tại thời điểm thanh toán (đơn held chưa từng trừ)
+                // Gói 13: trừ cả topping/size (option_ids từ options [id => name])
                 $inventoryService->deductStock(
                     $order->branch_id,
                     $order->items->map(fn($item) => [
                         'product_id' => $item->product_id,
                         'product_option_id' => $item->product_option_id,
+                        'option_ids' => $item->options ? array_keys((array) $item->options) : [],
                         'quantity' => $item->quantity,
                     ])->toArray()
                 );
@@ -767,6 +804,14 @@ class OrderController extends Controller
             ->orderBy('created_at', 'asc')
             ->get();
 
+        // Gói 11: cờ "chờ xác nhận" cho KDS — đơn Zalo chưa thu tiền (chưa trừ kho).
+        // Đơn POS đã thu tiền tại quầy nên không cần xác nhận, vào thẳng "Đang Pha Chế".
+        $orders->each(function ($o) {
+            $o->setAttribute('needs_confirm', $o->online_channel === 'zalo'
+                && $o->payment_status === 'pending'
+                && !$o->stock_deducted);
+        });
+
         return response()->json([
             'success' => true,
             'data' => $orders,
@@ -774,24 +819,24 @@ class OrderController extends Controller
     }
 
     /**
-     * Tra cứu danh sách đơn hàng theo số điện thoại khách hàng (Zalo Mini App)
+     * Gói 11: tạo mã QR tích điểm cho đơn POS — thu ngân bấm để hiện QR,
+     * khách quét bằng Mini App để gán TV vào đơn (token 15 phút, dùng 1 lần).
      */
-    public function history(Request $request): JsonResponse
+    public function claimQr(int $id): JsonResponse
     {
-        $request->validate([
-            'phone' => 'required|string',
-        ]);
+        $order = Order::findOrFail($id);
+        if (in_array($order->status, ['completed', 'cancelled'])) {
+            return response()->json(['success' => false, 'message' => 'Đơn đã hoàn thành/hủy, không tạo QR được.'], 400);
+        }
+        $order->claim_token = Str::random(24);
+        $order->claim_expires_at = now()->addMinutes(15);
+        $order->save();
 
-        $orders = Order::where('customer_phone', $request->phone)
-            ->with(['branch', 'items.product', 'items.option'])
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Lấy lịch sử đơn hàng thành công',
-            'data' => $orders,
-        ], 200);
+        return response()->json(['success' => true, 'data' => [
+            'code' => $order->code,
+            'token' => $order->claim_token,
+            'expires_at' => $order->claim_expires_at,
+        ]]);
     }
 
     /**
@@ -800,7 +845,7 @@ class OrderController extends Controller
     public function showByCode(string $code): JsonResponse
     {
         $order = Order::where('code', $code)
-            ->with(['branch', 'items.product', 'items.option'])
+            ->with(['branch', 'customer:id,name,member_code,tier_id', 'customer.tier:id,name', 'items.product', 'items.option'])
             ->firstOrFail();
 
         return response()->json([

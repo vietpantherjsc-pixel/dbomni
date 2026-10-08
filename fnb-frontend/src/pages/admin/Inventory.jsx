@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useBranch } from '../../contexts/BranchContext';
 
 const API = 'http://localhost/api';
-const BRANCH_ID = 1;
 
 const TYPE_LABELS = { raw: 'Nguyên liệu thô', semi_finished: 'Bán thành phẩm', consumable: 'Tiêu hao' };
 const TYPE_COLORS = {
@@ -22,58 +22,83 @@ export default function Inventory() {
     const [tab, setTab] = useState('stock');
     const [materials, setMaterials] = useState([]);
     const [stock, setStock] = useState([]);
+    // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt form thêm mới trong tab Tồn kho
+    const [addMaterialSignal, setAddMaterialSignal] = useState(0);
+    // Gói 18: chi nhánh dùng chung từ BranchContext ('0' = tất cả)
+    const { branchId } = useBranch();
+    const [branches, setBranches] = useState([]);
+    // Tồn kho/nhập/chế biến cần 1 chi nhánh cụ thể: '0' -> lấy CN đầu tiên
+    const effBranchId = branchId === '0' ? (branches[0]?.id || 1) : Number(branchId);
 
-    const fetchAll = async () => {
+    const fetchAll = async (bid) => {
         try {
-            const [mRes, sRes] = await Promise.all([
+            const [mRes, sRes, bRes] = await Promise.all([
                 axios.get(`${API}/materials`),
-                axios.get(`${API}/inventory/branch/${BRANCH_ID}`),
+                axios.get(`${API}/inventory/branch/${bid}`),
+                axios.get(`${API}/branches`),
             ]);
             if (mRes.data?.success) setMaterials(mRes.data.data);
             if (sRes.data?.success) setStock(sRes.data.data);
+            if (bRes.data?.success) setBranches(bRes.data.data || []);
         } catch (err) { console.error('Lỗi tải kho:', err); }
     };
 
-    useEffect(() => { fetchAll(); }, []);
+    useEffect(() => { fetchAll(effBranchId); }, [effBranchId]);
 
     const matById = (id) => materials.find((m) => m.id === Number(id));
 
     return (
         <AdminLayout>
-            <div>
-                <h1 className="text-lg font-bold text-[#1f2937] mb-1">Kho hàng</h1>
-                <p className="text-[13px] text-[#6b7280] mb-4">Quản lý tồn kho, nhập hàng, chế biến bán thành phẩm và kiểm kê.</p>
-
-                <div className="flex gap-1 border-b border-gray-200 mb-4">
-                    {[
-                        ['stock', 'Tồn kho'],
-                        ['inbound', 'Nhập kho'],
-                        ['production', 'Chế biến'],
-                        ['stocktake', 'Kiểm kê'],
-                    ].map(([key, label]) => (
-                        <button
-                            key={key}
-                            onClick={() => setTab(key)}
-                            className={`px-4 py-2.5 text-[13px] border-b-2 -mb-px transition-colors ${
-                                tab === key ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'
-                            }`}
-                        >
-                            {label}
+            <div className="p-5">
+                {/* Tiêu đề + nút thêm (chuẩn trang Hóa đơn) */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-xl font-semibold text-gray-800">Kho hàng</h1>
+                        <p className="text-[13px] text-[#6b7280] mt-0.5">Quản lý tồn kho, nhập hàng, chế biến bán thành phẩm và kiểm kê.</p>
+                    </div>
+                    {tab === 'stock' && (
+                        <button onClick={() => setAddMaterialSignal((s) => s + 1)}
+                            className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] whitespace-nowrap ml-4">
+                            + Nguyên liệu
                         </button>
-                    ))}
+                    )}
                 </div>
 
-                {tab === 'stock' && <StockTab stock={stock} materials={materials} onChange={fetchAll} />}
-                {tab === 'inbound' && <InboundTab materials={materials} onDone={fetchAll} />}
-                {tab === 'production' && <ProductionTab materials={materials} matById={matById} onDone={fetchAll} />}
-                {tab === 'stocktake' && <StocktakeTab materials={materials} onDone={fetchAll} />}
+                <div className="mt-3 bg-white rounded shadow-sm">
+                    {/* Tabs */}
+                    <div className="flex gap-1 overflow-x-auto border-b border-gray-100 px-4">
+                        {[
+                            ['stock', 'Tồn kho'],
+                            ['inbound', 'Nhập kho'],
+                            ['production', 'Chế biến'],
+                            ['stocktake', 'Kiểm kê'],
+                        ].map(([key, label]) => (
+                            <button
+                                key={key}
+                                onClick={() => setTab(key)}
+                                className={`px-3 py-3 text-[13px] whitespace-nowrap border-b-2 -mb-px transition-colors ${
+                                    tab === key ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'
+                                }`}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="p-4">
+                        {tab === 'stock' && <StockTab stock={stock} materials={materials} onChange={() => fetchAll(effBranchId)} addSignal={addMaterialSignal} />}
+                        {tab === 'inbound' && <InboundTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
+                        {tab === 'production' && <ProductionTab materials={materials} matById={matById} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
+                        {tab === 'stocktake' && <StocktakeTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} showAll={branchId === '0'} />}
+                    </div>
+                </div>
             </div>
         </AdminLayout>
     );
 }
 
 // ================= TAB TỒN KHO =================
-function StockTab({ stock, materials, onChange }) {
+function StockTab({ stock, materials, onChange, addSignal }) {
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState(null); // null = thêm mới
     const [form, setForm] = useState({ name: '', unit: 'g', type: 'raw', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
@@ -83,6 +108,12 @@ function StockTab({ stock, materials, onChange }) {
         setEditingId(null);
         setForm({ name: '', unit: 'g', type: 'raw', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
     };
+
+    // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt mở form thêm mới
+    useEffect(() => {
+        if (addSignal > 0) { resetForm(); setShowForm(true); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [addSignal]);
 
     // Gói 4 (2026-10-05): sửa nguyên liệu — nạp dữ liệu cũ vào form
     const startEdit = (materialId) => {
@@ -136,16 +167,12 @@ function StockTab({ stock, materials, onChange }) {
 
     return (
         <div>
-            <div className="flex items-center justify-between mb-3">
-                <div className="text-[13px] text-gray-600">
-                    {lowCount > 0
-                        ? <span className="text-red-600 font-medium">⚠ {lowCount} nguyên liệu sắp hết</span>
-                        : <span className="text-emerald-600">✓ Tồn kho ổn định</span>}
+            {/* Gói 14: cảnh báo tồn thấp gọn 1 dòng trong card, chỉ hiện khi có */}
+            {lowCount > 0 && (
+                <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded text-[13px] text-red-700">
+                    ⚠ <b>{lowCount}</b> nguyên liệu sắp hết (dưới tồn tối thiểu)
                 </div>
-                <button onClick={() => { resetForm(); setShowForm(true); }} className="px-3 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
-                    + Nguyên liệu
-                </button>
-            </div>
+            )}
 
             {showForm && (
                 <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
@@ -200,7 +227,7 @@ function StockTab({ stock, materials, onChange }) {
                 </div>
             )}
 
-            <div className="bg-white rounded shadow-sm overflow-x-auto">
+            <div className="border border-gray-100 rounded overflow-x-auto">
                 <table className="w-full text-[13px] min-w-[700px]">
                     <thead>
                         <tr className="text-left text-gray-500 border-b border-gray-100">
@@ -253,7 +280,7 @@ function StockTab({ stock, materials, onChange }) {
 // ================= TAB NHẬP KHO (danh sách nhiều dòng) =================
 // Gói 4 (2026-10-04): nhập đơn hàng nhiều món — mỗi nguyên liệu 1 dòng,
 // điền số lượng vào các dòng cần nhập rồi bấm 1 nút, gọi API bulk 1 lần.
-function InboundTab({ materials, onDone }) {
+function InboundTab({ materials, onDone, branchId }) {
     const [rows, setRows] = useState({}); // {materialId: {purchase_quantity, unit_cost, expired_at, batch_code}}
     const [search, setSearch] = useState('');
     const [submitting, setSubmitting] = useState(false);
@@ -287,7 +314,7 @@ function InboundTab({ materials, onDone }) {
                 expired_at: rows[m.id].expired_at || null,
                 batch_code: rows[m.id].batch_code || null,
             }));
-            const res = await axios.post(`${API}/inbound/bulk`, { branch_id: BRANCH_ID, items });
+            const res = await axios.post(`${API}/inbound/bulk`, { branch_id: branchId, items });
             if (res.data?.success) {
                 alert(res.data.message);
                 setRows({});
@@ -321,7 +348,7 @@ function InboundTab({ materials, onDone }) {
                 </div>
             </div>
 
-            <div className="bg-white rounded shadow-sm overflow-x-auto">
+            <div className="border border-gray-100 rounded overflow-x-auto">
                 <table className="w-full text-[13px] min-w-[900px]">
                     <thead className="sticky top-0 bg-gray-50">
                         <tr className="text-left text-gray-500 border-b border-gray-100">
@@ -418,7 +445,7 @@ function InboundTab({ materials, onDone }) {
 }
 
 // ================= TAB CHẾ BIẾN =================
-function ProductionTab({ materials, matById, onDone }) {
+function ProductionTab({ materials, matById, onDone, branchId }) {
     const [recipes, setRecipes] = useState([]);
     const [history, setHistory] = useState([]);
     const [semiId, setSemiId] = useState('');
@@ -432,13 +459,13 @@ function ProductionTab({ materials, matById, onDone }) {
         try {
             const [rRes, hRes] = await Promise.all([
                 axios.get(`${API}/production-recipes`),
-                axios.get(`${API}/productions`, { params: { branch_id: BRANCH_ID } }),
+                axios.get(`${API}/productions`, { params: { branch_id: branchId } }),
             ]);
             if (rRes.data?.success) setRecipes(rRes.data.data);
             if (hRes.data?.success) setHistory(hRes.data.data);
         } catch (err) { console.error('Lỗi tải chế biến:', err); }
     };
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [branchId]);
 
     const filteredRecipes = semiId ? recipes.filter((r) => r.material_id === Number(semiId)) : recipes;
 
@@ -468,7 +495,7 @@ function ProductionTab({ materials, matById, onDone }) {
         if (!window.confirm(`Chế biến ${produce.quantity} ${matById(produce.material_id)?.unit} ${matById(produce.material_id)?.name}? Nguyên liệu thô sẽ bị trừ kho.`)) return;
         try {
             const res = await axios.post(`${API}/productions`, {
-                branch_id: BRANCH_ID,
+                branch_id: branchId,
                 material_id: Number(produce.material_id),
                 quantity: Number(produce.quantity),
                 note: produce.note || null,
@@ -574,25 +601,165 @@ function ProductionTab({ materials, matById, onDone }) {
     );
 }
 
-// ================= TAB KIỂM KÊ =================
+// ================= TAB KIỂM KÊ (Gói 19) =================
+// Theo demo v4 đã chốt: kiểm theo 3 nhóm (nguyên liệu thô / bán thành phẩm / bao bì),
+// nhập tồn thực tế → chênh lệch realtime, chốt phiếu → biên bản + 3 ảnh PNG theo nhóm,
+// lịch sử kiểm kho lưu trong admin (bảng stocktakes + stocktake_items).
+const ST_GROUPS = [
+    { id: 'raw', name: 'Nguyên liệu thô', slug: 'nguyen-lieu-tho' },
+    { id: 'semi', name: 'Bán thành phẩm', slug: 'ban-thanh-pham' },
+    { id: 'pack', name: 'Bao bì', slug: 'bao-bi' },
+];
+const stGiOfType = (t) => (t === 'semi_finished' ? 1 : t === 'consumable' ? 2 : 0);
+
+const stFmtDateVN = (iso) => {
+    if (!iso) return '—';
+    const d = String(iso).length > 10 ? String(iso).slice(0, 10) : String(iso);
+    const parts = d.split('-');
+    if (parts.length !== 3) return d;
+    return parts[2] + '/' + parts[1] + '/' + parts[0];
+};
+const stFmtQty = (n) => {
+    const v = Math.round(Number(n) * 100) / 100;
+    return v.toLocaleString('vi-VN');
+};
+const stWrapText = (ctx, text, maxW) => {
+    const words = String(text).split(' ');
+    const lines = [];
+    let line = '';
+    words.forEach((w) => {
+        const t = line ? line + ' ' + w : w;
+        if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; }
+        else line = t;
+    });
+    if (line) lines.push(line);
+    return lines;
+};
+
+// Vẽ biên bản PNG cho 1 nhóm (port từ demo v4 đã chốt)
+const drawStocktakePNG = (sess, gi) => {
+    const g = ST_GROUPS[gi];
+    const rows = sess.rows.filter((r) => r.gi === gi);
+    const W = 1000, pad = 44;
+    const dtStr = stFmtDateVN(sess.date) + ' — ' + sess.time;
+    let m = 0, s = 0, sh = 0;
+    rows.forEach((r) => { if (r.d === 0) m++; else if (r.d > 0) s++; else sh++; });
+
+    const cv = document.createElement('canvas');
+    const ctx = cv.getContext('2d');
+    const headerH = 196, infoH = 110, colH = 44, rowH = 46;
+    const tableW = W - pad * 2;
+    const cols = [46, 420, 120, 120, 206];
+    const H = headerH + infoH + colH + rows.length * rowH + 210;
+    cv.width = W; cv.height = H;
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+
+    // Header navy + tên nhóm
+    ctx.fillStyle = '#24305E'; ctx.fillRect(0, 0, W, headerH);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff'; ctx.font = '600 22px Inter, Arial, sans-serif';
+    ctx.fillText('DAYBREAK TEA & COFFEE', W / 2, 40);
+    ctx.fillStyle = '#F5A623'; ctx.font = '700 30px Inter, Arial, sans-serif';
+    ctx.fillText('KIỂM KHO — ' + g.name.toUpperCase(), W / 2, 88);
+    ctx.strokeStyle = '#F5A623'; ctx.lineWidth = 2;
+    ctx.strokeRect(W / 2 - 260, 108, 520, 64);
+    ctx.fillStyle = '#F5A623'; ctx.font = '400 15px Inter, Arial, sans-serif';
+    ctx.fillText('NGÀY — GIỜ KIỂM', W / 2, 132);
+    ctx.fillStyle = '#ffffff'; ctx.font = '700 26px Inter, Arial, sans-serif';
+    ctx.fillText(dtStr, W / 2, 160);
+
+    // Thông tin nhóm
+    let y = headerH + 36;
+    ctx.textAlign = 'left'; ctx.fillStyle = '#1f2430'; ctx.font = '400 20px Inter, Arial, sans-serif';
+    ctx.fillText('Người kiểm: ' + sess.checker, pad, y); y += 34;
+    ctx.fillText('Số dòng: ' + rows.length + '   ·   Khớp: ' + m + '   ·   Thừa: ' + s + '   ·   Thiếu: ' + sh, pad, y);
+    y += 24;
+
+    // Header bảng
+    ctx.fillStyle = '#24305E'; ctx.fillRect(pad, y, tableW, colH);
+    ctx.fillStyle = '#ffffff'; ctx.font = '700 17px Inter, Arial, sans-serif';
+    const heads = ['STT', 'Mặt hàng', 'Tồn LT', 'Tồn TT', 'Chênh lệch'];
+    let cx = pad;
+    heads.forEach((h, i) => { ctx.fillText(h, cx + 10, y + 29); cx += cols[i]; });
+    y += colH;
+
+    rows.forEach((r, idx) => {
+        const stt = idx + 1;
+        if (stt % 2 === 0) { ctx.fillStyle = '#fafbfc'; ctx.fillRect(pad, y, tableW, rowH); }
+        ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad, y + rowH); ctx.lineTo(pad + tableW, y + rowH); ctx.stroke();
+        ctx.fillStyle = '#1f2430'; ctx.font = '400 17px Inter, Arial, sans-serif';
+        let bx = pad;
+        ctx.fillText(String(stt), bx + 10, y + 30); bx += cols[0];
+        const lines = stWrapText(ctx, r.name + ' (' + r.unit + ')', cols[1] - 16);
+        ctx.font = '700 16px Inter, Arial, sans-serif';
+        lines.slice(0, 2).forEach((ln, li) => ctx.fillText(ln, bx + 10, y + 22 + li * 20));
+        ctx.font = '400 17px Inter, Arial, sans-serif';
+        bx += cols[1];
+        ctx.fillText(stFmtQty(r.system), bx + 10, y + 30); bx += cols[2];
+        ctx.fillText(stFmtQty(r.counted), bx + 10, y + 30); bx += cols[3];
+        ctx.fillStyle = r.d === 0 ? '#6b7280' : (r.d > 0 ? '#16a34a' : '#dc2626');
+        ctx.font = '700 17px Inter, Arial, sans-serif';
+        ctx.fillText(r.d === 0 ? '0' : (r.d > 0 ? '+' : '') + stFmtQty(r.d) + ' ' + r.unit, bx + 10, y + 30);
+        ctx.font = '400 17px Inter, Arial, sans-serif';
+        y += rowH;
+    });
+
+    // Chữ ký
+    y += 30;
+    ctx.fillStyle = '#1f2430'; ctx.font = '400 18px Inter, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Người kiểm', W * 0.25, y);
+    ctx.fillText('Quản lý', W * 0.75, y);
+    ctx.strokeStyle = '#6b7280'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(W * 0.25 - 140, y + 10); ctx.lineTo(W * 0.25 + 140, y + 70); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W * 0.75 - 140, y + 10); ctx.lineTo(W * 0.75 + 140, y + 70); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '400 15px Inter, Arial, sans-serif'; ctx.fillStyle = '#6b7280';
+    ctx.fillText('(Ký, ghi rõ họ tên)', W * 0.25, y + 96);
+    ctx.fillText('(Ký, ghi rõ họ tên)', W * 0.75, y + 96);
+    y += 120;
+    ctx.font = '400 14px Inter, Arial, sans-serif';
+    ctx.fillText('Ảnh biên bản nhóm "' + g.name + '" — dùng để lưu hồ sơ / in.', W / 2, y);
+
+    const a = document.createElement('a');
+    a.download = 'kiem-kho-' + g.slug + '-' + sess.date + '-' + String(sess.time).replace(':', '') + '.png';
+    a.href = cv.toDataURL('image/png');
+    document.body.appendChild(a); a.click(); a.remove();
+};
+
 function StocktakeTab({ materials, onDone }) {
     const [list, setList] = useState([]);
     const [detail, setDetail] = useState(null);
     const [counts, setCounts] = useState({});
+    const [activeGroup, setActiveGroup] = useState(0);
+    const [checkDate, setCheckDate] = useState('');
+    const [checkTime, setCheckTime] = useState('');
+    const [checkerName, setCheckerName] = useState('');
+    const [receipt, setReceipt] = useState(null);
     const [showCreate, setShowCreate] = useState(false);
     const [createType, setCreateType] = useState('spontaneous');
 
+    const nowParts = () => {
+        const n = new Date();
+        const p = (x) => String(x).padStart(2, '0');
+        return {
+            d: n.getFullYear() + '-' + p(n.getMonth() + 1) + '-' + p(n.getDate()),
+            t: p(n.getHours()) + ':' + p(n.getMinutes()),
+        };
+    };
+
     const fetchList = async () => {
         try {
-            const res = await axios.get(`${API}/stocktakes`, { params: { branch_id: BRANCH_ID } });
-            if (res.data?.success) setList(res.data.data);
+            const res = await axios.get(API + '/stocktakes', { params: { branch_id: BRANCH_ID } });
+            if (res.data?.success) setList(res.data.data || []);
         } catch (err) { console.error('Lỗi tải kiểm kê:', err); }
     };
     useEffect(() => { fetchList(); }, []);
 
     const handleCreate = async () => {
         try {
-            const res = await axios.post(`${API}/stocktakes`, { branch_id: BRANCH_ID, type: createType });
+            const res = await axios.post(API + '/stocktakes', { branch_id: BRANCH_ID, type: createType });
             if (res.data?.success) {
                 setShowCreate(false);
                 openDetail(res.data.data.id);
@@ -603,14 +770,58 @@ function StocktakeTab({ materials, onDone }) {
 
     const openDetail = async (id) => {
         try {
-            const res = await axios.get(`${API}/stocktakes/${id}`);
+            const res = await axios.get(API + '/stocktakes/' + id);
             if (res.data?.success) {
-                setDetail(res.data.data);
+                const d = res.data.data;
+                setDetail(d);
+                setReceipt(null);
                 const init = {};
-                (res.data.data.items || []).forEach((it) => { init[it.id] = it.counted_qty ?? ''; });
+                (d.items || []).forEach((it) => { init[it.id] = it.counted_qty ?? ''; });
                 setCounts(init);
+                // Ngày-giờ kiểm: lấy từ phiếu đã chốt, phiếu nháp thì mặc định hiện tại
+                if (d.checked_at) {
+                    const dt = new Date(d.checked_at);
+                    const p = (x) => String(x).padStart(2, '0');
+                    setCheckDate(dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate()));
+                    setCheckTime(p(dt.getHours()) + ':' + p(dt.getMinutes()));
+                } else {
+                    const np = nowParts();
+                    setCheckDate(np.d); setCheckTime(np.t);
+                }
+                setCheckerName(d.user?.name || '');
+                setActiveGroup(0);
             }
         } catch (err) { alert('Tải phiếu thất bại'); }
+    };
+
+    const openReceipt = async (id) => {
+        try {
+            const res = await axios.get(API + '/stocktakes/' + id);
+            if (res.data?.success) {
+                const d = res.data.data;
+                const dt = d.checked_at ? new Date(d.checked_at) : new Date(d.created_at);
+                const p = (x) => String(x).padStart(2, '0');
+                const sess = {
+                    id: d.id,
+                    date: dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate()),
+                    time: p(dt.getHours()) + ':' + p(dt.getMinutes()),
+                    checker: d.user?.name || '—',
+                    rows: (d.items || []).map((it) => {
+                        const counted = it.counted_qty == null ? 0 : Number(it.counted_qty);
+                        const system = Number(it.system_qty);
+                        return {
+                            gi: stGiOfType(it.material?.type),
+                            name: it.material?.name || '—',
+                            unit: it.material?.unit || '',
+                            system, counted,
+                            d: Math.round((counted - system) * 100) / 100,
+                        };
+                    }),
+                };
+                setDetail(null);
+                setReceipt(sess);
+            }
+        } catch (err) { alert('Tải biên bản thất bại'); }
     };
 
     const handleSaveCounts = async () => {
@@ -619,116 +830,245 @@ function StocktakeTab({ materials, onDone }) {
             .map(([stocktake_item_id, counted_qty]) => ({ stocktake_item_id: Number(stocktake_item_id), counted_qty: Number(counted_qty) }));
         if (items.length === 0) return alert('Nhập ít nhất 1 số liệu');
         try {
-            const res = await axios.patch(`${API}/stocktakes/${detail.id}/counts`, { items });
+            const res = await axios.patch(API + '/stocktakes/' + detail.id + '/counts', { items });
             if (res.data?.success) { alert(res.data.message); openDetail(detail.id); }
         } catch (err) { alert(err.response?.data?.message || 'Lưu thất bại'); }
     };
 
     const handleConfirm = async () => {
-        if (!window.confirm('Chốt kiểm kê? Kho sẽ được điều chỉnh theo chênh lệch. Không thể sửa sau khi chốt.')) return;
+        if (!window.confirm('Hoàn thành kiểm kho? Chênh lệch sẽ được lưu vào lịch sử (không tự động điều chỉnh tồn kho). Không thể sửa sau khi chốt.')) return;
         try {
-            const res = await axios.post(`${API}/stocktakes/${detail.id}/confirm`);
+            const res = await axios.post(API + '/stocktakes/' + detail.id + '/confirm', {
+                checked_at: checkDate && checkTime ? checkDate + ' ' + checkTime + ':00' : undefined,
+            });
             if (res.data?.success) {
-                const adj = res.data.data || [];
-                alert(`${res.data.message}\n` + (adj.length
-                    ? adj.map((a) => `${a.material}: hệ thống ${a.system} → thực đếm ${a.counted} (${a.diff > 0 ? '+' : ''}${a.diff} ${a.unit})`).join('\n')
-                    : 'Không có chênh lệch.'));
-                setDetail(null); fetchList(); onDone();
+                const { stocktake, rows } = res.data.data;
+                const sess = {
+                    id: stocktake.id,
+                    date: checkDate, time: checkTime,
+                    checker: checkerName || stocktake.user?.name || '—',
+                    rows: (rows || []).map((r) => ({
+                        gi: stGiOfType(r.type),
+                        name: r.name, unit: r.unit,
+                        system: r.system_qty, counted: r.counted_qty,
+                        d: Math.round(Number(r.diff) * 100) / 100,
+                    })),
+                };
+                setDetail(null);
+                setReceipt(sess);
+                fetchList();
+                onDone();
             }
         } catch (err) { alert(err.response?.data?.message || 'Chốt thất bại'); }
     };
 
-    if (detail) {
-        const diffCount = (detail.items || []).filter((it) => counts[it.id] !== '' && counts[it.id] != null && Math.abs(Number(counts[it.id]) - Number(it.system_qty)) >= 0.005).length;
+    // ---------- MÀN BIÊN BẢN ----------
+    if (receipt) {
+        const total = receipt.rows.length;
+        const diffN = receipt.rows.filter((r) => r.d !== 0).length;
         return (
-            <div className="bg-white border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold text-[14px]">
-                        Phiếu kiểm kê #{detail.id} — {STOCKTAKE_TYPES[detail.type]}
-                        <span className={`ml-2 px-2 py-0.5 rounded-full text-[11px] ${detail.status === 'confirmed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                            {detail.status === 'confirmed' ? 'Đã chốt' : 'Đang kiểm'}
-                        </span>
-                    </h3>
-                    <button onClick={() => setDetail(null)} className="text-[13px] text-gray-500 hover:underline">← Danh sách</button>
-                </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-[13px] min-w-[600px]">
-                        <thead>
-                            <tr className="text-left text-gray-500 border-b border-gray-100">
-                                <th className="py-2 font-medium">Nguyên liệu</th>
-                                <th className="py-2 font-medium text-right">Tồn hệ thống</th>
-                                <th className="py-2 font-medium text-right">Thực đếm *</th>
-                                <th className="py-2 font-medium text-right">Chênh lệch</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {(detail.items || []).map((it) => {
-                                const counted = counts[it.id];
-                                const diff = (counted !== '' && counted != null) ? Number(counted) - Number(it.system_qty) : null;
-                                return (
-                                    <tr key={it.id} className="border-b border-gray-50">
-                                        <td className="py-2">{it.material?.name} <span className="text-gray-400 text-xs">({it.material?.unit})</span></td>
-                                        <td className="py-2 text-right">{Number(it.system_qty).toLocaleString('vi-VN')}</td>
-                                        <td className="py-2 text-right">
-                                            <input
-                                                type="number" min="0" step="any"
-                                                value={counted ?? ''}
-                                                disabled={detail.status === 'confirmed'}
-                                                onChange={(e) => setCounts({ ...counts, [it.id]: e.target.value })}
-                                                className="w-28 px-2 py-1.5 text-[13px] border border-gray-300 rounded text-right focus:outline-none focus:border-[#0d6efd] disabled:bg-gray-50"
-                                            />
-                                        </td>
-                                        <td className={`py-2 text-right font-medium ${diff == null ? 'text-gray-300' : diff === 0 ? 'text-gray-400' : diff > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                            {diff == null ? '—' : `${diff > 0 ? '+' : ''}${diff.toLocaleString('vi-VN')}`}
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-                {detail.status !== 'confirmed' && (
-                    <div className="flex items-center gap-3 mt-4">
-                        <button onClick={handleSaveCounts} className="px-4 py-2 border border-gray-300 text-[13px] rounded text-gray-600 hover:bg-gray-50">
-                            Lưu số liệu
-                        </button>
-                        <button onClick={handleConfirm} className="px-5 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
-                            Chốt kiểm kê{diffCount > 0 ? ` (${diffCount} chênh lệch)` : ''}
-                        </button>
+            <div>
+                <button onClick={() => { setReceipt(null); fetchList(); }} className="text-[13px] text-gray-500 hover:underline mb-3">← Về danh sách kiểm kho</button>
+                <div className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 max-w-3xl">
+                    <div className="text-center mb-4">
+                        <div className="text-[12px] tracking-widest text-gray-400">DAYBREAK TEA & COFFEE</div>
+                        <h3 className="text-lg font-bold text-[#24305E]">BIÊN BẢN KIỂM KHO #{receipt.id}</h3>
+                        <div className="inline-block mt-2 px-4 py-1.5 border-2 border-dashed border-[#F5A623] rounded-lg">
+                            <span className="text-[12px] text-gray-500">Ngày — giờ kiểm: </span>
+                            <b className="text-[#24305E]">{stFmtDateVN(receipt.date)} — {receipt.time}</b>
+                        </div>
+                        <div className="text-[13px] text-gray-600 mt-2">Người kiểm: <b>{receipt.checker}</b> · {total} dòng · <span className={diffN ? 'text-red-600 font-medium' : 'text-emerald-600'}>{diffN} dòng lệch</span></div>
                     </div>
-                )}
+                    {ST_GROUPS.map((g, gi) => {
+                        const rows = receipt.rows.filter((r) => r.gi === gi);
+                        if (rows.length === 0) return null;
+                        return (
+                            <div key={g.id} className="mb-5">
+                                <div className="flex items-center justify-between mb-2">
+                                    <h4 className="font-semibold text-[14px] text-[#24305E]">▸ {g.name} ({rows.length})</h4>
+                                    <button onClick={() => drawStocktakePNG(receipt, gi)}
+                                        className="px-3 py-1.5 text-[12px] font-medium text-white bg-[#24305E] rounded hover:bg-[#1a2347]">
+                                        ⬇ Tải ảnh: {g.name}
+                                    </button>
+                                </div>
+                                <div className="overflow-x-auto border border-gray-100 rounded">
+                                    <table className="w-full text-[13px] min-w-[520px]">
+                                        <thead>
+                                            <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                                                <th className="px-3 py-2 font-medium">Mặt hàng</th>
+                                                <th className="px-3 py-2 font-medium text-right">Tồn LT</th>
+                                                <th className="px-3 py-2 font-medium text-right">Tồn TT</th>
+                                                <th className="px-3 py-2 font-medium text-right">Chênh lệch</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {rows.map((r, i) => (
+                                                <tr key={i} className="border-b border-gray-50">
+                                                    <td className="px-3 py-2"><b>{r.name}</b> <span className="text-gray-400 text-xs">({r.unit})</span></td>
+                                                    <td className="px-3 py-2 text-right">{stFmtQty(r.system)}</td>
+                                                    <td className="px-3 py-2 text-right">{stFmtQty(r.counted)}</td>
+                                                    <td className={'px-3 py-2 text-right font-medium ' + (r.d === 0 ? 'text-gray-400' : r.d > 0 ? 'text-emerald-600' : 'text-red-600')}>
+                                                        {r.d === 0 ? '0' : (r.d > 0 ? '+' : '') + stFmtQty(r.d)}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <div className="grid grid-cols-2 gap-4 mt-6 text-center text-[13px] text-gray-500">
+                        <div><div className="font-medium text-gray-700">Người kiểm</div><div className="mt-10 border-t border-dashed border-gray-300 pt-1">(Ký, ghi rõ họ tên)</div></div>
+                        <div><div className="font-medium text-gray-700">Quản lý</div><div className="mt-10 border-t border-dashed border-gray-300 pt-1">(Ký, ghi rõ họ tên)</div></div>
+                    </div>
+                </div>
             </div>
         );
     }
 
+    // ---------- MÀN NHẬP KIỂM (phiếu nháp đang mở) ----------
+    if (detail) {
+        const items = detail.items || [];
+        const total = items.length;
+        const doneCount = items.filter((it) => counts[it.id] !== '' && counts[it.id] != null).length;
+        const groupItems = (gi) => items.filter((it) => stGiOfType(it.material?.type) === gi);
+        const diffOf = (it) => {
+            const v = counts[it.id];
+            if (v === '' || v == null || isNaN(v)) return null;
+            return Math.round((Number(v) - Number(it.system_qty)) * 100) / 100;
+        };
+        return (
+            <div>
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-[14px]">
+                        Phiếu kiểm kê #{detail.id} — Kiểm kê {STOCKTAKE_TYPES[detail.type]?.toLowerCase()}
+                        <span className="ml-2 px-2 py-0.5 rounded-full text-[11px] bg-amber-50 text-amber-700 border border-amber-200">Đang kiểm</span>
+                    </h3>
+                    <button onClick={() => setDetail(null)} className="text-[13px] text-gray-500 hover:underline">← Danh sách</button>
+                </div>
+
+                <div className="bg-white border border-gray-200 rounded-lg p-4 mb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <label className="text-[13px] text-gray-600">Ngày kiểm
+                        <input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)}
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                    </label>
+                    <label className="text-[13px] text-gray-600">Giờ kiểm
+                        <input type="time" value={checkTime} onChange={(e) => setCheckTime(e.target.value)}
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                    </label>
+                    <label className="text-[13px] text-gray-600">Người kiểm
+                        <input type="text" value={checkerName} onChange={(e) => setCheckerName(e.target.value)} placeholder="Tên nhân viên kiểm"
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                    </label>
+                </div>
+
+                <div className="flex items-center justify-between mb-2 text-[13px]">
+                    <span className="text-gray-600">Tiến độ: <b className="text-[#24305E]">{doneCount}/{total}</b></span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full mb-3 overflow-hidden">
+                    <div className="h-full bg-[#F5A623] rounded-full transition-all" style={{ width: (total ? doneCount / total * 100 : 0) + '%' }} />
+                </div>
+
+                <div className="flex gap-2 mb-3 overflow-x-auto">
+                    {ST_GROUPS.map((g, gi) => {
+                        const c = groupItems(gi).length;
+                        const dc = groupItems(gi).filter((it) => counts[it.id] !== '' && counts[it.id] != null).length;
+                        return (
+                            <button key={g.id} onClick={() => setActiveGroup(gi)}
+                                className={'flex-shrink-0 px-4 py-2.5 text-[13px] rounded-lg border transition-colors ' + (activeGroup === gi
+                                    ? 'bg-[#24305E] text-white border-[#24305E] font-medium'
+                                    : 'bg-white text-gray-600 border-gray-200')}>
+                                {g.name} <span className="opacity-70">({dc}/{c})</span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {groupItems(activeGroup).map((it) => {
+                        const d = diffOf(it);
+                        return (
+                            <div key={it.id} className="bg-white border border-gray-200 rounded-lg p-3">
+                                <div className="flex items-start justify-between gap-2 mb-2">
+                                    <div>
+                                        <div className="font-medium text-[14px]">{it.material?.name}</div>
+                                        <div className="text-[12px] text-gray-400">Đơn vị: {it.material?.unit}</div>
+                                    </div>
+                                    {d == null
+                                        ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-500">Chưa kiểm</span>
+                                        : d === 0
+                                            ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-500">Khớp</span>
+                                            : d > 0
+                                                ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">Thừa {stFmtQty(d)}</span>
+                                                : <span className="px-2 py-0.5 rounded-full text-[11px] bg-red-50 text-red-600 border border-red-200">Thiếu {stFmtQty(Math.abs(d))}</span>}
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 items-end">
+                                    <div className="text-[13px] text-gray-600">Tồn LT<b className="block text-gray-900 text-[14px]">{stFmtQty(it.system_qty)}</b></div>
+                                    <div className={'text-[13px] ' + (d == null ? 'text-gray-400' : d === 0 ? 'text-gray-500' : d > 0 ? 'text-emerald-600' : 'text-red-600')}>
+                                        Chênh lệch<b className="block text-[14px]">{d == null ? '—' : (d > 0 ? '+' : '') + stFmtQty(d)}</b>
+                                    </div>
+                                    <label className="text-[12px] text-gray-500 col-span-1">Tồn thực tế
+                                        <input type="number" min="0" step="any" inputMode="decimal"
+                                            value={counts[it.id] ?? ''}
+                                            onChange={(e) => setCounts({ ...counts, [it.id]: e.target.value })}
+                                            placeholder="Nhập SL"
+                                            className="mt-1 w-full px-3 py-3 text-[16px] border border-gray-300 rounded-lg text-right focus:outline-none focus:border-[#0d6efd]" />
+                                    </label>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    {groupItems(activeGroup).length === 0 && (
+                        <div className="text-[13px] text-gray-400 py-8 text-center md:col-span-2">Nhóm này chưa có nguyên liệu.</div>
+                    )}
+                </div>
+
+                <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-gray-100 mt-4 -mx-1 px-1 py-3 flex items-center gap-3">
+                    <button onClick={handleSaveCounts} className="px-4 py-3 border border-gray-300 text-[14px] rounded-lg text-gray-600 hover:bg-gray-50">
+                        Lưu số liệu
+                    </button>
+                    <button onClick={handleConfirm} disabled={doneCount !== total}
+                        className="flex-1 px-5 py-3 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7] disabled:bg-gray-300 disabled:cursor-not-allowed">
+                        Hoàn thành kiểm kho{doneCount !== total ? ' (' + doneCount + '/' + total + ')' : ''}
+                    </button>
+                </div>
+                <div className="text-[12px] text-gray-400 mt-1">Nhập đủ tồn thực tế tất cả nguyên liệu để hoàn thành. Chênh lệch chỉ lưu lịch sử, không tự trừ/cộng kho.</div>
+            </div>
+        );
+    }
+
+    // ---------- MÀN DANH SÁCH + LỊCH SỬ ----------
     return (
         <div>
             <div className="flex items-center justify-between mb-3">
                 <div className="flex gap-2 items-center">
                     {!showCreate ? (
-                        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                        <button onClick={() => setShowCreate(true)} className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7]">
                             + Tạo phiếu kiểm kê
                         </button>
                     ) : (
                         <>
                             <select value={createType} onChange={(e) => setCreateType(e.target.value)}
-                                className="px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]">
+                                className="px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]">
                                 {Object.entries(STOCKTAKE_TYPES).map(([k, v]) => <option key={k} value={k}>Kiểm kê {v.toLowerCase()}</option>)}
                             </select>
-                            <button onClick={handleCreate} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">Tạo</button>
-                            <button onClick={() => setShowCreate(false)} className="px-3 py-2 text-[13px] text-gray-500">Hủy</button>
+                            <button onClick={handleCreate} className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7]">Tạo</button>
+                            <button onClick={() => setShowCreate(false)} className="px-3 py-2.5 text-[14px] text-gray-500">Hủy</button>
                         </>
                     )}
                 </div>
             </div>
-            <div className="bg-white rounded shadow-sm overflow-x-auto">
-                <table className="w-full text-[13px] min-w-[600px]">
+            <h3 className="font-semibold text-[14px] mb-2">Lịch sử kiểm kho</h3>
+            <div className="border border-gray-100 rounded-lg overflow-x-auto">
+                <table className="w-full text-[13px] min-w-[640px]">
                     <thead>
-                        <tr className="text-left text-gray-500 border-b border-gray-100">
-                            <th className="px-4 py-3 font-medium">#</th>
-                            <th className="px-3 py-3 font-medium">Loại</th>
-                            <th className="px-3 py-3 font-medium">Ngày tạo</th>
+                        <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                            <th className="px-4 py-3 font-medium">Phiếu</th>
+                            <th className="px-3 py-3 font-medium">Ngày — giờ kiểm</th>
                             <th className="px-3 py-3 font-medium">Người kiểm</th>
+                            <th className="px-3 py-3 font-medium text-right">Dòng kiểm</th>
+                            <th className="px-3 py-3 font-medium">Chênh lệch</th>
                             <th className="px-3 py-3 font-medium">Trạng thái</th>
                             <th className="px-4 py-3"></th>
                         </tr>
@@ -737,23 +1077,28 @@ function StocktakeTab({ materials, onDone }) {
                         {list.map((s) => (
                             <tr key={s.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                 <td className="px-4 py-3 font-medium">#{s.id}</td>
-                                <td className="px-3 py-3">Kiểm kê {STOCKTAKE_TYPES[s.type]?.toLowerCase()}</td>
-                                <td className="px-3 py-3 text-gray-500">{new Date(s.created_at).toLocaleString('vi-VN')}</td>
+                                <td className="px-3 py-3">{s.checked_at ? stFmtDateVN(s.checked_at) + ' — ' + new Date(s.checked_at).toTimeString().slice(0, 5) : <span className="text-gray-400">chưa chốt</span>}</td>
                                 <td className="px-3 py-3">{s.user?.name || '—'}</td>
+                                <td className="px-3 py-3 text-right">{s.total_items ?? '—'}</td>
+                                <td className="px-3 py-3">
+                                    {(s.diff_items ?? 0) === 0
+                                        ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">Khớp hết</span>
+                                        : <span className="px-2 py-0.5 rounded-full text-[11px] bg-red-50 text-red-600 border border-red-200">{s.diff_items} dòng lệch</span>}
+                                </td>
                                 <td className="px-3 py-3">
                                     {s.status === 'confirmed'
                                         ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">Đã chốt</span>
                                         : <span className="px-2 py-0.5 rounded-full text-[11px] bg-amber-50 text-amber-700 border border-amber-200">Đang kiểm</span>}
                                 </td>
-                                <td className="px-4 py-3 text-right">
-                                    <button onClick={() => openDetail(s.id)} className="text-[#0d6efd] hover:underline text-[13px]">
-                                        {s.status === 'confirmed' ? 'Xem' : 'Tiếp tục kiểm'}
-                                    </button>
+                                <td className="px-4 py-3 text-right whitespace-nowrap">
+                                    {s.status === 'confirmed'
+                                        ? <button onClick={() => openReceipt(s.id)} className="text-[#0d6efd] hover:underline text-[13px]">Xem</button>
+                                        : <button onClick={() => openDetail(s.id)} className="text-[#0d6efd] hover:underline text-[13px]">Tiếp tục kiểm</button>}
                                 </td>
                             </tr>
                         ))}
                         {list.length === 0 && (
-                            <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu kiểm kê nào.</td></tr>
+                            <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu kiểm kê nào.</td></tr>
                         )}
                     </tbody>
                 </table>

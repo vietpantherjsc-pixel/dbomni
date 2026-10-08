@@ -27,6 +27,10 @@ class PriceListController extends Controller
             'name' => 'required|string|max:100',
             'code' => 'nullable|string|max:50|unique:price_lists,code',
             'is_active' => 'boolean',
+            // Gói 17: chiết khấu kênh
+            'commission_rate' => 'nullable|numeric|min:0|max:100',
+            'commission_tax_included' => 'nullable|boolean',
+            'commission_tax_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
         $validated['code'] = $validated['code'] ?? Str::slug($validated['name'], '_');
@@ -41,6 +45,10 @@ class PriceListController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|string|max:100',
             'is_active' => 'sometimes|boolean',
+            // Gói 17: chiết khấu kênh
+            'commission_rate' => 'sometimes|numeric|min:0|max:100',
+            'commission_tax_included' => 'sometimes|boolean',
+            'commission_tax_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
         $priceList->update($validated);

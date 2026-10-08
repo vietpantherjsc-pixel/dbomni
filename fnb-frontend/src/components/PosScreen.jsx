@@ -18,7 +18,11 @@ import {
   LayoutGrid,
   Percent,
   UserPlus,
+  QrCode,
+  ChefHat,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { QRCodeSVG } from 'qrcode.react';
 import { printBill, printLabels } from '../utils/print';
 
 // =====================================================================
@@ -60,6 +64,7 @@ const catEmoji = (name) => {
 };
 
 export default function PosScreen({ onBackToApp }) {
+  const navigate = useNavigate(); // Gói 18: chuyển nhanh sang KDS
   // ---- Ca làm việc ----
   const [shift, setShift] = useState(null);
   const [isOpenShiftModal, setIsOpenShiftModal] = useState(false);
@@ -96,6 +101,9 @@ export default function PosScreen({ onBackToApp }) {
   const [receivedCash, setReceivedCash] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastOrderCompleted, setLastOrderCompleted] = useState(null);
+  // Gói 11: QR tích điểm — khách quét để gán TV vào đơn
+  const [qrClaim, setQrClaim] = useState(null); // {id, code, token, expires_at, member}
+  const [qrLoading, setQrLoading] = useState(false);
 
   // ---- Gói 3: loại đơn, bàn, chiết khấu ----
   const [orderType, setOrderType] = useState('takeaway');
@@ -199,6 +207,38 @@ export default function PosScreen({ onBackToApp }) {
       if (data.success) setTables(data.data);
     } catch (err) { console.error('Lỗi tải bàn:', err); }
   };
+
+  // Gói 11: QR tích điểm — tạo token, hiện QR cho khách quét
+  const openQrClaim = async () => {
+    if (!lastOrderCompleted?.id) { alert('Không tìm thấy đơn hàng.'); return; }
+    setQrLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/orders/${lastOrderCompleted.id}/claim-qr`, {
+        method: 'POST', headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Lỗi');
+      setQrClaim({ id: lastOrderCompleted.id, code: data.data.code, token: data.data.token, member: null });
+    } catch (e) { alert(e.message); }
+    finally { setQrLoading(false); }
+  };
+
+  // Gói 11: poll đơn trong lúc mở QR — khách quét xong thì hiện thông tin TV
+  useEffect(() => {
+    if (!qrClaim || qrClaim.member) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/orders/code/${qrClaim.code}`, { headers: authHeaders() });
+        const data = await res.json();
+        const c = data.data?.customer;
+        if (c) {
+          setQrClaim((prev) => prev ? { ...prev, member: { name: c.name, member_code: c.member_code, tier: c.tier?.name } } : prev);
+          clearInterval(t);
+        }
+      } catch { /* bỏ qua */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [qrClaim?.code, qrClaim?.member]);
 
   const fetchHeldOrders = async () => {
     try {
@@ -521,6 +561,7 @@ export default function PosScreen({ onBackToApp }) {
       const data = await res.json();
       if (data.success || data.data) {
         const completedOrder = {
+          id: data.data?.id,
           code: data.data?.code || 'POS-' + Date.now().toString().slice(-4),
           items: [...cart],
           subtotal: subtotalAmount, discount: discountAmount, total: totalAmount,
@@ -737,6 +778,16 @@ export default function PosScreen({ onBackToApp }) {
               {heldOrders.length}
             </span>
           )}
+        </button>
+
+        {/* Gói 18: nút chuyển nhanh sang KDS (bếp), không cần thoát ra admin */}
+        <button
+          onClick={() => navigate('/kds')}
+          title="Sang màn hình Bếp (KDS)"
+          className="flex items-center gap-1.5 bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/40 text-orange-300 px-3 py-2 rounded-lg text-xs font-semibold"
+        >
+          <ChefHat size={14} />
+          <span className="hidden sm:inline">KDS</span>
         </button>
 
         {shift ? (
@@ -1353,7 +1404,12 @@ export default function PosScreen({ onBackToApp }) {
             <CheckCircle2 size={48} className="text-emerald-400 mx-auto" />
             <h3 className="font-bold text-base">Đơn Hàng {lastOrderCompleted.code}</h3>
             <p className="text-xs text-slate-400">Đã gửi dữ liệu sang màn hình KDS cho Barista</p>
-            <div className="flex gap-2 pt-2">
+            {/* Gói 11: QR tích điểm cho khách */}
+            <button onClick={openQrClaim} disabled={qrLoading}
+              className="w-full py-2.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5">
+              <QrCode size={14} /> {qrLoading ? 'Đang tạo QR...' : 'QR tích điểm cho khách'}
+            </button>
+            <div className="flex gap-2 pt-1">
               <button onClick={() => printBill(lastOrderCompleted)}
                 className="flex-1 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
                 <Printer size={14} /> In Bill
@@ -1366,6 +1422,31 @@ export default function PosScreen({ onBackToApp }) {
                 Tiếp tục
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gói 11: modal QR tích điểm */}
+      {qrClaim && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#1e2a3f] border border-white/10 rounded-2xl w-full max-w-xs p-5 shadow-2xl text-center space-y-3">
+            <h3 className="font-bold text-base">QR tích điểm</h3>
+            <p className="text-xs text-slate-400">Khách mở Mini App → Quét tích điểm → quét mã này</p>
+            <div className="bg-white rounded-xl p-3 inline-block">
+              <QRCodeSVG value={JSON.stringify({ code: qrClaim.code, token: qrClaim.token })} size={180} />
+            </div>
+            <p className="text-xs text-slate-400 font-mono">{qrClaim.code}</p>
+            {qrClaim.member ? (
+              <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-xl p-3">
+                <p className="text-emerald-400 font-bold text-sm">✅ {qrClaim.member.name}</p>
+                <p className="text-xs text-slate-300">{qrClaim.member.member_code}{qrClaim.member.tier ? ` · Hạng ${qrClaim.member.tier}` : ''}</p>
+              </div>
+            ) : (
+              <p className="text-xs text-amber-400 animate-pulse">Đang chờ khách quét...</p>
+            )}
+            <button onClick={() => setQrClaim(null)} className="w-full py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold">
+              Đóng
+            </button>
           </div>
         </div>
       )}
