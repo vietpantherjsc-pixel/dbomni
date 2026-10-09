@@ -11,6 +11,7 @@ import {
   CreditCard,
   Layers
 } from 'lucide-react';
+import DateInput from '../components/DateInput';
 
 const API_BASE = 'http://localhost/api';
 
@@ -428,11 +429,11 @@ export default function AdminDashboard({ onBackToApp }) {
 
               <div>
                 <label className="font-semibold text-slate-700 block mb-1">Hạn sử dụng (nếu có):</label>
-                <input
-                  type="date"
+                <DateInput
                   value={inwardExpired}
-                  onChange={(e) => setInwardExpired(e.target.value)}
+                  onChange={setInwardExpired}
                   className="w-full p-2 border rounded-lg"
+                  placeholder="dd/mm/yyyy"
                 />
               </div>
 

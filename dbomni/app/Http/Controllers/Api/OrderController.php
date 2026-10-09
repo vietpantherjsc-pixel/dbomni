@@ -407,43 +407,7 @@ class OrderController extends Controller
 
         try {
             $order = DB::transaction(function () use ($id, $validated, $shouldRestock, $inventoryService, $loyaltyService) {
-                $order = Order::with('items')->lockForUpdate()->findOrFail($id);
-
-                if ($order->status === 'cancelled') {
-                    throw new Exception('Đơn hàng này đã được hủy trước đó.');
-                }
-
-                // Hoàn trả nguyên vật liệu theo BOM nếu restock = true
-                // Gói 3b: đơn held chưa từng trừ kho (stock_deducted=false) thì không có gì để hoàn.
-                if ($shouldRestock && $order->stock_deducted) {
-                    // Gói 13: hoàn cả topping/size (option_ids từ options [id => name])
-                    $inventoryService->restock(
-                        $order->branch_id ?? 1,
-                        $order->items->map(fn($item) => [
-                            'product_id' => $item->product_id,
-                            'product_option_id' => $item->product_option_id,
-                            'option_ids' => $item->options ? array_keys((array) $item->options) : [],
-                            'quantity' => $item->quantity,
-                        ])->toArray()
-                    );
-                }
-
-                $order->status = 'cancelled';
-                $order->payment_status = 'refunded';
-                $order->cancel_reason = $validated['reason'];
-                $order->cancelled_at = now();
-                $order->save();
-
-                // Gói 5: hoàn điểm đã đổi khi hủy đơn
-                $loyaltyService->refundRedeem($order);
-
-                // Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận)
-                $loyaltyService->revokeEarn($order);
-
-                // Gói 3b: nếu là đơn lưu gắn bàn -> trả bàn về trống khi không còn đơn lưu nào khác
-                $this->releaseTableIfFree($order);
-
-                return $order;
+                return $this->performCancel($id, $validated['reason'], $shouldRestock, $inventoryService, $loyaltyService);
             });
 
             return response()->json([
@@ -457,6 +421,101 @@ class OrderController extends Controller
                 'success' => false,
                 'message' => $e->getMessage(),
             ], 400);
+        }
+    }
+
+    /**
+     * Gói 33: lõi HỦY đơn dùng chung cho cancel đơn lẻ và bulk cancel.
+     * KHÔNG tự mở transaction — caller bọc ngoài.
+     */
+    private function performCancel(int $id, string $reason, bool $shouldRestock, InventoryService $inventoryService, LoyaltyService $loyaltyService): Order
+    {
+        $order = Order::with('items')->lockForUpdate()->findOrFail($id);
+
+        if ($order->status === 'cancelled') {
+            throw new Exception('Đơn hàng này đã được hủy trước đó.');
+        }
+
+        // Hoàn trả nguyên vật liệu theo BOM nếu restock = true
+        // Gói 3b: đơn held chưa từng trừ kho (stock_deducted=false) thì không có gì để hoàn.
+        if ($shouldRestock && $order->stock_deducted) {
+            // Gói 13: hoàn cả topping/size (option_ids từ options [id => name])
+            $inventoryService->restock(
+                $order->branch_id ?? 1,
+                $order->items->map(fn($item) => [
+                    'product_id' => $item->product_id,
+                    'product_option_id' => $item->product_option_id,
+                    'option_ids' => $item->options ? array_keys((array) $item->options) : [],
+                    'quantity' => $item->quantity,
+                ])->toArray()
+            );
+        }
+
+        $order->status = 'cancelled';
+        $order->payment_status = 'refunded';
+        $order->cancel_reason = $reason;
+        $order->cancelled_at = now();
+        $order->save();
+
+        // Gói 5: hoàn điểm đã đổi khi hủy đơn
+        $loyaltyService->refundRedeem($order);
+
+        // Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận)
+        $loyaltyService->revokeEarn($order);
+
+        // Gói 3b: nếu là đơn lưu gắn bàn -> trả bàn về trống khi không còn đơn lưu nào khác
+        $this->releaseTableIfFree($order);
+
+        return $order;
+    }
+
+    /**
+     * Gói 33 (2026-10-09): THAO TÁC HÀNG LOẠT hóa đơn — CHỈ admin cấp cao nhất
+     * (route middleware permission:orders.bulk).
+     * POST /api/orders/bulk-action {ids, action: cancel|delete, reason?}
+     * - cancel: tái dùng performCancel (hoàn kho nếu đã trừ, hoàn/thu hồi điểm);
+     *          bỏ qua đơn đã cancelled (báo skipped).
+     * - delete: XÓA VĨNH VIỄN đơn + items, KHÔNG hoàn kho (dùng cho đơn nháp/test;
+     *          muốn hoàn kho thì dùng Hủy).
+     */
+    public function bulkAction(Request $request, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1|max:200',
+            'ids.*' => 'integer|exists:orders,id',
+            'action' => 'required|in:cancel,delete',
+            'reason' => 'nullable|string|max:255',
+        ]);
+        $ids = array_values(array_unique($validated['ids']));
+        $action = $validated['action'];
+        $reason = $validated['reason'] ?? 'Hủy hàng loạt';
+
+        try {
+            $result = DB::transaction(function () use ($ids, $action, $reason, $inventoryService, $loyaltyService) {
+                $done = 0;
+                $skipped = 0;
+                foreach ($ids as $id) {
+                    $order = Order::find($id);
+                    if (!$order) { $skipped++; continue; }
+                    if ($action === 'cancel') {
+                        if ($order->status === 'cancelled') { $skipped++; continue; }
+                        $this->performCancel($id, $reason, true, $inventoryService, $loyaltyService);
+                        $done++;
+                    } else {
+                        $order->items()->delete();
+                        $order->delete();
+                        $done++;
+                    }
+                }
+                return ['done' => $done, 'skipped' => $skipped];
+            });
+
+            $msg = $action === 'cancel'
+                ? "Đã hủy {$result['done']} hóa đơn" . ($result['skipped'] ? " (bỏ qua {$result['skipped']} đơn đã hủy trước đó)" : '') . '.'
+                : "Đã xóa vĩnh viễn {$result['done']} hóa đơn.";
+            return response()->json(['success' => true, 'message' => $msg, 'data' => $result]);
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
     }
 

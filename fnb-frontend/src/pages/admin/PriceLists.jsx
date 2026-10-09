@@ -114,7 +114,8 @@ export default function PriceLists() {
             <thead><tr><th style={{width:36}}></th><th>Tên kênh</th><th>Mã</th><th>Chiết khấu kênh</th><th className="text-center">Món đang bán</th><th className="text-center">Trạng thái</th><th className="text-right">Thao tác</th></tr></thead>
             <tbody>
               {lists.map((pl) => (
-                <tr key={pl.id}
+                <React.Fragment key={pl.id}>
+                <tr
                   draggable
                   onDragStart={(e) => { drag.current = pl.id; e.dataTransfer.effectAllowed = 'move'; }}
                   onDragOver={(e) => e.preventDefault()}
@@ -172,6 +173,7 @@ export default function PriceLists() {
                     </td>
                   </tr>
                 )}
+                </React.Fragment>
               ))}
               {lists.length === 0 && <tr><td colSpan={7} className="p-8 text-center" style={{color:'var(--m-ink-faint)'}}>Chưa có kênh nào.</td></tr>}
             </tbody>

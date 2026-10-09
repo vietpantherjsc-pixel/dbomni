@@ -12,7 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 // Gói 4 (2026-10-04): Kiểm kê kho (ngày/tuần/tháng/đột xuất).
-// Luồng: tạo phiếu (chụp tồn hệ thống) -> nhập số thực đếm -> chốt (điều chỉnh kho).
+// Luồng: tạo phiếu (chụp tồn hệ thống) -> nhập số thực đếm -> chốt (chỉ GHI NHẬN chênh lệch, không tự điều chỉnh kho).
 class StocktakeController extends Controller
 {
     // Gói 19 (2026-10-09): Lịch sử kiểm kho — chốt phiếu chỉ GHI NHẬN chênh lệch,
@@ -20,6 +20,7 @@ class StocktakeController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Stocktake::with(['user', 'branch', 'items'])
+            ->orderByRaw('checked_at IS NULL DESC')
             ->orderByDesc('checked_at')
             ->orderByDesc('id');
         if ($request->filled('branch_id')) {
@@ -40,7 +41,7 @@ class StocktakeController extends Controller
 
     public function show(int $id): JsonResponse
     {
-        $stocktake = Stocktake::with(['items.material', 'user', 'branch'])->findOrFail($id);
+        $stocktake = Stocktake::with(['items.material.category', 'user', 'branch'])->findOrFail($id); // Gói 22: kèm loại NL
         return response()->json(['success' => true, 'data' => $stocktake]);
     }
 
@@ -86,7 +87,7 @@ class StocktakeController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Đã tạo phiếu kiểm kê',
-            'data' => $stocktake->load('items.material'),
+            'data' => $stocktake->load('items.material.category'), // Gói 22
         ], 201);
     }
 
@@ -125,7 +126,7 @@ class StocktakeController extends Controller
 
         try {
             $result = DB::transaction(function () use ($id, $validated) {
-                $stocktake = Stocktake::with('items.material')->lockForUpdate()->findOrFail($id);
+                $stocktake = Stocktake::with('items.material.category')->lockForUpdate()->findOrFail($id);
 
                 if ($stocktake->status !== 'draft') {
                     throw new Exception('Phiếu đã được chốt trước đó.');
@@ -144,6 +145,9 @@ class StocktakeController extends Controller
                         'name' => $item->material->name,
                         'unit' => $item->material->unit,
                         'type' => $item->material->type,
+                        // Gói 22: snapshot loại NL tại lúc chốt (nhóm ảnh xuất theo loại)
+                        'category_id' => $item->material->material_category_id,
+                        'category_name' => $item->material->category?->name,
                         'system_qty' => (float) $item->system_qty,
                         'counted_qty' => (float) $item->counted_qty,
                         'diff' => $diff,

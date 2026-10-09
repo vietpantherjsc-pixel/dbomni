@@ -292,6 +292,14 @@ class ReportController extends Controller
         $agg = $this->productAgg($cur['items']);
         $refAgg = $this->productAgg($ref['items']);
         $rows = [];
+        // Gói 25: badge "đang ẩn ở CN X" — số liệu đơn cũ giữ nguyên
+        $pids = array_keys(array_slice($agg, 0, $limit, true));
+        $hiddenMap = [];
+        if (!empty($pids)) {
+            foreach (\App\Models\BranchProductHidden::with('branch:id,name')->whereIn('product_id', $pids)->get() as $h) {
+                $hiddenMap[$h->product_id][] = $h->branch->name;
+            }
+        }
         foreach (array_slice($agg, 0, $limit, true) as $pid => $a) {
             $ra = $refAgg[$pid] ?? ['revenue' => 0, 'quantity' => 0];
             $rows[] = [
@@ -300,6 +308,7 @@ class ReportController extends Controller
                 'quantity' => $a['quantity'],
                 'revenue' => $this->r2($disp($a['revenue'], $a['vat'])),
                 'delta' => $this->pct($a['revenue'], $ra['revenue']),
+                'hidden_branches' => array_values(array_unique($hiddenMap[$pid] ?? [])),
             ];
         }
         return $rows;

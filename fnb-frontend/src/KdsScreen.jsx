@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import { fmtDateTime } from './utils/format';
 import { 
   ChefHat, Clock, CheckCircle2, AlertCircle, RefreshCw, 
   Volume2, VolumeX, ArrowRight, Check, Coffee, Store, ShoppingCart
@@ -33,7 +34,7 @@ function KdsOrderCard({ ord, elapsed, typeLabel, scheduledAt, action }) {
 
       {scheduledAt && (
         <p className="text-[11px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/30 rounded-xl px-2.5 py-1.5">
-          📅 Hẹn: {new Date(scheduledAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          📅 Hẹn: {fmtDateTime(scheduledAt)}
         </p>
       )}
 

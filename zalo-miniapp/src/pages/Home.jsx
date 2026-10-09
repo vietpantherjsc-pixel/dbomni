@@ -15,6 +15,7 @@ export default function Home() {
   const [promos, setPromos] = useState([]);
   const [sales, setSales] = useState([]);
   const [shopInfo, setShopInfo] = useState({ cover_url: '', ref_bonus_points: 100 });
+  const [topIds, setTopIds] = useState(new Set()); // Gói 34: ids top 10 bán chạy
   const [q, setQ] = useState('');
   const [sheet, setSheet] = useState(null);
   const nav = useNavigate();
@@ -22,9 +23,12 @@ export default function Home() {
   useEffect(() => { captureRef(); }, []); // Gói 9: giữ mã giới thiệu ?ref=
   useEffect(() => { if (!branch) { nav('/branches'); return; } }, [branch]);
 
-  useEffect(() => { api.menu().then(setMenu).catch(() => {}); }, []);
+  useEffect(() => { api.menu(branch?.id).then(setMenu).catch(() => {}); }, [branch]); // Gói 25: lọc theo CN
   useEffect(() => { api.shopInfo(branch?.id).then(setShopInfo).catch(() => {}); }, [branch]);
-  useEffect(() => { api.saleProducts().then(setSales).catch(() => {}); }, []);
+  useEffect(() => { api.saleProducts().then(setSales).catch(() => {}); }, []); // Gói 34: map KM theo món
+  useEffect(() => { // Gói 34: top 10 bán chạy theo chi nhánh
+    api.topProducts(branch?.id).then((rows) => setTopIds(new Set((rows || []).map((r) => r.product_id)))).catch(() => {});
+  }, [branch]);
 
   useEffect(() => {
     if (!menu.length) return;
@@ -36,9 +40,10 @@ export default function Home() {
   const allProducts = menu.flatMap((c) => c.products || []);
   const favorites = allProducts.filter((p) => p.is_favorite);
   const forYou = (favorites.length ? favorites : allProducts).slice(0, 4);
+  const saleMap = {}; // Gói 34: KM theo món (từ /sale-products)
+  sales.forEach((s) => { saleMap[s.id] = s; });
 
-  const filtered = q
-    ? menu.map((c) => ({ ...c, products: (c.products || []).filter((p) => p.name.toLowerCase().includes(q.toLowerCase())) })).filter((c) => c.products.length)
+  const filtered = q    ? menu.map((c) => ({ ...c, products: (c.products || []).filter((p) => p.name.toLowerCase().includes(q.toLowerCase())) })).filter((c) => c.products.length)
     : menu;
 
   // Gói 9: nút Chia sẻ — copy link giới thiệu (lưu ref để tính điểm affiliate sau này)
@@ -130,36 +135,56 @@ export default function Home() {
       {/* Lưới Dành cho bạn */}
       <div className="zm-section-title">💚 Dành cho bạn</div>
       <div className="zm-grid2">
-        {forYou.map((p) => (
-          <div key={p.id} className="zm-card" onClick={() => setSheet(p)}>
-            {p.is_favorite && <div className="zm-badge-hot">Được yêu thích</div>}
-            <img src={img(p)} alt={p.name} loading="lazy" />
-            <div className="zm-card-body">
-              <div className="zm-card-name">{p.name}</div>
-              <div className="zm-card-price">{fmt(p.base_price)}đ</div>
+        {forYou.map((p) => {
+          const isTop = topIds.has(p.id); // Gói 34
+          const sale = saleMap[p.id];
+          return (
+            <div key={p.id} className="zm-card" onClick={() => setSheet(p)}>
+              {isTop
+                ? <div className="zm-badge-hot zm-badge-best">Bán chạy</div>
+                : (p.is_favorite && <div className="zm-badge-hot">Được yêu thích</div>)}
+              <div className="zm-card-media">
+                <img src={img(p)} alt={p.name} loading="lazy" />
+                <button className="zm-card-add" aria-label="Thêm món" onClick={(e) => { e.stopPropagation(); setSheet(p); }}>+</button>
+              </div>
+              <div className="zm-card-body">
+                {sale && <div className="zm-promo-line">{sale.promo_name}</div>}
+                <div className="zm-card-name">{p.name}</div>
+                <div className="zm-card-price">{sale ? (<><span>{fmt(sale.sale_price)}đ</span> <span className="zm-row-old">{fmt(p.base_price)}đ</span></>) : (<>{fmt(p.base_price)}đ</>)}</div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       {forYou.length === 0 && <div className="zm-empty">Chưa có món nào.</div>}
 
-      {/* Thực đơn đầy đủ */}
-      <div className="zm-section-title">📋 Thực đơn</div>
+      {/* Thực đơn đầy đủ (Gói 34c: bỏ tiêu đề "Thực đơn" theo yêu cầu Đại Vương) */}
       {filtered.map((cat) => (
         <div key={cat.id}>
           <div className="zm-cat-title">{cat.name}</div>
-          {(cat.products || []).map((p) => (
-            <div key={p.id} className="zm-row-item" onClick={() => setSheet(p)}>
-              <img src={img(p)} alt={p.name} loading="lazy" />
-              <div className="zm-row-info">
-                {p.is_favorite && <div style={{ color: '#e11d48', fontSize: 12, fontWeight: 700, marginBottom: 2 }}>♥ Được yêu thích</div>}
-                <div className="zm-row-name">{p.name}</div>
-                {p.description && <div className="zm-row-desc">{p.description}</div>}
-                <div className="zm-row-price">{fmt(p.base_price)}đ</div>
+          {(cat.products || []).map((p) => {
+            const isTop = topIds.has(p.id); // Gói 34
+            const sale = saleMap[p.id];
+            return (
+              <div key={p.id} className="zm-row-item" onClick={() => setSheet(p)}>
+                <img src={img(p)} alt={p.name} loading="lazy" />
+                <div className="zm-row-info">
+                  {isTop
+                    ? <div className="zm-best">Bán chạy</div>
+                    : (p.is_favorite && <div style={{ color: '#e11d48', fontSize: 12, fontWeight: 700, marginBottom: 2 }}>Được yêu thích</div>)}
+                  {sale && <div className="zm-promo-line">{sale.promo_name}</div>}
+                  <div className="zm-row-name">{p.name}</div>
+                  {p.description && <div className="zm-row-desc">{p.description}</div>}
+                  <div className="zm-row-price">
+                    {sale
+                      ? (<><span>{fmt(sale.sale_price)}đ</span><span className="zm-row-old">{fmt(p.base_price)}đ</span></>)
+                      : (<>{fmt(p.base_price)}đ</>)}
+                  </div>
+                </div>
+                <button className="zm-add-btn" onClick={(e) => { e.stopPropagation(); setSheet(p); }}>+</button>
               </div>
-              <button className="zm-add-btn" onClick={(e) => { e.stopPropagation(); setSheet(p); }}>+</button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ))}
       {filtered.length === 0 && <div className="zm-empty">Chưa có món nào.</div>}

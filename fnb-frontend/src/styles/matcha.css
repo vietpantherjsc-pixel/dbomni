@@ -21,9 +21,11 @@
   --m-accent-soft: #E9EEF9;   /* nền highlight xanh */
   --m-stamp: #F5A623;         /* cam theo logo (điểm nhấn) */
 
-  --m-sidebar: #24305E;       /* sidebar navy */
-  --m-sidebar-ink: #B9C4D8;
-  --m-sidebar-active: #9DB4E4;
+  --m-sidebar: #FFFFFF;       /* Gói 31 (bản B): sidebar trắng */
+  --m-sidebar-ink: #3C4460;
+  --m-sidebar-active: #24305E;
+  --m-topbar-bg: #24305E;       /* Gói 31 (bản B): topbar navy */
+  --m-topbar-ink: #FFFFFF;
 
   --m-success: #2E7D4F;
   --m-warning: #B7791F;
@@ -54,11 +56,11 @@ body.m-theme {
 /* ---- Số liệu: tabular ---- */
 .m-num { font-variant-numeric: tabular-nums; }
 
-/* ---- Thẻ ---- */
+/* ---- Thẻ (Gói 31 bản B: bo 12px) ---- */
 .m-card {
   background: var(--m-surface);
   border: 1px solid var(--m-line);
-  border-radius: var(--m-radius);
+  border-radius: 12px;
   box-shadow: var(--m-shadow);
 }
 
@@ -133,26 +135,28 @@ body.m-theme {
 .m-tab:hover { color: var(--m-ink); }
 .m-tab.active { color: var(--m-primary-deep); border-bottom-color: var(--m-primary); }
 
-/* ---- Sidebar ---- */
+/* ---- Sidebar (Gói 31 bản B: trắng, viền phải) ---- */
 .m-sidebar {
   background: var(--m-sidebar);
   color: var(--m-sidebar-ink);
+  border-right: 1px solid var(--m-line);
 }
 .m-nav-item {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px;
-  border-radius: var(--m-radius);
-  font-size: 13px; color: var(--m-sidebar-ink);
+  min-height: 40px;
+  border-radius: 10px;
+  font-size: 13px; font-weight: 500; color: var(--m-sidebar-ink);
   cursor: pointer; text-decoration: none;
   transition: background 0.15s, color 0.15s;
 }
-.m-nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
-.m-nav-item.active { background: rgba(157,190,140,0.16); color: var(--m-sidebar-active); font-weight: 600; }
+.m-nav-item:hover { background: #F2F4F9; color: var(--m-primary-deep); }
+.m-nav-item.active { background: var(--m-accent-soft); color: var(--m-sidebar-active); font-weight: 600; }
 
-/* ---- Topbar ---- */
+/* ---- Topbar (Gói 31 bản B: navy) ---- */
 .m-topbar {
-  background: var(--m-surface);
-  border-bottom: 1px solid var(--m-line);
+  background: var(--m-topbar-bg);
+  color: var(--m-topbar-ink);
 }
 
 /* ---- Modal / Drawer ---- */

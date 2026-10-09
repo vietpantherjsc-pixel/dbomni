@@ -84,7 +84,11 @@ export default function GroupRoom() {
     const t = setInterval(load, 15000); // tự refresh tổng đơn mỗi 15s
     return () => clearInterval(t);
   }, [tab, load]);
-  useEffect(() => { api.menu().then(setMenu).catch(() => {}); }, []);
+  useEffect(() => {
+    // Gói 25: lọc menu theo CN của nhóm (ưu tiên) rồi mới tới CN khách đang chọn
+    const bid = group?.branch?.id || group?.branch_id || branch?.id;
+    api.menu(bid).then(setMenu).catch(() => {});
+  }, [group, branch]);
 
   if (err) {
     return (

@@ -1,7 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
+import { fmtDate, fmtTime, fmtDateTime } from '../../utils/format';
+import DateInput from '../../components/DateInput';
+import TimeInput from '../../components/TimeInput';
 
 const API = 'http://localhost/api';
 
@@ -22,6 +25,7 @@ export default function Inventory() {
     const [tab, setTab] = useState('stock');
     const [materials, setMaterials] = useState([]);
     const [stock, setStock] = useState([]);
+    const [categories, setCategories] = useState([]); // Gói 22: loại danh mục NL
     // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt form thêm mới trong tab Tồn kho
     const [addMaterialSignal, setAddMaterialSignal] = useState(0);
     // Gói 18: chi nhánh dùng chung từ BranchContext ('0' = tất cả)
@@ -32,14 +36,16 @@ export default function Inventory() {
 
     const fetchAll = async (bid) => {
         try {
-            const [mRes, sRes, bRes] = await Promise.all([
+            const [mRes, sRes, bRes, cRes] = await Promise.all([
                 axios.get(`${API}/materials`),
                 axios.get(`${API}/inventory/branch/${bid}`),
                 axios.get(`${API}/branches`),
+                axios.get(`${API}/material-categories`),
             ]);
             if (mRes.data?.success) setMaterials(mRes.data.data);
             if (sRes.data?.success) setStock(sRes.data.data);
             if (bRes.data?.success) setBranches(bRes.data.data || []);
+            if (cRes.data?.success) setCategories(cRes.data.data || []);
         } catch (err) { console.error('Lỗi tải kho:', err); }
     };
 
@@ -47,18 +53,30 @@ export default function Inventory() {
 
     const matById = (id) => materials.find((m) => m.id === Number(id));
 
+    // Gói 22: tải lại loại NL + nguyên liệu (sau CRUD loại)
+    const fetchCats = async () => {
+        try {
+            const [cRes, mRes] = await Promise.all([
+                axios.get(`${API}/material-categories`),
+                axios.get(`${API}/materials`),
+            ]);
+            if (cRes.data?.success) setCategories(cRes.data.data || []);
+            if (mRes.data?.success) setMaterials(mRes.data.data);
+        } catch (err) { console.error('Lỗi tải loại NL:', err); }
+    };
+
     return (
         <AdminLayout>
-            <div className="p-5">
+            <div className="p-4 sm:p-5">
                 {/* Tiêu đề + nút thêm (chuẩn trang Hóa đơn) */}
-                <div className="flex items-center justify-between">
-                    <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                         <h1 className="text-xl font-semibold text-gray-800">Kho hàng</h1>
                         <p className="text-[13px] text-[#6b7280] mt-0.5">Quản lý tồn kho, nhập hàng, chế biến bán thành phẩm và kiểm kê.</p>
                     </div>
                     {tab === 'stock' && (
                         <button onClick={() => setAddMaterialSignal((s) => s + 1)}
-                            className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] whitespace-nowrap ml-4">
+                            className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] whitespace-nowrap self-start sm:self-auto shrink-0">
                             + Nguyên liệu
                         </button>
                     )}
@@ -66,9 +84,10 @@ export default function Inventory() {
 
                 <div className="mt-3 bg-white rounded shadow-sm">
                     {/* Tabs */}
-                    <div className="flex gap-1 overflow-x-auto border-b border-gray-100 px-4">
+                    <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-100 px-4">
                         {[
                             ['stock', 'Tồn kho'],
+                            ['cats', 'Loại NL'],
                             ['inbound', 'Nhập kho'],
                             ['production', 'Chế biến'],
                             ['stocktake', 'Kiểm kê'],
@@ -76,7 +95,7 @@ export default function Inventory() {
                             <button
                                 key={key}
                                 onClick={() => setTab(key)}
-                                className={`px-3 py-3 text-[13px] whitespace-nowrap border-b-2 -mb-px transition-colors ${
+                                className={`px-3 py-3 text-[13px] whitespace-nowrap shrink-0 border-b-2 -mb-px transition-colors ${
                                     tab === key ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'
                                 }`}
                             >
@@ -86,10 +105,11 @@ export default function Inventory() {
                     </div>
 
                     <div className="p-4">
-                        {tab === 'stock' && <StockTab stock={stock} materials={materials} onChange={() => fetchAll(effBranchId)} addSignal={addMaterialSignal} />}
+                        {tab === 'stock' && <StockTab stock={stock} materials={materials} categories={categories} onChange={() => fetchAll(effBranchId)} addSignal={addMaterialSignal} />}
+                        {tab === 'cats' && <CategoryTab categories={categories} onChange={fetchCats} />}
                         {tab === 'inbound' && <InboundTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
                         {tab === 'production' && <ProductionTab materials={materials} matById={matById} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
-                        {tab === 'stocktake' && <StocktakeTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} showAll={branchId === '0'} />}
+                        {tab === 'stocktake' && <StocktakeTab materials={materials} categories={categories} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} showAll={branchId === '0'} />}
                     </div>
                 </div>
             </div>
@@ -98,15 +118,15 @@ export default function Inventory() {
 }
 
 // ================= TAB TỒN KHO =================
-function StockTab({ stock, materials, onChange, addSignal }) {
+function StockTab({ stock, materials, categories, onChange, addSignal }) {
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState(null); // null = thêm mới
-    const [form, setForm] = useState({ name: '', unit: 'g', type: 'raw', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
+    const [form, setForm] = useState({ name: '', unit: 'g', type: 'raw', material_category_id: '', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
 
     const resetForm = () => {
         setShowForm(false);
         setEditingId(null);
-        setForm({ name: '', unit: 'g', type: 'raw', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
+        setForm({ name: '', unit: 'g', type: 'raw', material_category_id: '', minimum_stock: 0, purchase_unit: '', conversion_rate: '' });
     };
 
     // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt mở form thêm mới
@@ -124,6 +144,7 @@ function StockTab({ stock, materials, onChange, addSignal }) {
             name: m.name,
             unit: m.unit,
             type: m.type,
+            material_category_id: m.material_category_id ?? '',
             minimum_stock: m.minimum_stock ?? 0,
             purchase_unit: m.purchase_unit || '',
             conversion_rate: m.conversion_rate || '',
@@ -144,6 +165,7 @@ function StockTab({ stock, materials, onChange, addSignal }) {
                 name: form.name.trim(),
                 unit: form.unit.trim(),
                 type: form.type,
+                material_category_id: form.material_category_id === '' ? null : Number(form.material_category_id),
                 minimum_stock: Number(form.minimum_stock) || 0,
                 purchase_unit: form.purchase_unit.trim() || null,
                 conversion_rate: form.purchase_unit.trim() ? (Number(form.conversion_rate) || 1) : 1,
@@ -201,6 +223,14 @@ function StockTab({ stock, materials, onChange, addSignal }) {
                         </select>
                     </div>
                     <div>
+                        <label className="text-xs text-gray-500">Loại nguyên liệu (nhóm kiểm kho)</label>
+                        <select value={form.material_category_id} onChange={(e) => setForm({ ...form, material_category_id: e.target.value })}
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]">
+                            <option value="">— Chưa phân loại —</option>
+                            {(categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
                         <label className="text-xs text-gray-500">Tồn tối thiểu (báo hết)</label>
                         <input type="number" min="0" value={form.minimum_stock} onChange={(e) => setForm({ ...form, minimum_stock: e.target.value })}
                             className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
@@ -245,9 +275,12 @@ function StockTab({ stock, materials, onChange, addSignal }) {
                             <tr key={s.material_id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                 <td className="px-4 py-3 font-medium">{s.name}</td>
                                 <td className="px-3 py-3">
-                                    <span className={`px-2 py-0.5 rounded-full text-[11px] border ${TYPE_COLORS[s.type] || TYPE_COLORS.raw}`}>
-                                        {TYPE_LABELS[s.type] || s.type}
-                                    </span>
+                                    {(() => {
+                                        const m = materials.find((x) => x.id === s.material_id);
+                                        const cn = m?.category?.name;
+                                        if (cn) return <span className="px-2 py-0.5 rounded-full text-[11px] border bg-blue-50 text-blue-700 border-blue-200">{cn}</span>;
+                                        return <span className={`px-2 py-0.5 rounded-full text-[11px] border ${TYPE_COLORS[s.type] || TYPE_COLORS.raw}`}>{TYPE_LABELS[s.type] || s.type}</span>;
+                                    })()}
                                 </td>
                                 <td className="px-3 py-3 text-right font-bold">{Number(s.current_stock).toLocaleString('vi-VN')} {s.unit}</td>
                                 <td className="px-3 py-3 text-right text-gray-500">{Number(s.minimum_stock).toLocaleString('vi-VN')} {s.unit}</td>
@@ -407,10 +440,9 @@ function InboundTab({ materials, onDone, branchId }) {
                                             : <span className="text-gray-300 text-xs">—</span>}
                                     </td>
                                     <td className="px-2 py-2">
-                                        <input
-                                            type="date"
+                                        <DateInput
                                             value={r.expired_at ?? ''}
-                                            onChange={(e) => setRow(m.id, 'expired_at', e.target.value)}
+                                            onChange={(v) => setRow(m.id, 'expired_at', v)}
                                             className="w-full px-2 py-1.5 text-[12px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]"
                                         />
                                     </td>
@@ -587,7 +619,7 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                         <div key={p.id} className="text-[13px] border-b border-gray-50 py-2">
                             <div className="flex justify-between">
                                 <span className="font-medium">{p.material?.name} — {Number(p.quantity).toLocaleString('vi-VN')} {p.material?.unit}</span>
-                                <span className="text-gray-400 text-xs">{new Date(p.created_at).toLocaleString('vi-VN')}</span>
+                                <span className="text-gray-400 text-xs">{fmtDateTime(p.created_at)}</span>
                             </div>
                             <div className="text-xs text-gray-500">
                                 Dùng: {(p.items || []).map((i) => `${Number(i.quantity).toLocaleString('vi-VN')} ${i.material?.unit} ${i.material?.name}`).join(', ')}
@@ -601,24 +633,133 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
     );
 }
 
+// ================= TAB LOẠI NGUYÊN LIỆU (Gói 22) =================
+// Quản lý loại danh mục nguyên liệu — nhóm kiểm kho động (thay 3 nhóm cứng).
+function CategoryTab({ categories, onChange }) {
+    const [name, setName] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState('');
+
+    const sorted = (categories || []).slice().sort((a, b) => ((a.sort_order ?? 0) - (b.sort_order ?? 0)) || (a.id - b.id));
+
+    const saveNew = async () => {
+        if (!name.trim()) return alert('Nhập tên loại nguyên liệu');
+        try {
+            const res = await axios.post(`${API}/material-categories`, { name: name.trim() });
+            if (res.data?.success) { setName(''); onChange(); }
+        } catch (err) { alert(err.response?.data?.message || 'Thêm thất bại'); }
+    };
+
+    const startEdit = (c) => { setEditingId(c.id); setEditName(c.name); };
+    const cancelEdit = () => { setEditingId(null); setEditName(''); };
+
+    const saveEdit = async (id) => {
+        if (!editName.trim()) return alert('Nhập tên loại nguyên liệu');
+        try {
+            const res = await axios.patch(`${API}/material-categories/${id}`, { name: editName.trim() });
+            if (res.data?.success) { cancelEdit(); onChange(); }
+        } catch (err) { alert(err.response?.data?.message || 'Lưu thất bại'); }
+    };
+
+    const del = async (c) => {
+        if (!window.confirm(`Xóa loại "${c.name}"?`)) return;
+        try {
+            const res = await axios.delete(`${API}/material-categories/${c.id}`);
+            if (res.data?.success) onChange();
+            else alert(res.data?.message || 'Xóa thất bại');
+        } catch (err) { alert(err.response?.data?.message || 'Xóa thất bại'); }
+    };
+
+    // Đổi thứ tự bằng nút lên/xuống
+    const move = async (idx, dir) => {
+        const j = idx + dir;
+        if (j < 0 || j >= sorted.length) return;
+        const ids = sorted.map((c) => c.id);
+        const tmp = ids[idx]; ids[idx] = ids[j]; ids[j] = tmp;
+        try {
+            const res = await axios.post(`${API}/material-categories/reorder`, { ids });
+            if (res.data?.success) onChange();
+        } catch (err) { alert('Sắp xếp thất bại'); }
+    };
+
+    return (
+        <div>
+            <p className="text-[13px] text-gray-500 mb-3">
+                Loại nguyên liệu dùng để nhóm khi kiểm kho — số ảnh PNG xuất ra bằng số loại có dòng kiểm.
+            </p>
+            <div className="flex gap-2 mb-4 max-w-md">
+                <input value={name} onChange={(e) => setName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && saveNew()}
+                    placeholder="Tên loại mới (VD: Gia vị)"
+                    className="flex-1 px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                <button onClick={saveNew}
+                    className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7] whitespace-nowrap">
+                    + Thêm loại
+                </button>
+            </div>
+            <div className="border border-gray-100 rounded-lg overflow-x-auto">
+                <table className="w-full text-[13px] min-w-[480px]">
+                    <thead>
+                        <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                            <th className="px-4 py-3 font-medium" style={{ width: 90 }}>Thứ tự</th>
+                            <th className="px-3 py-3 font-medium">Tên loại</th>
+                            <th className="px-3 py-3 font-medium text-right">Số nguyên liệu</th>
+                            <th className="px-4 py-3 font-medium text-right">Thao tác</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {sorted.map((c, i) => (
+                            <tr key={c.id} className="border-b border-gray-50">
+                                <td className="px-4 py-3 text-gray-500">{i + 1}</td>
+                                <td className="px-3 py-3">
+                                    {editingId === c.id ? (
+                                        <input value={editName} onChange={(e) => setEditName(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(c.id); if (e.key === 'Escape') cancelEdit(); }}
+                                            autoFocus
+                                            className="px-2 py-1.5 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                                    ) : (
+                                        <b>{c.name}</b>
+                                    )}
+                                </td>
+                                <td className="px-3 py-3 text-right text-gray-500">{c.materials_count ?? 0}</td>
+                                <td className="px-4 py-3 text-right whitespace-nowrap">
+                                    {editingId === c.id ? (
+                                        <>
+                                            <button onClick={() => saveEdit(c.id)} className="text-xs font-bold text-green-700 mr-2">Lưu</button>
+                                            <button onClick={cancelEdit} className="text-xs text-gray-500 mr-2">Hủy</button>
+                                        </>
+                                    ) : (
+                                        <button onClick={() => startEdit(c)} className="text-xs font-semibold mr-2 text-[#0d6efd] hover:underline">Sửa</button>
+                                    )}
+                                    <button onClick={() => move(i, -1)} disabled={i === 0} title="Lên"
+                                        className="text-xs font-bold mr-1 px-1.5 py-0.5 border rounded disabled:opacity-30">↑</button>
+                                    <button onClick={() => move(i, 1)} disabled={i === sorted.length - 1} title="Xuống"
+                                        className="text-xs font-bold mr-2 px-1.5 py-0.5 border rounded disabled:opacity-30">↓</button>
+                                    <button onClick={() => del(c)} className="text-xs font-semibold text-red-600 hover:underline">Xóa</button>
+                                </td>
+                            </tr>
+                        ))}
+                        {sorted.length === 0 && (
+                            <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400">Chưa có loại nào.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
 // ================= TAB KIỂM KÊ (Gói 19) =================
 // Theo demo v4 đã chốt: kiểm theo 3 nhóm (nguyên liệu thô / bán thành phẩm / bao bì),
 // nhập tồn thực tế → chênh lệch realtime, chốt phiếu → biên bản + 3 ảnh PNG theo nhóm,
 // lịch sử kiểm kho lưu trong admin (bảng stocktakes + stocktake_items).
-const ST_GROUPS = [
-    { id: 'raw', name: 'Nguyên liệu thô', slug: 'nguyen-lieu-tho' },
-    { id: 'semi', name: 'Bán thành phẩm', slug: 'ban-thanh-pham' },
-    { id: 'pack', name: 'Bao bì', slug: 'bao-bi' },
-];
-const stGiOfType = (t) => (t === 'semi_finished' ? 1 : t === 'consumable' ? 2 : 0);
+// Gói 22: nhóm kiểm kho ĐỘNG theo loại danh mục nguyên liệu (thay 3 nhóm cứng).
+// catId = material_category_id; 0 = "Chưa phân loại".
+const stCatIdOf = (material) => material?.material_category_id ?? 0;
+const stSlug = (str) => String(str || '').toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'nhom';
 
-const stFmtDateVN = (iso) => {
-    if (!iso) return '—';
-    const d = String(iso).length > 10 ? String(iso).slice(0, 10) : String(iso);
-    const parts = d.split('-');
-    if (parts.length !== 3) return d;
-    return parts[2] + '/' + parts[1] + '/' + parts[0];
-};
+// Gói 36: dùng fmtDate/fmtTime từ utils/format (đã thay mọi chỗ dùng stFmtDateVN).
 const stFmtQty = (n) => {
     const v = Math.round(Number(n) * 100) / 100;
     return v.toLocaleString('vi-VN');
@@ -636,18 +777,18 @@ const stWrapText = (ctx, text, maxW) => {
     return lines;
 };
 
-// Vẽ biên bản PNG cho 1 nhóm (port từ demo v4 đã chốt)
-const drawStocktakePNG = (sess, gi) => {
-    const g = ST_GROUPS[gi];
-    const rows = sess.rows.filter((r) => r.gi === gi);
+// Vẽ biên bản PNG cho 1 nhóm loại nguyên liệu (port từ demo v4 đã chốt, Gói 22: nhóm động + tên CN)
+const drawStocktakePNG = (sess, group) => {
+    const g = group;
+    const rows = sess.rows.filter((r) => r.catId === g.id);
     const W = 1000, pad = 44;
-    const dtStr = stFmtDateVN(sess.date) + ' — ' + sess.time;
+    const dtStr = fmtDate(sess.date) + ' — ' + fmtTime(sess.time);
     let m = 0, s = 0, sh = 0;
     rows.forEach((r) => { if (r.d === 0) m++; else if (r.d > 0) s++; else sh++; });
 
     const cv = document.createElement('canvas');
     const ctx = cv.getContext('2d');
-    const headerH = 196, infoH = 110, colH = 44, rowH = 46;
+    const headerH = 196, infoH = 150, colH = 44, rowH = 46;
     const tableW = W - pad * 2;
     const cols = [46, 420, 120, 120, 206];
     const H = headerH + infoH + colH + rows.length * rowH + 210;
@@ -668,9 +809,10 @@ const drawStocktakePNG = (sess, gi) => {
     ctx.fillStyle = '#ffffff'; ctx.font = '700 26px Inter, Arial, sans-serif';
     ctx.fillText(dtStr, W / 2, 160);
 
-    // Thông tin nhóm
+    // Thông tin nhóm (Gói 22: thêm tên chi nhánh)
     let y = headerH + 36;
     ctx.textAlign = 'left'; ctx.fillStyle = '#1f2430'; ctx.font = '400 20px Inter, Arial, sans-serif';
+    ctx.fillText('Chi nhánh: ' + (sess.branchName || '—'), pad, y); y += 34;
     ctx.fillText('Người kiểm: ' + sess.checker, pad, y); y += 34;
     ctx.fillText('Số dòng: ' + rows.length + '   ·   Khớp: ' + m + '   ·   Thừa: ' + s + '   ·   Thiếu: ' + sh, pad, y);
     y += 24;
@@ -723,16 +865,25 @@ const drawStocktakePNG = (sess, gi) => {
     ctx.fillText('Ảnh biên bản nhóm "' + g.name + '" — dùng để lưu hồ sơ / in.', W / 2, y);
 
     const a = document.createElement('a');
-    a.download = 'kiem-kho-' + g.slug + '-' + sess.date + '-' + String(sess.time).replace(':', '') + '.png';
+    a.download = 'kiem-kho-' + stSlug(g.name) + '-' + sess.date + '-' + String(sess.time).replace(':', '') + '.png';
     a.href = cv.toDataURL('image/png');
     document.body.appendChild(a); a.click(); a.remove();
 };
 
-function StocktakeTab({ materials, onDone }) {
+function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
     const [list, setList] = useState([]);
     const [detail, setDetail] = useState(null);
     const [counts, setCounts] = useState({});
-    const [activeGroup, setActiveGroup] = useState(0);
+    // Gói 22: nhóm kiểm kho động theo loại danh mục (0 = Chưa phân loại)
+    const groups = useMemo(() => {
+        const sorted = (categories || []).slice()
+            .sort((a, b) => ((a.sort_order ?? 0) - (b.sort_order ?? 0)) || (a.id - b.id));
+        const list = sorted.map((c) => ({ id: c.id, name: c.name }));
+        list.push({ id: 0, name: 'Chưa phân loại' });
+        return list;
+    }, [categories]);
+    const [activeCat, setActiveCat] = useState(null);
+    const curCat = groups.some((g) => g.id === activeCat) ? activeCat : (groups[0] ? groups[0].id : 0);
     const [checkDate, setCheckDate] = useState('');
     const [checkTime, setCheckTime] = useState('');
     const [checkerName, setCheckerName] = useState('');
@@ -751,15 +902,15 @@ function StocktakeTab({ materials, onDone }) {
 
     const fetchList = async () => {
         try {
-            const res = await axios.get(API + '/stocktakes', { params: { branch_id: BRANCH_ID } });
+            const res = await axios.get(API + '/stocktakes', { params: { branch_id: branchId } });
             if (res.data?.success) setList(res.data.data || []);
         } catch (err) { console.error('Lỗi tải kiểm kê:', err); }
     };
-    useEffect(() => { fetchList(); }, []);
+    useEffect(() => { fetchList(); }, [branchId]);
 
     const handleCreate = async () => {
         try {
-            const res = await axios.post(API + '/stocktakes', { branch_id: BRANCH_ID, type: createType });
+            const res = await axios.post(API + '/stocktakes', { branch_id: branchId, type: createType });
             if (res.data?.success) {
                 setShowCreate(false);
                 openDetail(res.data.data.id);
@@ -789,7 +940,7 @@ function StocktakeTab({ materials, onDone }) {
                     setCheckDate(np.d); setCheckTime(np.t);
                 }
                 setCheckerName(d.user?.name || '');
-                setActiveGroup(0);
+                setActiveCat(null);
             }
         } catch (err) { alert('Tải phiếu thất bại'); }
     };
@@ -806,11 +957,13 @@ function StocktakeTab({ materials, onDone }) {
                     date: dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate()),
                     time: p(dt.getHours()) + ':' + p(dt.getMinutes()),
                     checker: d.user?.name || '—',
+                    branchName: d.branch?.name || '—', // Gói 22
+                    groups: groups,
                     rows: (d.items || []).map((it) => {
                         const counted = it.counted_qty == null ? 0 : Number(it.counted_qty);
                         const system = Number(it.system_qty);
                         return {
-                            gi: stGiOfType(it.material?.type),
+                            catId: stCatIdOf(it.material),
                             name: it.material?.name || '—',
                             unit: it.material?.unit || '',
                             system, counted,
@@ -847,8 +1000,10 @@ function StocktakeTab({ materials, onDone }) {
                     id: stocktake.id,
                     date: checkDate, time: checkTime,
                     checker: checkerName || stocktake.user?.name || '—',
+                    branchName: stocktake.branch?.name || '—', // Gói 22
+                    groups: groups,
                     rows: (rows || []).map((r) => ({
-                        gi: stGiOfType(r.type),
+                        catId: r.category_id ?? 0, // Gói 22: snapshot loại NL lúc chốt
                         name: r.name, unit: r.unit,
                         system: r.system_qty, counted: r.counted_qty,
                         d: Math.round(Number(r.diff) * 100) / 100,
@@ -875,18 +1030,19 @@ function StocktakeTab({ materials, onDone }) {
                         <h3 className="text-lg font-bold text-[#24305E]">BIÊN BẢN KIỂM KHO #{receipt.id}</h3>
                         <div className="inline-block mt-2 px-4 py-1.5 border-2 border-dashed border-[#F5A623] rounded-lg">
                             <span className="text-[12px] text-gray-500">Ngày — giờ kiểm: </span>
-                            <b className="text-[#24305E]">{stFmtDateVN(receipt.date)} — {receipt.time}</b>
+                            <b className="text-[#24305E]">{fmtDate(receipt.date)} — {fmtTime(receipt.time)}</b>
                         </div>
+                        <div className="text-[13px] text-gray-600 mt-1">Chi nhánh: <b>{receipt.branchName}</b></div>
                         <div className="text-[13px] text-gray-600 mt-2">Người kiểm: <b>{receipt.checker}</b> · {total} dòng · <span className={diffN ? 'text-red-600 font-medium' : 'text-emerald-600'}>{diffN} dòng lệch</span></div>
                     </div>
-                    {ST_GROUPS.map((g, gi) => {
-                        const rows = receipt.rows.filter((r) => r.gi === gi);
+                    {(receipt.groups || []).map((g) => {
+                        const rows = receipt.rows.filter((r) => r.catId === g.id);
                         if (rows.length === 0) return null;
                         return (
                             <div key={g.id} className="mb-5">
                                 <div className="flex items-center justify-between mb-2">
                                     <h4 className="font-semibold text-[14px] text-[#24305E]">▸ {g.name} ({rows.length})</h4>
-                                    <button onClick={() => drawStocktakePNG(receipt, gi)}
+                                    <button onClick={() => drawStocktakePNG(receipt, g)}
                                         className="px-3 py-1.5 text-[12px] font-medium text-white bg-[#24305E] rounded hover:bg-[#1a2347]">
                                         ⬇ Tải ảnh: {g.name}
                                     </button>
@@ -932,7 +1088,7 @@ function StocktakeTab({ materials, onDone }) {
         const items = detail.items || [];
         const total = items.length;
         const doneCount = items.filter((it) => counts[it.id] !== '' && counts[it.id] != null).length;
-        const groupItems = (gi) => items.filter((it) => stGiOfType(it.material?.type) === gi);
+        const groupItems = (catId) => items.filter((it) => stCatIdOf(it.material) === catId);
         const diffOf = (it) => {
             const v = counts[it.id];
             if (v === '' || v == null || isNaN(v)) return null;
@@ -950,11 +1106,11 @@ function StocktakeTab({ materials, onDone }) {
 
                 <div className="bg-white border border-gray-200 rounded-lg p-4 mb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <label className="text-[13px] text-gray-600">Ngày kiểm
-                        <input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)}
+                        <DateInput value={checkDate} onChange={(v) => setCheckDate(v)}
                             className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
                     </label>
                     <label className="text-[13px] text-gray-600">Giờ kiểm
-                        <input type="time" value={checkTime} onChange={(e) => setCheckTime(e.target.value)}
+                        <TimeInput value={checkTime} onChange={(v) => setCheckTime(v)}
                             className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
                     </label>
                     <label className="text-[13px] text-gray-600">Người kiểm
@@ -971,12 +1127,12 @@ function StocktakeTab({ materials, onDone }) {
                 </div>
 
                 <div className="flex gap-2 mb-3 overflow-x-auto">
-                    {ST_GROUPS.map((g, gi) => {
-                        const c = groupItems(gi).length;
-                        const dc = groupItems(gi).filter((it) => counts[it.id] !== '' && counts[it.id] != null).length;
+                    {groups.map((g) => {
+                        const c = groupItems(g.id).length;
+                        const dc = groupItems(g.id).filter((it) => counts[it.id] !== '' && counts[it.id] != null).length;
                         return (
-                            <button key={g.id} onClick={() => setActiveGroup(gi)}
-                                className={'flex-shrink-0 px-4 py-2.5 text-[13px] rounded-lg border transition-colors ' + (activeGroup === gi
+                            <button key={g.id} onClick={() => setActiveCat(g.id)}
+                                className={'flex-shrink-0 px-4 py-2.5 text-[13px] rounded-lg border transition-colors ' + (curCat === g.id
                                     ? 'bg-[#24305E] text-white border-[#24305E] font-medium'
                                     : 'bg-white text-gray-600 border-gray-200')}>
                                 {g.name} <span className="opacity-70">({dc}/{c})</span>
@@ -986,7 +1142,7 @@ function StocktakeTab({ materials, onDone }) {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {groupItems(activeGroup).map((it) => {
+                    {groupItems(curCat).map((it) => {
                         const d = diffOf(it);
                         return (
                             <div key={it.id} className="bg-white border border-gray-200 rounded-lg p-3">
@@ -1019,7 +1175,7 @@ function StocktakeTab({ materials, onDone }) {
                             </div>
                         );
                     })}
-                    {groupItems(activeGroup).length === 0 && (
+                    {groupItems(curCat).length === 0 && (
                         <div className="text-[13px] text-gray-400 py-8 text-center md:col-span-2">Nhóm này chưa có nguyên liệu.</div>
                     )}
                 </div>
@@ -1077,7 +1233,7 @@ function StocktakeTab({ materials, onDone }) {
                         {list.map((s) => (
                             <tr key={s.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                 <td className="px-4 py-3 font-medium">#{s.id}</td>
-                                <td className="px-3 py-3">{s.checked_at ? stFmtDateVN(s.checked_at) + ' — ' + new Date(s.checked_at).toTimeString().slice(0, 5) : <span className="text-gray-400">chưa chốt</span>}</td>
+                                <td className="px-3 py-3">{s.checked_at ? fmtDate(s.checked_at) + ' — ' + fmtTime(s.checked_at) : <span className="text-gray-400">chưa chốt</span>}</td>
                                 <td className="px-3 py-3">{s.user?.name || '—'}</td>
                                 <td className="px-3 py-3 text-right">{s.total_items ?? '—'}</td>
                                 <td className="px-3 py-3">

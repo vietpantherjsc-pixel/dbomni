@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
+import { fmtDate } from '../../utils/format';
+import DateInput from '../../components/DateInput';
 
 // =====================================================================
 // Gói 15 (2026-10-08): Trang Báo cáo cho Giám đốc — code từ demo v3 đã chốt.
@@ -28,7 +30,7 @@ const CSS = `
 .rpt .filters .in{max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;width:100%}
 .rpt .f-item{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:110px}
 .rpt .f-item label{font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
-.rpt select, .rpt input[type=date]{padding:9px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:14px;background:#fff;color:var(--text);font-family:inherit;width:100%}
+.rpt select, .rpt input[type=date], .rpt input[type=text]{padding:9px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:14px;background:#fff;color:var(--text);font-family:inherit;width:100%}
 .rpt select:focus, .rpt input:focus{outline:2px solid var(--orange);border-color:var(--orange)}
 .rpt #customBox{display:none;flex:1 1 100%;gap:8px;flex-wrap:wrap}
 .rpt #customBox.show{display:flex}
@@ -143,12 +145,8 @@ const fmtShort = (n) => {
     return fmtInt(n);
 };
 const pad = (n) => String(n).padStart(2, '0');
-const fmtD = (s) => {
-    if (!s) return '—';
-    const d = new Date(String(s).replace(' ', 'T'));
-    if (isNaN(d)) return '—';
-    return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
-};
+// Gói 36: dùng chung utils/format cho đồng nhất (giữ fallback '—')
+const fmtD = (s) => fmtDate(s) || '—';
 const todayStr = () => {
     const d = new Date();
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -319,7 +317,7 @@ export default function Reports() {
                         </div>
                         <div className="f-item">
                             <label>Ngày mốc</label>
-                            <input type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                            <DateInput value={f.date} onChange={(v) => set('date', v)} />
                         </div>
                         <div className="f-item">
                             <label>Kỳ so sánh</label>
@@ -332,11 +330,11 @@ export default function Reports() {
                         <div id="customBox" className={f.compare === 'custom' ? 'show' : ''}>
                             <div className="f-item">
                                 <label>Từ ngày</label>
-                                <input type="date" value={f.compare_from} onChange={(e) => set('compare_from', e.target.value)} />
+                                <DateInput value={f.compare_from} onChange={(v) => set('compare_from', v)} />
                             </div>
                             <div className="f-item">
                                 <label>Đến ngày</label>
-                                <input type="date" value={f.compare_to} onChange={(e) => set('compare_to', e.target.value)} />
+                                <DateInput value={f.compare_to} onChange={(v) => set('compare_to', v)} />
                             </div>
                         </div>
                     </div>
@@ -400,7 +398,14 @@ export default function Reports() {
                                     {r.top_products.map((t, i) => (
                                         <tr key={i}>
                                             <td className="num">{i + 1}</td>
-                                            <td className="prod">{t.name}</td>
+                                            <td className="prod">{t.name}
+                                                {/* Gói 25: badge "đang ẩn" — số liệu đơn cũ giữ nguyên */}
+                                                {(t.hidden_branches || []).length > 0 && (
+                                                    <span style={{ display: 'inline-block', marginLeft: 8, fontSize: 11, padding: '1px 8px', borderRadius: 20, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', whiteSpace: 'nowrap' }}>
+                                                        đang ẩn ở {t.hidden_branches.join(', ')}
+                                                    </span>
+                                                )}
+                                            </td>
                                             <td className="num">{fmtInt(t.quantity)}</td>
                                             <td className="num"><b>{fmtVND(t.revenue)}</b></td>
                                             <td className="num"><span dangerouslySetInnerHTML={{ __html: deltaBadge(t.delta) }} /></td>

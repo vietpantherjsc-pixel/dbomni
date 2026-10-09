@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
 // =====================================================================
 // Gói 18 (2026-10-09): Context chi nhánh dùng chung cho admin.
@@ -17,6 +17,15 @@ export const BranchProvider = ({ children }) => {
         localStorage.setItem(KEY, s);
         setBranchIdState(s);
     };
+
+    // Gói 24: đồng bộ khi đổi CN ở tab khác (VD: admin đổi CN, tab POS tự theo)
+    useEffect(() => {
+        const onStorage = (e) => {
+            if (e.key === KEY && e.newValue) setBranchIdState(e.newValue);
+        };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, []);
 
     return (
         <BranchContext.Provider value={{ branchId, setBranchId }}>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import DateInput from '../../components/DateInput';
 import {
     REPORT_CSS, kpi, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
     groupChart, donut, PERIOD_NAMES, COMPARE_NAMES,
@@ -99,7 +100,7 @@ export default function ReportsPnl() {
                         </div>
                         <div className="f-item">
                             <label>Ngày mốc</label>
-                            <input type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                            <DateInput value={f.date} onChange={(v) => set('date', v)} />
                         </div>
                         <div className="f-item">
                             <label>Kỳ so sánh</label>
@@ -112,11 +113,11 @@ export default function ReportsPnl() {
                         <div id="customBox" className={f.compare === 'custom' ? 'show' : ''}>
                             <div className="f-item">
                                 <label>Từ ngày</label>
-                                <input type="date" value={f.compare_from} onChange={(e) => set('compare_from', e.target.value)} />
+                                <DateInput value={f.compare_from} onChange={(v) => set('compare_from', v)} />
                             </div>
                             <div className="f-item">
                                 <label>Đến ngày</label>
-                                <input type="date" value={f.compare_to} onChange={(e) => set('compare_to', e.target.value)} />
+                                <DateInput value={f.compare_to} onChange={(v) => set('compare_to', v)} />
                             </div>
                         </div>
                     </div>

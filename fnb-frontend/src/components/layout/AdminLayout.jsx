@@ -32,6 +32,7 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
         qr: <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zm10 0h3v3h-3zm3 3h3v3h-3z" />,
         gear: <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.4 7.4 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.4 7.4 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z" />,
         pos: <path d="M4 7h16v9H4zM4 7l2-3h12l2 3M8 20h8m-4-4v4M7 11h.01M11 11h.01M15 11h.01" />,
+        book: <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />,
         kitchen: <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6V13.87zM6 17h12" />,
         bell: <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9m-4.3 13a2 2 0 0 1-3.4 0" />,
         menu: <path d="M4 6h16M4 12h16M4 18h16" />,
@@ -64,28 +65,50 @@ const mainMenu = [
     { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt', children: ['Hóa đơn bán hàng', 'Hóa đơn điện tử'] },
     { path: '/admin/products', label: 'Mặt hàng', icon: 'tag', children: [
         { label: 'Danh sách mặt hàng', path: '/admin/products' },
+        { label: 'Quản lý hiển thị', path: '/admin/products/visibility' }, // Gói 25: ẩn/hiện món theo CN
         { label: 'Danh mục', path: '/admin/categories' },
-        { label: 'Thực đơn', path: '/admin/menus' },
         { label: 'Nhóm tùy chọn', path: '/admin/option-groups' },
+    ] },
+    { path: '/admin/menus', label: 'Thực đơn', icon: 'book', children: [ // Gói 25: tách khỏi Mặt hàng theo demo đã chốt
+        { label: 'Danh sách thực đơn', path: '/admin/menus' },
+        { label: 'Quản lý hiển thị', path: '/admin/menus/visibility' }, // Gói 25: ẩn/hiện thực đơn theo CN
     ] },
     { path: '/admin/bookings', label: 'Đặt lịch', icon: 'calendar' },
     { path: '/admin/tables', label: 'Bàn', icon: 'table' },
-    { path: '/admin/staff', label: 'Nhân viên', icon: 'users' },
+    { path: '/admin/staff', label: 'Nhân viên', icon: 'users', perm: 'staff.view', children: [ // Gói 26
+        { label: 'Danh sách nhân viên', path: '/admin/staff' },
+        { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles' },
+        { label: 'Bảng lương', path: '/admin/staff/salary' },
+        { label: 'Lương lễ, Tết & phạt', path: '/admin/staff/holiday-policy' },
+    ] },
     { path: '/admin/customers', label: 'Khách hàng', icon: 'user', children: [
         { label: 'Danh sách khách hàng', path: '/admin/customers' },
         { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
     ] },
     { path: '/admin/promotions', label: 'Khuyến mại', icon: 'percent' },
     { path: '/admin/inventory', label: 'Kho hàng', icon: 'box' },
-    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: ['Phiếu thu', 'Phiếu chi'] },
-    { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', children: ['Bảng chấm công', 'Tính lương'] },
+    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: [ // Gói 29
+        { label: 'Danh sách thu chi', path: '/admin/transactions' },
+        { label: 'Danh mục thu chi', path: '/admin/transaction-categories' },
+        { label: 'Đối tác', path: '/admin/partners' },
+    ] },
+    { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', perm: 'staff.view', children: [ // Gói 35
+        { label: 'Bảng chấm công', path: '/admin/attendance' },
+        { label: 'Ca làm việc', path: '/admin/attendance/shifts' },
+        { label: 'Đăng ký & Xếp ca', path: '/admin/attendance/scheduling' },
+        { label: 'Yêu cầu nghỉ', path: '/admin/attendance/requests' },
+        { label: 'QR chấm công', path: '/admin/attendance/qr' },
+    ] },
 ];
 
 const channelMenu = [
     { path: '/admin/price-lists', label: 'Kênh bán hàng', icon: 'tag' },
     { path: '/admin/integrations', label: 'Đối tác tích hợp', icon: 'plug' },
     { path: '/admin/online', label: 'Bán online', icon: 'globe', children: ['Đơn online', 'Cấu hình'] },
-    { path: '/admin/qr-order', label: 'QR Order', icon: 'qr', children: ['Danh sách QR', 'Tạo QR'] },
+    { path: '/admin/qr-order', label: 'QR Order', icon: 'qr', children: [ // Gói 28: submenu mở đúng tab
+        { label: 'Danh sách QR', path: '/admin/qr-order' },
+        { label: 'Tạo QR', path: '/admin/qr-order?tab=tao' },
+    ] },
 ];
 
 // Nghiệp vụ bán hàng của hệ thống (giữ lại từ layout cũ)
@@ -95,11 +118,12 @@ const opsMenu = [
 ];
 
 const AdminLayout = ({ children }) => {
-    const { user, logout } = useAuth();
+    const { user, logout, can } = useAuth();
     const { branchId, setBranchId } = useBranch();
     const location = useLocation();
     const navigate = useNavigate();
     const [collapsed, setCollapsed] = useState(false);
+    const [mobileOpen, setMobileOpen] = useState(false); // drawer sidebar trên mobile
     const [openSub, setOpenSub] = useState(null); // path của menu đang mở submenu
     // Gói 18: dropdown chọn chi nhánh
     const [branches, setBranches] = useState([]);
@@ -199,6 +223,7 @@ const AdminLayout = ({ children }) => {
                                 <Link
                                     key={label}
                                     to={to}
+                                    onClick={() => setMobileOpen(false)}
                                     className={`m-nav-item ${childActive ? 'active' : ''}`}
                                 >
                                     {label}
@@ -212,26 +237,27 @@ const AdminLayout = ({ children }) => {
     };
 
     const renderMenu = (items) => (
-        <div className="space-y-[2px]">{items.map(renderItem)}</div>
+        // Gói 26: ẩn menu theo quyền (mục nào có perm mà không đủ quyền thì ẩn)
+        <div className="space-y-[2px]">{items.filter((it) => !it.perm || can(it.perm)).map(renderItem)}</div>
     );
 
     return (
         <div className="flex h-screen" style={{ background: 'var(--m-bg)' }}>
             {/* ============ SIDEBAR ============ */}
             <aside
-                className={`m-sidebar flex flex-col shrink-0 transition-all duration-200 z-20 ${
-                    collapsed ? 'w-14' : 'w-[216px]'
-                }`}
+                className={`m-sidebar flex flex-col shrink-0 transition-all duration-200 z-40 fixed md:static inset-y-0 left-0 h-screen md:h-auto ${
+                    mobileOpen ? 'translate-x-0' : '-translate-x-full'
+                } md:translate-x-0 w-[240px] ${collapsed ? 'md:w-14' : 'md:w-[216px]'}`}
             >
                 {/* Logo */}
-                <div className="h-[56px] flex items-center justify-center border-b border-white/10 shrink-0">
+                <div className="h-[56px] flex items-center justify-center border-b shrink-0" style={{ borderColor: 'var(--m-line)' }}>
                     {!collapsed ? (
                         <span className="text-[19px] font-extrabold tracking-tight flex items-center gap-2">
-                            <span style={{ color: 'var(--m-accent)' }}>DBOmni</span>
+                            <span style={{ color: 'var(--m-primary)' }}>DBOmni</span>
                             <span className="m-stamp">POS</span>
                         </span>
                     ) : (
-                        <span className="text-lg font-extrabold" style={{ color: 'var(--m-accent)' }}>D</span>
+                        <span className="text-lg font-extrabold" style={{ color: 'var(--m-primary)' }}>D</span>
                     )}
                 </div>
 
@@ -241,19 +267,19 @@ const AdminLayout = ({ children }) => {
                         <button
                             onClick={() => setBranchOpen(!branchOpen)}
                             className="m-nav-item w-full justify-between"
-                            style={{ background: 'rgba(255,255,255,0.06)' }}
+                            style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }}
                         >
-                            <span className="truncate font-medium">{branchName}</span>
+                            <span className="truncate font-medium min-w-0">{branchName}</span>
                             <Icon name="chevron" className={`w-3.5 h-3.5 opacity-60 transition-transform ${branchOpen ? '-rotate-90' : 'rotate-90'}`} />
                         </button>
                         {branchOpen && (
                             <>
                                 <div className="fixed inset-0 z-30" onClick={() => setBranchOpen(false)} />
-                                <div className="absolute left-0 right-0 top-full mt-1 z-40 rounded-lg overflow-hidden shadow-xl border border-white/10 max-h-64 overflow-y-auto" style={{ background: '#1c2547' }}>
+                                <div className="absolute left-0 right-0 top-full mt-1 z-40 rounded-lg overflow-hidden shadow-xl max-h-64 overflow-y-auto" style={{ background: '#fff', border: '1px solid var(--m-line)' }}>
                                     <button
                                         onClick={() => { setBranchId('0'); setBranchOpen(false); }}
-                                        className={`w-full text-left px-3 py-2 text-[13px] hover:bg-white/10 ${branchId === '0' ? 'font-bold' : ''}`}
-                                        style={{ color: branchId === '0' ? 'var(--m-accent)' : '#e6ebf5' }}
+                                        className={`w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50 ${branchId === '0' ? 'font-bold' : ''}`}
+                                        style={{ color: branchId === '0' ? 'var(--m-primary)' : 'var(--m-ink)' }}
                                     >
                                         {branchId === '0' ? '✓ ' : ''}Tất cả chi nhánh
                                     </button>
@@ -261,8 +287,8 @@ const AdminLayout = ({ children }) => {
                                         <button
                                             key={b.id}
                                             onClick={() => { setBranchId(b.id); setBranchOpen(false); }}
-                                            className={`w-full text-left px-3 py-2 text-[13px] hover:bg-white/10 ${String(branchId) === String(b.id) ? 'font-bold' : ''}`}
-                                            style={{ color: String(branchId) === String(b.id) ? 'var(--m-accent)' : '#e6ebf5' }}
+                                            className={`w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50 ${String(branchId) === String(b.id) ? 'font-bold' : ''}`}
+                                            style={{ color: String(branchId) === String(b.id) ? 'var(--m-primary)' : 'var(--m-ink)' }}
                                         >
                                             {String(branchId) === String(b.id) ? '✓ ' : ''}{b.name}
                                         </button>
@@ -272,7 +298,7 @@ const AdminLayout = ({ children }) => {
                         )}
                     </div>
                 ) : (
-                    <div className="mx-auto mt-2.5 w-8 h-8 rounded-lg bg-white/5" />
+                    <div className="mx-auto mt-2.5 w-8 h-8 rounded-lg" style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }} />
                 )}
 
                 {/* Menu */}
@@ -280,14 +306,14 @@ const AdminLayout = ({ children }) => {
                     <div>{renderMenu(mainMenu)}</div>
 
                     {!collapsed && (
-                        <div className="m-kicker px-3" style={{ color: 'rgba(185,196,216,0.6)' }}>
+                        <div className="m-kicker px-3" style={{ color: 'var(--m-ink-faint)' }}>
                             Kênh bán hàng
                         </div>
                     )}
                     <div className={collapsed ? '' : '-mt-2.5'}>{renderMenu(channelMenu)}</div>
 
                     {!collapsed && (
-                        <div className="m-kicker px-3" style={{ color: 'rgba(185,196,216,0.6)' }}>
+                        <div className="m-kicker px-3" style={{ color: 'var(--m-ink-faint)' }}>
                             Nghiệp vụ
                         </div>
                     )}
@@ -295,10 +321,13 @@ const AdminLayout = ({ children }) => {
                 </nav>
 
                 {/* Thiết lập (đáy) */}
-                <div className="p-2.5 border-t border-white/10">
+                <div className="p-2.5 border-t" style={{ borderColor: 'var(--m-line)' }}>
                     {renderItem({ path: '/admin/settings', label: 'Thiết lập', icon: 'gear' })}
                 </div>
             </aside>
+            {mobileOpen && (
+                <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileOpen(false)} />
+            )}
 
             {/* ============ MAIN ============ */}
             <div className="flex-1 flex flex-col min-w-0">
@@ -306,35 +335,37 @@ const AdminLayout = ({ children }) => {
                 <header className="m-topbar h-[56px] flex items-center justify-between px-4 shrink-0 z-10">
                     <div className="flex items-center gap-2.5">
                         <button
-                            onClick={() => setCollapsed(!collapsed)}
-                            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100"
-                            title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
+                            onClick={() => {
+                                if (window.innerWidth < 768) setMobileOpen((v) => !v);
+                                else setCollapsed(!collapsed);
+                            }}
+                            className="p-1.5 rounded-lg text-white/80 hover:bg-white/10 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                            title="Menu"
                         >
                             <Icon name="menu" className="w-5 h-5" />
                         </button>
-                        <span className="text-[14px] font-semibold" style={{ color: 'var(--m-ink)' }}>
+                        <span className="text-[14px] font-semibold whitespace-nowrap truncate max-w-[140px] text-white">
                             {branchName}
                         </span>
                     </div>
                     <div className="flex items-center gap-3">
-                        <button className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 relative" title="Thông báo">
+                        <button className="p-1.5 rounded-lg text-white/80 hover:bg-white/10 relative min-w-[44px] min-h-[44px] flex items-center justify-center" title="Thông báo">
                             <Icon name="bell" className="w-5 h-5" />
                         </button>
                         <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-lg text-white flex items-center justify-center text-[13px] font-bold" style={{ background: 'var(--m-primary)' }}>
+                            <div className="w-8 h-8 rounded-lg text-white flex items-center justify-center text-[13px] font-bold" style={{ background: 'var(--m-stamp)' }}>
                                 {(user?.name || 'A').charAt(0).toUpperCase()}
                             </div>
                             <div className="hidden sm:block leading-tight">
-                                <div className="text-[12.5px] font-semibold" style={{ color: 'var(--m-ink)' }}>{user?.name || 'Quản trị'}</div>
-                                <div className="text-[10.5px] capitalize" style={{ color: 'var(--m-ink-faint)' }}>
+                                <div className="text-[12.5px] font-semibold text-white">{user?.name || 'Quản trị'}</div>
+                                <div className="text-[10.5px] capitalize text-white/60">
                                     {(user?.roles || []).join(', ') || 'Nhân viên'}
                                 </div>
                             </div>
                         </div>
                         <button
                             onClick={handleLogout}
-                            className="flex items-center gap-1 text-[12.5px] px-2 py-1.5 rounded-lg hover:bg-red-50"
-                            style={{ color: 'var(--m-ink-soft)' }}
+                            className="flex items-center gap-1 text-[12.5px] px-2 py-1.5 rounded-lg text-white/80 hover:bg-white/10"
                             title="Đăng xuất"
                         >
                             <Icon name="logout" className="w-4 h-4" />

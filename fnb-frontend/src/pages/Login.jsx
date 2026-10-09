@@ -54,9 +54,9 @@ const Login = () => {
 
                 <form onSubmit={handleLogin}>
                     <div className="mb-4">
-                        <label className="block text-gray-700 text-sm font-bold mb-2">Email</label>
+                        <label className="block text-gray-700 text-sm font-bold mb-2">Email / Tên đăng nhập nhân viên</label>
                         <input 
-                            type="email" 
+                            type="text" 
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus:border-blue-500"

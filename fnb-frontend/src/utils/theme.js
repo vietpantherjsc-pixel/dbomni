@@ -31,8 +31,8 @@ export function applyThemeColor(hex) {
     root.setProperty('--m-primary-deep', mix('#000000', hex, 0.22));   // hover: tối hơn
     root.setProperty('--m-accent', mix('#FFFFFF', hex, 0.55));          // xanh nhạt
     root.setProperty('--m-accent-soft', mix('#FFFFFF', hex, 0.88));     // nền highlight
-    root.setProperty('--m-sidebar', hex.toUpperCase());
-    root.setProperty('--m-sidebar-active', mix('#FFFFFF', hex, 0.6));
+    root.setProperty('--m-topbar-bg', hex.toUpperCase());               // Gói 31 (bản B): màu chủ đạo lên topbar
+    root.setProperty('--m-sidebar-active', hex.toUpperCase());          // mục menu active
     try { localStorage.setItem(STORAGE_KEY, hex.toUpperCase()); } catch (e) { /* ignore */ }
 }
 

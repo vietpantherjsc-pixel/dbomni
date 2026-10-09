@@ -126,6 +126,30 @@ class OnlineOrderController extends Controller
         return response()->json(['success' => true, 'data' => $data]);
     }
 
+    // Gói 34: top 10 món bán chạy trong 30 ngày qua (theo tổng số lượng, chỉ đơn completed)
+    // GET /api/online/top-products?branch_id=
+    public function topProducts(Request $request): JsonResponse
+    {
+        $branchId = (int) $request->query('branch_id', 0);
+        $since = now()->subDays(30);
+        $rows = DB::table('order_items')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->where('orders.status', 'completed')
+            ->whereNotNull('order_items.product_id')
+            ->where('orders.created_at', '>=', $since)
+            ->when($branchId > 0, fn ($q) => $q->where('orders.branch_id', $branchId))
+            ->groupBy('order_items.product_id')
+            ->selectRaw('order_items.product_id, SUM(order_items.quantity) AS total_sold')
+            ->orderByDesc('total_sold')
+            ->limit(10)
+            ->get();
+
+        return response()->json(['success' => true, 'data' => $rows->map(fn ($r) => [
+            'product_id' => (int) $r->product_id,
+            'total_sold' => (int) $r->total_sold,
+        ])->values()]);
+    }
+
     // Cấu hình phí ship
     public function shipConfig(): JsonResponse
     {
@@ -648,7 +672,7 @@ class OnlineOrderController extends Controller
                 );
 
                 $order->payment_status = 'paid';
-                $order->status = 'pending'; // vào KDS
+                $order->status = 'processing'; // Gói 11: xác nhận xong vào thẳng "Đang Pha Chế" (KDS đã thu tiền)
                 $order->stock_deducted = true;
                 $order->save();
 

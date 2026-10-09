@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useBranch } from '../../contexts/BranchContext';
+import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
 import { printBill, printLabels } from '../../utils/print';
+import ImportExcelModal from './ImportExcelModal'; // Gói 23: import đơn từ Excel
+import { fmtDateTime as fmtDateTimeShared } from '../../utils/format';
 
 // =====================================================================
 // Gói 2 (2026-10-04): Trang Hóa đơn theo style Sapo.
@@ -35,14 +39,13 @@ const statusPill = (status) => {
     }
 };
 
-const fmtDateTime = (iso) => {
-    if (!iso) return '-';
-    const d = new Date(iso);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
+// Gói 36: dùng chung utils/format (giữ fallback '-'; CSV vẫn dd/mm/yyyy)
+const fmtDateTime = (iso) => fmtDateTimeShared(iso) || '-';
 
 const Orders = () => {
+    // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
+    const branchCtx = useBranch();
+    const branchId = (branchCtx && branchCtx.branchId) || '0';
     const [tab, setTab] = useState('all');
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
@@ -51,11 +54,18 @@ const Orders = () => {
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState(null);
+    const [showImport, setShowImport] = useState(false); // Gói 23
 
     // Gói 3: tách/gộp đơn
     const [checked, setChecked] = useState({}); // {orderId: true}
     const [splitOrder, setSplitOrder] = useState(null); // đơn đang tách
     const [splitQty, setSplitQty] = useState({}); // {orderItemId: qty}
+
+    // Gói 33: thao tác hàng loạt hóa đơn — CHỈ admin cấp cao nhất
+    const { can } = useAuth();
+    const canBulk = can('orders.bulk');
+    const [showBulkCancel, setShowBulkCancel] = useState(false);
+    const [bulkReason, setBulkReason] = useState('');
 
     const toggleCheck = (id) => {
         setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -63,6 +73,32 @@ const Orders = () => {
 
     const checkedIds = Object.keys(checked).filter((k) => checked[k]).map(Number);
     const checkedOrders = orders.filter((o) => checkedIds.includes(o.id));
+
+    // Gói 33: hủy hàng loạt (tái dùng logic cancel đơn lẻ: hoàn kho + hoàn/thu hồi điểm)
+    const handleBulkCancel = async () => {
+        if (!bulkReason.trim()) return alert('Nhập lý do hủy.');
+        try {
+            const res = await axios.post('http://localhost/api/orders/bulk-action', {
+                ids: checkedIds, action: 'cancel', reason: bulkReason.trim(),
+            });
+            alert(res.data?.message || 'Đã hủy hàng loạt.');
+            setShowBulkCancel(false); setBulkReason(''); setChecked({});
+            fetchOrders();
+        } catch (err) { alert(err.response?.data?.message || 'Hủy hàng loạt thất bại'); }
+    };
+
+    // Gói 33: xóa vĩnh viễn hàng loạt (KHÔNG hoàn kho — chỉ dùng cho đơn nháp/test)
+    const handleBulkDelete = async () => {
+        if (!window.confirm(`XÓA VĨNH VIỄN ${checkedIds.length} hóa đơn đã chọn?\n\n- Đơn bị xóa khỏi hệ thống, KHÔNG khôi phục được.\n- KHÔNG hoàn kho, KHÔNG hoàn điểm.\n- Muốn hoàn kho/điểm thì dùng "Hủy hóa đơn".`)) return;
+        try {
+            const res = await axios.post('http://localhost/api/orders/bulk-action', {
+                ids: checkedIds, action: 'delete',
+            });
+            alert(res.data?.message || 'Đã xóa hàng loạt.');
+            setChecked({});
+            fetchOrders();
+        } catch (err) { alert(err.response?.data?.message || 'Xóa hàng loạt thất bại'); }
+    };
 
     const handleMerge = async () => {
         if (checkedIds.length < 2) return alert('Chọn ít nhất 2 đơn để gộp.');
@@ -117,6 +153,7 @@ const Orders = () => {
         try {
             const params = new URLSearchParams({ tab, page, per_page: 15 });
             if (search) params.append('search', search);
+            if (branchId !== '0') params.append('branch_id', branchId);
             const res = await axios.get(`http://localhost/api/orders?${params}`);
             if (res.data?.success) {
                 setOrders(res.data.data.data || []);
@@ -128,7 +165,7 @@ const Orders = () => {
         } finally {
             setLoading(false);
         }
-    }, [tab, page, search]);
+    }, [tab, page, search, branchId]);
 
     useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
@@ -162,21 +199,32 @@ const Orders = () => {
                 {/* Tiêu đề + nút xuất */}
                 <div className="flex items-center justify-between">
                     <h1 className="text-xl font-semibold text-gray-800">Hóa đơn</h1>
-                    <button
-                        onClick={exportCsv}
-                        className="flex items-center gap-1.5 text-[13px] font-medium text-green-700 border border-green-600 rounded px-3 py-2 hover:bg-green-50"
-                    >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                            <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
-                        </svg>
-                        Xuất hóa đơn
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setShowImport(true)}
+                            className="flex items-center gap-1.5 text-[13px] font-medium text-[#24305E] border border-[#24305E] rounded px-3 py-2 hover:bg-blue-50"
+                        >
+                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+                            </svg>
+                            Import Excel
+                        </button>
+                        <button
+                            onClick={exportCsv}
+                            className="flex items-center gap-1.5 text-[13px] font-medium text-green-700 border border-green-600 rounded px-3 py-2 hover:bg-green-50"
+                        >
+                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                                <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+                            </svg>
+                            Xuất hóa đơn
+                        </button>
+                    </div>
                 </div>
 
                 <div className="mt-3 bg-white rounded shadow-sm">
                     {/* Tabs */}
                     <div className="flex items-center justify-between border-b border-gray-100 px-4">
-                        <div className="flex gap-1 overflow-x-auto">
+                        <div className="flex gap-1 overflow-x-auto overflow-y-hidden">
                             {TABS.map((t) => (
                                 <button
                                     key={t.key}
@@ -230,6 +278,27 @@ const Orders = () => {
                             >
                                 Gộp {checkedIds.length} đơn
                             </button>
+                        )}
+                        {/* Gói 33: thao tác hàng loạt — CHỈ admin cấp cao nhất */}
+                        {canBulk && checkedIds.length > 0 && (
+                            <>
+                                <span className="text-[13px] font-bold whitespace-nowrap" style={{ color: 'var(--m-primary)' }}>
+                                    Đã chọn {checkedIds.length} hóa đơn
+                                </span>
+                                <button
+                                    onClick={() => setShowBulkCancel(true)}
+                                    className="text-[13px] rounded px-4 py-2 font-medium border"
+                                    style={{ borderColor: 'var(--m-line)', color: 'var(--m-ink)' }}
+                                >
+                                    Hủy hóa đơn
+                                </button>
+                                <button
+                                    onClick={handleBulkDelete}
+                                    className="text-[13px] bg-[#C0392B] text-white rounded px-4 py-2 font-medium hover:bg-[#a93226]"
+                                >
+                                    Xóa hóa đơn
+                                </button>
+                            </>
                         )}
                     </div>
 
@@ -331,6 +400,14 @@ const Orders = () => {
                     )}
                 </div>
             </div>
+
+            {/* Gói 23: Modal import Excel */}
+            {showImport && (
+                <ImportExcelModal
+                    onClose={() => setShowImport(false)}
+                    onDone={() => { setShowImport(false); fetchOrders(); }}
+                />
+            )}
 
             {/* Modal chi tiết */}
             {selected && (
@@ -486,6 +563,26 @@ const Orders = () => {
                             >
                                 Xác nhận tách
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Gói 33: modal lý do hủy hàng loạt */}
+            {showBulkCancel && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowBulkCancel(false)}>
+                    <div className="bg-white rounded-xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="font-bold text-[16px] mb-1">Hủy {checkedIds.length} hóa đơn</h3>
+                        <p className="text-[12.5px] text-gray-500 mb-3">
+                            Đơn được hủy sẽ hoàn kho (nếu đã trừ) và hoàn/thu hồi điểm tích lũy, giống hủy đơn lẻ.
+                            Đơn đã hủy trước đó sẽ được bỏ qua.
+                        </p>
+                        <label className="text-[12px] font-semibold text-gray-600">Lý do hủy</label>
+                        <input value={bulkReason} onChange={(e) => setBulkReason(e.target.value)}
+                            placeholder="VD: Khách hủy, nhập nhầm..." className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]" />
+                        <div className="flex justify-end gap-2 mt-4">
+                            <button onClick={() => setShowBulkCancel(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[13px]">Bỏ qua</button>
+                            <button onClick={handleBulkCancel} className="px-4 py-2 rounded-lg text-white text-[13px] font-medium" style={{ background: 'var(--m-primary)' }}>Xác nhận hủy</button>
                         </div>
                     </div>
                 </div>

@@ -2,6 +2,15 @@
 // Cách dùng: Đại Vương cài driver máy in vào máy (USB cắm là nhận, LAN thì Add printer qua IP),
 // khi bấm in -> hộp thoại Chrome hiện ra -> chọn đúng máy in K80 / máy in tem.
 
+import { fmtDateTime, fmtTime } from './format.js';
+
+// Gói 36: "Giờ" trên bill — order.date từ POS ("HH:MM") hoặc created_at ISO → chuẩn hiển thị
+const fmtOrderTime = (v) => {
+  const s = String(v || '').trim();
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return fmtTime(s);
+  return fmtDateTime(s);
+};
+
 // Mở cửa sổ in mới, ghi HTML rồi gọi print()
 function openPrintWindow(html, title) {
   const w = window.open('', '_blank', 'width=400,height=600');
@@ -59,7 +68,7 @@ export function printBill(order) {
     <div class="center">HÓA ĐƠN BÁN HÀNG ${typeLabel ? '(' + typeLabel + ')' : ''}</div>
     <div class="dashed"></div>
     <div class="row"><span>Mã đơn:</span><span><b>${escapeHtml(order.code || '')}</b></span></div>
-    <div class="row"><span>Giờ:</span><span>${escapeHtml(order.date || order.created_at || '')}</span></div>
+    <div class="row"><span>Giờ:</span><span>${escapeHtml(fmtOrderTime(order.date || order.created_at))}</span></div>
     <div class="row"><span>Khách:</span><span>${escapeHtml(order.customer_name || 'Khách lẻ')}</span></div>
     ${order.table_name ? `<div class="row"><span>Bàn:</span><span>${escapeHtml(order.table_name)}</span></div>` : ''}
     <div class="dashed"></div>

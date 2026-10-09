@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import DateTimeInput from '../../components/DateTimeInput';
+import TimeInput from '../../components/TimeInput';
+import { fmtDate, fmtDateTime } from '../../utils/format';
 
 const API = 'http://localhost/api';
 
@@ -242,14 +245,14 @@ export default function Promotions() {
                                 <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Thời gian áp dụng</h3>
                                 <div className="grid grid-cols-2 gap-4">
                                     <div><label className="m-label">Ngày bắt đầu</label>
-                                        <input type="datetime-local" value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} className="m-input w-full" /></div>
+                                        <DateTimeInput value={form.starts_at} onChange={(v) => setForm({ ...form, starts_at: v })} className="m-input w-full" /></div>
                                     <div>
                                         <label className="flex items-center gap-2 text-xs mt-6" style={{ color: 'var(--m-ink-soft)' }}>
                                             <input type="checkbox" checked={form.has_expires} onChange={(e) => setForm({ ...form, has_expires: e.target.checked })} />
                                             Thời gian kết thúc
                                         </label>
                                         {form.has_expires && (
-                                            <input type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} className="m-input w-full mt-1" />
+                                            <DateTimeInput value={form.expires_at} onChange={(v) => setForm({ ...form, expires_at: v })} className="m-input w-full" />
                                         )}
                                     </div>
                                 </div>
@@ -277,9 +280,9 @@ export default function Promotions() {
                                 {form.use_time && (
                                     <div className="grid grid-cols-2 gap-4 mt-2">
                                         <div><label className="m-label">Từ</label>
-                                            <input type="time" value={form.time_from} onChange={(e) => setForm({ ...form, time_from: e.target.value })} className="m-input w-full" /></div>
+                                            <TimeInput value={form.time_from} onChange={(v) => setForm({ ...form, time_from: v })} className="m-input w-full" /></div>
                                         <div><label className="m-label">Đến</label>
-                                            <input type="time" value={form.time_to} onChange={(e) => setForm({ ...form, time_to: e.target.value })} className="m-input w-full" /></div>
+                                            <TimeInput value={form.time_to} onChange={(v) => setForm({ ...form, time_to: v })} className="m-input w-full" /></div>
                                     </div>
                                 )}
                             </div>
@@ -363,8 +366,8 @@ export default function Promotions() {
                                     <div className="text-xs opacity-80 mt-1">{SCOPE_LABELS[form.scope]} · {TYPE_LABELS[form.type]}</div>
                                 </div>
                                 <div className="text-xs space-y-1" style={{ color: 'var(--m-ink-soft)' }}>
-                                    <div>Bắt đầu<br /><b style={{ color: 'var(--m-ink)' }}>{form.starts_at ? new Date(form.starts_at).toLocaleString('vi-VN') : '—'}</b></div>
-                                    <div>Kết thúc<br /><b style={{ color: 'var(--m-ink)' }}>{form.has_expires && form.expires_at ? new Date(form.expires_at).toLocaleString('vi-VN') : '—'}</b></div>
+                                    <div>Bắt đầu<br /><b style={{ color: 'var(--m-ink)' }}>{fmtDateTime(form.starts_at) || '—'}</b></div>
+                                    <div>Kết thúc<br /><b style={{ color: 'var(--m-ink)' }}>{(form.has_expires && form.expires_at) ? fmtDateTime(form.expires_at) : '—'}</b></div>
                                     <div className="pt-1">• {form.target === 'all' ? 'Tất cả khách hàng' : 'Thẻ thành viên'}</div>
                                 </div>
                             </div>
@@ -414,9 +417,9 @@ export default function Promotions() {
                                         {p.type === 'percent' ? `${p.value}%` : p.type === 'gift' ? `Tặng ${p.gift_quantity} × ${p.gift_product?.name || ''}` : p.type === 'shipping' ? (Number(p.value) > 0 ? `Giảm ${Number(p.value).toLocaleString('vi-VN')}đ ship` : 'Miễn phí ship') : `${Number(p.value).toLocaleString('vi-VN')}đ`}
                                     </td>
                                     <td className="text-xs" style={{ color: 'var(--m-ink-soft)' }}>
-                                        {p.starts_at ? new Date(p.starts_at).toLocaleDateString('vi-VN') : '—'}
+                                        {fmtDate(p.starts_at) || '—'}
                                         {' → '}
-                                        {p.expires_at ? new Date(p.expires_at).toLocaleDateString('vi-VN') : 'không giới hạn'}
+                                        {fmtDate(p.expires_at) || 'không giới hạn'}
                                     </td>
                                     <td>
                                         <button onClick={() => toggleActive(p)} title="Bật/tắt" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>

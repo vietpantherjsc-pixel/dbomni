@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import DateInput from '../../components/DateInput';
 import {
     REPORT_CSS, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
     PERIOD_NAMES,
@@ -98,7 +99,7 @@ export default function ReportsInventory() {
                         </div>
                         <div className="f-item">
                             <label>Ngày mốc</label>
-                            <input type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                            <DateInput value={f.date} onChange={(v) => set('date', v)} />
                         </div>
                     </div>
                 </div>

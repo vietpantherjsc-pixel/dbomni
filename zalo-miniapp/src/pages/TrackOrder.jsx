@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api, fmt } from '../api';
+import { fmtDateTime } from '../utils/format';
 import { TabBar } from './Home';
 
 const STEPS = [
@@ -72,7 +73,7 @@ export default function TrackOrder() {
             <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>
               {order.order_type === 'delivery' ? '🛵 Giao hàng' : '🏃 Mang đi'} · {order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Trả tại quán'}
               {order.payment_status === 'pending' && order.payment_method === 'transfer' && ' · ⏳ Chờ quán xác nhận tiền'}
-              {order.scheduled_at && ` · ⏰ Lấy lúc ${new Date(order.scheduled_at).toLocaleString('vi-VN')}`}
+              {order.scheduled_at && ` · ⏰ Lấy lúc ${fmtDateTime(order.scheduled_at)}`}
             </div>
           </div>
 

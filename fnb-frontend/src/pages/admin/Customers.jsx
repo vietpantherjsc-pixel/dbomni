@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { QRCodeSVG } from 'qrcode.react';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { fmtDate, fmtDateTime } from '../../utils/format';
+import DateInput from '../../components/DateInput';
 
 const API = 'http://localhost/api';
 
@@ -140,7 +142,7 @@ export default function Customers() {
                                 <div><label className="text-xs text-gray-500">SĐT * (định danh)</label>
                                     <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
                                 <div><label className="text-xs text-gray-500">Sinh nhật</label>
-                                    <input type="date" value={form.birthday} onChange={(e) => setForm({ ...form, birthday: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
+                                    <DateInput value={form.birthday} onChange={(v) => setForm({ ...form, birthday: v })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
                                 <div><label className="text-xs text-gray-500">Ghi chú</label>
                                     <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
                             </div>
@@ -169,7 +171,7 @@ export default function Customers() {
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Hạng thành viên</div><div className="font-semibold text-violet-700">{detail.tier?.name || '—'}</div></div>
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Điểm hiện tại</div><div className="font-bold text-amber-600 text-lg">{Number(detail.points).toLocaleString('vi-VN')}</div></div>
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Tổng đã mua</div><div className="font-semibold">{Number(detail.total_spent).toLocaleString('vi-VN')}đ</div></div>
-                                    <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Sinh nhật</div><div className="font-medium">{detail.birthday ? new Date(detail.birthday).toLocaleDateString('vi-VN') : '—'}</div></div>
+                                    <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Sinh nhật</div><div className="font-medium">{fmtDate(detail.birthday) || '—'}</div></div>
                                 </div>
                                 <div className="text-center">
                                     <QRCodeSVG value={detail.member_code} size={120} />
@@ -192,7 +194,7 @@ export default function Customers() {
                                 <h4 className="font-medium text-[14px] mb-2">Lịch sử điểm</h4>
                                 {(detail.pointTransactions || []).map((t) => (
                                     <div key={t.id} className="flex justify-between text-[13px] border-b border-gray-50 py-1.5">
-                                        <span className="text-gray-600">{t.note || t.type} <span className="text-gray-400 text-xs">· {new Date(t.created_at).toLocaleString('vi-VN')}</span></span>
+                                        <span className="text-gray-600">{t.note || t.type} <span className="text-gray-400 text-xs">· {fmtDateTime(t.created_at)}</span></span>
                                         <span className={`font-bold ${t.change > 0 ? 'text-emerald-600' : 'text-red-600'}`}>{t.change > 0 ? '+' : ''}{t.change}</span>
                                     </div>
                                 ))}
@@ -203,7 +205,7 @@ export default function Customers() {
                                 <h4 className="font-medium text-[14px] mb-2">Đơn hàng đã mua</h4>
                                 {(detail.orders || []).map((o) => (
                                     <div key={o.id} className="flex justify-between text-[13px] border-b border-gray-50 py-1.5">
-                                        <span className="font-medium">{o.code} <span className="text-gray-400 text-xs">· {new Date(o.created_at).toLocaleString('vi-VN')}</span></span>
+                                        <span className="font-medium">{o.code} <span className="text-gray-400 text-xs">· {fmtDateTime(o.created_at)}</span></span>
                                         <span className="font-semibold">{Number(o.total_amount).toLocaleString('vi-VN')}đ</span>
                                     </div>
                                 ))}

@@ -14,12 +14,13 @@ async function req(path, opts = {}) {
 
 export const api = {
   branches: () => req('/branches'),
-  menu: () => req('/display-menus?unique=1'), // Gói 7g: theo Thực đơn; unique=1: món trùng chỉ hiện 1 lần ở thực đơn trên cùng
+  menu: (branchId) => req(`/display-menus?unique=1${branchId ? `&branch_id=${branchId}` : ''}`), // Gói 7g: theo Thực đơn; unique=1: món trùng chỉ hiện 1 lần ở thực đơn trên cùng. Gói 25: lọc món/thực đơn bị ẩn ở CN
   shipConfig: () => req('/ship-config'),
   // Gói 9: trang chủ kiểu GrabFood
   // Gói 10f: shopInfo theo chi nhánh -> cover riêng (chưa có thì cover chung)
   shopInfo: (branchId) => req(`/shop-info${branchId ? `?branch_id=${branchId}` : ''}`),
   saleProducts: () => req('/sale-products'),
+  topProducts: (branchId) => req(`/top-products${branchId ? `?branch_id=${branchId}` : ''}`), // Gói 34: top 10 bán chạy
   // Gói 9: đặt đơn nhóm
   groupCreate: (payload) => req('/group-orders', { method: 'POST', body: JSON.stringify(payload) }),
   groupGet: (code) => req(`/group-orders/${encodeURIComponent(code)}`),

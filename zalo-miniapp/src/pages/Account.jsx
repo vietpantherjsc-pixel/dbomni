@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { api, fmt, getProfile, setProfile } from '../api';
+import { fmtDate } from '../utils/format';
 import { TabBar } from './Home';
 
 // Gói 11: Tài khoản đăng nhập bằng SĐT + Mã thành viên (bỏ tra cứu tự do bằng SĐT
@@ -65,7 +66,7 @@ export default function Account() {
           {customer.orders.length === 0 && <div className="zm-empty" style={{ padding: 20 }}>Chưa có đơn nào.</div>}
           {customer.orders.map((o) => (
             <div key={o.id} className="zm-total-row" style={{ padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
-              <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{new Date(o.created_at).toLocaleDateString('vi-VN')} · {o.status}</span></span>
+              <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{fmtDate(o.created_at)} · {o.status}</span></span>
               <span><b>{fmt(o.total_amount)}đ</b></span>
             </div>
           ))}

@@ -5,6 +5,8 @@ import { BranchProvider } from './contexts/BranchContext';
 import Login from './pages/Login';
 import Dashboard from './pages/admin/Dashboard';
 import Products from './pages/admin/Products';
+import ProductVisibility from './pages/admin/ProductVisibility'; // Gói 25
+import MenuVisibility from './pages/admin/MenuVisibility'; // Gói 25
 import OptionGroups from './pages/admin/OptionGroups';
 import Menus from './pages/admin/Menus';
 import Categories from './pages/admin/Categories';
@@ -16,6 +18,9 @@ import Customers from './pages/admin/Customers';
 import MemberTiers from './pages/admin/MemberTiers';
 import Promotions from './pages/admin/Promotions';
 import Tables from './pages/admin/Tables';
+import Transactions from './pages/admin/Transactions'; // Gói 27: thu chi
+import TransactionCategories from './pages/admin/TransactionCategories'; // Gói 29: danh mục thu chi
+import Partners from './pages/admin/Partners'; // Gói 29: đối tác công nợ
 import PosScreen from './components/PosScreen';
 import KdsScreen from './KdsScreen';
 import Settings from './pages/admin/Settings';
@@ -23,6 +28,18 @@ import PriceLists from './pages/admin/PriceLists';
 import Reports from './pages/admin/Reports'; // Gói 15: Báo cáo Giám đốc
 import ReportsInventory from './pages/admin/ReportsInventory'; // Gói 17: Báo cáo kho
 import ReportsPnl from './pages/admin/ReportsPnl'; // Gói 17: Báo cáo thu chi/PNL
+import QrOrder from './pages/admin/QrOrder'; // Gói 28: QR Order theo chi nhánh
+import Staff from './pages/admin/Staff'; // Gói 26: nhân viên
+import Roles from './pages/admin/Roles'; // Gói 26: chức vụ & phân quyền
+import Salary from './pages/admin/Salary'; // Gói 26: bảng lương theo giờ
+import HolidayPolicy from './pages/admin/HolidayPolicy'; // Gói 30: lương lễ/tết & phạt
+import ChamCong from './pages/ChamCong'; // Gói 35: trang chấm công NV (public)
+import DangKyCa from './pages/DangKyCa'; // Gói 35: trang đăng ký ca NV (public)
+import WorkShifts from './pages/admin/WorkShifts'; // Gói 35: ca làm việc
+import AttendanceGrid from './pages/admin/AttendanceGrid'; // Gói 35: bảng chấm công tuần
+import LeaveRequests from './pages/admin/LeaveRequests'; // Gói 35: yêu cầu nghỉ
+import Scheduling from './pages/admin/Scheduling'; // Gói 35: đăng ký & xếp ca
+import AttendanceQr from './pages/admin/AttendanceQr'; // Gói 35: QR chấm công
 
 // Gói 1 (2026-10-04): bọc 2 màn hình để nút "Về App" điều hướng được
 // (component thật cần prop onBackToApp / onBackToClient).
@@ -60,6 +77,9 @@ const App = () => {
                 <Routes>
                     {/* Route Công khai */}
                     <Route path="/login" element={<Login />} />
+                    {/* Gói 35: trang nhân viên (public, không cần đăng nhập admin) */}
+                    <Route path="/cham-cong" element={<ChamCong />} />
+                    <Route path="/dang-ky-ca" element={<DangKyCa />} />
 
                     {/* Các Route Bảo mật */}
                     <Route 
@@ -79,6 +99,16 @@ const App = () => {
                                 <Products />
                             </PrivateRoute>
                         } 
+                    />
+
+                    {/* Gói 25: Quản lý hiển thị mặt hàng theo chi nhánh */}
+                    <Route
+                        path="/admin/products/visibility"
+                        element={
+                            <PrivateRoute>
+                                <ProductVisibility />
+                            </PrivateRoute>
+                        }
                     />
 
                     <Route 
@@ -104,6 +134,16 @@ const App = () => {
                         element={
                             <PrivateRoute>
                                 <Menus />
+                            </PrivateRoute>
+                        }
+                    />
+
+                    {/* Gói 25: Quản lý hiển thị thực đơn theo chi nhánh */}
+                    <Route
+                        path="/admin/menus/visibility"
+                        element={
+                            <PrivateRoute>
+                                <MenuVisibility />
                             </PrivateRoute>
                         }
                     />
@@ -187,14 +227,29 @@ const App = () => {
                             </PrivateRoute>
                         }
                     />
+                    <Route
+                        path="/admin/qr-order"
+                        element={
+                            <PrivateRoute>
+                                <QrOrder />
+                            </PrivateRoute>
+                        }
+                    />
+                    {/* Gói 26: Nhân sự */}
+                    <Route path="/admin/staff" element={<PrivateRoute><Staff /></PrivateRoute>} />
+                    <Route path="/admin/staff/roles" element={<PrivateRoute><Roles /></PrivateRoute>} />
+                    <Route path="/admin/staff/salary" element={<PrivateRoute><Salary /></PrivateRoute>} />
+                    <Route path="/admin/staff/holiday-policy" element={<PrivateRoute><HolidayPolicy /></PrivateRoute>} />
+                    {/* Gói 35: Chấm công */}
+                    <Route path="/admin/attendance" element={<PrivateRoute><AttendanceGrid /></PrivateRoute>} />
+                    <Route path="/admin/attendance/shifts" element={<PrivateRoute><WorkShifts /></PrivateRoute>} />
+                    <Route path="/admin/attendance/scheduling" element={<PrivateRoute><Scheduling /></PrivateRoute>} />
+                    <Route path="/admin/attendance/requests" element={<PrivateRoute><LeaveRequests /></PrivateRoute>} />
+                    <Route path="/admin/attendance/qr" element={<PrivateRoute><AttendanceQr /></PrivateRoute>} />
                     {/* Gói 2 (2026-10-04): các mục menu Sapo chưa phát triển -> trang ComingSoon */}
                     {[
                         ['/admin/bookings', 'Đặt lịch'],
-                        ['/admin/staff', 'Nhân viên'],
-                        ['/admin/transactions', 'Thu chi'],
-                        ['/admin/attendance', 'Chấm công'],
                         ['/admin/integrations', 'Đối tác tích hợp'],
-                        ['/admin/qr-order', 'QR Order'],
                     ].map(([path, title]) => (
                         <Route
                             key={path}
@@ -206,6 +261,30 @@ const App = () => {
                             }
                         />
                     ))}
+                    <Route
+                        path="/admin/transactions"
+                        element={
+                            <PrivateRoute>
+                                <Transactions />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/transaction-categories"
+                        element={
+                            <PrivateRoute>
+                                <TransactionCategories />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/partners"
+                        element={
+                            <PrivateRoute>
+                                <Partners />
+                            </PrivateRoute>
+                        }
+                    />
                     <Route
                         path="/admin/online"
                         element={

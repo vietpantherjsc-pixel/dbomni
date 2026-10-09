@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Batch;
 use App\Models\Material;
+use App\Models\Transaction;
+use App\Models\TransactionCategory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -48,6 +50,37 @@ class InboundController extends Controller
     }
 
     /**
+     * Gói 27 (2026-10-09): tự sinh phiếu chi "Đã thanh toán" khi nhập kho
+     * (quyết định của Đại Vương: danh mục "Nhập hàng").
+     * Idempotent: cặp (related_type, related_id) đã có phiếu thì không tạo trùng.
+     */
+    private function createAutoExpense(int $branchId, float $amount, int $relatedId, string $note): void
+    {
+        $exists = Transaction::where('related_type', 'inbound')
+            ->where('related_id', $relatedId)
+            ->exists();
+        if ($exists) {
+            return;
+        }
+        $cat = TransactionCategory::firstOrCreate(
+            ['name' => 'Nhập hàng', 'type' => 'expense'],
+            ['is_system' => true]
+        );
+        Transaction::create([
+            'code' => Transaction::nextCode('expense'),
+            'type' => 'expense',
+            'category_id' => $cat->id,
+            'branch_id' => $branchId,
+            'amount' => $amount,
+            'paid_amount' => $amount, // Gói 29: phiếu tự sinh đã thanh toán -> còn nợ = 0
+            'paid_at' => now()->toDateString(),
+            'status' => 'paid',
+            'note' => $note,
+            'created_by' => auth()->id(),
+        ]);
+    }
+
+    /**
      * Nhập 1 lô nguyên vật liệu vào kho chi nhánh.
      */
     public function store(Request $request): JsonResponse
@@ -62,7 +95,18 @@ class InboundController extends Controller
         ]);
 
         $result = DB::transaction(function () use ($validated) {
-            return $this->createBatch($validated['branch_id'], $validated);
+            $created = $this->createBatch($validated['branch_id'], $validated);
+            // Gói 27: tự sinh phiếu chi "Đã thanh toán" theo tổng tiền phiếu nhập.
+            $amount = (float) $validated['purchase_quantity'] * (float) ($validated['unit_cost'] ?? 0);
+            if ($amount > 0) {
+                $this->createAutoExpense(
+                    $validated['branch_id'],
+                    $amount,
+                    $created['batch']->id,
+                    "Tự sinh từ phiếu nhập kho {$created['batch']->batch_code} ({$created['material']})"
+                );
+            }
+            return $created;
         });
 
         return response()->json([
@@ -92,6 +136,20 @@ class InboundController extends Controller
             $out = [];
             foreach ($validated['items'] as $item) {
                 $out[] = $this->createBatch($validated['branch_id'], $item);
+            }
+            // Gói 27: 1 phiếu chi duy nhất cho cả đợt nhập nhiều dòng.
+            $total = 0;
+            foreach ($validated['items'] as $item) {
+                $total += (float) $item['purchase_quantity'] * (float) ($item['unit_cost'] ?? 0);
+            }
+            if ($total > 0 && !empty($out)) {
+                $codes = implode(', ', array_map(fn($r) => $r['batch']->batch_code, $out));
+                $this->createAutoExpense(
+                    $validated['branch_id'],
+                    $total,
+                    $out[0]['batch']->id,
+                    'Tự sinh từ phiếu nhập kho nhiều dòng (' . count($out) . ' dòng): ' . $codes
+                );
             }
             return $out;
         });

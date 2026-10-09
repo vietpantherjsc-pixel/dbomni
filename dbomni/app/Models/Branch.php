@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 // Gói 1 (2026-10-04): Thêm $guarded = [] để seeder/factory tạo được chi nhánh
@@ -24,5 +25,11 @@ class Branch extends Model
     public function shifts(): HasMany
     {
         return $this->hasMany(Shift::class);
+    }
+
+    // Gói 26c: nhân viên làm việc tại chi nhánh (pivot branch_employee)
+    public function employees(): BelongsToMany
+    {
+        return $this->belongsToMany(Employee::class, 'branch_employee')->withTimestamps();
     }
 }

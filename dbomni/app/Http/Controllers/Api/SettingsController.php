@@ -25,6 +25,18 @@ class SettingsController extends Controller
             // Gói 9: cover Mini App + điểm thưởng giới thiệu
             'shop_cover_url' => Setting::get('shop_cover_url', ''),
             'ref_bonus_points' => Setting::get('ref_bonus_points', '100'),
+            // Gói 26: phụ cấp ăn + tỷ lệ BHXH
+            'meal_allowance_min_hours' => Setting::get('meal_allowance_min_hours', '8'),
+            'meal_allowance_amount' => Setting::get('meal_allowance_amount', '25000'),
+            'bhxh_emp_bhxh' => Setting::get('bhxh_emp_bhxh', '8'),
+            'bhxh_emp_bhyt' => Setting::get('bhxh_emp_bhyt', '1.5'),
+            'bhxh_emp_bhtn' => Setting::get('bhxh_emp_bhtn', '1'),
+            'bhxh_employer_rate' => Setting::get('bhxh_employer_rate', '21.5'),
+            // Gói 37: hạn chót đăng ký ca (thứ 0=Thứ 2..6=CN, giờ HH:MM)
+            'shift_reg_deadline_weekday' => Setting::get('shift_reg_deadline_weekday', '5'),
+            'shift_reg_deadline_time' => Setting::get('shift_reg_deadline_time', '20:00'),
+            // Gói 37e: địa chỉ máy chủ cho QR chấm công (IP LAN, VD http://192.168.1.50:3000)
+            'qr_base_url' => Setting::get('qr_base_url', ''),
         ]);
     }
 

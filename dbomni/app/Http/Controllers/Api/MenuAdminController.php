@@ -16,10 +16,18 @@ class MenuAdminController extends Controller
 {
     public function index(): JsonResponse
     {
+        // Gói 25: kèm hidden_branches (mảng {id, name}) để hiện badge "đang ẩn ở CN X"
+        $hidden = \App\Models\BranchMenuHidden::with('branch:id,name')->get()->groupBy('menu_id');
         $menus = Menu::withCount('products')
             ->orderBy('sort_order')
             ->orderBy('id')
-            ->get();
+            ->get()
+            ->map(function ($m) use ($hidden) {
+                $m->hidden_branches = isset($hidden[$m->id])
+                    ? $hidden[$m->id]->map(fn($r) => ['id' => $r->branch->id, 'name' => $r->branch->name])->values()
+                    : [];
+                return $m;
+            });
         return response()->json(['success' => true, 'data' => $menus]);
     }
 

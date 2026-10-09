@@ -4,6 +4,7 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useBranch } from '../../contexts/BranchContext';
 
 // =====================================================================
 // Gói 7d (2026-10-05): Dashboard theo phong cách B (Matcha).
@@ -50,13 +51,17 @@ const Dashboard = () => {
     const [range, setRange] = useState('today');
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
+    const branchCtx = useBranch();
+    const branchId = (branchCtx && branchCtx.branchId) || '0';
 
     useEffect(() => {
         const fetchStats = async () => {
             setLoading(true);
             try {
+                const bq = branchId !== '0' ? `&branch_id=${branchId}` : '';
                 const res = await axios.get(
-                    `http://localhost/api/admin/dashboard/stats?range=${range}`
+                    `http://localhost/api/admin/dashboard/stats?range=${range}${bq}`
                 );
                 if (res.data?.success) {
                     setData(res.data.data.sapo || null);
@@ -68,7 +73,7 @@ const Dashboard = () => {
             }
         };
         fetchStats();
-    }, [range]);
+    }, [range, branchId]);
 
     return (
         <AdminLayout>

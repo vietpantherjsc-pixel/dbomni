@@ -12,7 +12,8 @@ class MaterialController extends Controller
 {
     public function index(): JsonResponse
     {
-        $materials = Material::orderBy('type')->orderBy('name')->get();
+        // Gói 22: kèm loại danh mục để nhóm kiểm kho + hiển thị
+        $materials = Material::with('category')->orderBy('type')->orderBy('name')->get();
         return response()->json(['success' => true, 'data' => $materials]);
     }
 
@@ -22,6 +23,7 @@ class MaterialController extends Controller
             'name' => 'required|string|max:150',
             'unit' => 'required|string|max:20',
             'type' => 'required|in:raw,semi_finished,consumable',
+            'material_category_id' => 'nullable|exists:material_categories,id', // Gói 22
             'minimum_stock' => 'nullable|numeric|min:0',
             'purchase_unit' => 'nullable|string|max:20',
             'conversion_rate' => 'nullable|numeric|min:0.0001',
@@ -36,6 +38,7 @@ class MaterialController extends Controller
             'name' => $validated['name'],
             'unit' => $validated['unit'],
             'type' => $validated['type'],
+            'material_category_id' => $validated['material_category_id'] ?? null, // Gói 22
             'minimum_stock' => $validated['minimum_stock'] ?? 0,
             'purchase_unit' => $validated['purchase_unit'] ?? null,
             'conversion_rate' => $validated['conversion_rate'] ?? 1,
@@ -50,6 +53,7 @@ class MaterialController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|string|max:150',
             'unit' => 'sometimes|string|max:20',
+            'material_category_id' => 'sometimes|nullable|exists:material_categories,id', // Gói 22
             'minimum_stock' => 'nullable|numeric|min:0',
             'purchase_unit' => 'nullable|string|max:20',
             'conversion_rate' => 'nullable|numeric|min:0.0001',

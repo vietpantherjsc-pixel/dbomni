@@ -23,7 +23,9 @@ class MenuController extends Controller
                     ->where('is_service_fee', false) // Gói 6: ẩn món "Phí dịch vụ" (hệ thống tự tính)
                     ->with(['options', 'optionGroups' => function ($q) {
                         // Gói 7b: nhóm tùy chọn (Size/Độ ngọt/Đá/Topping) kèm options
-                        $q->where('is_active', true)->with(['options' => fn($qq) => $qq->orderBy('id')]);
+                        // Gói 34e: sắp xếp nhóm tùy chọn theo sort_order của admin
+                        $q->where('is_active', true)->orderBy('sort_order')->orderBy('id')
+                            ->with(['options' => fn($qq) => $qq->orderBy('sort_order')->orderBy('id')]);
                     }]);
             }])
             ->get();

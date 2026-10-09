@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtPrice } from '../../utils/number';
+import { useBranch } from '../../contexts/BranchContext'; // Gói 25: badge ẩn/hiện theo CN
+import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
 
 const BASE = 'http://localhost/api';
 const COLOR_PRESETS = ['#24305E', '#2F3E2E', '#00B14F', '#E8830C', '#C0392B', '#6C3FA3', '#D6336C', '#0EA5E9', '#78716C', '#1F2937'];
@@ -117,6 +119,10 @@ const BomLines = ({ lines, materials, onChange, materialFilter, addLabel }) => {
 };
 
 const Products = () => {
+    const branchCtx = useBranch();
+    const ctxBranchId = (branchCtx && branchCtx.branchId) || '0'; // Gói 25
+    const { can } = useAuth();
+    const canBulk = can('products.bulk'); // Gói 33: CHỈ admin cấp cao nhất
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
     const [priceLists, setPriceLists] = useState([]);
@@ -130,6 +136,47 @@ const Products = () => {
     const [tab, setTab] = useState('info');
     const [costPrice, setCostPrice] = useState(null);
     const [formData, setFormData] = useState(initialFormState);
+
+    // Gói 33: chọn + thao tác hàng loạt
+    const [selected, setSelected] = useState({});
+    const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
+    const [bulkModal, setBulkModal] = useState(null); // 'category' | 'channels'
+    const [bulkCatId, setBulkCatId] = useState('');
+    const [bulkChannels, setBulkChannels] = useState({});
+    const headerCbRef = useRef(null);
+    // Gói 33: màn chỉnh sửa nhanh
+    const [bulkEdit, setBulkEdit] = useState(false);
+    const [bulkFields, setBulkFields] = useState(['base_price', 'price_grabfood', 'price_shopeefood', 'unit', 'print_label']);
+    const [bulkRows, setBulkRows] = useState({});
+    const [addFieldOpen, setAddFieldOpen] = useState(false);
+    const [bulkSaving, setBulkSaving] = useState(false);
+
+    const selectedIds = Object.keys(selected).filter((k) => selected[k]).map(Number);
+    const toggleSelect = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
+    useEffect(() => {
+        if (headerCbRef.current) {
+            headerCbRef.current.indeterminate = selectedIds.length > 0 && selectedIds.length < products.length;
+        }
+    });
+
+    // Giá kênh hiện tại của món (từ relation prices.price_list)
+    const priceOf = (p, code) => {
+        const row = (p.prices || []).find((x) => x.price_list?.code === code);
+        return row ? row.price : '';
+    };
+
+    // Định nghĩa field cho màn chỉnh sửa nhanh (kênh động theo priceLists)
+    const allBulkFields = () => ([
+        { key: 'base_price', label: 'Giá bán tại quán', type: 'number' },
+        ...priceLists.map((pl) => ({ key: 'price_' + pl.code, label: 'Giá bán ' + pl.name, type: 'number' })),
+        { key: 'unit', label: 'Đơn vị', type: 'text' },
+        { key: 'print_label', label: 'In tem', type: 'checkbox' },
+        { key: 'category_id', label: 'Danh mục', type: 'category' },
+        { key: 'cost_price', label: 'Giá vốn', type: 'number' },
+        { key: 'tax_rate', label: 'Thuế suất (%)', type: 'number' },
+        { key: 'is_active', label: 'Đang bán', type: 'checkbox' },
+    ]);
+    const bulkFieldDef = (key) => allBulkFields().find((f) => f.key === key);
 
     useEffect(() => {
         fetchProducts();
@@ -197,6 +244,99 @@ const Products = () => {
             setProducts((ps) => ps.map((p) => p.id === product.id ? { ...p, is_favorite: res.data.is_favorite } : p));
         } catch (e) { alert('Không lưu được, thử lại.'); }
     };
+
+    // ================= Gói 33: thao tác hàng loạt =================
+    const runBulkAction = async (action, params) => {
+        if (!selectedIds.length) return;
+        try {
+            const res = await axios.post(`${BASE}/products/bulk-action`, { ids: selectedIds, action, params });
+            alert(`Đã cập nhật ${res.data?.updated ?? selectedIds.length} mặt hàng.`);
+            setSelected({}); setBulkMenuOpen(false); setBulkModal(null);
+            fetchProducts();
+        } catch (e) { alert(e.response?.data?.message || 'Thao tác hàng loạt thất bại'); }
+    };
+    const confirmBulkDelete = () => {
+        if (!window.confirm(`XÓA ${selectedIds.length} mặt hàng đã chọn?\n\nMón đã xóa không khôi phục được.`)) return;
+        runBulkAction('delete', {});
+    };
+    const openChannelsModal = () => {
+        const init = { pos: true, zalo: true };
+        priceLists.forEach((pl) => { init[pl.code] = true; });
+        setBulkChannels(init);
+        setBulkModal('channels');
+        setBulkMenuOpen(false);
+    };
+    // Màn chỉnh sửa nhanh: nạp giá trị hiện tại của các món đã chọn
+    const openBulkEdit = () => {
+        const rows = {};
+        selectedIds.forEach((id) => {
+            const p = products.find((x) => x.id === id);
+            if (!p) return;
+            const vals = {
+                base_price: p.base_price ?? '', unit: p.unit ?? '', print_label: !!p.print_label,
+                category_id: p.category_id ?? '', cost_price: p.cost_price ?? '',
+                tax_rate: p.tax_rate ?? '', is_active: !!p.is_active,
+            };
+            priceLists.forEach((pl) => { vals['price_' + pl.code] = priceOf(p, pl.code); });
+            rows[id] = vals;
+        });
+        setBulkRows(rows);
+        // Field mặc định như demo (chỉ lấy kênh giá tồn tại thật)
+        const codes = new Set(priceLists.map((pl) => pl.code));
+        setBulkFields(['base_price', 'price_grabfood', 'price_shopeefood', 'unit', 'print_label']
+            .filter((k) => !k.startsWith('price_') || codes.has(k.slice(6))));
+        setBulkEdit(true);
+    };
+    const setBulkCell = (id, field, value) => {
+        setBulkRows((r) => ({ ...r, [id]: { ...r[id], [field]: value } }));
+    };
+    const saveBulkEdit = async () => {
+        const rows = selectedIds.map((id) => {
+            const values = {};
+            bulkFields.forEach((f) => {
+                const v = bulkRows[id]?.[f];
+                const def = bulkFieldDef(f);
+                if (v === '' || v === undefined || v === null) return; // trống = giữ nguyên
+                if (def?.type === 'number') values[f] = Number(v);
+                else if (def?.type === 'checkbox') values[f] = !!v;
+                else if (f === 'category_id') values[f] = v === '' ? null : v;
+                else values[f] = v;
+            });
+            return { id, values };
+        }).filter((r) => Object.keys(r.values).length > 0);
+        if (!rows.length) return alert('Chưa sửa ô nào.');
+        setBulkSaving(true);
+        try {
+            const res = await axios.post(`${BASE}/products/bulk-update`, { rows });
+            alert(`Đã lưu ${res.data?.updated ?? rows.length} mặt hàng.`);
+            setBulkEdit(false); setSelected({});
+            fetchProducts();
+        } catch (e) { alert(e.response?.data?.message || 'Lưu hàng loạt thất bại'); }
+        finally { setBulkSaving(false); }
+    };
+    // Ô nhập cho từng loại field trong màn chỉnh sửa nhanh
+    const bulkCellEditor = (id, f) => {
+        const def = bulkFieldDef(f.key);
+        const v = bulkRows[id]?.[f.key];
+        if (!def) return null;
+        if (def.type === 'checkbox') {
+            return <input type="checkbox" checked={!!v} onChange={(e) => setBulkCell(id, f.key, e.target.checked)} className="w-4 h-4 accent-[#24305E]" />;
+        }
+        if (def.type === 'category') {
+            return (
+                <select value={v ?? ''} onChange={(e) => setBulkCell(id, f.key, e.target.value)} className="m-input !py-1.5 min-w-[140px]">
+                    <option value="">— Chưa phân loại —</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+            );
+        }
+        return (
+            <input type={def.type === 'number' ? 'number' : 'text'} min="0"
+                value={v ?? ''} onChange={(e) => setBulkCell(id, f.key, e.target.value)}
+                className="m-input !py-1.5 min-w-[110px]" placeholder="—" />
+        );
+    };
+    // ================= /Gói 33 =================
     const handleEdit = async (product) => {
         try {
             const r = await axios.get(`${BASE}/products/${product.id}`);
@@ -318,6 +458,97 @@ const Products = () => {
         }));
     };
 
+    // ================= Gói 33: màn CHỈNH SỬA NHANH =================
+    if (bulkEdit) {
+        const defs = allBulkFields();
+        const unusedFields = defs.filter((f) => !bulkFields.includes(f.key));
+        const selProducts = selectedIds.map((id) => products.find((p) => p.id === id)).filter(Boolean);
+        return (
+            <AdminLayout>
+                <div className="p-6 max-w-[1200px] mx-auto">
+                    <button onClick={() => setBulkEdit(false)} className="text-[13px] font-semibold hover:underline mb-2" style={{ color: 'var(--m-primary)' }}>
+                        ‹ Quay lại danh sách mặt hàng
+                    </button>
+                    <h1 className="text-[22px] font-bold text-[var(--m-ink)]">Chỉnh sửa nhanh mặt hàng</h1>
+                    <p className="text-sm mt-1 mb-4" style={{ color: 'var(--m-ink-soft)' }}>
+                        Đang sửa <b>{selProducts.length}</b> món: {selProducts.slice(0, 3).map((p) => p.name).join(', ')}{selProducts.length > 3 ? '...' : ''}
+                    </p>
+
+                    <div className="m-card p-4 mb-4">
+                        <div className="text-[13px] font-bold mb-2" style={{ color: 'var(--m-ink)' }}>Các thông tin chỉnh sửa</div>
+                        <div className="flex flex-wrap gap-2 items-center">
+                            {bulkFields.map((key) => {
+                                const d = bulkFieldDef(key);
+                                if (!d) return null;
+                                return (
+                                    <span key={key} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium border"
+                                        style={{ background: 'var(--m-bg-soft)', borderColor: 'var(--m-line)', color: 'var(--m-ink)' }}>
+                                        {d.label}
+                                        <button onClick={() => setBulkFields((fs) => fs.filter((x) => x !== key))}
+                                            className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] hover:bg-red-100 hover:text-red-600" title="Bỏ trường này">✕</button>
+                                    </span>
+                                );
+                            })}
+                            <div className="relative">
+                                <button onClick={() => setAddFieldOpen((v) => !v)} className="m-btn m-btn-ghost m-btn-sm">+ Thêm trường chỉnh sửa ▾</button>
+                                {addFieldOpen && (
+                                    <>
+                                        <div className="fixed inset-0 z-30" onClick={() => setAddFieldOpen(false)} />
+                                        <div className="absolute left-0 top-full mt-1 z-40 bg-white rounded-lg shadow-xl border min-w-[220px] py-1" style={{ borderColor: 'var(--m-line)' }}>
+                                            {unusedFields.length === 0 && <div className="px-3 py-2 text-[12.5px] text-gray-400">Đã dùng hết các trường</div>}
+                                            {unusedFields.map((f) => (
+                                                <button key={f.key} onClick={() => { setBulkFields((fs) => [...fs, f.key]); setAddFieldOpen(false); }}
+                                                    className="w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50">{f.label}</button>
+                                            ))}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="m-card overflow-hidden mb-4">
+                        <div className="overflow-x-auto">
+                            <table className="m-table min-w-[900px]">
+                                <thead>
+                                    <tr>
+                                        <th style={{ width: 44 }}>STT</th>
+                                        <th>Tên món</th>
+                                        {bulkFields.map((key) => {
+                                            const d = bulkFieldDef(key);
+                                            return <th key={key}>{d ? d.label : key}</th>;
+                                        })}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {selProducts.map((p, i) => (
+                                        <tr key={p.id}>
+                                            <td className="text-gray-400">{i + 1}</td>
+                                            <td className="font-medium whitespace-nowrap">{p.name}</td>
+                                            {bulkFields.map((key) => (
+                                                <td key={key} onClick={(e) => e.stopPropagation()}>
+                                                    {bulkCellEditor(p.id, { key })}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 sticky bottom-0 py-3" style={{ background: 'var(--m-bg)' }}>
+                        <button onClick={() => { if (window.confirm('Bỏ các thay đổi chưa lưu?')) setBulkEdit(false); }} className="m-btn m-btn-ghost">Hủy</button>
+                        <button onClick={saveBulkEdit} disabled={bulkSaving} className="m-btn m-btn-primary">
+                            {bulkSaving ? 'Đang lưu...' : `Lưu thay đổi (${selProducts.length} món)`}
+                        </button>
+                    </div>
+                </div>
+            </AdminLayout>
+        );
+    }
+    // ================= /Gói 33 =================
+
     return (
         <AdminLayout>
             <div className="p-6 max-w-[1200px] mx-auto">
@@ -329,10 +560,58 @@ const Products = () => {
                 <button onClick={openAdd} className="m-btn m-btn-primary">+ Thêm mặt hàng</button>
             </div>
 
+            {/* Gói 33: thanh thao tác hàng loạt — CHỈ admin cấp cao nhất */}
+            {canBulk && selectedIds.length > 0 && (
+                <div className="m-card p-3 mb-3 flex flex-wrap items-center gap-3" style={{ background: 'var(--m-accent-soft)', borderColor: '#d5ddf2' }}>
+                    <span className="text-[13.5px] font-bold" style={{ color: 'var(--m-primary)' }}>
+                        ✓ Đã chọn {selectedIds.length} mặt hàng
+                    </span>
+                    <div className="relative">
+                        <button onClick={() => setBulkMenuOpen((v) => !v)} className="m-btn m-btn-primary m-btn-sm">
+                            Chọn thao tác ▾
+                        </button>
+                        {bulkMenuOpen && (
+                            <>
+                                <div className="fixed inset-0 z-30" onClick={() => setBulkMenuOpen(false)} />
+                                <div className="absolute left-0 top-full mt-1 z-40 bg-white rounded-lg shadow-xl border min-w-[230px] py-1" style={{ borderColor: 'var(--m-line)' }}>
+                                    <button onClick={() => { setBulkCatId(''); setBulkModal('category'); setBulkMenuOpen(false); }}
+                                        className="w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50">Đổi danh mục</button>
+                                    <button onClick={() => { openChannelsModal(); }}
+                                        className="w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50">Bật/tắt kênh bán hàng</button>
+                                    <button onClick={() => runBulkAction('set_visibility', { visible: true })}
+                                        className="w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50">Hiện mặt hàng</button>
+                                    <button onClick={() => runBulkAction('set_visibility', { visible: false })}
+                                        className="w-full text-left px-3 py-2 text-[13px] hover:bg-gray-50">Ẩn mặt hàng</button>
+                                    <button onClick={confirmBulkDelete}
+                                        className="w-full text-left px-3 py-2 text-[13px] text-red-600 hover:bg-red-50">Xóa mặt hàng</button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                    <button onClick={openBulkEdit} className="m-btn m-btn-sm text-white font-semibold" style={{ background: 'var(--m-stamp)' }}>
+                        Chỉnh sửa nhanh
+                    </button>
+                    <button onClick={() => setSelected({})} className="text-[12.5px] underline" style={{ color: 'var(--m-ink-soft)' }}>
+                        Bỏ chọn
+                    </button>
+                </div>
+            )}
+
             <div className="m-card overflow-hidden">
                 <table className="m-table">
                     <thead>
                         <tr>
+                            {canBulk && (
+                                <th style={{ width: 40 }}>
+                                    <input ref={headerCbRef} type="checkbox" className="w-4 h-4 accent-[#24305E] align-middle"
+                                        checked={products.length > 0 && selectedIds.length === products.length}
+                                        onChange={(e) => {
+                                            const next = {};
+                                            if (e.target.checked) products.forEach((p) => { next[p.id] = true; });
+                                            setSelected(next);
+                                        }} />
+                                </th>
+                            )}
                             <th style={{ width: 56 }}></th>
                             <th>Tên mặt hàng</th>
                             <th>Danh mục</th>
@@ -345,12 +624,19 @@ const Products = () => {
                     </thead>
                     <tbody>
                         {loading ? (
-                            <tr><td colSpan="8" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
+                            <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
                         ) : products.length === 0 ? (
-                            <tr><td colSpan="8" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có mặt hàng nào.</td></tr>
+                            <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có mặt hàng nào.</td></tr>
                         ) : (
                             products.map(product => (
                                 <tr key={product.id} onClick={() => handleEdit(product)} className="cursor-pointer">
+                                    {canBulk && (
+                                        <td onClick={(e) => e.stopPropagation()}>
+                                            <input type="checkbox" className="w-4 h-4 accent-[#24305E] align-middle"
+                                                checked={!!selected[product.id]}
+                                                onChange={() => toggleSelect(product.id)} />
+                                        </td>
+                                    )}
                                     <td onClick={(e) => e.stopPropagation()}>
                                         {product.image_url ? (
                                             <img src={product.image_url} alt={product.name}
@@ -366,7 +652,25 @@ const Products = () => {
                                                 style={{ background: 'var(--m-bg)', color: 'var(--m-ink-faint)' }}>☕</div>
                                         )}
                                     </td>
-                                    <td className="font-medium">{product.name}</td>
+                                    <td className="font-medium">
+                                        {product.name}
+                                        {/* Gói 25: badge ẩn/hiện theo CN — chế độ Tất cả: liệt kê CN; CN cụ thể: báo nếu ẩn ở CN này */}
+                                        {(() => {
+                                            const hb = product.hidden_branches || [];
+                                            if (!hb.length) return null;
+                                            if (ctxBranchId === '0') {
+                                                return (
+                                                    <span className="m-badge m-badge-red block mt-1" style={{ whiteSpace: 'normal' }}>
+                                                        Đang ẩn ở: {hb.map((h) => h.name).join(', ')}
+                                                    </span>
+                                                );
+                                            }
+                                            const me = hb.find((h) => String(h.id) === String(ctxBranchId));
+                                            return me ? (
+                                                <span className="m-badge m-badge-red block mt-1">Đang ẩn ở CN này</span>
+                                            ) : null;
+                                        })()}
+                                    </td>
                                     <td style={{ color: 'var(--m-ink-soft)' }}>{product.category?.name || 'Chưa phân loại'}</td>
                                     <td className="font-semibold m-num">{fmtPrice(product.base_price)} ₫</td>
                                     <td onClick={(e) => e.stopPropagation()} title={product.is_favorite ? 'Bỏ yêu thích' : 'Đánh dấu yêu thích'}>
@@ -599,6 +903,58 @@ const Products = () => {
                             </div>
                         </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Gói 33: modal đổi danh mục hàng loạt */}
+            {bulkModal === 'category' && (
+                <div className="m-modal-backdrop" onClick={() => setBulkModal(null)}>
+                    <div className="m-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="m-modal-head">Đổi danh mục — {selectedIds.length} mặt hàng</div>
+                        <div className="m-modal-body">
+                            <label className="m-label">Danh mục mới</label>
+                            <select value={bulkCatId} onChange={(e) => setBulkCatId(e.target.value)} className="m-select">
+                                <option value="">— Chưa phân loại —</option>
+                                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="m-modal-foot">
+                            <button onClick={() => setBulkModal(null)} className="m-btn m-btn-ghost">Hủy</button>
+                            <button onClick={() => runBulkAction('change_category', { category_id: bulkCatId === '' ? null : Number(bulkCatId) })}
+                                className="m-btn m-btn-primary">Áp dụng</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Gói 33: modal bật/tắt kênh bán hàng loạt */}
+            {bulkModal === 'channels' && (
+                <div className="m-modal-backdrop" onClick={() => setBulkModal(null)}>
+                    <div className="m-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="m-modal-head">Bật/tắt kênh bán — {selectedIds.length} mặt hàng</div>
+                        <div className="m-modal-body">
+                            <p className="text-[12.5px] mb-3" style={{ color: 'var(--m-ink-soft)' }}>
+                                Tick kênh muốn BÁN, bỏ tick kênh muốn TẮT. Áp dụng giống nhau cho tất cả món đã chọn.
+                            </p>
+                            <div className="space-y-2">
+                                {[{ code: 'pos', name: 'Máy POS (tại quán)' }, { code: 'zalo', name: 'Zalo Mini App' },
+                                  ...priceLists.map((pl) => ({ code: pl.code, name: pl.name }))].map((ch) => (
+                                    <label key={ch.code} className="flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer"
+                                        style={{ borderColor: 'var(--m-line)' }}>
+                                        <input type="checkbox" checked={!!bulkChannels[ch.code]}
+                                            onChange={(e) => setBulkChannels((s) => ({ ...s, [ch.code]: e.target.checked }))}
+                                            className="w-4 h-4 accent-[#24305E]" />
+                                        <span className="text-[13.5px] font-medium">{ch.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="m-modal-foot">
+                            <button onClick={() => setBulkModal(null)} className="m-btn m-btn-ghost">Hủy</button>
+                            <button onClick={() => runBulkAction('set_channels', { channels: bulkChannels })}
+                                className="m-btn m-btn-primary">Áp dụng</button>
+                        </div>
                     </div>
                 </div>
             )}

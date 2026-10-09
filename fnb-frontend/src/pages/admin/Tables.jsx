@@ -1,19 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useBranch } from '../../contexts/BranchContext';
 
 // Gói 3 (2026-10-04): Quản lý bàn (bản gọn) — thêm/xóa/đổi trạng thái bàn.
 // AuthContext đã gắn Bearer token vào axios.defaults nên dùng axios trực tiếp.
 const API = 'http://localhost/api';
 export default function Tables() {
+    // Gói 24: chi nhánh theo BranchContext ('0' = Tất cả)
+    const branchCtx = useBranch();
+    const branchId = (branchCtx && branchCtx.branchId) || '0';
     const [tables, setTables] = useState([]);
+    const [branches, setBranches] = useState([]);
     const [newName, setNewName] = useState('');
+    const [addBranchId, setAddBranchId] = useState('');
     const [loading, setLoading] = useState(true);
+    const showAll = branchId === '0';
+    const branchNameOf = (bid) => (branches.find((b) => String(b.id) === String(bid)) || {}).name || ('CN ' + bid);
 
     const fetchTables = async () => {
         setLoading(true);
         try {
-            const res = await axios.get(`${API}/tables`, { params: { branch_id: 1 } });
+            const params = showAll ? {} : { branch_id: branchId };
+            const res = await axios.get(`${API}/tables`, { params });
             if (res.data.success) setTables(res.data.data);
         } catch (err) {
             console.error('Lỗi tải bàn:', err);
@@ -22,13 +31,23 @@ export default function Tables() {
         }
     };
 
-    useEffect(() => { fetchTables(); }, []);
+    const fetchBranches = async () => {
+        try {
+            const res = await axios.get(`${API}/branches`);
+            if (res.data.success) setBranches(res.data.data || []);
+        } catch (err) { console.error('Lỗi tải chi nhánh:', err); }
+    };
+
+    useEffect(() => { fetchBranches(); }, []);
+    useEffect(() => { fetchTables(); }, [branchId]);
 
     const handleAdd = async () => {
         const name = newName.trim();
         if (!name) return alert('Nhập tên bàn (VD: B01)');
+        const bid = showAll ? addBranchId : branchId;
+        if (!bid) return alert('Vui lòng chọn chi nhánh cho bàn mới.');
         try {
-            const res = await axios.post(`${API}/tables`, { branch_id: 1, name });
+            const res = await axios.post(`${API}/tables`, { branch_id: Number(bid), name });
             if (res.data.success) {
                 setNewName('');
                 fetchTables();
@@ -65,14 +84,26 @@ export default function Tables() {
             <h1 className="text-xl font-semibold text-gray-800 mb-1">Quản lý bàn</h1>
             <p className="text-[13px] text-[#6b7280] mb-4">Danh sách bàn phục vụ tại quán (bấm vào thẻ để đổi trạng thái trống/có khách).</p>
 
-            <div className="flex gap-2 mb-4 max-w-md">
+            <div className="flex gap-2 mb-4 max-w-xl flex-wrap">
+                {showAll && (
+                    <select
+                        value={addBranchId}
+                        onChange={(e) => setAddBranchId(e.target.value)}
+                        className="px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb] bg-white"
+                    >
+                        <option value="">-- Chi nhánh --</option>
+                        {branches.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                    </select>
+                )}
                 <input
                     type="text"
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                     placeholder="Tên bàn mới (VD: B01)"
-                    className="flex-1 px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                    className="flex-1 min-w-[140px] px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
                 />
                 <button
                     onClick={handleAdd}
@@ -100,6 +131,9 @@ export default function Tables() {
                             title="Bấm để đổi trạng thái"
                         >
                             <div className="text-base font-bold text-[#1f2937]">{t.name}</div>
+                            {showAll && (
+                                <div className="text-[10px] text-[#6b7280] mt-0.5">{branchNameOf(t.branch_id)}</div>
+                            )}
                             <div className={`text-[11px] mt-1 font-medium ${t.status === 'occupied' ? 'text-[#b45309]' : 'text-[#059669]'}`}>
                                 {t.status === 'occupied' ? 'Có khách' : 'Trống'}
                             </div>

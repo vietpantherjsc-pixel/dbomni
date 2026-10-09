@@ -19,6 +19,8 @@ $app = Application::configure(basePath: dirname(__DIR__))
         $middleware->api(append: [
             \App\Http\Middleware\ForceJsonResponse::class,
         ]);
+        // Gói 26: kiểm tra quyền theo ma trận roles.permissions (vd "staff.view").
+        $middleware->alias(['permission' => \App\Http\Middleware\CheckPermission::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

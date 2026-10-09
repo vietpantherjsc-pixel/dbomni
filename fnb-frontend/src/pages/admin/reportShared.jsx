@@ -2,6 +2,7 @@
 // Gói 17: Dùng chung cho 3 trang báo cáo (Reports / ReportsInventory / ReportsPnl).
 // Tách từ Reports.jsx (Gói 15) để khỏi lặp code. Theme navy #24305E + cam #F5A623.
 // =====================================================================
+import { fmtDate } from '../../utils/format';
 
 export const REPORT_CSS = `
 .rpt{
@@ -20,7 +21,7 @@ export const REPORT_CSS = `
 .rpt .filters .in{max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;width:100%}
 .rpt .f-item{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:110px}
 .rpt .f-item label{font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
-.rpt select, .rpt input[type=date]{padding:9px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:14px;background:#fff;color:var(--text);font-family:inherit;width:100%}
+.rpt select, .rpt input[type=date], .rpt input[type=text]{padding:9px 10px;border:1px solid var(--line);border-radius:var(--r);font-size:14px;background:#fff;color:var(--text);font-family:inherit;width:100%}
 .rpt select:focus, .rpt input:focus{outline:2px solid var(--orange);border-color:var(--orange)}
 .rpt #customBox{display:none;flex:1 1 100%;gap:8px;flex-wrap:wrap}
 .rpt #customBox.show{display:flex}
@@ -134,12 +135,8 @@ const fmtShort = (n) => {
     return fmtInt(n);
 };
 const pad = (n) => String(n).padStart(2, '0');
-const fmtD = (s) => {
-    if (!s) return '—';
-    const d = new Date(String(s).replace(' ', 'T'));
-    if (isNaN(d)) return '—';
-    return pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
-};
+// Gói 36: dùng chung utils/format cho đồng nhất (giữ fallback '—')
+const fmtD = (s) => fmtDate(s) || '—';
 const todayStr = () => {
     const d = new Date();
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());

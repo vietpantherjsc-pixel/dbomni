@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\Recipe;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 // Gói 8a (2026-10-05): form mặt hàng đầy đủ kiểu Sapo —
@@ -17,7 +20,15 @@ class ProductController extends Controller
     public function index()
     {
         // Lấy danh sách mặt hàng kèm thông tin danh mục chứa nó
-        return response()->json(Product::with('category')->get());
+        // Gói 25: kèm hidden_branches (mảng {id, name}) để hiện badge "đang ẩn ở CN X"
+        $hidden = \App\Models\BranchProductHidden::with('branch:id,name')->get()->groupBy('product_id');
+        $products = Product::with(['category', 'prices.priceList'])->get()->map(function ($p) use ($hidden) {
+            $p->hidden_branches = isset($hidden[$p->id])
+                ? $hidden[$p->id]->map(fn($r) => ['id' => $r->branch->id, 'name' => $r->branch->name])->values()
+                : [];
+            return $p;
+        });
+        return response()->json($products);
     }
 
     public function store(Request $request)
@@ -149,6 +160,171 @@ class ProductController extends Controller
     {
         $product->update(['is_favorite' => !$product->is_favorite]);
         return response()->json(['is_favorite' => (bool) $product->is_favorite]);
+    }
+
+    // =====================================================================
+    // Gói 33 (2026-10-09): THAO TÁC HÀNG LOẠT mặt hàng — CHỈ admin cấp cao nhất
+    // (route middleware permission:products.bulk).
+    // POST /api/products/bulk-action {ids, action, params}
+    // - change_category {category_id}
+    // - set_channels {channels: {<price_list_code>: bool}} (+ pos/zalo -> sell_on_pos/sell_on_zalo)
+    // - set_visibility {visible: bool} -> is_active
+    // - delete -> xóa (giống single destroy)
+    // =====================================================================
+    public function bulkAction(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1|max:500',
+            'ids.*' => 'integer|exists:products,id',
+            'action' => 'required|in:change_category,set_channels,set_visibility,delete',
+            'params' => 'nullable|array',
+        ]);
+        $ids = array_values(array_unique($validated['ids']));
+        $action = $validated['action'];
+        $params = $validated['params'] ?? [];
+
+        $result = DB::transaction(function () use ($ids, $action, $params) {
+            $done = 0;
+            switch ($action) {
+                case 'change_category': {
+                    $categoryId = $params['category_id'] ?? null;
+                    if ($categoryId !== null && !\App\Models\Category::where('id', $categoryId)->exists()) {
+                        throw new \Exception('Danh mục không tồn tại.');
+                    }
+                    $done = Product::whereIn('id', $ids)->update(['category_id' => $categoryId]);
+                    break;
+                }
+                case 'set_channels': {
+                    $channels = $params['channels'] ?? [];
+                    if (!is_array($channels) || empty($channels)) {
+                        throw new \Exception('Thiếu params.channels {<mã kênh>: true/false}.');
+                    }
+                    $priceLists = PriceList::all()->keyBy('code');
+                    foreach ($ids as $id) {
+                        $product = Product::findOrFail($id);
+                        $sellAttrs = [];
+                        foreach ($channels as $code => $on) {
+                            $on = (bool) $on;
+                            if ($code === 'pos') { $sellAttrs['sell_on_pos'] = $on; continue; }
+                            if ($code === 'zalo') { $sellAttrs['sell_on_zalo'] = $on; continue; }
+                            $pl = $priceLists->get($code);
+                            if (!$pl) throw new \Exception("Kênh không tồn tại: {$code}.");
+                            $row = ProductPrice::firstOrNew([
+                                'product_id' => $id, 'price_list_id' => $pl->id,
+                            ]);
+                            $row->is_active = $on;
+                            if (!$row->exists) $row->price = $product->base_price; // bật kênh mới: lấy giá gốc
+                            $row->save();
+                        }
+                        if ($sellAttrs) $product->update($sellAttrs);
+                        $done++;
+                    }
+                    break;
+                }
+                case 'set_visibility': {
+                    $visible = (bool) ($params['visible'] ?? true);
+                    $done = Product::whereIn('id', $ids)->update(['is_active' => $visible]);
+                    break;
+                }
+                case 'delete': {
+                    foreach ($ids as $id) {
+                        Product::findOrFail($id)->delete(); // giống single destroy (model events)
+                        $done++;
+                    }
+                    break;
+                }
+            }
+            return $done;
+        });
+
+        return response()->json(['success' => true, 'updated' => $result]);
+    }
+
+    // =====================================================================
+    // Gói 33: CHỈNH SỬA NHANH hàng loạt (màn bulk edit kiểu Sapo).
+    // POST /api/products/bulk-update {rows: [{id, values: {field: value}}]}
+    // Fields: base_price, unit, print_label, category_id, cost_price,
+    //         tax_rate, is_active, price_<price_list_code> (giá kênh).
+    // Validate từng field theo rule của single update; lỗi nêu rõ dòng + tên field.
+    // =====================================================================
+    public function bulkUpdate(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'rows' => 'required|array|min:1|max:500',
+            'rows.*.id' => 'required|integer|exists:products,id',
+            'rows.*.values' => 'required|array|min:1',
+        ]);
+
+        $fieldRules = [
+            'base_price' => 'numeric|min:0',
+            'unit' => 'string|max:20',
+            'print_label' => 'boolean',
+            'category_id' => 'nullable|exists:categories,id',
+            'cost_price' => 'numeric|min:0',
+            'tax_rate' => 'nullable|numeric|min:0|max:100',
+            'is_active' => 'boolean',
+        ];
+
+        // Validate toàn bộ trước khi ghi (fail rõ dòng + field)
+        $allCodes = [];
+        foreach ($validated['rows'] as $i => $row) {
+            $rules = [];
+            foreach ($row['values'] as $field => $v) {
+                if (isset($fieldRules[$field])) {
+                    $rules["rows.{$i}.values.{$field}"] = $fieldRules[$field];
+                } elseif (str_starts_with($field, 'price_')) {
+                    $code = substr($field, 6);
+                    $allCodes[] = $code;
+                    $rules["rows.{$i}.values.{$field}"] = 'numeric|min:0';
+                } else {
+                    return response()->json([
+                        'success' => false, 'message' => "Dòng " . ($i + 1) . ": field không được phép '{$field}'.",
+                    ], 422);
+                }
+            }
+        }
+        $validator = Validator::make($validated, $rules, [], ['*' => 'giá trị']);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false, 'message' => $validator->errors()->first(),
+                'errors' => $validator->errors()->toArray(),
+            ], 422);
+        }
+
+        $priceLists = PriceList::whereIn('code', array_unique($allCodes))->get()->keyBy('code');
+        foreach (array_unique($allCodes) as $code) {
+            if (!$priceLists->has($code)) {
+                return response()->json([
+                    'success' => false, 'message' => "Kênh không tồn tại: {$code}.",
+                ], 422);
+            }
+        }
+
+        $updated = DB::transaction(function () use ($validated, $fieldRules, $priceLists) {
+            $n = 0;
+            foreach ($validated['rows'] as $row) {
+                $product = Product::findOrFail($row['id']);
+                $attrs = [];
+                foreach ($fieldRules as $field => $_) {
+                    if (array_key_exists($field, $row['values'])) $attrs[$field] = $row['values'][$field];
+                }
+                if ($attrs) $product->update($attrs);
+                foreach ($row['values'] as $field => $v) {
+                    if (!str_starts_with($field, 'price_')) continue;
+                    $pl = $priceLists->get(substr($field, 6));
+                    $pp = ProductPrice::firstOrNew([
+                        'product_id' => $row['id'], 'price_list_id' => $pl->id,
+                    ]);
+                    $pp->price = $v;
+                    if (!$pp->exists) $pp->is_active = true;
+                    $pp->save();
+                }
+                $n++;
+            }
+            return $n;
+        });
+
+        return response()->json(['success' => true, 'updated' => $updated]);
     }
 
     // ---- helpers ----

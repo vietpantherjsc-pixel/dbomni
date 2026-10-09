@@ -27,6 +27,7 @@ class BranchController extends Controller
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'cover_url' => 'nullable|string|max:500', // Gói 10f: cover riêng Mini App (null = dùng chung)
+            'is_active' => 'nullable|boolean', // Gói 22: bật/tắt chi nhánh
         ]);
         $branch = Branch::findOrFail($id);
         $branch->update($validated);

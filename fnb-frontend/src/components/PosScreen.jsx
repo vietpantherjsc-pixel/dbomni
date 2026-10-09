@@ -22,8 +22,10 @@ import {
   ChefHat,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useBranch } from '../contexts/BranchContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { printBill, printLabels } from '../utils/print';
+import { fmtTime, fmtDate } from '../utils/format';
 
 // =====================================================================
 // Gói 3d (2026-10-04): Redesign POS theo giao diện Sapo (theme tối).
@@ -65,6 +67,14 @@ const catEmoji = (name) => {
 
 export default function PosScreen({ onBackToApp }) {
   const navigate = useNavigate(); // Gói 18: chuyển nhanh sang KDS
+  // Gói 24: chi nhánh POS — theo BranchContext; '0' (Tất cả) thì thu ngân chọn tay
+  const branchCtx = useBranch();
+  const ctxBranchId = (branchCtx && branchCtx.branchId) || '0';
+  const [branches, setBranches] = useState([]);
+  const [posBranchId, setPosBranchId] = useState('');
+  const effBranchId = ctxBranchId !== '0' ? ctxBranchId : posBranchId;
+  const branchName = (branches.find((b) => String(b.id) === String(effBranchId)) || {}).name
+    || (effBranchId ? 'CN ' + effBranchId : '—');
   // ---- Ca làm việc ----
   const [shift, setShift] = useState(null);
   const [isOpenShiftModal, setIsOpenShiftModal] = useState(false);
@@ -142,6 +152,27 @@ export default function PosScreen({ onBackToApp }) {
     return () => clearInterval(t);
   }, []);
 
+  // ---- Gói 26: Thu ngân đăng nhập nhanh bằng PIN 6 số ----
+  const [cashier, setCashier] = useState(() => { try { return JSON.parse(localStorage.getItem('pos_cashier')) || null; } catch { return null; } });
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinErr, setPinErr] = useState('');
+  const verifyPin = async () => {
+    if (pinInput.length !== 6) { setPinErr('Nhập đủ 6 số'); return; }
+    try {
+      const res = await fetch(`${API_BASE}/employee/pin-verify`, {
+        method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin_code: pinInput }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        localStorage.setItem('pos_cashier', JSON.stringify(data.data));
+        setCashier(data.data); setPinOpen(false); setPinInput(''); setPinErr('');
+      } else setPinErr(data.message || 'Mã PIN không đúng');
+    } catch (e) { setPinErr('Lỗi kết nối'); }
+  };
+  const clearCashier = () => { localStorage.removeItem('pos_cashier'); setCashier(null); };
+
   // ---- Phím tắt F3: focus ô tìm món ----
   useEffect(() => {
     const onKey = (e) => {
@@ -161,9 +192,6 @@ export default function PosScreen({ onBackToApp }) {
 
   useEffect(() => {
     fetchCurrentShift();
-    fetchMenu();
-    fetchTables();
-    fetchHeldOrders();
     // Gói 5: cấu hình quy đổi điểm
     (async () => {
       try {
@@ -182,10 +210,12 @@ export default function PosScreen({ onBackToApp }) {
     } catch (err) { console.error('Lỗi kiểm tra ca:', err); }
   };
 
-  const fetchMenu = async () => {
+  const fetchMenu = async (bid) => {
     try {
       // Gói 7g: hiển thị theo Thực đơn (bảng menus, cột T) thay vì Danh mục
-      const res = await fetch(`${API_BASE}/display-menus`, { headers: authHeaders() });
+      // Gói 25: ?branch_id= -> loại món/thực đơn bị ẩn ở CN đang bán
+      const qs = bid && bid !== '0' ? `?branch_id=${bid}` : '';
+      const res = await fetch(`${API_BASE}/display-menus${qs}`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) {
         setCategories(data.data);
@@ -200,13 +230,41 @@ export default function PosScreen({ onBackToApp }) {
     } catch (err) { console.error('Lỗi tải menu:', err); }
   };
 
-  const fetchTables = async () => {
+  const fetchBranches = async () => {
     try {
-      const res = await fetch(`${API_BASE}/tables?branch_id=1`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/branches`, { headers: authHeaders() });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) setBranches(data.data);
+    } catch (err) { console.error('Lỗi tải chi nhánh:', err); }
+  };
+
+  useEffect(() => { fetchBranches(); }, []);
+
+  useEffect(() => {
+    if (ctxBranchId === '0' && !posBranchId && branches.length > 0) {
+      setPosBranchId(String(branches[0].id));
+    }
+  }, [branches, ctxBranchId, posBranchId]);
+
+  // Gói 25: đổi CN bán -> tải lại thực đơn (loại món/thực đơn bị ẩn ở CN đó)
+  useEffect(() => {
+    fetchMenu(effBranchId);
+  }, [effBranchId]);
+
+  const fetchTables = async () => {
+    if (!effBranchId) return;
+    try {
+      const res = await fetch(`${API_BASE}/tables?branch_id=${effBranchId}`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) setTables(data.data);
     } catch (err) { console.error('Lỗi tải bàn:', err); }
   };
+
+  // Gói 24: đổi chi nhánh -> tải lại bàn + đơn lưu của CN đó
+  useEffect(() => {
+    if (effBranchId) { fetchTables(); fetchHeldOrders(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effBranchId]);
 
   // Gói 11: QR tích điểm — tạo token, hiện QR cho khách quét
   const openQrClaim = async () => {
@@ -242,7 +300,8 @@ export default function PosScreen({ onBackToApp }) {
 
   const fetchHeldOrders = async () => {
     try {
-      const res = await fetch(`${API_BASE}/orders/held?branch_id=1`, { headers: authHeaders() });
+      if (!effBranchId) return;
+      const res = await fetch(`${API_BASE}/orders/held?branch_id=${effBranchId}`, { headers: authHeaders() });
       const data = await res.json();
       if (data.success) setHeldOrders(data.data);
     } catch (err) { console.error('Lỗi tải đơn lưu:', err); }
@@ -537,13 +596,16 @@ export default function PosScreen({ onBackToApp }) {
   // ================= THANH TOÁN =================
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (!effBranchId) {
+      return alert('Vui lòng chọn chi nhánh trước khi thanh toán.');
+    }
     if (paymentMethod === 'cash' && Number(receivedCash) < totalAmount) {
       return alert('Số tiền khách đưa không đủ');
     }
     setIsProcessing(true);
     try {
       const orderPayload = {
-        branch_id: 1,
+        branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
         customer_id: memberCustomer?.id || null, // Gói 5
@@ -568,7 +630,7 @@ export default function PosScreen({ onBackToApp }) {
           method: paymentMethod, order_type: orderType,
           customer_name: customerName.trim() || 'Khách lẻ',
           table_name: orderType === 'dine_in' ? (tables.find(t => t.id === Number(selectedTableId))?.name || '') : '',
-          date: new Date().toLocaleTimeString('vi-VN'),
+          date: fmtTime(new Date()),
         };
         setLastOrderCompleted(completedOrder);
         resetCartState();
@@ -593,12 +655,15 @@ export default function PosScreen({ onBackToApp }) {
   // ================= LƯU ĐƠN (HELD) =================
   const handleHoldOrder = async () => {
     if (cart.length === 0) return;
+    if (!effBranchId) {
+      return alert('Vui lòng chọn chi nhánh trước khi lưu đơn.');
+    }
     if (orderType === 'dine_in' && !selectedTableId) {
       return alert('Vui lòng chọn bàn trước khi lưu đơn.');
     }
     try {
       const orderPayload = {
-        branch_id: 1,
+        branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
         customer_id: memberCustomer?.id || null, // Gói 5
@@ -863,6 +928,26 @@ export default function PosScreen({ onBackToApp }) {
             + Tạo đơn mới
           </button>
 
+          {/* Gói 24: chọn chi nhánh bán (khi context đang ở "Tất cả") */}
+          {ctxBranchId === '0' ? (
+            <div className="px-3 pt-2">
+              <select
+                value={posBranchId}
+                onChange={(e) => setPosBranchId(e.target.value)}
+                className="w-full p-2 text-xs font-bold bg-amber-500/10 border border-amber-500/40 rounded-lg text-amber-200 focus:outline-none focus:border-amber-400 [&>option]:text-slate-900"
+              >
+                <option value="">-- Chọn chi nhánh bán --</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="px-3 pt-2">
+              <div className="text-[11px] text-slate-400">Chi nhánh bán: <b className="text-emerald-400">{branchName}</b></div>
+            </div>
+          )}
+
           {/* Loại đơn */}
           <div className="px-3 pt-2">
             <div className="grid grid-cols-3 gap-1 bg-white/5 p-1 rounded-lg">
@@ -1087,14 +1172,39 @@ export default function PosScreen({ onBackToApp }) {
       {/* ============ STATUS BAR ============ */}
       <div className="h-8 bg-[#101724] border-t border-white/10 flex items-center justify-between px-4 text-[11px] text-slate-500 shrink-0">
         <div className="flex gap-4">
-          <span>Chi nhánh: <b className="text-slate-300">CN-Q1</b></span>
-          <span>Thu ngân: <b className="text-slate-300">{shift?.cashier_name || '—'}</b></span>
+          <span>Chi nhánh: <b className="text-slate-300">{branchName}</b></span>
+          <button onClick={() => { setPinOpen(true); setPinInput(''); setPinErr(''); }} className="hover:text-slate-200" title="Đổi thu ngân (nhập PIN)">
+            Thu ngân: <b className="text-slate-300">{cashier?.full_name || shift?.cashier_name || '—'}</b>
+          </button>
         </div>
         <div className="flex gap-4">
-          <span>{now.toLocaleDateString('vi-VN')} {now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+          <span>{fmtDate(now)} {fmtTime(now)}</span>
           <span>POS v3.0</span>
         </div>
       </div>
+
+      {/* ============ Gói 26: MODAL NHẬP PIN THU NGÂN ============ */}
+      {pinOpen && (
+        <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4" onClick={() => setPinOpen(false)}>
+          <div className="bg-[#1a2436] rounded-xl w-full max-w-xs p-6 border border-white/10" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-white font-bold text-center mb-1">Thu ngân</h3>
+            <p className="text-slate-400 text-[12px] text-center mb-4">Nhập mã PIN 6 số của nhân viên</p>
+            <input
+              type="password" inputMode="numeric" maxLength={6} autoFocus
+              value={pinInput} onChange={(e) => setPinInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={(e) => e.key === 'Enter' && verifyPin()}
+              className="w-full text-center text-2xl tracking-[0.5em] font-mono bg-white/5 border border-white/15 rounded-lg py-3 text-white focus:outline-none focus:border-emerald-400"
+              placeholder="••••••"
+            />
+            {pinErr && <p className="text-red-400 text-[12px] text-center mt-2">{pinErr}</p>}
+            {cashier && <p className="text-slate-400 text-[12px] text-center mt-2">Đang: <b className="text-slate-200">{cashier.full_name}</b></p>}
+            <div className="flex gap-2 mt-4">
+              {cashier && <button onClick={() => { clearCashier(); setPinOpen(false); }} className="flex-1 py-2 rounded-lg border border-white/15 text-slate-300 text-sm">Xóa</button>}
+              <button onClick={verifyPin} className="flex-1 py-2 rounded-lg bg-emerald-500 text-white text-sm font-bold">Xác nhận</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ============ DRAWER ĐƠN LƯU ============ */}
       {isHeldDrawerOpen && (

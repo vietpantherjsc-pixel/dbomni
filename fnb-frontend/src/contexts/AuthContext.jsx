@@ -43,8 +43,18 @@ export const AuthProvider = ({ children }) => {
         return user?.permissions?.includes(permission);
     };
 
+    // Gói 26: kiểm tra quyền cho cả 2 loại tài khoản.
+    // - Tài khoản admin cũ (type 'user'): full quyền (tương thích ngược).
+    // - Nhân viên (type 'employee'): theo ma trận roles.permissions, hỗ trợ "*".
+    const can = (permission) => {
+        if (!user) return false;
+        if (user.type === 'user' || !user.type) return true;
+        const perms = user.permissions || [];
+        return perms.includes('*') || perms.includes(permission);
+    };
+
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, hasRole, hasPermission }}>
+        <AuthContext.Provider value={{ user, token, login, logout, hasRole, hasPermission, can }}>
             {children}
         </AuthContext.Provider>
     );
