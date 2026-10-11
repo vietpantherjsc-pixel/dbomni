@@ -20,6 +20,7 @@ export default function Staff() {
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);
+    const [newPin, setNewPin] = useState(null); // PIN vừa tạo/reset — chỉ hiện 1 lần
 
     const fetchAll = useCallback(async () => {
         const [e, r, b] = await Promise.all([
@@ -44,7 +45,7 @@ export default function Staff() {
         setForm({
             full_name: emp.full_name || '', dob: emp.dob?.slice(0, 10) || '', start_date: emp.start_date?.slice(0, 10) || '',
             phone: emp.phone || '', email: emp.email || '', education: emp.education || '', qualification: emp.qualification || '',
-            username: emp.username || '', password: '', pin_code: emp.pin_code || '',
+            username: emp.username || '', password: '', pin_code: '', // PIN đã hash ở backend — không điền vào form
             role_id: emp.role_id ? String(emp.role_id) : '', branch_id: emp.branch_id ? String(emp.branch_id) : '',
             branch_ids: bIds, is_active: !!emp.is_active,
             apply_responsibility: emp.apply_responsibility !== false,
@@ -67,13 +68,25 @@ export default function Staff() {
         if (!form.full_name.trim() || !form.phone.trim() || !form.start_date || !form.branch_id) return alert('Nhập họ tên, SĐT, ngày vào làm, chi nhánh');
         try {
             const payload = { ...form, role_id: form.role_id || null, username: form.username || null, email: form.email || null, password: form.password || undefined, dob: form.dob || null, branch_ids: form.branch_ids.map((x) => parseInt(x, 10)).filter((x) => !isNaN(x)) };
-            if (editing) await axios.patch(API + '/employees/' + editing.id, payload);
-            else await axios.post(API + '/employees', payload);
+            let r;
+            if (editing) r = await axios.patch(API + '/employees/' + editing.id, payload);
+            else r = await axios.post(API + '/employees', payload);
+            const d = r?.data?.data || r?.data || {};
             setShowForm(false); fetchAll();
+            // Backend trả pin_code_plain khi vừa đặt PIN mới — hiện 1 lần duy nhất
+            if (d.pin_code_plain) setNewPin(d.pin_code_plain);
         } catch (e) { alert(e.response?.data?.message || JSON.stringify(e.response?.data?.errors) || 'Lưu thất bại'); }
     };
     const remove = async (id) => { if (!window.confirm('Xóa nhân viên này?')) return; try { await axios.delete(API + '/employees/' + id); fetchAll(); } catch (e) { alert('Xóa thất bại'); } };
-    const resetPin = async (id) => { try { const r = await axios.post(API + '/employees/' + id + '/reset-pin'); alert('PIN mới: ' + r.data.data.pin_code); fetchAll(); } catch (e) { alert('Thất bại'); } };
+    const resetPin = async (id) => {
+        try {
+            const r = await axios.post(API + '/employees/' + id + '/reset-pin');
+            const d = r?.data?.data || r?.data || {};
+            if (d.pin_code_plain) setNewPin(d.pin_code_plain);
+            else alert('Đã đặt lại PIN.');
+            fetchAll();
+        } catch (e) { alert(e.response?.data?.message || 'Đặt lại PIN thất bại'); }
+    };
 
     return (
         <AdminLayout>
@@ -107,7 +120,7 @@ export default function Staff() {
                                         ))}
                                         {!(e.branches?.length || e.branch) && '—'}
                                     </td>
-                                    <td className="px-3 py-3 text-center font-mono tracking-widest">{e.pin_code}</td>
+                                    <td className="px-3 py-3 text-center font-mono tracking-widest text-gray-400">••••••</td>
                                     <td className="px-3 py-3 text-center">{e.is_active ? <span className="text-green-600">Đang làm</span> : <span className="text-gray-400">Đã nghỉ</span>}</td>
                                     {editable && <td className="px-4 py-3 text-right whitespace-nowrap">
                                         <button onClick={() => openEdit(e)} className="text-[#0d6efd] mr-3">Sửa</button>
@@ -150,7 +163,7 @@ export default function Staff() {
                                             );
                                         })}
                                     </div></div>
-                                <div><label className="text-[12px] text-gray-500">Mã PIN 6 số (chấm công + POS/KDS)</label><input value={form.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Trống = tự sinh" className={inp + ' font-mono tracking-widest'} /></div>
+                                <div><label className="text-[12px] text-gray-500">Mã PIN 6 số (chấm công + POS/KDS)</label><input value={form.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder={editing ? 'Để trống = giữ nguyên' : 'Trống = tự sinh'} className={inp + ' font-mono tracking-widest'} /></div>
                                 <div><label className="text-[12px] text-gray-500">Tên đăng nhập (admin)</label><input value={form.username} onChange={(e) => set('username', e.target.value)} className={inp} /></div>
                                 <div><label className="text-[12px] text-gray-500">Mật khẩu {editing ? '(trống = giữ nguyên)' : ''}</label><input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} className={inp} /></div>
                                 <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={form.is_active} onChange={(e) => set('is_active', e.target.checked)} /> Đang làm việc</label>
@@ -160,6 +173,18 @@ export default function Staff() {
                                 <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded border border-gray-300 text-[13px]">Hủy</button>
                                 <button onClick={save} className="px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">Lưu</button>
                             </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Modal hiện PIN mới — chỉ hiện 1 lần duy nhất sau khi tạo/reset */}
+                {newPin && (
+                    <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setNewPin(null)}>
+                        <div className="bg-white rounded-xl w-full max-w-sm p-6 text-center" onClick={(e) => e.stopPropagation()}>
+                            <div className="text-[15px] font-bold text-[#24305E] mb-1">PIN mới của nhân viên</div>
+                            <div className="font-mono text-[34px] font-extrabold tracking-[10px] text-[#F5A623] my-4">{newPin}</div>
+                            <p className="text-[13px] text-gray-500 mb-5">Hãy ghi lại cho nhân viên ngay —<br />mã này sẽ <b>không hiện lại</b> lần nữa.</p>
+                            <button onClick={() => setNewPin(null)} className="px-8 py-2.5 rounded bg-[#24305E] text-white text-[14px] font-semibold">Đã ghi lại</button>
                         </div>
                     </div>
                 )}

@@ -12,6 +12,7 @@ import Menus from './pages/admin/Menus';
 import Categories from './pages/admin/Categories';
 import ComingSoon from './pages/admin/ComingSoon';
 import OnlineConfig from './pages/admin/OnlineConfig';
+import Affiliate from './pages/admin/Affiliate'; // Gói 46
 import Orders from './pages/admin/Orders';
 import Inventory from './pages/admin/Inventory';
 import Customers from './pages/admin/Customers';
@@ -35,10 +36,16 @@ import Salary from './pages/admin/Salary'; // Gói 26: bảng lương theo giờ
 import HolidayPolicy from './pages/admin/HolidayPolicy'; // Gói 30: lương lễ/tết & phạt
 import ChamCong from './pages/ChamCong'; // Gói 35: trang chấm công NV (public)
 import DangKyCa from './pages/DangKyCa'; // Gói 35: trang đăng ký ca NV (public)
+import Loi3Chuyen from './pages/Loi3Chuyen'; // Trang NV tự báo lỗi 3 Chuyên (public)
+import KiemKe from './pages/KiemKe'; // Gói 43: trang kiểm kê NV (public)
+import CheBien from './pages/CheBien'; // Gói 43: trang chế biến NV (public)
+import NhapKho from './pages/NhapKho'; // Gói 43: trang nhập hàng NV (public)
+import XinNghi from './pages/XinNghi'; // Gói 46: trang NV xin nghỉ theo ca (public)
 import WorkShifts from './pages/admin/WorkShifts'; // Gói 35: ca làm việc
 import AttendanceGrid from './pages/admin/AttendanceGrid'; // Gói 35: bảng chấm công tuần
 import LeaveRequests from './pages/admin/LeaveRequests'; // Gói 35: yêu cầu nghỉ
 import Scheduling from './pages/admin/Scheduling'; // Gói 35: đăng ký & xếp ca
+import Violations from './pages/admin/Violations'; // Gói 40: lỗi 3 Chuyên
 import AttendanceQr from './pages/admin/AttendanceQr'; // Gói 35: QR chấm công
 
 // Gói 1 (2026-10-04): bọc 2 màn hình để nút "Về App" điều hướng được
@@ -80,6 +87,12 @@ const App = () => {
                     {/* Gói 35: trang nhân viên (public, không cần đăng nhập admin) */}
                     <Route path="/cham-cong" element={<ChamCong />} />
                     <Route path="/dang-ky-ca" element={<DangKyCa />} />
+                    <Route path="/loi-3-chuyen" element={<Loi3Chuyen />} />
+                    {/* Gói 43: trang kho cho NV (public, đăng nhập PIN) */}
+                    <Route path="/kiem-ke" element={<KiemKe />} />
+                    <Route path="/che-bien" element={<CheBien />} />
+                    <Route path="/nhap-kho" element={<NhapKho />} />
+                    <Route path="/xin-nghi" element={<XinNghi />} /> {/* Gói 46 */}
 
                     {/* Các Route Bảo mật */}
                     <Route 
@@ -242,6 +255,7 @@ const App = () => {
                     <Route path="/admin/staff/holiday-policy" element={<PrivateRoute><HolidayPolicy /></PrivateRoute>} />
                     {/* Gói 35: Chấm công */}
                     <Route path="/admin/attendance" element={<PrivateRoute><AttendanceGrid /></PrivateRoute>} />
+                    <Route path="/admin/attendance/violations" element={<PrivateRoute><Violations /></PrivateRoute>} />
                     <Route path="/admin/attendance/shifts" element={<PrivateRoute><WorkShifts /></PrivateRoute>} />
                     <Route path="/admin/attendance/scheduling" element={<PrivateRoute><Scheduling /></PrivateRoute>} />
                     <Route path="/admin/attendance/requests" element={<PrivateRoute><LeaveRequests /></PrivateRoute>} />
@@ -290,6 +304,14 @@ const App = () => {
                         element={
                             <PrivateRoute>
                                 <OnlineConfig />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/online/affiliate"
+                        element={
+                            <PrivateRoute>
+                                <Affiliate />
                             </PrivateRoute>
                         }
                     />

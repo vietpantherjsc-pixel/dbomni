@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\InboundController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\CustomerAddressController; // Gói 49: sổ địa chỉ
 use App\Http\Controllers\Api\DisplayMenuController;
 use App\Http\Controllers\Api\GroupOrderController;
 use App\Http\Controllers\Api\MaterialController;
@@ -36,6 +37,9 @@ use App\Http\Controllers\Api\UploadController; // Gói 10f
 use App\Http\Controllers\Api\RoleController; // Gói 26: chức vụ & phân quyền
 use App\Http\Controllers\Api\EmployeeController; // Gói 26: nhân viên
 use App\Http\Controllers\Api\EmployeeAuthController; // Gói 26: đăng nhập nhân viên + PIN
+use App\Http\Controllers\Api\EmployeeInventoryController; // Gói 43: kho cho NV mobile
+use App\Http\Controllers\Api\InboundReceiptController; // Gói 43: phiếu nhập theo hóa đơn
+use App\Http\Controllers\Api\StockTransferController; // Gói 43: chuyển kho giữa các CN
 use App\Http\Controllers\Api\SalaryController; // Gói 26: lương theo giờ
 use App\Http\Controllers\Api\WorkShiftController; // Gói 35: ca làm việc
 use App\Http\Controllers\Api\ShiftRegistrationController; // Gói 35: đăng ký ca
@@ -43,6 +47,9 @@ use App\Http\Controllers\Api\WorkScheduleController; // Gói 35: xếp ca
 use App\Http\Controllers\Api\AttendanceController; // Gói 35: chấm công QR
 use App\Http\Controllers\Api\LeaveRequestController; // Gói 35: yêu cầu nghỉ/đổi ca
 use App\Http\Controllers\Api\AttendanceQrController; // Gói 35: QR chấm công theo CN
+use App\Http\Controllers\Api\ViolationController; // Gói 40: lỗi 3 Chuyên
+use App\Http\Controllers\Api\AffiliateController; // Gói 46: affiliate Zalo Mini App
+use App\Http\Controllers\Api\ShiftLeaveController; // Gói 46: xin nghỉ theo ca
 
 // Gói 13: giới hạn 10 lần thử/phút chống dò mật khẩu
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -59,8 +66,28 @@ Route::middleware('auth:sanctum')->prefix('employee')->group(function () {
     Route::post('/attendance/check-out', [AttendanceController::class, 'checkOut']);
     Route::get('/attendance/history', [AttendanceController::class, 'myHistory']);
     Route::get('/attendance/today', [AttendanceController::class, 'myToday']);
+    Route::get('/my-violations', [ViolationController::class, 'myIndex']); // Gói 40: NV xem lỗi của mình
+    Route::post('/my-violations', [ViolationController::class, 'myStore']); // Gói 40: NV tự báo lỗi
+    Route::get('/violation-types', [ViolationController::class, 'employeeTypes']); // Gói 40: danh mục cho NV
     Route::get('/leave-requests', [LeaveRequestController::class, 'myList']);
     Route::post('/leave-requests', [LeaveRequestController::class, 'store']);
+    // Gói 46: xin nghỉ theo ca (/xin-nghi)
+    Route::get('/shift-leaves/my-shifts', [ShiftLeaveController::class, 'myShifts']);
+    Route::get('/shift-leaves', [ShiftLeaveController::class, 'myList']);
+    Route::post('/shift-leaves', [ShiftLeaveController::class, 'store']);
+    // Gói 43: kho cho NV (3 trang mobile /kiem-ke, /che-bien, /nhap-kho)
+    Route::get('/materials', [EmployeeInventoryController::class, 'materials']);
+    Route::get('/suppliers', [EmployeeInventoryController::class, 'suppliers']);
+    Route::get('/stocktakes', [EmployeeInventoryController::class, 'stocktakes']);
+    Route::post('/stocktakes', [EmployeeInventoryController::class, 'storeStocktake']);
+    Route::get('/stocktakes/{id}', [EmployeeInventoryController::class, 'showStocktake']);
+    Route::patch('/stocktakes/{id}/counts', [EmployeeInventoryController::class, 'updateStocktakeCounts']);
+    Route::post('/stocktakes/{id}/confirm', [EmployeeInventoryController::class, 'confirmStocktake']);
+    Route::get('/production-materials', [EmployeeInventoryController::class, 'productionMaterials']);
+    Route::get('/production-recipes', [EmployeeInventoryController::class, 'productionRecipes']);
+    Route::post('/productions', [EmployeeInventoryController::class, 'storeProduction']);
+    Route::get('/productions', [EmployeeInventoryController::class, 'productions']);
+    Route::post('/inbound-receipts', [EmployeeInventoryController::class, 'storeInboundReceipt']);
 });
 // Gói 26: đăng nhập nhân viên (username/password)
 Route::post('/employee/login', [EmployeeAuthController::class, 'login'])->middleware('throttle:10,1');
@@ -191,6 +218,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/stocktakes/{id}/counts', [StocktakeController::class, 'updateCounts']);
     Route::post('/stocktakes/{id}/confirm', [StocktakeController::class, 'confirm']);
 
+    // Gói 43: chuyển kho giữa các chi nhánh
+    Route::get('/stock-transfers', [StockTransferController::class, 'index']);
+    Route::get('/stock-transfers/{id}', [StockTransferController::class, 'show']);
+    Route::post('/stock-transfers', [StockTransferController::class, 'store']);
+    Route::post('/stock-transfers/{id}/confirm', [StockTransferController::class, 'confirm']);
+    Route::post('/stock-transfers/{id}/cancel', [StockTransferController::class, 'cancel']);
+    Route::get('/stock-transfer-stock', [StockTransferController::class, 'stock']);
+    // Gói 43: phiếu nhập hàng theo hóa đơn
+    Route::get('/inbound-receipts', [InboundReceiptController::class, 'index']);
+    Route::get('/inbound-receipts/{id}', [InboundReceiptController::class, 'show']);
+    Route::post('/inbound-receipts', [InboundReceiptController::class, 'store']);
+    Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update']);
+    Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel']);
+
     // Gói 5: CRM — khách hàng
     Route::get('/customers', [CustomerController::class, 'index']);
     Route::post('/customers', [CustomerController::class, 'store']);
@@ -223,8 +264,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/branches/{id}', [BranchController::class, 'update']);
 
     // Gói 10f: upload ảnh cover Mini App (jpg/png/webp <= 1MB, tự crop 1200x500)
-    Route::post('/uploads/cover', [UploadController::class, 'cover']);
-    Route::post('/settings', [SettingsController::class, 'update']);
+    // Gói 38: settings + upload cover — CHỈ role có settings.edit
+    Route::middleware('permission:settings.edit')->group(function () {
+        Route::post('/uploads/cover', [UploadController::class, 'cover']);
+        Route::post('/uploads/promo-banner', [UploadController::class, 'promoBanner']); // Gói 49e
+        Route::post('/settings', [SettingsController::class, 'update']);
+        // Gói 40: quản lý danh mục lỗi 3 Chuyên
+        Route::post('/violation-types', [ViolationController::class, 'typesStore']);
+        Route::put('/violation-types/{id}', [ViolationController::class, 'typesUpdate']);
+        Route::delete('/violation-types/{id}', [ViolationController::class, 'typesDestroy']);
+    });
     Route::get('/settings', [SettingsController::class, 'index']); // Gói 8a: thuế & giá
     // Gói 7p: màu chủ đạo giao diện (Đại Vương tự pick)
     Route::get('/settings/theme', [SettingsController::class, 'theme']);
@@ -269,7 +318,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/admin/inventory/inward', [InboundController::class, 'store']);
 
     // Gói 26: Nhân sự — PIN nhanh cho POS/KDS (cần token đăng nhập)
-    Route::post('/employee/pin-verify', [EmployeeAuthController::class, 'pinVerify']);
+    // Gói 38: throttle chống dò PIN + bắt buộc kèm phone/username (xem EmployeeAuthController@pinVerify)
+    Route::post('/employee/pin-verify', [EmployeeAuthController::class, 'pinVerify'])->middleware('throttle:10,1');
 
     // Gói 26: Nhân sự — đọc (quyền staff.view)
     Route::middleware('permission:staff.view')->group(function () {
@@ -288,10 +338,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/shift-registrations/week', [ShiftRegistrationController::class, 'adminWeek']);
         Route::get('/work-schedules/week', [WorkScheduleController::class, 'week']);
         Route::get('/attendances/grid', [AttendanceController::class, 'grid']);
+        Route::get('/attendances/shift-stats', [AttendanceController::class, 'shiftStats']); // Gói 46: cột Tổng số ca
         Route::get('/leave-requests', [LeaveRequestController::class, 'index']);
+        Route::get('/shift-leaves', [ShiftLeaveController::class, 'index']); // Gói 46: xin nghỉ theo ca
         Route::get('/branches/{id}/attendance-qr', [AttendanceQrController::class, 'show']);
         Route::get('/schedule-notes', [WorkScheduleController::class, 'getNote']); // Gói 37
         Route::get('/schedule-notes/map', [WorkScheduleController::class, 'notesMap']); // Gói 37b
+
+        // Gói 40: Lỗi 3 Chuyên — đọc (quyền staff.view, quản lý cửa hàng xem được, không thấy lương)
+        Route::get('/violations', [ViolationController::class, 'index']);
+        Route::get('/violations/summary', [ViolationController::class, 'summary']);
+        Route::get('/violation-types', [ViolationController::class, 'typesIndex']);
+
+        // Gói 46: Affiliate Zalo Mini App — đọc
+        Route::get('/affiliate/top', [AffiliateController::class, 'top']);
+        Route::get('/affiliate/orders', [AffiliateController::class, 'orders']);
     });
 
     // Gói 26: Nhân sự — ghi (quyền staff.edit)
@@ -302,6 +363,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/employees/{id}/reset-password', [EmployeeController::class, 'resetPassword']);
         Route::post('/salary/{id}/record', [SalaryController::class, 'saveRecord']);
         Route::post('/salary/{id}/days', [SalaryController::class, 'saveDays']);
+        Route::post('/salary/import-attendance', [SalaryController::class, 'importAttendance']); // Đổ giờ công từ chấm công
         Route::post('/salary/{id}/wage-levels', [SalaryController::class, 'addWageLevel']);
         Route::delete('/salary/wage-levels/{id}', [SalaryController::class, 'deleteWageLevel']);
         Route::post('/salary/{id}/advances', [SalaryController::class, 'addAdvance']);
@@ -315,16 +377,33 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/holidays/{id}', [SalaryController::class, 'deleteHoliday']);
         Route::put('/salary-policies', [SalaryController::class, 'savePolicies']); // Gói 30
         Route::put('/salary/{id}/violations', [SalaryController::class, 'saveViolations']); // Gói 30
+        // Gói 40: Trừ khác đa khoản
+        Route::get('/salary/{employee}/deductions', [SalaryController::class, 'listDeductions']);
+        Route::post('/salary/{employee}/deductions', [SalaryController::class, 'storeDeduction']);
+        Route::put('/salary/deductions/{id}', [SalaryController::class, 'updateDeduction']);
+        Route::delete('/salary/deductions/{id}', [SalaryController::class, 'destroyDeduction']);
+        // Gói 40: Lỗi 3 Chuyên — ghi (quyền staff.edit)
+        Route::post('/violations', [ViolationController::class, 'store']);
+        Route::put('/violations/{id}', [ViolationController::class, 'update']);
+        Route::delete('/violations/{id}', [ViolationController::class, 'destroy']);
 
         // Gói 35: Chấm công — ghi (quyền staff.edit)
         Route::post('/work-shifts/reorder', [WorkShiftController::class, 'reorder']);
         Route::apiResource('work-shifts', WorkShiftController::class)->only(['store', 'update', 'destroy'])->parameters(['work-shifts' => 'id']);
         Route::post('/work-schedules/assign', [WorkScheduleController::class, 'assign']);
+        Route::post('/work-schedules/batch-save', [WorkScheduleController::class, 'batchSave']); // Gói 42: lưu hàng loạt các ô nháp của 1 CN
         Route::delete('/work-schedules/{id}', [WorkScheduleController::class, 'destroy']);
         Route::post('/work-shift-capacities', [WorkScheduleController::class, 'saveCapacity']); // Gói 37
         Route::put('/schedule-notes', [WorkScheduleController::class, 'saveNote']); // Gói 37
         Route::post('/leave-requests/{id}/approve', [LeaveRequestController::class, 'approve']);
         Route::post('/leave-requests/{id}/reject', [LeaveRequestController::class, 'reject']);
+        // Gói 46: xin nghỉ theo ca — quản lý tạo trực tiếp / duyệt (tự gỡ ca) / từ chối
+        Route::post('/shift-leaves', [ShiftLeaveController::class, 'managerStore']);
+        Route::post('/shift-leaves/{id}/approve', [ShiftLeaveController::class, 'approve']);
+        Route::post('/shift-leaves/{id}/reject', [ShiftLeaveController::class, 'reject']);
+        Route::post('/shift-registrations/{id}/approve', [ShiftRegistrationController::class, 'approve']); // B2
+        Route::post('/shift-registrations/{id}/reject', [ShiftRegistrationController::class, 'reject']); // B2
+        Route::post('/shift-registrations/{id}/approve-and-assign', [ShiftRegistrationController::class, 'approveAndAssign']); // Gói 41: duyệt + tự xếp ca trên bảng Xếp ca
         Route::post('/branches/{id}/attendance-qr/regenerate', [AttendanceQrController::class, 'regenerate']);
     });
 });
@@ -351,6 +430,13 @@ Route::prefix('online')->group(function () {
     Route::post('/orders/{code}/claim', [OnlineOrderController::class, 'claim']);
     // Gói 7p: màu chủ đạo giao diện (public cho Mini App)
     Route::get('/theme', [SettingsController::class, 'publicTheme']);
+    // Gói 48: banner KM cho carousel Mini App (public)
+    Route::get('/promo-banners', [PromotionController::class, 'banners']);
+    // Gói 49: sổ địa chỉ giao hàng (public, xác thực customer_id)
+    Route::get('/addresses', [CustomerAddressController::class, 'index']);
+    Route::post('/addresses', [CustomerAddressController::class, 'store']);
+    Route::patch('/addresses/{id}', [CustomerAddressController::class, 'update']);
+    Route::delete('/addresses/{id}', [CustomerAddressController::class, 'destroy']);
     Route::post('/shipping-fee', [OnlineOrderController::class, 'shippingFee']);
     Route::post('/promotions/eligible', [OnlineOrderController::class, 'eligiblePromotions']);
     Route::get('/customer', [OnlineOrderController::class, 'customer']);

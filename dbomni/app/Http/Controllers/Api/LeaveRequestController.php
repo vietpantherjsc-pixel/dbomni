@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Models\LeaveRequest;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -46,14 +47,18 @@ class LeaveRequestController extends Controller
     public function approve(Request $request, int $id): JsonResponse
     {
         $lr = LeaveRequest::findOrFail($id);
-        $lr->update(['status' => 'approved', 'handled_by' => $request->user()?->id]);
+        // Gói 38: handled_by chỉ set khi người duyệt là User (admin); Employee duyệt thì null (tránh lỗi FK)
+        $actor = $request->user();
+        $lr->update(['status' => 'approved', 'handled_by' => $actor instanceof User ? $actor->id : null]);
         return response()->json(['success' => true, 'message' => 'Đã duyệt yêu cầu.']);
     }
 
     public function reject(Request $request, int $id): JsonResponse
     {
         $lr = LeaveRequest::findOrFail($id);
-        $lr->update(['status' => 'rejected', 'handled_by' => $request->user()?->id]);
+        // Gói 38: handled_by chỉ set khi người duyệt là User (admin); Employee duyệt thì null (tránh lỗi FK)
+        $actor = $request->user();
+        $lr->update(['status' => 'rejected', 'handled_by' => $actor instanceof User ? $actor->id : null]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

@@ -130,7 +130,7 @@ export default function OnlineConfig() {
   return (
     <AdminLayout>
     <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-xl font-bold mb-1">Bán online — Cấu hình</h1>
+      <h1 className="text-xl font-bold mb-1">Zalo Mini App</h1>
       <p className="text-sm text-gray-500 mb-6">Phí ship cho Zalo Mini App + tọa độ chi nhánh để tính khoảng cách.</p>
 
       {/* Gói 9: Cover trang chủ + điểm thưởng giới thiệu */}

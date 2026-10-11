@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { api, fmt, getProfile, captureRef } from '../api';
+import { api, fmt, priceOf, imgUrl, getProfile, captureRef } from '../api';
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
 
@@ -71,7 +71,7 @@ export default function Home() {
       {/* Cover + nút chọn chi nhánh */}
       <div className="zm-cover">
         {shopInfo.cover_url ? (
-          <img src={shopInfo.cover_url} alt="cover" onError={(e) => { e.target.style.display = 'none'; }} />
+          <img src={imgUrl(shopInfo.cover_url)} alt="cover" onError={(e) => { e.target.style.display = 'none'; }} />
         ) : (
           <div className="zm-cover-fallback">☕</div>
         )}
@@ -120,11 +120,11 @@ export default function Home() {
             {sales.map((s) => (
               <div key={s.id} className="zm-sale-card" onClick={() => openSale(s)}>
                 <img src={s.image_url || 'https://via.placeholder.com/300?text=☕'} alt={s.name} loading="lazy" />
-                <div className="zm-sale-badge">-{Math.round((1 - s.sale_price / s.base_price) * 100)}%</div>
+                <div className="zm-sale-badge">-{Math.round((1 - s.sale_price / priceOf(s)) * 100)}%</div>
                 <div className="zm-card-name">{s.name}</div>
                 <div>
                   <span className="zm-card-price" style={{ color: '#e11d48' }}>{fmt(s.sale_price)}đ</span>
-                  <span className="zm-row-old">{fmt(s.base_price)}đ</span>
+                  <span className="zm-row-old">{fmt(priceOf(s))}đ</span>
                 </div>
               </div>
             ))}
@@ -150,7 +150,7 @@ export default function Home() {
               <div className="zm-card-body">
                 {sale && <div className="zm-promo-line">{sale.promo_name}</div>}
                 <div className="zm-card-name">{p.name}</div>
-                <div className="zm-card-price">{sale ? (<><span>{fmt(sale.sale_price)}đ</span> <span className="zm-row-old">{fmt(p.base_price)}đ</span></>) : (<>{fmt(p.base_price)}đ</>)}</div>
+                <div className="zm-card-price">{sale ? (<><span>{fmt(sale.sale_price)}đ</span> <span className="zm-row-old">{fmt(priceOf(p))}đ</span></>) : (<>{fmt(priceOf(p))}đ</>)}</div>
               </div>
             </div>
           );
@@ -177,8 +177,8 @@ export default function Home() {
                   {p.description && <div className="zm-row-desc">{p.description}</div>}
                   <div className="zm-row-price">
                     {sale
-                      ? (<><span>{fmt(sale.sale_price)}đ</span><span className="zm-row-old">{fmt(p.base_price)}đ</span></>)
-                      : (<>{fmt(p.base_price)}đ</>)}
+                      ? (<><span>{fmt(sale.sale_price)}đ</span><span className="zm-row-old">{fmt(priceOf(p))}đ</span></>)
+                      : (<>{fmt(priceOf(p))}đ</>)}
                   </div>
                 </div>
                 <button className="zm-add-btn" onClick={(e) => { e.stopPropagation(); setSheet(p); }}>+</button>
@@ -192,7 +192,7 @@ export default function Home() {
       {sheet && <ProductSheet product={sheet} onClose={() => setSheet(null)} />}
 
       {count > 0 && (
-        <div className="zm-cartbar">
+        <div className="zm-cartbar above-tab">
           <button className="zm-btn-primary" onClick={() => nav('/cart')}>
             🛒 Xem giỏ hàng · {count} món · {fmt(subtotal)}đ
           </button>

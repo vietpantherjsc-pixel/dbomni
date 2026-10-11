@@ -47,6 +47,7 @@ class PromotionController extends Controller
             'time_to' => 'nullable|date_format:H:i|after:time_from',
             'channels' => 'nullable|array',
             'is_active' => 'nullable|boolean',
+            'banner_url' => 'nullable|string|max:500', // Gói 48: ảnh banner cho Mini App
         ];
     }
 
@@ -107,5 +108,24 @@ class PromotionController extends Controller
         ]);
 
         return response()->json(['success' => true, 'data' => $list]);
+    }
+
+    // Gói 48: banner KM cho carousel trong Zalo Mini App (public).
+    // Chỉ lấy CT đang bật, có ảnh banner, còn hiệu lực.
+    public function banners(): JsonResponse
+    {
+        $now = now();
+        $items = \App\Models\Promotion::where('is_active', true)
+            ->whereNotNull('banner_url')
+            ->where('banner_url', '!=', '')
+            ->where(function ($q) use ($now) {
+                $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now);
+            })
+            ->where(function ($q) use ($now) {
+                $q->whereNull('expires_at')->orWhere('expires_at', '>=', $now);
+            })
+            ->orderByDesc('id')
+            ->get(['id', 'name', 'banner_url']);
+        return response()->json(['success' => true, 'data' => $items]);
     }
 }

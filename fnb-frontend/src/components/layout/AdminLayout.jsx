@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import '../../styles/matcha.css';
 import { loadTheme } from '../../utils/theme';
+import { loadFont } from '../../utils/font';
 import { loadNumberSettings } from '../../utils/number';
 import axios from 'axios';
 
@@ -29,6 +30,7 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
         clock: <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-16v6l4 2" />,
         plug: <path d="M9 7V2m6 5V2M7 7h10v4a5 5 0 0 1-10 0V7zm5 9v5" />,
         globe: <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z" />,
+        zalo: <path d="M12 3C7 3 3 7 3 12c0 2.2 1 4.2 2.6 5.6L4 21l3.6-1.5c1.4.7 2.9 1 4.4 1 5 0 9-4 9-9s-4-8.5-9-8.5z" />,
         qr: <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zm10 0h3v3h-3zm3 3h3v3h-3z" />,
         gear: <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.4 7.4 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.4 7.4 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.06-.4.1-.8.1-1.2z" />,
         pos: <path d="M4 7h16v9H4zM4 7l2-3h12l2 3M8 20h8m-4-4v4M7 11h.01M11 11h.01M15 11h.01" />,
@@ -94,6 +96,7 @@ const mainMenu = [
     ] },
     { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', perm: 'staff.view', children: [ // Gói 35
         { label: 'Bảng chấm công', path: '/admin/attendance' },
+        { label: 'Lỗi 3 Chuyên', path: '/admin/attendance/violations' },
         { label: 'Ca làm việc', path: '/admin/attendance/shifts' },
         { label: 'Đăng ký & Xếp ca', path: '/admin/attendance/scheduling' },
         { label: 'Yêu cầu nghỉ', path: '/admin/attendance/requests' },
@@ -104,7 +107,10 @@ const mainMenu = [
 const channelMenu = [
     { path: '/admin/price-lists', label: 'Kênh bán hàng', icon: 'tag' },
     { path: '/admin/integrations', label: 'Đối tác tích hợp', icon: 'plug' },
-    { path: '/admin/online', label: 'Bán online', icon: 'globe', children: ['Đơn online', 'Cấu hình'] },
+    { path: '/admin/online', label: 'Zalo Mini App', icon: 'zalo', children: [ // Gói 46: 2 submenu
+        { label: 'Cấu hình', path: '/admin/online' },
+        { label: 'Affiliate', path: '/admin/online/affiliate' },
+    ] },
     { path: '/admin/qr-order', label: 'QR Order', icon: 'qr', children: [ // Gói 28: submenu mở đúng tab
         { label: 'Danh sách QR', path: '/admin/qr-order' },
         { label: 'Tạo QR', path: '/admin/qr-order?tab=tao' },
@@ -147,9 +153,11 @@ const AdminLayout = ({ children }) => {
 
     // Gói 7p: áp màu chủ đạo do Đại Vương pick (localStorage trước, server sau)
     // Gói 8f: nạp cấu hình số thập phân
+    // Gói 47: áp font chữ do Đại Vương chọn
     useEffect(() => {
         loadTheme(axios);
         loadNumberSettings(axios);
+        loadFont(axios);
     }, []);
 
     const isActive = (path) => {

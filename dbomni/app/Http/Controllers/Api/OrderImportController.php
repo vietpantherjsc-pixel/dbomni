@@ -328,7 +328,7 @@ class OrderImportController extends Controller
                         'subtotal' => $lineTotal,
                         'total_price' => $lineTotal,
                         'discount_amount' => 0,
-                        'options' => $ln['option'] !== '' ? [['name' => $ln['option'], 'price' => 0]] : [],
+                        'options' => self::splitOptions($ln['option'] ?? ''),
                         'note' => null,
                         'created_at' => $order->created_at,
                         'updated_at' => $order->created_at,
@@ -497,7 +497,21 @@ class OrderImportController extends Controller
         return $v;
     }
 
-    /** Parse ngày từ Excel serial hoặc chuỗi d/m/Y... */
+    /** Gói 49b: tách chuỗi tùy chọn thành mảng (ngăn cách bởi xuống dòng hoặc dấu ;). */
+    private static function splitOptions(string $raw): array
+    {
+        $raw = trim($raw);
+        if ($raw === '') return [];
+        $parts = preg_split('/[\r\n]+|\s*;\s*/', $raw);
+        $out = [];
+        foreach ($parts as $p) {
+            $p = trim($p);
+            if ($p !== '') $out[] = ['name' => $p, 'price' => 0];
+        }
+        return $out;
+    }
+
+    /** Parse ngày từ Excel serial hoặc chuỗi d/m/Y... (kể cả "dd-mm-yyyy HH:MM:SS CH/SA") */
     private function parseDate($v): ?Carbon
     {
         if ($v === null || (is_string($v) && trim($v) === '')) {
@@ -511,6 +525,18 @@ class OrderImportController extends Controller
             }
         }
         $s = trim((string) $v);
+        // Gói 48: định dạng Việt "dd-mm-yyyy HH:MM:SS CH/SA" (CH=Chiều/PM, SA=Sáng/AM)
+        if (preg_match('/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(CH|SA)$/i', $s, $m)) {
+            $h = (int) $m[4];
+            $isPM = strtoupper($m[7]) === 'CH';
+            if ($isPM && $h < 12) $h += 12;
+            if (!$isPM && $h == 12) $h = 0;
+            try {
+                return Carbon::create((int) $m[3], (int) $m[2], (int) $m[1], $h, (int) $m[5], (int) ($m[6] ?? 0));
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
         foreach (['d/m/Y H:i:s', 'd/m/Y H:i', 'd/m/Y', 'd-m-Y H:i:s', 'd-m-Y H:i', 'd-m-Y', 'Y-m-d H:i:s', 'Y-m-d'] as $f) {
             try {
                 $dt = Carbon::createFromFormat($f, $s);

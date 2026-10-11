@@ -18,6 +18,7 @@ export default function WorkShifts() {
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);
     const [dragIdx, setDragIdx] = useState(null);
+    const [saving, setSaving] = useState(false); // chống bấm Lưu 2 lần tạo trùng ca
 
     const fetchAll = useCallback(async () => {
         const [s, b] = await Promise.all([
@@ -46,7 +47,9 @@ export default function WorkShifts() {
         setShowForm(true);
     };
     const save = async () => {
+        if (saving) return;
         if (!form.name.trim() || !valid24(form.start_time) || !valid24(form.end_time)) return alert('Nhập tên ca, giờ vào và giờ ra đúng định dạng 24h (VD: 07:00)');
+        setSaving(true);
         try {
             const payload = {
                 name: form.name.trim(),
@@ -59,11 +62,12 @@ export default function WorkShifts() {
             else await axios.post(API + '/work-shifts', payload);
             setShowForm(false); fetchAll();
         } catch (e) { alert(e.response?.data?.message || JSON.stringify(e.response?.data?.errors) || 'Lưu thất bại'); }
+        setSaving(false);
     };
-    const remove = async (id) => { if (!window.confirm('Xóa ca làm việc này?')) return; try { await axios.delete(API + '/work-shifts/' + id); fetchAll(); } catch (e) { alert('Xóa thất bại'); } };
+    const remove = async (id) => { if (!window.confirm('Xóa ca làm việc này?')) return; try { await axios.delete(API + '/work-shifts/' + id); fetchAll(); } catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); } };
     const toggleActive = async (s) => {
         try { await axios.put(API + '/work-shifts/' + s.id, { is_active: !s.is_active }); fetchAll(); }
-        catch (e) { alert('Đổi trạng thái thất bại'); }
+        catch (e) { alert(e.response?.data?.message || 'Đổi trạng thái thất bại'); }
     };
     // Kéo-thả đổi thứ tự: thả -> gọi reorder với danh sách id theo thứ tự mới
     const onDrop = async (toIdx) => {
@@ -74,7 +78,7 @@ export default function WorkShifts() {
         setDragIdx(null);
         setList(nl);
         try { await axios.post(API + '/work-shifts/reorder', { ids: nl.map((x) => x.id) }); }
-        catch (e) { alert('Lưu thứ tự thất bại'); fetchAll(); }
+        catch (e) { alert(e.response?.data?.message || 'Lưu thứ tự thất bại'); fetchAll(); }
     };
 
     return (
@@ -147,7 +151,7 @@ export default function WorkShifts() {
                             </div>
                             <div className="flex justify-end gap-2 mt-5">
                                 <button onClick={() => setShowForm(false)} className="px-4 py-2 rounded border border-gray-300 text-[13px]">Hủy</button>
-                                <button onClick={save} className="px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">Lưu</button>
+                                <button onClick={save} disabled={saving} className={'px-4 py-2 rounded text-white text-[13px] font-medium ' + (saving ? 'bg-gray-400' : 'bg-[#24305E]')}>{saving ? 'Đang lưu...' : 'Lưu'}</button>
                             </div>
                         </div>
                     </div>

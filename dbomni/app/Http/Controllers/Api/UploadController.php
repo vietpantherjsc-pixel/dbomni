@@ -48,7 +48,7 @@ class UploadController extends Controller
             $file->move($dir, $filename);
         }
 
-        $url = url('covers/' . $filename);
+        $url = '/covers/' . $filename; // Gói 49k: đường dẫn tương đối — Mini App tự ghép host (tránh localhost)
 
         if ($branchId) {
             Branch::where('id', $branchId)->update(['cover_url' => $url]);
@@ -57,6 +57,24 @@ class UploadController extends Controller
         }
 
         return response()->json(['success' => true, 'data' => ['url' => $url]]);
+    }
+
+    // Gói 49e: tải ảnh banner KM (mỗi CT một file riêng, KHÔNG xóa file của CT khác).
+    public function promoBanner(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:1024',
+        ]);
+        $file = $validated['image'];
+        $dir = public_path('covers');
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $ext = $file->getClientOriginalExtension() ?: 'jpg';
+        $filename = 'promo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $file->move($dir, $filename);
+        // Gói 49k: đường dẫn tương đối — Mini App tự ghép host (tránh localhost)
+        return response()->json(['success' => true, 'data' => ['url' => '/covers/' . $filename]]);
     }
 
     /**

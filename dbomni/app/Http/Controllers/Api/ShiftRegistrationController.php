@@ -52,12 +52,21 @@ class ShiftRegistrationController extends Controller
     {
         /** @var Employee $emp */
         $emp = $request->user();
-        $monday = Carbon::parse($request->query('week', now()->startOfWeek()->toDateString()))->startOfWeek();
+        // audit #12: validate tham số week
+        $v = $request->validate(['week' => 'nullable|date']);
+        $monday = Carbon::parse($v['week'] ?? now()->startOfWeek()->toDateString())->startOfWeek();
         $days = [];
         for ($i = 0; $i < 7; $i++) $days[] = $monday->copy()->addDays($i)->toDateString();
         $regs = ShiftRegistration::with('workShift:id,name,start_time,end_time')
             ->where('employee_id', $emp->id)
-            ->whereIn('date', $days)->get()->groupBy(fn($r) => $r->date->toDateString());
+            ->whereIn('date', $days)->get()
+            // audit #9: map date về Y-m-d (đừng để "2026-10-12 00:00:00" như Gói 35d)
+            ->map(function ($r) {
+                $a = $r->toArray();
+                $a['date'] = $r->date->toDateString();
+                return $a;
+            })
+            ->groupBy('date');
         // Gói 37: thông tin hạn chót + lượt gửi còn lại
         $deadline = self::deadlineForWeek($monday);
         $submitCount = (int) (ShiftRegWeek::where('employee_id', $emp->id)
@@ -100,13 +109,26 @@ class ShiftRegistrationController extends Controller
             return response()->json(['success' => false, 'message' => 'Đã quá hạn đăng ký ca tuần này.'], 422);
         }
         // Gói 37: gửi xong được gửi lại 1 lần (tối đa 2 lượt GỬI); draft không tính
-        $regWeek = null;
+        // audit #13: check + increment submit_count trong transaction với lockForUpdate
+        // để 2 request gửi đồng thời không vượt quá 2 lượt
         if ($v['status'] === 'submitted') {
-            $regWeek = ShiftRegWeek::firstOrCreate(
-                ['employee_id' => $emp->id, 'week_start' => $days[0]],
-                ['submit_count' => 0]
-            );
-            if ($regWeek->submit_count >= 2) {
+            $ok = DB::transaction(function () use ($emp, $days) {
+                $rw = ShiftRegWeek::where('employee_id', $emp->id)
+                    ->where('week_start', $days[0])
+                    ->lockForUpdate()
+                    ->first();
+                if (!$rw) {
+                    $rw = ShiftRegWeek::create([
+                        'employee_id' => $emp->id,
+                        'week_start' => $days[0],
+                        'submit_count' => 0,
+                    ]);
+                }
+                if ($rw->submit_count >= 2) return false;
+                $rw->increment('submit_count');
+                return true;
+            });
+            if (!$ok) {
                 return response()->json(['success' => false, 'message' => 'Đã hết lượt gửi lại đăng ký ca tuần này.'], 422);
             }
         }
@@ -137,8 +159,6 @@ class ShiftRegistrationController extends Controller
             if (!empty($rows)) ShiftRegistration::insert($rows);
         });
 
-        if ($regWeek) $regWeek->increment('submit_count');
-
         $msg = $v['status'] === 'submitted' ? 'Đã gửi đăng ký ca.' : 'Đã lưu nháp.';
         return response()->json(['success' => true, 'message' => $msg]);
     }
@@ -155,7 +175,9 @@ class ShiftRegistrationController extends Controller
         for ($i = 0; $i < 7; $i++) $days[] = $monday->copy()->addDays($i)->toDateString();
 
         $q = ShiftRegistration::with(['employee:id,full_name,branch_id', 'workShift:id,name,start_time,end_time'])
-            ->whereIn('date', $days);
+            ->whereIn('date', $days)
+            // audit #16: loại bản nháp — admin chỉ xem submitted/approved/rejected
+            ->whereIn('status', ['submitted', 'approved', 'rejected']);
         if (!empty($v['branch_id'])) {
             $q->whereHas('employee', function ($qq) use ($v) {
                 $qq->where('branch_id', $v['branch_id']);
@@ -172,5 +194,55 @@ class ShiftRegistrationController extends Controller
             'success' => true,
             'data' => ['week_start' => $days[0], 'week_end' => $days[6], 'days' => $days, 'registrations' => $regs],
         ]);
+    }
+
+    // B2: duyệt đăng ký ca (chỉ khi đang chờ)
+    public function approve(Request $request, int $id): JsonResponse
+    {
+        $reg = ShiftRegistration::findOrFail($id);
+        if ($reg->status !== 'submitted') {
+            return response()->json(['success' => false, 'message' => 'Chỉ duyệt được đăng ký đang chờ.'], 422);
+        }
+        $reg->status = 'approved';
+        $reg->save();
+        return response()->json(['success' => true, 'message' => 'Đã duyệt đăng ký ca.']);
+    }
+
+    // Gói 41: duyệt + tự động xếp NV vào ca (dùng trên bảng Xếp ca).
+    // Gán ca trước (kiểm tra sức chứa), gán OK mới duyệt → không bị duyệt mà rớt ca.
+    public function approveAndAssign(Request $request, int $id): JsonResponse
+    {
+        $reg = ShiftRegistration::with('employee:id,branch_id')->findOrFail($id);
+        if ($reg->status !== 'submitted') {
+            return response()->json(['success' => false, 'message' => 'Chỉ duyệt được đăng ký đang chờ.'], 422);
+        }
+        // Dùng chung logic gán ca (có kiểm tra sức chứa trong transaction)
+        $assignReq = Request::create('/api/work-schedules/assign', 'POST', [
+            'employee_id' => $reg->employee_id,
+            'work_shift_id' => $reg->work_shift_id,
+            'date' => $reg->date instanceof Carbon ? $reg->date->toDateString() : (string) $reg->date,
+            'branch_id' => $reg->employee?->branch_id,
+        ]);
+        $assignReq->setUserResolver(fn () => $request->user());
+        $res = app(WorkScheduleController::class)->assign($assignReq);
+        if ($res->getStatusCode() !== 200) {
+            return $res; // lỗi (VD vượt sức chứa) → giữ nguyên chưa duyệt
+        }
+        $reg->status = 'approved';
+        $reg->save();
+        return response()->json(['success' => true, 'message' => 'Đã duyệt và xếp ca.']);
+    }
+
+    // B2: từ chối đăng ký ca (chỉ khi đang chờ). Chưa có cột lưu lý do → note chỉ validate, không lưu.
+    public function reject(Request $request, int $id): JsonResponse
+    {
+        $v = $request->validate(['note' => 'nullable|string|max:500']);
+        $reg = ShiftRegistration::findOrFail($id);
+        if ($reg->status !== 'submitted') {
+            return response()->json(['success' => false, 'message' => 'Chỉ từ chối được đăng ký đang chờ.'], 422);
+        }
+        $reg->status = 'rejected';
+        $reg->save();
+        return response()->json(['success' => true, 'message' => 'Đã từ chối đăng ký ca.']);
     }
 }

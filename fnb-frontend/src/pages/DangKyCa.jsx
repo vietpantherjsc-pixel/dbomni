@@ -69,6 +69,8 @@ const CSS = `
 .dk-field{width:100%;min-height:50px;border:1.5px solid #e8e9ee;border-radius:12px;padding:10px 12px;font-size:16px;font-family:inherit;background:#fbfbfc;margin-top:10px;}
 .dk-label{font-size:13px;font-weight:700;color:#6b7280;margin-top:14px;display:block;}
 .dk-pin{font-size:30px;font-weight:800;letter-spacing:12px;text-align:center;}
+.dk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.dk-logout:active{transform:scale(.95);}
 `;
 
 function auth(token) {
@@ -148,6 +150,26 @@ export default function DangKyCa() {
     setTimeout(() => setToastOn(false), 2200);
   };
 
+  // Đăng xuất: xóa token, reset toàn bộ state về chưa đăng nhập
+  const logout = () => {
+    localStorage.removeItem('emp_token');
+    localStorage.removeItem('emp_info');
+    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
+    setShifts([]); setSel({}); setLoading(false); setSaving(false);
+    setDeadlineAt(''); setCanSubmit(true); setSubmitsLeft(2); setSubmitCount(0); setPastDeadline(false);
+    setShowSuccess(false); setToastOn(false);
+  };
+
+  // Token hết hạn (401) → đăng xuất, không để hiện tên NV cũ
+  const expired = (e) => {
+    if (e && e.response && e.response.status === 401) {
+      logout();
+      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      return true;
+    }
+    return false;
+  };
+
   const loadWeek = async (tk) => {
     setLoading(true);
     try {
@@ -171,6 +193,7 @@ export default function DangKyCa() {
       setSubmitCount(typeof data.submit_count === 'number' ? data.submit_count : 0);
       setPastDeadline(dl ? new Date(dl.replace(' ', 'T') + ':00') < new Date() : false);
     } catch (e) {
+      if (expired(e)) return;
       toast(errMsg(e, 'Không tải được đăng ký tuần này.'));
     } finally { setLoading(false); }
   };
@@ -184,11 +207,12 @@ export default function DangKyCa() {
           setEmp(r.data.data);
           localStorage.setItem('emp_info', JSON.stringify(r.data.data));
         }
-      } catch (e) { /* giữ info cũ */ }
+      } catch (e) { if (!expired(e)) { /* giữ info cũ */ } }
       try {
         const s = await axios.get(API + '/employee/work-shifts', auth(token));
         setShifts(s.data && s.data.data ? s.data.data : []);
       } catch (e) {
+        if (expired(e)) return;
         toast(errMsg(e, 'Không tải được danh sách ca.'));
       }
     })();
@@ -203,12 +227,15 @@ export default function DangKyCa() {
   const doLogin = async (e) => {
     e.preventDefault();
     setErr('');
-    if (!phone.trim()) { setErr('Vui lòng nhập số điện thoại.'); return; }
+    // Chuẩn hóa SĐT: trim, bỏ khoảng trắng, +84xxxxxxxxx → 0xxxxxxxxx
+    let p = phone.trim().replace(/\s+/g, '');
+    if (p.startsWith('+84')) p = '0' + p.slice(3);
+    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
     if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
     setLoginBusy(true);
     try {
       const r = await axios.post(API + '/employee/phone-login', {
-        phone: phone.trim(), pin_code: pin,
+        phone: p, pin_code: pin,
       });
       const tk = r.data.access_token;
       const info = r.data.employee || {};
@@ -240,6 +267,7 @@ export default function DangKyCa() {
       }, auth(token));
       toast('Đã lưu nháp ✓');
     } catch (e) {
+      if (expired(e)) return;
       toast(errMsg(e, 'Lưu nháp thất bại.'));
     } finally { setSaving(false); }
   };
@@ -255,6 +283,7 @@ export default function DangKyCa() {
       setShowSuccess(true);
       loadWeek(token); // tải lại để cập nhật lượt gửi còn lại
     } catch (e) {
+      if (expired(e)) return;
       toast(errMsg(e, 'Gửi đăng ký thất bại.'));
     } finally { setSaving(false); }
   };
@@ -335,10 +364,11 @@ export default function DangKyCa() {
       <header className="dk-hd">
         <div className="dk-hd-user">
           <div className="dk-avatar">{avatarLetter}</div>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div className="dk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="dk-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
           </div>
+          <button className="dk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="dk-title">Đăng ký ca làm việc</div>
       </header>

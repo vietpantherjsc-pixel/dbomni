@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 // Gói 26: Chi tiết giờ công theo ngày (nhập tay / sau này đồng bộ từ chấm công).
 class SalaryDay extends Model
 {
-    protected $fillable = ['employee_id', 'date', 'check_in', 'check_out', 'hours', 'meal_count', 'meal_manual'];
+    protected $fillable = ['employee_id', 'date', 'check_in', 'check_out', 'hours', 'hours_source', 'meal_count', 'meal_manual'];
 
     protected $casts = [
         'date' => 'date',

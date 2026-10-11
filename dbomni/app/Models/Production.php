@@ -28,6 +28,12 @@ class Production extends Model
         return $this->belongsTo(User::class);
     }
 
+    // Gói 43: nhân viên thực hiện (qua trang mobile)
+    public function employee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class);
+    }
+
     public function items(): HasMany
     {
         return $this->hasMany(ProductionItem::class);

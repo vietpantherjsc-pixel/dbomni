@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ScheduleNote;
+use App\Models\User;
 use App\Models\WorkSchedule;
 use App\Models\WorkShift;
 use App\Models\WorkShiftCapacity;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 // Gói 35: Xếp ca — quản lý gán ca + điều chỉnh giờ vào/ra riêng từng NV.
 class WorkScheduleController extends Controller
@@ -86,9 +88,68 @@ class WorkScheduleController extends Controller
             'custom_start_time' => 'nullable|date_format:H:i',
             'custom_end_time' => 'nullable|date_format:H:i',
         ]);
-        // Gói 37: kiểm tra sức chứa của ô ca×ngày (không tính chính NV này vì upsert)
+        // Gói 38: created_by chỉ set khi người thao tác là User (tài khoản admin);
+        // Employee thao tác (quản lý là NV) thì để null để tránh lỗi FK users.id -> 500
+        $actor = $request->user();
+        $createdBy = $actor instanceof User ? $actor->id : null;
+
+        try {
+            $sched = DB::transaction(fn () => $this->doAssign($v, $createdBy));
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+        return response()->json(['success' => true, 'message' => 'Đã xếp ca.', 'data' => $sched]);
+    }
+
+    // Gói 42: lưu hàng loạt các ô đã nháp của 1 chi nhánh trong 1 transaction.
+    // { items: [{employee_id, work_shift_id, date, branch_id?, custom_start_time?, custom_end_time?}], deletes: [schedule_id] }
+    public function batchSave(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'items' => 'nullable|array|max:500',
+            'items.*.employee_id' => 'required|exists:employees,id',
+            'items.*.work_shift_id' => 'required|exists:work_shifts,id',
+            'items.*.date' => 'required|date',
+            'items.*.branch_id' => 'nullable|exists:branches,id',
+            'items.*.custom_start_time' => 'nullable|date_format:H:i',
+            'items.*.custom_end_time' => 'nullable|date_format:H:i',
+            'deletes' => 'nullable|array|max:500',
+            'deletes.*' => 'integer|exists:work_schedules,id',
+        ]);
+        if (empty($v['items']) && empty($v['deletes'])) {
+            return response()->json(['success' => true, 'message' => 'Không có thay đổi.']);
+        }
+        foreach ($v['items'] ?? [] as &$it) {
+            foreach (['custom_start_time', 'custom_end_time'] as $f) {
+                if (!empty($it[$f])) $it[$f] = $this->normTime($it[$f]);
+            }
+        }
+        unset($it);
+        $actor = $request->user();
+        $createdBy = $actor instanceof User ? $actor->id : null;
+        try {
+            DB::transaction(function () use ($v, $createdBy) {
+                if (!empty($v['deletes'])) {
+                    WorkSchedule::whereIn('id', $v['deletes'])->delete();
+                }
+                foreach ($v['items'] ?? [] as $it) {
+                    $this->doAssign($it, $createdBy);
+                }
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+        return response()->json(['success' => true, 'message' => 'Đã lưu lịch làm việc.']);
+    }
+
+    // Gói 42: lõi gán 1 NV vào ca (kiểm tra sức chứa) — gọi trong transaction của caller.
+    private function doAssign(array $v, ?int $createdBy)
+    {
         $weekday = ((int) Carbon::parse($v['date'])->dayOfWeek + 6) % 7; // 0=Thứ 2
-        $cap = WorkShiftCapacity::where('work_shift_id', $v['work_shift_id'])->where('weekday', $weekday)->first();
+        $cap = WorkShiftCapacity::where('work_shift_id', $v['work_shift_id'])
+            ->where('weekday', $weekday)
+            ->lockForUpdate()
+            ->first();
         if ($cap && $cap->max_staff !== null) {
             $cnt = WorkSchedule::where('work_shift_id', $v['work_shift_id'])
                 ->where('date', $v['date'])
@@ -97,22 +158,18 @@ class WorkScheduleController extends Controller
             if ($cnt >= $cap->max_staff) {
                 $shift = WorkShift::find($v['work_shift_id']);
                 $d = Carbon::parse($v['date'])->format('d/m');
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Ca ' . ($shift?->name ?? '') . ' ngày ' . $d . ' đã đủ ' . $cap->max_staff . ' người.',
-                ], 422);
+                throw new \RuntimeException('Ca ' . ($shift?->name ?? '') . ' ngày ' . $d . ' đã đủ ' . $cap->max_staff . ' người.');
             }
         }
-        $sched = WorkSchedule::updateOrCreate(
+        return WorkSchedule::updateOrCreate(
             ['employee_id' => $v['employee_id'], 'work_shift_id' => $v['work_shift_id'], 'date' => $v['date']],
             [
                 'branch_id' => $v['branch_id'] ?? null,
                 'custom_start_time' => $v['custom_start_time'] ?? null,
                 'custom_end_time' => $v['custom_end_time'] ?? null,
-                'created_by' => $request->user()?->id,
+                'created_by' => $createdBy,
             ]
         );
-        return response()->json(['success' => true, 'message' => 'Đã xếp ca.', 'data' => $sched]);
     }
 
     public function destroy(int $id): JsonResponse

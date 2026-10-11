@@ -1,0 +1,282 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Batch;
+use App\Models\InboundReceipt;
+use App\Models\Material;
+use App\Models\Partner;
+use App\Models\Transaction;
+use App\Models\TransactionCategory;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+// Gói 43: phiếu nhập hàng theo hóa đơn NCC (thuế/CK/phí VC, trả ngay/công nợ).
+class InboundReceiptController extends Controller
+{
+    public function index(Request $request): JsonResponse
+    {
+        $q = InboundReceipt::with(['branch', 'partner'])
+            ->orderByDesc('id');
+        if ($request->filled('branch_id')) $q->where('branch_id', $request->input('branch_id'));
+        if ($request->filled('partner_id')) $q->where('partner_id', $request->input('partner_id'));
+        if ($request->filled('status')) $q->where('status', $request->input('status'));
+        if ($request->filled('payment_type')) $q->where('payment_type', $request->input('payment_type'));
+        $per = min((int) $request->input('per_page', 20), 200);
+        return response()->json(['success' => true, 'data' => $q->paginate($per)]);
+    }
+
+    public function show(int $id): JsonResponse
+    {
+        $r = InboundReceipt::with(['branch', 'partner', 'items.material', 'items.batch'])->findOrFail($id);
+        return response()->json(['success' => true, 'data' => $r]);
+    }
+
+    public function store(Request $request): JsonResponse
+    {
+        $actor = $request->user();
+        $isEmployee = $actor instanceof \App\Models\Employee;
+        $v = $this->validateReceipt($request, false, !$isEmployee);
+        // NV mobile: ép chi nhánh theo token, không nhận từ client
+        $branchId = $isEmployee ? (int) $actor->branch_id : (int) $v['branch_id'];
+
+        try {
+            $receipt = DB::transaction(function () use ($v, $branchId, $actor, $isEmployee) {
+                $totals = $this->calcTotals($v);
+                $receipt = InboundReceipt::create([
+                    'code' => InboundReceipt::nextCode(),
+                    'branch_id' => $branchId,
+                    'partner_id' => $v['partner_id'] ?? null,
+                    'invoice_no' => $v['invoice_no'] ?? null,
+                    'receipt_date' => $v['receipt_date'] ?? now()->toDateString(),
+                    'tax_included' => (bool) ($v['tax_included'] ?? true),
+                    'tax_rate' => $v['tax_rate'] ?? 0,
+                    'discount_amount' => $v['discount_amount'] ?? 0,
+                    'shipping_fee' => $v['shipping_fee'] ?? 0,
+                    'subtotal' => $totals['subtotal'],
+                    'vat_amount' => $totals['vat_amount'],
+                    'grand_total' => $totals['grand_total'],
+                    'payment_type' => $v['payment_type'] ?? 'paid',
+                    'status' => 'confirmed',
+                    'note' => $v['note'] ?? null,
+                    'created_by_user_id' => !$isEmployee && $actor instanceof \App\Models\User ? $actor->id : null,
+                    'created_by_employee_id' => $isEmployee ? $actor->id : null,
+                ]);
+                foreach ($v['items'] as $item) {
+                    $material = Material::findOrFail($item['material_id']);
+                    $rate = (float) ($material->conversion_rate ?: 1);
+                    $baseQty = (float) $item['purchase_quantity'] * $rate;
+                    $lineTotal = (float) $item['purchase_quantity'] * (float) ($item['unit_cost'] ?? 0);
+                    $batch = Batch::create([
+                        'material_id' => $material->id,
+                        'branch_id' => $branchId,
+                        'receipt_id' => $receipt->id,
+                        'batch_code' => $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8))),
+                        'initial_quantity' => $baseQty,
+                        'current_quantity' => $baseQty,
+                        'unit_cost' => $item['unit_cost'] ?? 0,
+                        'expired_at' => $item['expired_at'] ?? null,
+                        'status' => 'active',
+                    ]);
+                    $receipt->items()->create([
+                        'material_id' => $material->id,
+                        'batch_id' => $batch->id,
+                        'purchase_quantity' => $item['purchase_quantity'],
+                        'purchase_unit' => $material->purchase_unit ?: $material->unit,
+                        'conversion_rate' => $rate,
+                        'unit_cost' => $item['unit_cost'] ?? 0,
+                        'line_total' => $lineTotal,
+                        'expired_at' => $item['expired_at'] ?? null,
+                        'batch_code' => $batch->batch_code,
+                    ]);
+                }
+                $this->createExpense($receipt);
+                return $receipt;
+            });
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã tạo phiếu nhập ' . $receipt->code . '.',
+            'data' => $receipt->load(['items.material', 'partner']),
+        ], 201);
+    }
+
+    // Admin sửa phiếu khi có sai sót: chỉ khi chưa phát sinh thanh toán công nợ
+    // và batch chưa bị xuất dùng (đối với sửa số lượng).
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
+        if ($receipt->status !== 'confirmed') {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã hủy, không sửa được.'], 422);
+        }
+        $txn = Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->first();
+        if ($txn && $txn->payments()->exists()) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã phát sinh thanh toán, chỉ sửa được ghi chú.'], 422);
+        }
+        $v = $this->validateReceipt($request, true);
+
+        try {
+            DB::transaction(function () use ($v, $receipt, $txn, $request) {
+                // Cập nhật header
+                $up = [];
+                foreach (['partner_id', 'invoice_no', 'receipt_date', 'tax_included', 'tax_rate', 'discount_amount', 'shipping_fee', 'note'] as $f) {
+                    if (array_key_exists($f, $v)) $up[$f] = $v[$f];
+                }
+                // Cập nhật dòng hàng: chỉ cho sửa khi batch chưa xuất dùng
+                if (isset($v['items'])) {
+                    foreach ($v['items'] as $ri) {
+                        if (empty($ri['id'])) continue;
+                        $line = $receipt->items->firstWhere('id', $ri['id']);
+                        if (!$line || !$line->batch) continue;
+                        $batch = $line->batch;
+                        $touched = (float) $batch->current_quantity != (float) $batch->initial_quantity;
+                        $newQty = (float) ($ri['purchase_quantity'] ?? $line->purchase_quantity);
+                        $newCost = (float) ($ri['unit_cost'] ?? $line->unit_cost);
+                        if ($touched && abs($newQty - (float) $line->purchase_quantity) > 0.0001) {
+                            throw new \Exception('Dòng "' . ($line->material?->name ?? '') . '" đã xuất dùng một phần, không sửa được số lượng.');
+                        }
+                        $rate = (float) $line->conversion_rate ?: 1;
+                        $baseQty = $newQty * $rate;
+                        $batch->update([
+                            'initial_quantity' => $baseQty,
+                            'current_quantity' => $touched ? $batch->current_quantity : $baseQty,
+                            'unit_cost' => $newCost,
+                            'expired_at' => $ri['expired_at'] ?? $line->expired_at,
+                        ]);
+                        $line->update([
+                            'purchase_quantity' => $newQty,
+                            'unit_cost' => $newCost,
+                            'line_total' => $newQty * $newCost,
+                            'expired_at' => $ri['expired_at'] ?? $line->expired_at,
+                        ]);
+                    }
+                    $receipt->refresh();
+                }
+                if (!empty($up)) $receipt->update($up);
+                // Tính lại tổng
+                $totals = $this->calcTotals([
+                    'items' => $receipt->items->map(fn ($l) => [
+                        'purchase_quantity' => $l->purchase_quantity,
+                        'unit_cost' => $l->unit_cost,
+                    ])->all(),
+                    'tax_included' => $receipt->tax_included,
+                    'tax_rate' => $receipt->tax_rate,
+                    'discount_amount' => $receipt->discount_amount,
+                    'shipping_fee' => $receipt->shipping_fee,
+                ]);
+                $receipt->update($totals);
+                // Đồng bộ phiếu chi
+                if ($txn) {
+                    $txn->update([
+                        'amount' => $totals['grand_total'],
+                        'paid_amount' => $txn->status === 'paid' ? $totals['grand_total'] : $txn->paid_amount,
+                        'partner_id' => $receipt->partner_id,
+                    ]);
+                }
+            });
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+        return response()->json(['success' => true, 'message' => 'Đã cập nhật phiếu nhập.', 'data' => $receipt->fresh()->load(['items.material', 'partner'])]);
+    }
+
+    // Hủy phiếu: chỉ khi tất cả batch chưa xuất dùng
+    public function cancel(int $id): JsonResponse
+    {
+        $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
+        if ($receipt->status !== 'confirmed') {
+            return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái đã nhập.'], 422);
+        }
+        foreach ($receipt->items as $line) {
+            if ($line->batch && (float) $line->batch->current_quantity != (float) $line->batch->initial_quantity) {
+                return response()->json(['success' => false, 'message' => 'Nguyên liệu "' . ($line->material?->name ?? '') . '" đã xuất dùng, không hủy được.'], 422);
+            }
+        }
+        DB::transaction(function () use ($receipt) {
+            foreach ($receipt->items as $line) {
+                if ($line->batch) $line->batch->delete();
+            }
+            Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->delete();
+            $receipt->update(['status' => 'cancelled']);
+        });
+        return response()->json(['success' => true, 'message' => 'Đã hủy phiếu nhập.']);
+    }
+
+    private function validateReceipt(Request $request, bool $isUpdate = false, bool $requireBranch = true): array
+    {
+        $rules = [
+            'branch_id' => ($requireBranch && !$isUpdate ? 'required' : 'nullable') . '|exists:branches,id',
+            'partner_id' => 'nullable|exists:partners,id',
+            'invoice_no' => 'nullable|string|max:100',
+            'receipt_date' => 'nullable|date',
+            'tax_included' => 'nullable|boolean',
+            'tax_rate' => 'nullable|numeric|min:0|max:100',
+            'discount_amount' => 'nullable|numeric|min:0',
+            'shipping_fee' => 'nullable|numeric|min:0',
+            'payment_type' => 'nullable|in:paid,debt',
+            'note' => 'nullable|string|max:1000',
+            'items' => ($isUpdate ? 'nullable' : 'required') . '|array|min:1|max:200',
+            'items.*.id' => 'nullable|exists:inbound_receipt_items,id',
+            'items.*.material_id' => 'required|exists:materials,id',
+            'items.*.purchase_quantity' => 'required|numeric|min:0.001',
+            'items.*.unit_cost' => 'nullable|numeric|min:0',
+            'items.*.expired_at' => 'nullable|date',
+            'items.*.batch_code' => 'nullable|string|max:50',
+        ];
+        return $request->validate($rules);
+    }
+
+    // subtotal = Σ SL×đơn giá; VAT tách từ giá đã gồm thuế; grand = subtotal − CK + phí VC
+    private function calcTotals(array $v): array
+    {
+        $subtotal = 0;
+        foreach ($v['items'] ?? [] as $it) {
+            $subtotal += (float) ($it['purchase_quantity'] ?? 0) * (float) ($it['unit_cost'] ?? 0);
+        }
+        $rate = (float) ($v['tax_rate'] ?? 0);
+        $vat = 0;
+        if (!empty($v['tax_included']) && $rate > 0) {
+            $vat = $subtotal * $rate / (100 + $rate);
+        } elseif ($rate > 0) {
+            $vat = $subtotal * $rate / 100;
+        }
+        $grand = $subtotal - (float) ($v['discount_amount'] ?? 0) + (float) ($v['shipping_fee'] ?? 0);
+        if (empty($v['tax_included']) && $rate > 0) {
+            $grand += $vat; // giá chưa gồm thuế → cộng VAT
+        }
+        return [
+            'subtotal' => round($subtotal, 2),
+            'vat_amount' => round($vat, 2),
+            'grand_total' => round(max($grand, 0), 2),
+        ];
+    }
+
+    private function createExpense(InboundReceipt $receipt): void
+    {
+        $cat = TransactionCategory::firstOrCreate(
+            ['name' => 'Nhập hàng', 'type' => 'expense'],
+            ['is_system' => true]
+        );
+        $isDebt = $receipt->payment_type === 'debt';
+        Transaction::create([
+            'code' => Transaction::nextCode('expense'),
+            'type' => 'expense',
+            'category_id' => $cat->id,
+            'branch_id' => $receipt->branch_id,
+            'partner_id' => $receipt->partner_id,
+            'amount' => $receipt->grand_total,
+            'paid_amount' => $isDebt ? 0 : $receipt->grand_total,
+            'paid_at' => $isDebt ? null : now()->toDateString(),
+            'status' => $isDebt ? 'pending' : 'paid',
+            'related_type' => 'inbound_receipt',
+            'related_id' => $receipt->id,
+            'note' => 'Nhập hàng ' . $receipt->code . ($receipt->invoice_no ? ' (HĐ ' . $receipt->invoice_no . ')' : ''),
+            'created_by' => $receipt->created_by_user_id,
+        ]);
+    }
+}

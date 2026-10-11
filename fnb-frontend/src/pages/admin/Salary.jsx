@@ -23,13 +23,14 @@ function exportPayslipPNG(payroll) {
     R(['Ngày', 'Giờ vào', 'Giờ ra', 'Tổng số giờ', 'Phụ cấp tiền ăn'].map((t) => C(t, 1, { bold: true, align: 'center' })), '#d9d9d9');
     payroll.days.forEach((d) => {
         R([C(fmtDate(d.date) + (d.is_holiday ? ' (x' + d.multiplier + ')' : ''), 1, { align: 'center' }), C(fmtTime(d.check_in) || '', 1, { align: 'center' }), C(fmtTime(d.check_out) || '', 1, { align: 'center' }),
-           C(d.hours ? fmtH(d.hours) : '0.00', 1, { align: 'center' }),
+           C(d.hours == null ? '' : fmtH(d.hours), 1, { align: 'center' }),
            C(d.meal_count > 1 ? 'X' + d.meal_count : (d.meal_count ? 'X' : ''), 1, { align: 'center' })]);
     });
     const sum = (label, val, bold, bg) => R([C(label, 3, { bold }), C(val, 1, { bold, align: 'center' }), C('', 1)], bg);
     sum('A. TỔNG GIỜ CÔNG', fmtH(s.total_hours), true);
-    sum('1. ' + (s.line1_note || 'Các khoản trừ khác'), s.line1_deduction ? fmt(s.line1_deduction) : '');
-    if (s.violations > 0) sum('Số lỗi vi phạm' + (s.violation_note ? ' (' + s.violation_note + ')' : ''), s.violations + ' lỗi');
+    const dedRows = Array.isArray(s.deductions) ? s.deductions : (s.line1_deduction ? [{ name: s.line1_note || 'Các khoản trừ khác', amount: s.line1_deduction, note: '' }] : []);
+    dedRows.forEach((d) => sum('Trừ khác: ' + d.name + (d.note ? ' (' + d.note + ')' : ''), d.amount ? fmt(d.amount) : ''));
+    if (s.violations > 0 || s.violations_override) sum('Số lỗi 3 Chuyên' + (s.violations_override ? ' (điều chỉnh tay)' : ' (tự động)') + (s.violation_note ? ' — ' + s.violation_note : ''), s.violations + ' lỗi');
     sum('2. Lương trách nhiệm (' + s.resp_formula + ')', fmt(s.line2_responsibility) + '/h');
     sum('3. Lương cơ bản/h', fmt(s.line3_base_rate));
     sum('4. Mức lương/h (2 + 3)', fmt(s.line4_rate), true);
@@ -38,7 +39,6 @@ function exportPayslipPNG(payroll) {
     if (s.holiday_extra) sum('Lương lễ/tết', (s.holiday_days || []).map((h) => ((h.date ? fmtDate(h.date) + ' ' : '') + '(x' + h.multiplier + '): +' + fmt(h.extra) + 'đ')).join('; '));
     if (s.bonus_total) sum('Thưởng', fmt(s.bonus_total));
     if (s.advance_total) sum('Ứng lương (trừ)', fmt(s.advance_total));
-    if (s.line1_deduction) { /* đã hiện ở dòng 1 */ }
     sum('C. THỰC NHẬN', fmt(s.net), true, '#c6efce');
     if (ins) {
         R([C('D. BHXH (Mức đóng ' + fmt(ins.base_amount) + ')' + (ins.employer_pays_all ? ' (Công ty chi trả)' : ''), 5, { bold: true })]);
@@ -107,11 +107,23 @@ export default function Salary() {
     const [days, setDays] = useState([]);
     const [mealCfg, setMealCfg] = useState({ meal_min_hours: 14.5, meal_price: 30000 }); // Gói 30d
     const [insForm, setInsForm] = useState({ base_amount: '', employer_pays_all: false });
-    const [recForm, setRecForm] = useState({ other_deduction: 0, other_deduction_note: '', note: '' });
-    const [violForm, setViolForm] = useState({ violation_count: 0, violation_note: '' });
+    // Gói 40: Trừ khác = danh sách (thay 4 ô input cũ); Lỗi 3 Chuyên tự cộng + điều chỉnh tay
+    const [deductions, setDeductions] = useState([]);
+    const [deductionsOrig, setDeductionsOrig] = useState([]);
+    const [monthNote, setMonthNote] = useState('');
+    const [violAuto, setViolAuto] = useState(0);
+    const [violOverride, setViolOverride] = useState('');
+    const [violNote, setViolNote] = useState('');
     const [wlForm, setWlForm] = useState({ hourly_rate: '', start_date: '', note: '' });
     const [advForm, setAdvForm] = useState({ amount: '', date: '', note: '' });
     const [bonusForm, setBonusForm] = useState({ type: 'performance', amount: '', date: '', note: '' });
+    // Đổ giờ công từ chấm công
+    const [branches, setBranches] = useState([]);
+    const [impOpen, setImpOpen] = useState(false);
+    const [impMonth, setImpMonth] = useState(month);
+    const [impBranch, setImpBranch] = useState('');
+    const [impLoading, setImpLoading] = useState(false);
+    const [impResult, setImpResult] = useState(null);
 
     const fetchEmployees = useCallback(async () => {
         const res = await axios.get(API + '/employees', { params: { is_active: 1, per_page: 100 } });
@@ -127,9 +139,24 @@ export default function Salary() {
             const res = await axios.get(API + '/salary/' + empId, { params: { month } });
             if (res.data?.success) {
                 setPayroll(res.data.data);
-                const r = res.data.data.record;
-                setRecForm({ other_deduction: r?.other_deduction ?? 0, other_deduction_note: r?.other_deduction_note ?? '', note: r?.note ?? '' });
-                setViolForm({ violation_count: r?.violation_count ?? 0, violation_note: r?.violation_note ?? '' });
+                const sum = res.data.data.summary || {};
+                // Trừ khác: ưu tiên mảng deductions từ contract; fallback gọi endpoint riêng
+                const dl = Array.isArray(sum.deductions) ? sum.deductions : null;
+                if (dl) {
+                    setDeductions(dl.map((d) => ({ ...d })));
+                    setDeductionsOrig(dl.map((d) => ({ ...d })));
+                } else {
+                    try {
+                        const dd = await axios.get(API + '/salary/' + empId + '/deductions', { params: { month } });
+                        const list = dd.data?.data || [];
+                        setDeductions(list.map((d) => ({ ...d })));
+                        setDeductionsOrig(list.map((d) => ({ ...d })));
+                    } catch { setDeductions([]); setDeductionsOrig([]); }
+                }
+                setViolAuto(sum.violations_auto ?? sum.violations ?? 0);
+                setViolOverride(sum.violations_override ? String(sum.violations ?? '') : '');
+                setViolNote(sum.violation_note || '');
+                setMonthNote(res.data.data.record?.note || '');
             }
             const h = await axios.get(API + '/salary/' + empId + '/history');
             if (h.data?.success) setHist(h.data.data);
@@ -144,6 +171,9 @@ export default function Salary() {
 
     useEffect(() => { fetchEmployees(); }, [fetchEmployees]);
     useEffect(() => { fetchPayroll(); }, [fetchPayroll]);
+    useEffect(() => {
+        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch(() => {});
+    }, []);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
     const editable = can('staff.edit');
@@ -153,15 +183,54 @@ export default function Salary() {
 
     const saveDays = async () => {
         try {
-            await axios.post(API + '/salary/' + empId + '/days', { days: days.map((d) => ({ date: d.date, check_in: d.check_in || null, check_out: d.check_out || null, hours: Number(d.hours) || 0, meal_count: Number(d.meal_count) || 0, meal_manual: !!d.meal_manual })) });
+            await axios.post(API + '/salary/' + empId + '/days', { days: days.map((d) => ({ date: d.date, check_in: d.check_in || null, check_out: d.check_out || null, hours: (d.hours === '' || d.hours == null) ? null : Number(d.hours), meal_count: Number(d.meal_count) || 0, meal_manual: !!d.meal_manual })) });
             alert('Đã lưu chi tiết ngày công.'); fetchPayroll();
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
     };
-    const saveRecordExtra = async () => {
+    // Đổ giờ công từ chấm công (theo giờ check-in/out thực tế)
+    const openImport = () => { setImpMonth(month); setImpBranch(''); setImpResult(null); setImpOpen(true); };
+    const doImport = async () => {
+        if (!impMonth) return alert('Chọn tháng cần đổ giờ công');
+        if (!window.confirm('Đổ giờ công tháng ' + impMonth + (impBranch ? '' : ' (tất cả chi nhánh)') + ' từ chấm công?\n\n• Lấy giờ check-in/out thực tế\n• Quên chấm → để trống, nhập tay sau\n• Nghỉ được duyệt → 0 giờ\n• Ô đã nhập tay sẽ được GIỮ NGUYÊN')) return;
+        setImpLoading(true);
         try {
-            await axios.put(API + '/salary/' + empId + '/violations', { month, violation_count: Number(violForm.violation_count) || 0, violation_note: violForm.violation_note || null });
-            await axios.post(API + '/salary/' + empId + '/record', { month, hours: s?.total_hours || 0, work_days: 0, other_deduction: Number(recForm.other_deduction) || 0, other_deduction_note: recForm.other_deduction_note || null, note: recForm.note || null });
+            const r = await axios.post(API + '/salary/import-attendance', { month: impMonth, branch_id: impBranch || undefined });
+            setImpResult(r.data?.data || null);
+            fetchPayroll();
+        } catch (e) { alert(e.response?.data?.message || 'Đổ giờ công thất bại'); }
+        setImpLoading(false);
+    };
+    // Gói 40: lưu Lỗi 3 Chuyên (null = về tự động)
+    const saveViolations = async () => {
+        try {
+            await axios.put(API + '/salary/' + empId + '/violations', { month, violation_count: violOverride === '' ? null : Number(violOverride), violation_note: violNote || null });
             alert('Đã lưu.'); fetchPayroll();
+        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
+    };
+    // Gói 40: Trừ khác — diff với danh sách gốc rồi POST/PUT/DELETE
+    const updDed = (i, k, v) => { const nd = [...deductions]; nd[i] = { ...nd[i], [k]: v }; setDeductions(nd); };
+    const addDed = () => setDeductions([...deductions, { name: '', amount: '', note: '' }]);
+    const delDedRow = (i) => setDeductions(deductions.filter((_, x) => x !== i));
+    const saveDeductions = async () => {
+        const origById = Object.fromEntries(deductionsOrig.filter((d) => d.id).map((d) => [d.id, d]));
+        const curIds = new Set(deductions.filter((d) => d.id).map((d) => d.id));
+        try {
+            for (const o of deductionsOrig) {
+                if (o.id && !curIds.has(o.id)) await axios.delete(API + '/salary/deductions/' + o.id);
+            }
+            for (const d of deductions) {
+                if (!String(d.name || '').trim() && !Number(d.amount)) continue;
+                if (!d.id) {
+                    await axios.post(API + '/salary/' + empId + '/deductions', { month, name: String(d.name).trim(), amount: Number(d.amount) || 0, note: d.note || null });
+                } else {
+                    const o = origById[d.id];
+                    if (!o || o.name !== d.name || Number(o.amount) !== Number(d.amount) || (o.note || '') !== (d.note || '')) {
+                        await axios.put(API + '/salary/deductions/' + d.id, { name: String(d.name).trim(), amount: Number(d.amount) || 0, note: d.note || null });
+                    }
+                }
+            }
+            await axios.post(API + '/salary/' + empId + '/record', { month, hours: s?.total_hours || 0, work_days: 0, note: monthNote || null });
+            alert('Đã lưu khoản trừ khác.'); fetchPayroll();
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
     };
     const addWage = async () => {
@@ -206,6 +275,7 @@ export default function Salary() {
                     </select>
                     <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]" />
                     {payroll && editable && <button onClick={() => exportPayslipPNG(payroll)} className={btn + 'bg-[#24305E] text-white'}>⬇ Xuất ảnh</button>}
+                    {editable && <button onClick={openImport} className={btn + 'bg-[#0d6efd] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
@@ -236,13 +306,15 @@ export default function Salary() {
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtDate(d.date)}{d.is_holiday && <span className="inline-block ml-1 bg-red-50 text-red-600 border border-red-200 rounded-full px-1.5 text-[10px] font-bold" title={d.holiday_name}>x{d.multiplier}</span>}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtTime(d.check_in) || ''}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtTime(d.check_out) || ''}</td>
-                                        <td className="px-3 py-1.5 border border-gray-300">{d.hours ? fmtH(d.hours) : '0.00'}</td>
+                                        <td className="px-3 py-1.5 border border-gray-300">{d.hours == null ? '' : fmtH(d.hours)}{d.hours_source === 'attendance' && <span className="inline-block ml-1 bg-blue-50 text-[#1d4ed8] border border-blue-200 rounded-full px-1.5 text-[10px] font-bold" title="Giờ từ chấm công">chấm công</span>}{d.hours_source === 'leave' && <span className="inline-block ml-1 bg-gray-100 text-gray-500 border border-gray-200 rounded-full px-1.5 text-[10px] font-bold" title="Nghỉ được duyệt">nghỉ</span>}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{d.meal_count > 1 ? 'X' + d.meal_count : (d.meal_count ? 'X' : '')}</td>
                                     </tr>
                                 ))}
                                 {sumRow('A. TỔNG GIỜ CÔNG', fmtH(s.total_hours), true)}
-                                {sumRow('1. ' + (s.line1_note || 'Các khoản trừ khác'), s.line1_deduction ? fmt(s.line1_deduction) : '')}
-                                {s.violations > 0 && sumRow('Số lỗi vi phạm' + (s.violation_note ? ' (' + s.violation_note + ')' : ''), s.violations + ' lỗi')}
+                                {(Array.isArray(s.deductions) ? s.deductions : (s.line1_deduction ? [{ name: s.line1_note || 'Các khoản trừ khác', amount: s.line1_deduction, note: '' }] : [])).map((d, i) =>
+                                    sumRow('Trừ khác: ' + d.name + (d.note ? ' (' + d.note + ')' : ''), d.amount ? fmt(d.amount) : '')
+                                )}
+                                {(s.violations > 0 || s.violations_override) && sumRow('Số lỗi 3 Chuyên' + (s.violations_override ? ' (điều chỉnh tay)' : ' (tự động)') + (s.violation_note ? ' — ' + s.violation_note : ''), s.violations + ' lỗi')}
                                 {sumRow('2. Lương trách nhiệm (' + s.resp_formula + ')', fmt(s.line2_responsibility) + '/h')}
                                 {sumRow('3. Lương cơ bản/h', fmt(s.line3_base_rate))}
                                 {sumRow('4. Mức lương/h (2 + 3)', fmt(s.line4_rate), true)}
@@ -297,8 +369,12 @@ export default function Salary() {
                                                 <td key={k} className="px-2 py-1"><input disabled={!editable} value={d[k] || ''} placeholder="HH:MM"
                                                     onChange={(e) => { const nd = [...days]; nd[i][k] = e.target.value; setDays(nd); }} className={inp + ' !w-24'} /></td>
                                             ))}
-                                            <td className="px-2 py-1"><input disabled={!editable} type="number" step="0.01" min="0" value={d.hours || ''}
-                                                onChange={(e) => { const nd = [...days]; nd[i].hours = e.target.value; if (!nd[i].meal_manual) nd[i].meal_count = (Number(e.target.value) || 0) >= Number(mealCfg.meal_min_hours || 14.5) ? 1 : 0; setDays(nd); }} className={inp + ' !w-24'} placeholder="tự tính" /></td>
+                                            <td className="px-2 py-1"><div className="flex items-center gap-1">
+                                                <input disabled={!editable} type="number" step="0.01" min="0" value={d.hours ?? ''}
+                                                    onChange={(e) => { const nd = [...days]; nd[i].hours = e.target.value; if (!nd[i].meal_manual) nd[i].meal_count = (Number(e.target.value) || 0) >= Number(mealCfg.meal_min_hours || 14.5) ? 1 : 0; setDays(nd); }} className={inp + ' !w-24'} placeholder="tự tính" />
+                                                {d.hours_source === 'attendance' && <span className="text-[10px] font-bold text-[#1d4ed8] bg-blue-50 border border-blue-200 rounded-full px-1.5 py-0.5 whitespace-nowrap" title="Giờ đổ từ chấm công — sửa tay sẽ chuyển thành nhập tay">chấm công</span>}
+                                                {d.hours_source === 'leave' && <span className="text-[10px] font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5 whitespace-nowrap" title="Nghỉ được duyệt = 0 giờ">nghỉ</span>}
+                                            </div></td>
                                             <td className="px-2 py-1"><div className="flex items-center gap-1">
                                                 <input disabled={!editable} type="number" min="0" max="10" value={d.meal_count || ''}
                                                     onChange={(e) => { const nd = [...days]; nd[i].meal_count = e.target.value; nd[i].meal_manual = true; setDays(nd); }} className={inp + ' !w-20'} />
@@ -382,18 +458,106 @@ export default function Salary() {
                         </div>
 
                         <div className="m-card p-4 md:col-span-2">
-                            <h3 className="font-bold mb-2">Vi phạm & khoản trừ khác (tháng {month})</h3>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                <input type="number" min="0" max="100" placeholder="Số lỗi vi phạm" value={violForm.violation_count} onChange={(e) => setViolForm({ ...violForm, violation_count: e.target.value })} className={inp} disabled={!editable} />
-                                <input placeholder="Lý do vi phạm (vd Lỗi 3 chuyên)" value={violForm.violation_note} onChange={(e) => setViolForm({ ...violForm, violation_note: e.target.value })} className={inp} disabled={!editable} />
-                                <input type="number" placeholder="Khoản trừ khác (1.)" value={recForm.other_deduction} onChange={(e) => setRecForm({ ...recForm, other_deduction: e.target.value })} className={inp} disabled={!editable} />
-                                <input placeholder="Ghi chú tháng" value={recForm.note} onChange={(e) => setRecForm({ ...recForm, note: e.target.value })} className={inp} disabled={!editable} />
+                            <h3 className="font-bold mb-2">Trừ khác (tháng {month})</h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-[13px] min-w-[520px]">
+                                    <thead><tr className="text-left text-gray-500 border-b border-gray-100">
+                                        <th className="py-2 font-medium">Tên khoản trừ</th>
+                                        <th className="py-2 font-medium">Số tiền</th>
+                                        <th className="py-2 font-medium">Lý do</th>
+                                        {editable && <th className="py-2 w-10"></th>}
+                                    </tr></thead>
+                                    <tbody>
+                                        {deductions.map((d, i) => (
+                                            <tr key={d.id || 'new-' + i} className="border-b border-gray-50">
+                                                <td className="py-1.5 pr-2"><input disabled={!editable} value={d.name || ''} onChange={(e) => updDed(i, 'name', e.target.value)} className={inp} placeholder="VD: Tạm ứng" /></td>
+                                                <td className="py-1.5 pr-2"><input disabled={!editable} type="number" min="0" value={d.amount ?? ''} onChange={(e) => updDed(i, 'amount', e.target.value)} className={inp + ' !w-32'} placeholder="0" /></td>
+                                                <td className="py-1.5 pr-2"><input disabled={!editable} value={d.note || ''} onChange={(e) => updDed(i, 'note', e.target.value)} className={inp} placeholder="Lý do" /></td>
+                                                {editable && <td className="py-1.5"><button onClick={() => delDedRow(i)} className="text-red-500 text-[14px]" title="Xóa dòng">✕</button></td>}
+                                            </tr>
+                                        ))}
+                                        {deductions.length === 0 && <tr><td colSpan={editable ? 4 : 3} className="py-6 text-center text-gray-400">Chưa có khoản trừ khác.</td></tr>}
+                                    </tbody>
+                                </table>
                             </div>
-                            {editable && <button onClick={saveRecordExtra} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu</button>}
+                            <div className="flex justify-between items-center mt-2 text-[13px]">
+                                <span className="text-gray-500">Tổng trừ khác</span>
+                                <b className="text-[#24305E]">{fmt(deductions.reduce((t, d) => t + (Number(d.amount) || 0), 0))}đ</b>
+                            </div>
+                            <input placeholder="Ghi chú tháng" value={monthNote} onChange={(e) => setMonthNote(e.target.value)} className={inp + ' mt-2'} disabled={!editable} />
+                            {editable && <div className="flex gap-2 mt-3">
+                                <button onClick={addDed} className={btn + 'border border-gray-300'}>＋ Thêm khoản trừ</button>
+                                <button onClick={saveDeductions} className={btn + 'bg-[#24305E] text-white'}>Lưu</button>
+                            </div>}
+                        </div>
+
+                        <div className="m-card p-4">
+                            <h3 className="font-bold mb-2">Lỗi 3 Chuyên (tháng {month})</h3>
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-[13px]">
+                                Tự động từ chấm công: <b className="text-[#24305E]">{violAuto} lỗi</b>
+                                <div className="text-[12px] text-gray-400 mt-0.5">Cộng từ tab Lỗi 3 Chuyên — quản lý cửa hàng ghi nhận tại đó.</div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                                <input type="number" min="0" placeholder="Điều chỉnh tay (trống = tự động)" value={violOverride} onChange={(e) => setViolOverride(e.target.value)} className={inp} disabled={!editable} />
+                                <input placeholder="Lý do / ghi chú" value={violNote} onChange={(e) => setViolNote(e.target.value)} className={inp} disabled={!editable} />
+                            </div>
+                            {editable && <button onClick={saveViolations} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu</button>}
                         </div>
                     </div>
                 )}
             </div>
+
+            {/* Modal đổ giờ công từ chấm công */}
+            {impOpen && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={() => !impLoading && setImpOpen(false)}>
+                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[440px] max-h-[88vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
+                        <h2 className="font-bold text-[16px] text-[#24305E]">Đổ giờ công từ chấm công</h2>
+                        {!impResult ? (<>
+                            <p className="text-[12px] text-gray-500 mt-1 mb-3 leading-[1.7]">
+                                Lấy giờ <b>check-in/out thực tế</b> đổ vào bảng lương tháng.<br />
+                                • Quên chấm (thiếu giờ vào/ra) → <b>để trống</b>, nhập tay sau<br />
+                                • Nghỉ được duyệt → <b>0 giờ</b><br />
+                                • Ô đã nhập tay <b>không</b> bị ghi đè
+                            </p>
+                            <div className="grid grid-cols-2 gap-3 mb-4">
+                                <div>
+                                    <label className="text-[12px] text-gray-500">Tháng</label>
+                                    <input type="month" value={impMonth} onChange={(e) => setImpMonth(e.target.value)} className={inp + ' mt-1'} />
+                                </div>
+                                <div>
+                                    <label className="text-[12px] text-gray-500">Chi nhánh</label>
+                                    <select value={impBranch} onChange={(e) => setImpBranch(e.target.value)} className={inp + ' mt-1'}>
+                                        <option value="">Tất cả chi nhánh</option>
+                                        {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setImpOpen(false)} disabled={impLoading} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
+                                <button onClick={doImport} disabled={impLoading} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (impLoading ? 'bg-gray-400' : 'bg-[#0d6efd]')}>{impLoading ? 'Đang đổ...' : 'Xác nhận đổ'}</button>
+                            </div>
+                        </>) : (
+                            <div className="text-[13px] leading-[1.9] mt-2">
+                                <div>✅ Đã đổ giờ đầy đủ: <b>{impResult.imported}</b> ngày</div>
+                                <div>🏖️ Ngày nghỉ được duyệt: <b>{impResult.leave}</b> ngày</div>
+                                <div>⚠️ Thiếu chấm (để trống): <b>{impResult.incomplete}</b> ngày — cần nhập tay bổ sung</div>
+                                <div>🔒 Giữ nguyên (đã nhập tay): <b>{impResult.skipped_manual}</b> ô</div>
+                                <div className="text-gray-500">Nhân viên xử lý: {impResult.employees}</div>
+                                {(impResult.missing || []).length > 0 && (
+                                    <div className="mt-2 max-h-[160px] overflow-y-auto border border-gray-200 rounded p-2 text-[12px]">
+                                        <div className="font-semibold mb-1">Cần nhập tay bổ sung:</div>
+                                        {impResult.missing.slice(0, 50).map((m, i) => (
+                                            <div key={i}>{m.employee} — {fmtDate(m.date)}</div>
+                                        ))}
+                                        {impResult.missing.length > 50 && <div>... và {impResult.missing.length - 50} ngày nữa</div>}
+                                    </div>
+                                )}
+                                <button onClick={() => { setImpOpen(false); fetchPayroll(); }} className="w-full h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold mt-4">Đóng</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </AdminLayout>
     );
 }

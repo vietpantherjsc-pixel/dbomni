@@ -181,13 +181,16 @@ export default function Scheduling() {
     const days = weekDates(week);
     const weekLabel = ddMM(days[0]) + ' – ' + ddMM(days[6]);
 
+    // audit #28: bọc try/catch như các fetch khác
     const fetchBase = useCallback(async () => {
-        const [b, s] = await Promise.all([
-            axios.get(API + '/branches'),
-            axios.get(API + '/work-shifts', { params: { branch_id: branchId || undefined } }),
-        ]);
-        setBranches(b.data?.data || b.data || []);
-        setShifts((s.data?.data || []).filter((x) => x.is_active));
+        try {
+            const [b, s] = await Promise.all([
+                axios.get(API + '/branches'),
+                axios.get(API + '/work-shifts', { params: { branch_id: branchId || undefined } }),
+            ]);
+            setBranches(b.data?.data || b.data || []);
+            setShifts((s.data?.data || []).filter((x) => x.is_active));
+        } catch (e) { alert(e.response?.data?.message || 'Tải chi nhánh / ca làm việc thất bại'); }
     }, [branchId]);
     const fetchRegs = useCallback(async () => {
         setLoading(true);
@@ -230,7 +233,23 @@ export default function Scheduling() {
     useEffect(() => { fetchBase(); }, [fetchBase]);
     useEffect(() => { fetchDeadline(); }, [fetchDeadline]);
     useEffect(() => { if (tab === 'reg') fetchRegs(); }, [tab, fetchRegs]);
-    useEffect(() => { if (tab === 'sched') { fetchSched(); if (!branchId) fetchNotesMap(); } }, [tab, fetchSched, fetchNotesMap, branchId]);
+    // Gói 41: tab Xếp ca cũng cần danh sách đăng ký để hiện khung "chờ duyệt" đồng bộ
+    useEffect(() => { if (tab === 'sched') { fetchSched(); fetchRegs(); if (!branchId) fetchNotesMap(); } }, [tab, fetchSched, fetchRegs, fetchNotesMap, branchId]);
+    // Gói 42: nháp xếp ca — key `${bid}|${sid}|${date}` -> {empId: {on, cs, ce}}; bấm Lưu của CN mới lưu thật
+    // (khai báo trước useEffect để dependency array không dính TDZ)
+    const [drafts, setDrafts] = useState({});
+    const [branchConfirm, setBranchConfirm] = useState(null); // {bid, branchName, cells: [{sid, date, shiftName, dateLabel, added, changed, removed}]}
+    const [savingBranch, setSavingBranch] = useState(null); // bid đang lưu
+    // Gói 42: giữ nháp kể cả tắt trang (theo tuần) — quản lý xếp nhiều lần mới xong
+    const draftKey = 'sched_drafts_' + (days[0] || '');
+    useEffect(() => {
+        try { setDrafts(JSON.parse(localStorage.getItem(draftKey)) || {}); }
+        catch { setDrafts({}); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [draftKey]);
+    useEffect(() => {
+        try { localStorage.setItem(draftKey, JSON.stringify(drafts)); } catch { /* bỏ qua */ }
+    }, [draftKey, drafts]);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
     const editable = can('staff.edit');
@@ -269,51 +288,133 @@ export default function Scheduling() {
     const openAssignCell = (shiftId, date, bid, branchEmps, branchCm) => {
         const sid = String(shiftId);
         const list = ((branchCm[sid] || {})[date] || []);
+        const dkey = bid + '|' + sid + '|' + date;
+        const draft = drafts[dkey]; // Gói 42: mở lại thì hiện nháp cũ
         const init = {};
         branchEmps.forEach((e) => {
-            const ex = list.find((sc) => String(sc.employee_id) === String(e.id));
-            init[String(e.id)] = { on: !!ex, cs: ex ? hhmm(ex.custom_start_time || '') : '', ce: ex ? hhmm(ex.custom_end_time || '') : '' };
+            const eid = String(e.id);
+            if (draft && draft[eid]) {
+                init[eid] = { on: !!draft[eid].on, cs: draft[eid].cs || '', ce: draft[eid].ce || '' };
+            } else {
+                const ex = list.find((sc) => String(sc.employee_id) === String(e.id));
+                init[eid] = { on: !!ex, cs: ex ? hhmm(ex.custom_start_time || '') : '', ce: ex ? hhmm(ex.custom_end_time || '') : '' };
+            }
         });
         setAssignSel(init);
-        setAssignCell({ shiftId: sid, date, branchId: bid, emps: branchEmps, cm: branchCm });
+        setAssignCell({ shiftId: sid, date, branchId: bid, emps: branchEmps, cm: branchCm, dkey });
     };
-    const [savingCell, setSavingCell] = useState(false); // Gói 37d: chống bấm Lưu 2 lần
-    const saveCellAssign = async () => {
-        if (savingCell) return;
-        setSavingCell(true);
-        const { shiftId, date, branchId: bid, emps, cm: bcm } = assignCell;
+    // audit #32: chống bấm 2 lần cho các modal còn lại
+    const [savingCap, setSavingCap] = useState(false);
+    const [savingNote, setSavingNote] = useState(false);
+    const [savingSet, setSavingSet] = useState(false);
+    // Gói 42: Lưu nháp ô ca (chưa lưu lên server) — bấm nút Lưu của chi nhánh mới lưu thật
+    const saveDraft = () => {
+        if (!assignCell) return;
+        const { shiftId, date, emps, cm: bcm, dkey } = assignCell;
+        for (const e of emps) {
+            const sel = assignSel[String(e.id)];
+            const cs = (sel?.cs || '').slice(0, 5), ce = (sel?.ce || '').slice(0, 5);
+            if (cs && !valid24(cs)) return alert('Giờ vào riêng của ' + e.full_name + ' sai định dạng HH:MM');
+            if (ce && !valid24(ce)) return alert('Giờ ra riêng của ' + e.full_name + ' sai định dạng HH:MM');
+        }
         const list = ((bcm[String(shiftId)] || {})[date] || []);
         const exByEmp = {};
         list.forEach((sc) => { exByEmp[String(sc.employee_id)] = sc; });
-        try {
-            for (const e of emps) {
-                const eid = String(e.id);
-                const sel = assignSel[eid];
+        let changed = false;
+        const nd = {};
+        emps.forEach((e) => {
+            const eid = String(e.id);
+            const sel = assignSel[eid];
+            const ex = exByEmp[eid];
+            const on = !!sel?.on;
+            const cs = (sel?.cs || '').slice(0, 5) || '', ce = (sel?.ce || '').slice(0, 5) || '';
+            nd[eid] = { on, cs, ce };
+            const sameTime = hhmm(ex?.custom_start_time || '') === cs && hhmm(ex?.custom_end_time || '') === ce;
+            if (on !== !!ex || (on && !sameTime)) changed = true;
+        });
+        const ndrafts = { ...drafts };
+        if (changed) ndrafts[dkey] = nd;
+        else delete ndrafts[dkey]; // nháp trùng hệt đã lưu → xóa nháp
+        setDrafts(ndrafts);
+        setAssignCell(null);
+    };
+
+    // Gói 42: mở bảng xác nhận lưu tất cả ô nháp của chi nhánh
+    const openBranchConfirm = (bid) => {
+        const bCm = cellMapOf(schedsOf(bid));
+        const bEmps = empsOf(bid);
+        const cells = [];
+        Object.keys(drafts).forEach((k) => {
+            if (!k.startsWith(bid + '|')) return;
+            const [, sid, date] = k.split('|');
+            const draft = drafts[k];
+            const list = ((bCm[sid] || {})[date] || []);
+            const exByEmp = {};
+            list.forEach((sc) => { exByEmp[String(sc.employee_id)] = sc; });
+            const added = [], changed = [], removed = [];
+            Object.keys(draft).forEach((eid) => {
+                const sel = draft[eid];
                 const ex = exByEmp[eid];
-                if (sel && sel.on) {
-                    const cs = (sel.cs || '').slice(0, 5) || null;
-                    const ce = (sel.ce || '').slice(0, 5) || null;
-                    if (cs && !valid24(cs)) { alert('Giờ vào riêng của ' + e.full_name + ' sai định dạng HH:MM'); setSavingCell(false); return; }
-                    if (ce && !valid24(ce)) { alert('Giờ ra riêng của ' + e.full_name + ' sai định dạng HH:MM'); setSavingCell(false); return; }
-                    const same = ex && hhmm(ex.custom_start_time || '') === (cs || '') && hhmm(ex.custom_end_time || '') === (ce || '');
-                    // Gói 37d: backend assign đã updateOrCreate → chỉ POST, không xóa-tạo lại
-                    // (bản cũ xóa rồi tạo lại gây lỗi "No query results" khi bấm Lưu 2 lần)
-                    if (!same) {
-                        await axios.post(API + '/work-schedules/assign', {
-                            employee_id: e.id, work_shift_id: Number(shiftId), date,
-                            branch_id: bid || undefined,
-                            custom_start_time: cs, custom_end_time: ce,
-                        });
-                    }
-                } else if (ex) {
-                    await axios.delete(API + '/work-schedules/' + ex.id);
+                const emp = bEmps.find((e) => String(e.id) === eid);
+                const nm = emp?.full_name || ('#' + eid);
+                const cs = (sel.cs || '').slice(0, 5), ce = (sel.ce || '').slice(0, 5);
+                if (sel.on && !ex) added.push({ name: nm, cs, ce });
+                else if (sel.on && ex) {
+                    const same = hhmm(ex.custom_start_time || '') === cs && hhmm(ex.custom_end_time || '') === ce;
+                    if (!same) changed.push({ name: nm, cs, ce });
+                } else if (!sel.on && ex) removed.push(nm);
+            });
+            if (!added.length && !changed.length && !removed.length) return;
+            const sh = shifts.find((x) => String(x.id) === sid);
+            cells.push({ sid, date, shiftName: sh ? sh.name : '', dateLabel: WD[weekdayOf(date)] + ' ' + ddMM(date), added, changed, removed });
+        });
+        if (!cells.length) return alert('Không có thay đổi nào để lưu.');
+        const b = branches.find((x) => String(x.id) === String(bid));
+        setBranchConfirm({ bid, branchName: b?.name || '', cells });
+    };
+
+    // Gói 42: lưu thật tất cả ô nháp của chi nhánh (1 API batch)
+    const doBranchSave = async () => {
+        const { bid, cells } = branchConfirm;
+        setBranchConfirm(null);
+        setSavingBranch(bid);
+        const bCm = cellMapOf(schedsOf(bid));
+        const items = [], deletes = [];
+        cells.forEach((c) => {
+            const list = ((bCm[String(c.sid)] || {})[c.date] || []);
+            const exByEmp = {};
+            list.forEach((sc) => { exByEmp[String(sc.employee_id)] = sc.id; });
+            const draft = drafts[bid + '|' + c.sid + '|' + c.date] || {};
+            Object.keys(draft).forEach((eid) => {
+                const sel = draft[eid];
+                if (sel.on) {
+                    items.push({
+                        employee_id: Number(eid), work_shift_id: Number(c.sid), date: c.date,
+                        branch_id: bid || undefined,
+                        custom_start_time: (sel.cs || '').slice(0, 5) || null,
+                        custom_end_time: (sel.ce || '').slice(0, 5) || null,
+                    });
+                } else if (exByEmp[eid]) {
+                    deletes.push(exByEmp[eid]);
                 }
-            }
-            setAssignCell(null);
+            });
+        });
+        try {
+            await axios.post(API + '/work-schedules/batch-save', { items, deletes });
+            const nd = { ...drafts };
+            Object.keys(nd).forEach((k) => { if (k.startsWith(bid + '|')) delete nd[k]; });
+            setDrafts(nd);
             fetchSched();
-            if (!branchId) fetchNotesMap();
-        } catch (e) { alert(e.response?.data?.message || 'Lưu phân ca thất bại'); fetchSched(); }
-        setSavingCell(false);
+        } catch (e) { alert(e.response?.data?.message || 'Lưu lịch thất bại'); }
+        setSavingBranch(null);
+    };
+
+    // Gói 42: bỏ tất cả nháp của chi nhánh
+    const discardDrafts = (bid) => {
+        if (!window.confirm('Bỏ tất cả các ô đang nháp của chi nhánh này?')) return;
+        const nd = { ...drafts };
+        Object.keys(nd).forEach((k) => { if (k.startsWith(bid + '|')) delete nd[k]; });
+        setDrafts(nd);
     };
 
     // ---- Sức chứa ô ca×ngày ----
@@ -322,9 +423,12 @@ export default function Scheduling() {
         setCapVal(cur == null ? '' : String(cur));
         setCapCell({ shiftId: String(shiftId), date });
     };
+    // audit #32: cờ saving + disabled nút (copy pattern savingCell)
     const saveCap = async () => {
+        if (savingCap) return;
         const v = capVal.trim() === '' ? null : parseInt(capVal, 10);
         if (v !== null && !(v >= 1 && v <= 100)) return alert('Nhập số từ 1 đến 100, hoặc để trống = không giới hạn');
+        setSavingCap(true);
         try {
             await axios.post(API + '/work-shift-capacities', {
                 work_shift_id: Number(capCell.shiftId), weekday: weekdayOf(capCell.date), max_staff: v,
@@ -332,11 +436,14 @@ export default function Scheduling() {
             setCapCell(null);
             fetchSched();
         } catch (e) { alert(e.response?.data?.message || 'Lưu sức chứa thất bại'); }
+        setSavingCap(false);
     };
 
     // ---- Ghi chú tuần (Gói 37b: theo chi nhánh của bảng) ----
     const openNote = (bid) => { setNoteBid(bid); setNoteVal(noteOf(bid) || ''); setNoteOpen(true); };
     const saveNote = async () => {
+        if (savingNote) return;
+        setSavingNote(true);
         try {
             await axios.put(API + '/schedule-notes', {
                 week: days[0], branch_id: noteBid || null, note: noteVal.trim() || null,
@@ -345,13 +452,16 @@ export default function Scheduling() {
             fetchSched();
             if (!branchId) fetchNotesMap();
         } catch (e) { alert(e.response?.data?.message || 'Lưu ghi chú thất bại'); }
+        setSavingNote(false);
     };
 
     // ---- Cài đặt hạn chót ----
     const [dlForm, setDlForm] = useState({ weekday: '5', time: '20:00' });
     const openSettings = () => { setDlForm({ ...dl }); setSetOpen(true); };
     const saveSettings = async () => {
+        if (savingSet) return;
         if (!valid24(dlForm.time)) return alert('Giờ chốt chưa đúng định dạng HH:MM (VD: 20:00)');
+        setSavingSet(true);
         try {
             await axios.post(API + '/settings', { settings: {
                 shift_reg_deadline_weekday: String(dlForm.weekday),
@@ -361,6 +471,31 @@ export default function Scheduling() {
             setSetOpen(false);
             alert('Đã lưu hạn chót đăng ký ca.');
         } catch (e) { alert(e.response?.data?.message || 'Lưu cài đặt thất bại'); }
+        setSavingSet(false);
+    };
+
+    // ---- B2: duyệt / từ chối đăng ký ca ----
+    const approveReg = async (id) => {
+        try {
+            await axios.post(API + '/shift-registrations/' + id + '/approve');
+            fetchRegs();
+        } catch (e) { alert(e.response?.data?.message || 'Duyệt thất bại'); }
+    };
+    const rejectReg = async (id) => {
+        const note = window.prompt('Lý do từ chối (không bắt buộc):');
+        if (note === null) return; // bấm Hủy → thôi
+        try {
+            await axios.post(API + '/shift-registrations/' + id + '/reject', { note: note.trim() || null });
+            fetchRegs();
+            if (tab === 'sched') fetchSched();
+        } catch (e) { alert(e.response?.data?.message || 'Từ chối thất bại'); }
+    };
+    // Gói 41: duyệt + tự động xếp NV vào ca ngay trên bảng Xếp ca
+    const approveRegSched = async (r) => {
+        try {
+            await axios.post(API + '/shift-registrations/' + r.id + '/approve-and-assign');
+            fetchRegs(); fetchSched();
+        } catch (e) { alert(e.response?.data?.message || 'Duyệt & xếp ca thất bại'); }
     };
 
     // Gói 37b: xuất PNG theo từng bảng chi nhánh
@@ -368,6 +503,9 @@ export default function Scheduling() {
         const bid = String(b.id);
         const bShifts = shiftsOf(bid);
         if (!bShifts.length) return alert('Chưa có ca làm việc nào');
+        // Gói 42: ảnh PNG xuất theo lịch ĐÃ LƯU — báo nếu còn nháp chưa lưu
+        const bcnt = Object.keys(drafts).filter((k) => k.startsWith(bid + '|')).length;
+        if (bcnt > 0 && !window.confirm('Còn ' + bcnt + ' ô chưa lưu. Xuất ảnh theo lịch ĐÃ LƯU (không gồm nháp)?')) return;
         exportSchedulePNG({ branchName: b.name, days, shifts: bShifts, cellMap: cellMapOf(schedsOf(bid)), capOf, note: noteOf(bid) });
     };
 
@@ -453,7 +591,13 @@ export default function Scheduling() {
                                                                 ? <span className="text-gray-300 text-[12px]">—</span>
                                                                 : list.map((r) => (
                                                                     <div key={r.id} className={'font-semibold text-[13px] leading-[1.55] ' + (r.status === 'approved' ? 'text-green-700' : r.status === 'rejected' ? 'text-red-400 line-through' : 'text-[#1d4ed8]')}>
-                                                                        {r.employee?.full_name}
+                                                                        <span>{r.employee?.full_name}</span>
+                                                                        {editable && r.status === 'submitted' && (
+                                                                            <span className="ml-1 whitespace-nowrap">
+                                                                                <button onClick={() => approveReg(r.id)} title="Duyệt" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
+                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                 ))}
                                                         </td>
@@ -481,12 +625,33 @@ export default function Scheduling() {
                     const bShifts = shiftsOf(bid);
                     const bCm = cellMapOf(schedsOf(bid));
                     const bNote = noteOf(bid);
+                    // Gói 41: đăng ký chờ duyệt của CN này -> [shiftId][date] để hiện trong ô xếp ca
+                    const bPend = {};
+                    (regs.registrations || []).forEach((r) => {
+                        if (r.status !== 'submitted') return;
+                        if (String(r.employee?.branch_id) !== bid) return;
+                        const psid = String(r.work_shift_id);
+                        (bPend[psid] = bPend[psid] || {});
+                        (bPend[psid][r.date] = bPend[psid][r.date] || []).push(r);
+                    });
                     return (
                     <div key={bid} className="mb-6">
                         <div className="rounded-xl p-4 mb-3 text-white" style={{ background: '#24305E' }}>
                             <div className="flex flex-wrap items-center gap-3">
                                 <div className="font-extrabold text-[17px] tracking-wide">LỊCH LÀM VIỆC TUẦN {weekLabel}</div>
                                 <button onClick={() => doExport(b)} className="ml-auto px-3 py-1.5 rounded bg-[#F5A623] text-[#24305E] text-[12px] font-semibold">⬇ Xuất ảnh PNG</button>
+                                {editable && (() => {
+                                    // Gói 42: nút Lưu theo chi nhánh — lưu tất cả ô đang nháp (bấm được nhiều lần)
+                                    const bcnt = Object.keys(drafts).filter((k) => k.startsWith(bid + '|')).length;
+                                    const dis = bcnt === 0 || savingBranch === bid;
+                                    return (<>
+                                        <button onClick={() => openBranchConfirm(bid)} disabled={dis}
+                                            className={'px-3 py-1.5 rounded text-[12px] font-semibold ' + (dis ? 'bg-gray-500 text-gray-200' : 'bg-green-600 text-white')}>
+                                            {savingBranch === bid ? 'Đang lưu...' : '💾 Lưu' + (bcnt ? ' (' + bcnt + ')' : '')}
+                                        </button>
+                                        {bcnt > 0 && <button onClick={() => discardDrafts(bid)} className="text-[12px] text-red-300 underline">Bỏ nháp</button>}
+                                    </>);
+                                })()}
                             </div>
                             <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-[13px] text-[#dbe1f5]">
                                 <span>Chi nhánh: <b className="text-white">{b.name}</b></span>
@@ -521,23 +686,47 @@ export default function Scheduling() {
                                                 {days.map((d) => {
                                                     const list = ((bCm[sid] || {})[d] || []);
                                                     const cap = capOf(sid, d);
-                                                    const over = cap != null && list.length > cap;
-                                                    const full = cap != null && list.length === cap;
+                                                    const dkey = bid + '|' + sid + '|' + d;
+                                                    const draft = drafts[dkey]; // Gói 42: có nháp thì hiện nội dung nháp
+                                                    const shown = draft
+                                                        ? bEmps.filter((e) => draft[String(e.id)]?.on).map((e) => {
+                                                            const sel = draft[String(e.id)];
+                                                            return { id: 'draft-' + e.id, employee: e, is_custom: !!(sel.cs || sel.ce), start_time: sel.cs || '', end_time: sel.ce || '' };
+                                                        })
+                                                        : list;
+                                                    const over = cap != null && shown.length > cap;
+                                                    const full = cap != null && shown.length === cap;
+                                                    const pend = ((bPend[sid] || {})[d] || []); // Gói 41: đăng ký chờ duyệt
                                                     return (
                                                         <td key={d} className="px-2 py-2 border border-gray-200 align-top hover:bg-[#f6f8ff] cursor-pointer min-w-[120px]"
                                                             onClick={() => editable && openAssignCell(sid, d, bid, bEmps, bCm)} title={editable ? 'Bấm để gán nhân viên' : ''}>
-                                                            {list.length === 0 && <div className="text-gray-300 text-[12px]">+ Gán</div>}
-                                                            {list.map((sc) => (
+                                                            {shown.length === 0 && pend.length === 0 && <div className="text-gray-300 text-[12px]">+ Gán</div>}
+                                                            {shown.map((sc) => (
                                                                 <div key={sc.id} className="text-[#1d4ed8] font-semibold text-[13px] leading-[1.55]">
                                                                     {sc.employee?.full_name}
                                                                     {sc.is_custom && <div className="text-[11px] font-medium text-[#b45309]">✎ {hhmm(sc.start_time)}–{hhmm(sc.end_time)}</div>}
                                                                 </div>
                                                             ))}
+                                                            {draft && <div><span className="inline-block mt-1 text-[10px] font-bold text-[#b45309] bg-[#fef3c7] border border-[#fcd34d] rounded-full px-2 py-0.5">● chưa lưu</span></div>}
+                                                            {pend.length > 0 && (
+                                                                <div className="mt-1.5 border-[1.5px] border-dashed border-[#F5A623] rounded-lg px-1.5 py-1 bg-[#fffaf0]" onClick={(e) => e.stopPropagation()}>
+                                                                    <div className="text-[10px] font-bold text-[#b45309] mb-0.5">📝 Chờ duyệt ({pend.length})</div>
+                                                                    {pend.map((r) => (
+                                                                        <div key={r.id} className="flex items-center gap-1 py-0.5">
+                                                                            <span className="flex-1 text-[12px] font-semibold text-[#92400e] truncate">{r.employee?.full_name}</span>
+                                                                            {editable && (<span className="whitespace-nowrap">
+                                                                                <button onClick={() => approveRegSched(r)} title="Duyệt & tự xếp vào ca" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
+                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
+                                                                            </span>)}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
                                                             <span
                                                                 className={'inline-block mt-1.5 text-[11px] font-bold px-2.5 py-0.5 rounded-full cursor-pointer ' + (over ? 'bg-red-100 text-red-700' : full ? 'bg-[#fff3e0] text-[#b45309]' : 'bg-[#eef0f8] text-[#24305E]')}
                                                                 onClick={(e) => { e.stopPropagation(); if (editable) openCap(sid, d); }}
                                                                 title={editable ? 'Bấm để sửa sức chứa ô này' : ''}>
-                                                                {list.length}/{cap == null ? '∞' : cap}
+                                                                {shown.length}/{cap == null ? '∞' : cap}
                                                             </span>
                                                         </td>
                                                     );
@@ -564,18 +753,21 @@ export default function Scheduling() {
             {/* Popup gán NV cho ô ca×ngày */}
             {assignCell && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={() => setAssignCell(null)}>
-                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[430px] max-h-[88vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
+                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[430px] max-h-[88vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-5 pb-3 shrink-0">
                         {(() => {
                             const s = shifts.find((x) => String(x.id) === String(assignCell.shiftId));
-                            const bcm = assignCell.cm || {};
                             const cap = capOf(assignCell.shiftId, assignCell.date);
-                            const n = ((bcm[String(assignCell.shiftId)] || {})[assignCell.date] || []).length;
+                            // audit #27: đếm từ assignSel (lựa chọn hiện tại), không phải dữ liệu cũ trong ô
+                            const n = Object.values(assignSel).filter((x) => x?.on).length;
                             return (<>
                                 <h2 className="font-bold text-[16px] text-[#24305E]">{s?.name} · {WD[weekdayOf(assignCell.date)]} {ddMM(assignCell.date)}</h2>
                                 <p className="text-[12px] text-gray-500 mt-1 mb-3">{s ? hhmm(s.start_time) + '–' + hhmm(s.end_time) : ''} — sức chứa ô này: <b>{cap == null ? '∞' : cap}</b> người. Bấm tên để chọn/bỏ chọn; giờ riêng để trống = theo giờ ca.</p>
                                 <div className="text-[13px] font-semibold text-[#24305E] mb-1">Đã chọn: {n}{cap != null ? '/' + cap : ''} người</div>
                             </>);
                         })()}
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-5">
                         <div className="divide-y divide-gray-100">
                             {(assignCell.emps || []).map((e) => {
                                 const eid = String(e.id);
@@ -597,9 +789,56 @@ export default function Scheduling() {
                             })}
                             {(assignCell.emps || []).length === 0 && <div className="py-6 text-center text-gray-400 text-[13px]">Chưa có nhân viên.</div>}
                         </div>
-                        <div className="flex gap-2 mt-4">
+                        </div>
+                        {/* Gói 41b: nút Hủy/Lưu dính đáy popup — luôn thấy được kể cả danh sách dài */}
+                        <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
+                        <div className="flex gap-2">
                             <button onClick={() => setAssignCell(null)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                            <button onClick={saveCellAssign} disabled={savingCell} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (savingCell ? 'bg-gray-400' : 'bg-[#24305E]')}>{savingCell ? 'Đang lưu...' : 'Lưu'}</button>
+                            <button onClick={saveDraft} className="flex-1 h-11 rounded-xl text-white text-[14px] font-semibold bg-[#24305E]">Lưu nháp</button>
+                        </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Gói 42: Xác nhận lưu tất cả ô nháp của chi nhánh */}
+            {branchConfirm && (
+                <div className="fixed inset-0 bg-black/40 z-[60] flex items-end sm:items-center justify-center" onClick={() => setBranchConfirm(null)}>
+                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[460px] max-h-[88vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-5 pb-2 shrink-0">
+                        <h2 className="font-bold text-[16px] text-[#24305E]">✋ Xác nhận lưu lịch</h2>
+                        <p className="text-[12px] text-gray-500 mt-1 mb-3">Chi nhánh <b>{branchConfirm.branchName}</b> · tuần {weekLabel} — các thay đổi dưới đây sẽ được lưu:</p>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-5">
+                        {branchConfirm.cells.map((c, ci) => (
+                            <div key={ci} className="py-2 border-b border-dashed border-gray-200">
+                                <div className="font-bold text-[13px] text-[#24305E]">{c.shiftName} · {c.dateLabel}</div>
+                                {c.added.map((a, i) => (
+                                    <div key={'a' + i} className="flex justify-between py-1 text-[13px]">
+                                        <span className="text-green-700 font-medium">＋ Thêm</span>
+                                        <b>{a.name}{a.cs || a.ce ? <span className="font-mono font-normal text-gray-500"> ({a.cs || '…'}–{a.ce || '…'})</span> : ''}</b>
+                                    </div>
+                                ))}
+                                {c.changed.map((a, i) => (
+                                    <div key={'c' + i} className="flex justify-between py-1 text-[13px]">
+                                        <span className="text-[#b45309] font-medium">✎ Đổi giờ</span>
+                                        <b>{a.name}<span className="font-mono font-normal text-gray-500"> ({a.cs || '…'}–{a.ce || '…'})</span></b>
+                                    </div>
+                                ))}
+                                {c.removed.map((n, i) => (
+                                    <div key={'r' + i} className="flex justify-between py-1 text-[13px]">
+                                        <span className="text-red-600 font-medium">－ Bỏ</span>
+                                        <b>{n}</b>
+                                    </div>
+                                ))}
+                            </div>
+                        ))}
+                        </div>
+                        <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
+                        <div className="flex gap-2">
+                            <button onClick={() => setBranchConfirm(null)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">← Quay lại</button>
+                            <button onClick={doBranchSave} className="flex-1 h-11 rounded-xl text-white text-[14px] font-semibold bg-[#16a34a]">Xác nhận lưu</button>
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -616,7 +855,7 @@ export default function Scheduling() {
                             className={inp} />
                         <div className="flex gap-2 mt-4">
                             <button onClick={() => setCapCell(null)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                            <button onClick={saveCap} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold">Lưu</button>
+                            <button onClick={saveCap} disabled={savingCap} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (savingCap ? 'bg-gray-400' : 'bg-[#24305E]')}>{savingCap ? 'Đang lưu...' : 'Lưu'}</button>
                         </div>
                     </div>
                 </div>
@@ -631,7 +870,7 @@ export default function Scheduling() {
                         <textarea value={noteVal} onChange={(e) => setNoteVal(e.target.value)} rows={6} className={inp + ' leading-[1.6]'} placeholder={'Tiktok: Phúc +\nWC: Uyên'} />
                         <div className="flex gap-2 mt-4">
                             <button onClick={() => setNoteOpen(false)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                            <button onClick={saveNote} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold">Lưu ghi chú</button>
+                            <button onClick={saveNote} disabled={savingNote} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (savingNote ? 'bg-gray-400' : 'bg-[#24305E]')}>{savingNote ? 'Đang lưu...' : 'Lưu ghi chú'}</button>
                         </div>
                     </div>
                 </div>
@@ -657,7 +896,7 @@ export default function Scheduling() {
                         </div>
                         <div className="flex gap-2 mt-4">
                             <button onClick={() => setSetOpen(false)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                            <button onClick={saveSettings} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold">Lưu cài đặt</button>
+                            <button onClick={saveSettings} disabled={savingSet} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (savingSet ? 'bg-gray-400' : 'bg-[#24305E]')}>{savingSet ? 'Đang lưu...' : 'Lưu cài đặt'}</button>
                         </div>
                     </div>
                 </div>

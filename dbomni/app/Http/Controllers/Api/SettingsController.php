@@ -49,10 +49,14 @@ class SettingsController extends Controller
     }
 
     // Gói 7p: lấy màu chủ đạo giao diện (public cho Mini App)
+    // Gói 47: kèm font chữ
+    // Gói 48: kèm thời gian trượt banner KM
     public function publicTheme(): JsonResponse
     {
         return response()->json([
             'primary' => Setting::get('theme_primary', '#24305E'),
+            'font_family' => Setting::get('font_family', 'Inter'),
+            'promo_slide_interval' => (int) Setting::get('promo_slide_interval', 5),
         ]);
     }
 

@@ -8,6 +8,8 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; }
+/* Gói 47b: nút/input/select/textarea kế thừa font từ body (theo font Đại Vương chọn ở Thiết lập) */
+button, input, select, textarea { font-family: inherit; }
 #root { max-width: 480px; margin: 0 auto; background: #fff; min-height: 100vh; position: relative; }
 
 .zm-page { padding-bottom: 90px; min-height: 100vh; background: #fff; }
@@ -53,6 +55,8 @@ html, body { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif
 .zm-add-btn:active { transform: scale(.92); }
 
 .zm-cartbar { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid #eee; z-index: 30; } /* Gói 10c: cao hơn tabbar (20) để không bị che */
+/* Gói 49d: khi có tabbar bên dưới, cartbar nổi lên trên tabbar thay vì đè lên */
+.zm-cartbar.above-tab { bottom: 62px; padding-bottom: 12px; }
 .zm-btn-primary { width: 100%; background: var(--zm-primary); color: #fff; border: none; border-radius: 28px; padding: 15px; font-size: 16px; font-weight: 800; cursor: pointer; }
 .zm-btn-primary:disabled { background: #ccc; cursor: not-allowed; }
 .zm-btn-outline { width: 100%; background: #fff; color: var(--zm-primary); border: 1.5px solid var(--zm-primary); border-radius: 28px; padding: 13px; font-size: 15px; font-weight: 700; cursor: pointer; }
@@ -122,7 +126,7 @@ html, body { font-family: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif
 .zm-ot-head .c-price, .zm-ot-row .c-price { width: 66px; flex-shrink: 0; text-align: right; font-size: 12px; color: #666; }
 .zm-ot-head .c-total, .zm-ot-row .c-total { width: 82px; flex-shrink: 0; text-align: right; font-weight: 700; }
 /* Gói 10c: badge số món trên tab Giỏ hàng */
-.zm-tabbar-badge { position: absolute; top: -6px; right: -14px; min-width: 18px; height: 18px; border-radius: 9px; background: #e11d48; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
+.zm-tabbar-badge { position: absolute; top: -6px; right: 2px; min-width: 18px; height: 18px; border-radius: 9px; background: #e11d48; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
 
 .zm-empty { text-align: center; padding: 60px 20px; color: #aaa; font-size: 14px; }
 .zm-note { font-size: 12px; color: #888; background: #f9f9f9; border-radius: 10px; padding: 10px 12px; margin-top: 10px; line-height: 1.5; }

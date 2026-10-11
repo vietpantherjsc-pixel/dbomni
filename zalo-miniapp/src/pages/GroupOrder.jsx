@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { api, fmt, getMyGroups, saveMyGroup, getRef } from '../api';
+import { api, fmt, priceOf, getMyGroups, saveMyGroup, getRef } from '../api';
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
 import { TabBar } from './Home';
@@ -198,7 +198,7 @@ export default function GroupRoom() {
                   <img src={img(p)} alt={p.name} loading="lazy" />
                   <div className="zm-row-info">
                     <div className="zm-row-name">{p.name}</div>
-                    <div className="zm-row-price">{fmt(p.base_price)}đ</div>
+                    <div className="zm-row-price">{fmt(priceOf(p))}đ</div>
                   </div>
                   <button className="zm-add-btn" onClick={(e) => { e.stopPropagation(); setSheet(p); }}>+</button>
                 </div>

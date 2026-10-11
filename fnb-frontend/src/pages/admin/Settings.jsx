@@ -4,6 +4,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { applyThemeColor, getStoredTheme, DEFAULT_PRIMARY, THEME_PRESETS } from '../../utils/theme';
+import { applyFont, getStoredFont, DEFAULT_FONT, FONT_PRESETS } from '../../utils/font';
 import { DECIMAL_LABELS } from '../../utils/number';
 
 // Gói 26 (2026-10-09): Cấu hình phụ cấp ăn, tỷ lệ BHXH, ngày lễ.
@@ -58,7 +59,7 @@ const PayrollConfig = () => {
             <div className="grid sm:grid-cols-2 gap-4 max-w-xl mb-4">
                 {F.map(([k, label]) => (
                     <div key={k}><label className="m-label">{label}</label>
-                        <input type="number" step="any" value={cfg[k]} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })} className="m-input w-40" /></div>
+                        <input type="number" step="any" value={cfg[k]} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })} className="m-input !w-40" /></div>
                 ))}
             </div>
             <button onClick={save} className="m-btn m-btn-primary">Lưu cấu hình</button>
@@ -84,8 +85,8 @@ const PayrollConfig = () => {
             </div>
             <div className="flex flex-wrap gap-2 items-end">
                 <div><label className="m-label">Ngày</label><DateInput value={hForm.date} onChange={(v) => setHForm({ ...hForm, date: v })} className="m-input" /></div>
-                <div><label className="m-label">Tên ngày lễ</label><input value={hForm.name} onChange={(e) => setHForm({ ...hForm, name: e.target.value })} placeholder="VD: Tết Dương lịch" className="m-input w-48" /></div>
-                <div><label className="m-label">Hệ số</label><input type="number" step="0.5" min="1" value={hForm.multiplier} onChange={(e) => setHForm({ ...hForm, multiplier: e.target.value })} className="m-input w-24" /></div>
+                <div><label className="m-label">Tên ngày lễ</label><input value={hForm.name} onChange={(e) => setHForm({ ...hForm, name: e.target.value })} placeholder="VD: Tết Dương lịch" className="m-input !w-48" /></div>
+                <div><label className="m-label">Hệ số</label><input type="number" step="0.5" min="1" value={hForm.multiplier} onChange={(e) => setHForm({ ...hForm, multiplier: e.target.value })} className="m-input !w-24" /></div>
                 <button onClick={addHoliday} className="m-btn m-btn-primary">+ Thêm</button>
             </div>
         </div>
@@ -242,9 +243,18 @@ const Settings = () => {
     const [decimals, setDecimals] = useState({ price: 0, quantity: 1, tax: 0, discount: 0 });
     const [savingDec, setSavingDec] = useState(false);
     const [decMsg, setDecMsg] = useState('');
+    // Gói 47: font chữ
+    const [font, setFont] = useState(DEFAULT_FONT);
+    const [savingFont, setSavingFont] = useState(false);
+    // Gói 49c: thời gian trượt banner KM
+    const [slideInt, setSlideInt] = useState('5');
+    const [savingSlide, setSavingSlide] = useState(false);
+    const [slideMsg, setSlideMsg] = useState('');
+    const [fontMsg, setFontMsg] = useState('');
 
     useEffect(() => {
         setPrimary(getStoredTheme() || DEFAULT_PRIMARY);
+        setFont(getStoredFont() || DEFAULT_FONT); // Gói 47
         (async () => {
             try {
                 const res = await axios.get('http://localhost/api/settings/theme');
@@ -265,6 +275,10 @@ const Settings = () => {
                         tax: Number(res.data.decimals_tax ?? 0),
                         discount: Number(res.data.decimals_discount ?? 0),
                     });
+                    // Gói 47: font chữ
+                    if (res.data.font_family) setFont(res.data.font_family);
+                    // Gói 49c: thời gian trượt banner
+                    if (res.data.promo_slide_interval) setSlideInt(String(res.data.promo_slide_interval));
                 }
             } catch (e) { /* giữ mặc định */ }
         })();
@@ -288,6 +302,26 @@ const Settings = () => {
             setMsg('Lưu thất bại, thử lại.');
         } finally {
             setSaving(false);
+        }
+    };
+
+    // Gói 47: font chữ
+    const pickFont = (family) => {
+        setFont(family);
+        applyFont(family); // xem trước ngay
+        setFontMsg('');
+    };
+    const saveFont = async () => {
+        setSavingFont(true);
+        setFontMsg('');
+        try {
+            await axios.post('http://localhost/api/settings', { settings: { font_family: font } });
+            applyFont(font);
+            setFontMsg('Đã lưu font chữ. Áp dụng cho web admin.');
+        } catch (e) {
+            setFontMsg('Lưu thất bại, thử lại.');
+        } finally {
+            setSavingFont(false);
         }
     };
 
@@ -355,6 +389,61 @@ const Settings = () => {
                     </div>
                 </div>
 
+                {/* Gói 47: Font chữ */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Font chữ giao diện</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Tất cả font đều hỗ trợ đầy đủ tiếng Việt. Bấm để xem trước ngay trên toàn trang.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+                        {FONT_PRESETS.map((f) => (
+                            <button
+                                key={f.family}
+                                onClick={() => pickFont(f.family)}
+                                className="text-left border-2 rounded-xl p-4 transition-all hover:shadow-md"
+                                style={{ borderColor: font === f.family ? 'var(--m-primary)' : 'var(--m-line)', background: font === f.family ? 'var(--m-accent-soft)' : '#fff' }}
+                            >
+                                <div className="text-[18px] font-bold mb-1" style={{ fontFamily: `${f.family}, sans-serif` }}>{f.name}</div>
+                                <div className="text-[13px] mb-1" style={{ fontFamily: `${f.family}, sans-serif`, color: 'var(--m-ink-soft)' }}>
+                                    Cà phê sữa đá — 45.000đ
+                                </div>
+                                <div className="text-[11px]" style={{ color: 'var(--m-ink-faint)' }}>{f.desc}</div>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button onClick={saveFont} disabled={savingFont} className="m-btn m-btn-primary" style={savingFont ? { opacity: 0.5 } : {}}>
+                            {savingFont ? 'Đang lưu...' : 'Lưu font chữ'}
+                        </button>
+                        {fontMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{fontMsg}</span>}
+                    </div>
+                </div>
+
+                {/* Gói 49c: thời gian trượt banner KM */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Banner khuyến mại (Zalo Mini App)</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Banner hiển thị dạng slider trong mục Thành viên trên Mini App. Tải ảnh banner tại trang Khuyến mại.
+                    </p>
+                    <div className="flex items-center gap-3">
+                        <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Tự chuyển ảnh sau mỗi</label>
+                        <input type="number" min="2" max="30" value={slideInt} onChange={(e) => setSlideInt(e.target.value)}
+                            className="!w-[76px] m-input text-center" />
+                        <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>giây</span>
+                        <button onClick={async () => {
+                            setSavingSlide(true); setSlideMsg('');
+                            try {
+                                await axios.post('http://localhost/api/settings', { settings: { promo_slide_interval: slideInt } });
+                                setSlideMsg('Đã lưu.');
+                            } catch (e) { setSlideMsg('Lưu thất bại.'); }
+                            finally { setSavingSlide(false); }
+                        }} disabled={savingSlide} className="m-btn m-btn-primary" style={savingSlide ? { opacity: 0.5 } : {}}>
+                            {savingSlide ? 'Đang lưu...' : 'Lưu'}
+                        </button>
+                        {slideMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{slideMsg}</span>}
+                    </div>
+                </div>
+
                 {/* Gói 8a: Thuế & giá */}
                 <div className="m-card p-6 mt-4">
                     <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Thuế & giá</h2>
@@ -375,7 +464,7 @@ const Settings = () => {
                             <label className="m-label">Thuế suất mặc định (%)</label>
                             <input type="number" min="0" max="100" step="0.5" value={defaultTaxRate}
                                 onChange={(e) => setDefaultTaxRate(e.target.value)}
-                                className="m-input w-40" placeholder="VD: 8" />
+                                className="m-input !w-40" placeholder="VD: 8" />
                         </div>
                     </div>
                     <div className="flex items-center gap-3 mt-5">

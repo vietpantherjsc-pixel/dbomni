@@ -124,6 +124,59 @@ class InventoryService
     }
 
     /**
+     * Gói 43: Trừ kho FIFO và TRẢ VỀ chi tiết từng lô đã trừ (để tính giá vốn khi chuyển kho).
+     * Không tự bọc transaction — caller bọc (dùng cho chuyển kho: trừ nguồn + nhập đích trong 1 transaction).
+     *
+     * @param array $needs [material_id => quantity] (đơn vị cơ sở)
+     * @return array [material_id => [['batch_id' => int, 'quantity' => float, 'unit_cost' => float, 'expired_at' => ?string], ...]]
+     */
+    public function deductMaterialsDetailed(int $branchId, array $needs): array
+    {
+        $result = [];
+        foreach ($needs as $materialId => $qtyNeeded) {
+            $qtyNeeded = (float) $qtyNeeded;
+            if ($qtyNeeded <= 0) {
+                continue;
+            }
+            $batches = Batch::where('branch_id', $branchId)
+                ->where('material_id', $materialId)
+                ->where('status', 'active')
+                ->where('current_quantity', '>', 0)
+                ->orderByRaw('expired_at IS NULL, expired_at ASC')
+                ->orderBy('id', 'ASC')
+                ->lockForUpdate()
+                ->get();
+
+            if ($batches->sum('current_quantity') < $qtyNeeded) {
+                $mat = \App\Models\Material::find($materialId);
+                $name = $mat ? $mat->name : "#{$materialId}";
+                throw new Exception("Nguyên liệu {$name} không đủ tồn kho (cần {$qtyNeeded}, còn {$batches->sum('current_quantity')}).");
+            }
+
+            $remaining = $qtyNeeded;
+            foreach ($batches as $batch) {
+                if ($remaining <= 0) {
+                    break;
+                }
+                $deduct = min((float) $batch->current_quantity, $remaining);
+                $batch->current_quantity -= $deduct;
+                if ((float) $batch->current_quantity == 0) {
+                    $batch->status = 'exhausted';
+                }
+                $batch->save();
+                $result[$materialId][] = [
+                    'batch_id' => $batch->id,
+                    'quantity' => $deduct,
+                    'unit_cost' => (float) $batch->unit_cost,
+                    'expired_at' => $batch->expired_at,
+                ];
+                $remaining -= $deduct;
+            }
+        }
+        return $result;
+    }
+
+    /**
      * Trừ kho theo FIFO cho 1 chi nhánh. Ném Exception khi không đủ tồn kho.
      *
      * @param array $lines [['product_id' => int, 'product_option_id' => int|null, 'quantity' => int]]

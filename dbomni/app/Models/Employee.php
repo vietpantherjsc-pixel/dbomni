@@ -20,7 +20,7 @@ class Employee extends Authenticatable
         'apply_responsibility',
     ];
 
-    protected $hidden = ['password', 'remember_token'];
+    protected $hidden = ['password', 'remember_token', 'pin_code']; // Gói 38: PIN không lộ trong API
 
     protected $casts = [
         'dob' => 'date',
@@ -28,6 +28,7 @@ class Employee extends Authenticatable
         'is_active' => 'boolean',
         'apply_responsibility' => 'boolean',
         'password' => 'hashed',
+        'pin_code' => 'hashed', // Gói 38: PIN 6 số lưu hash bcrypt, không plaintext
     ];
 
     public function role(): BelongsTo

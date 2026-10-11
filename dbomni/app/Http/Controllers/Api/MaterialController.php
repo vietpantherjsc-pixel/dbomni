@@ -64,11 +64,33 @@ class MaterialController extends Controller
 
     public function destroy(int $id): JsonResponse
     {
+        // Gói 46: cho xóa khi tồn kho về 0 (xóa mềm, giữ lịch sử);
+        // chặn khi còn trong định mức (BOM).
         $material = Material::findOrFail($id);
-        if ($material->batches()->exists()) {
-            return response()->json(['success' => false, 'message' => 'Nguyên liệu đã có lô nhập, không thể xóa.'], 400);
+
+        // 1. Kiểm tra còn trong định mức món ăn / công thức chế biến không
+        $productIds = \App\Models\Recipe::where('material_id', $id)->distinct()->pluck('product_id');
+        $inProduction = \App\Models\ProductionRecipe::where('material_id', $id)
+            ->orWhere('raw_material_id', $id)->exists();
+        $dishCount = $productIds->count();
+        if ($dishCount > 0 || $inProduction) {
+            $extra = $inProduction ? ' và công thức chế biến' : '';
+            return response()->json([
+                'success' => false,
+                'message' => "Không xóa được \"{$material->name}\": đang dùng trong {$dishCount} món{$extra}. Hãy gỡ khỏi định mức trước.",
+            ], 422);
         }
-        $material->delete();
-        return response()->json(['success' => true, 'message' => 'Đã xóa nguyên liệu']);
+
+        // 2. Kiểm tra tồn kho về 0 (mọi chi nhánh)
+        $stock = (float) $material->batches()->sum('current_quantity');
+        if ($stock > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "Không xóa được \"{$material->name}\": tồn kho còn {$stock} {$material->unit}. Chỉ xóa được khi tồn về 0.",
+            ], 422);
+        }
+
+        $material->delete(); // xóa mềm — lịch sử lô/phiếu vẫn giữ
+        return response()->json(['success' => true, 'message' => "Đã xóa \"{$material->name}\" (lịch sử vẫn được giữ lại)."]);
     }
 }

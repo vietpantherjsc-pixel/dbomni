@@ -48,14 +48,40 @@ class EmployeeAuthController extends Controller
     }
 
     // Xác thực PIN 6 số -> phiên thu ngân ở POS/KDS (gọi khi đã có token đăng nhập)
+    // Gói 38: BẮT BUỘC kèm phone (hoặc username) + PIN — không cho dò PIN trần toàn hệ thống.
+    // PIN lưu hash bcrypt nên tìm NV theo phone/username trước, rồi Hash::check.
     public function pinVerify(Request $request): JsonResponse
     {
-        $request->validate(['pin_code' => 'required|string|size:6']);
+        $v = $request->validate([
+            'pin_code' => 'required|string|size:6|regex:/^[0-9]{6}$/',
+            'phone' => 'nullable|string',
+            'username' => 'nullable|string',
+        ]);
 
-        $emp = Employee::with(['role:id,name', 'branch:id,name'])
-            ->where('pin_code', $request->string('pin_code'))
-            ->where('is_active', true)
-            ->first();
+        $emp = null;
+        if (!empty($v['phone']) || !empty($v['username'])) {
+            // Có định danh: tìm nhanh theo SĐT/username rồi check PIN
+            $q = Employee::with(['role:id,name', 'branch:id,name'])->where('is_active', true);
+            if (!empty($v['phone'])) {
+                $q->where('phone', $v['phone']);
+            } else {
+                $q->where('username', $v['username']);
+            }
+            $candidate = $q->first();
+            if ($candidate && Hash::check($v['pin_code'], (string) $candidate->pin_code)) {
+                $emp = $candidate;
+            }
+        } else {
+            // POS đăng nhập nhanh chỉ bằng PIN: duyệt NV đang hoạt động rồi Hash::check
+            // (route đã throttle:10,1 nên không dò được; số NV quán cà phê nhỏ nên đủ nhanh)
+            $candidates = Employee::with(['role:id,name', 'branch:id,name'])->where('is_active', true)->get();
+            foreach ($candidates as $candidate) {
+                if (Hash::check($v['pin_code'], (string) $candidate->pin_code)) {
+                    $emp = $candidate;
+                    break;
+                }
+            }
+        }
 
         if (!$emp) {
             return response()->json(['success' => false, 'message' => 'Mã PIN không đúng.'], 401);
@@ -85,8 +111,9 @@ class EmployeeAuthController extends Controller
         if (!$branch || !hash_equals((string) $branch->attendance_qr_token, (string) $v['token'])) {
             return response()->json(['success' => false, 'message' => 'Mã QR không hợp lệ.'], 422);
         }
-        $emp = Employee::with(['branch:id,name'])
-            ->where('pin_code', $v['pin_code'])->where('is_active', true)->first();
+        // Gói 38: PIN lưu hash — tìm NV đang hoạt động rồi Hash::check (không where theo pin_code)
+        $emp = Employee::with(['branch:id,name'])->where('is_active', true)->get()
+            ->first(fn ($e) => $e->pin_code && Hash::check($v['pin_code'], $e->pin_code));
         if (!$emp) {
             return response()->json(['success' => false, 'message' => 'Mã PIN không đúng.'], 401);
         }
@@ -100,11 +127,11 @@ class EmployeeAuthController extends Controller
             'phone' => 'required|string',
             'pin_code' => 'required|string|size:6',
         ]);
+        // Gói 38: PIN lưu hash — tìm NV theo SĐT trước, rồi Hash::check (không where theo pin_code)
         $emp = Employee::with(['branch:id,name'])
             ->where('phone', $v['phone'])
-            ->where('pin_code', $v['pin_code'])
             ->where('is_active', true)->first();
-        if (!$emp) {
+        if (!$emp || !$emp->pin_code || !Hash::check($v['pin_code'], $emp->pin_code)) {
             return response()->json(['success' => false, 'message' => 'SĐT hoặc mã PIN không đúng.'], 401);
         }
         return $this->issueEmployeeToken($emp, 'shift_register');

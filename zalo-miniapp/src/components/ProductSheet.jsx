@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { fmt } from '../api';
+import { fmt, priceOf } from '../api';
 import { useShop } from '../store';
 
 // Sheet chi tiết món kiểu Grab.
@@ -41,8 +41,8 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
 
   const size = sizes.find((o) => o.id === sizeId);
   const unitPrice = useGroups
-    ? Number(product.base_price) + selectedOpts.reduce((s, o) => s + Number(o.additional_price || 0), 0)
-    : Number(product.base_price) + (size ? Number(size.additional_price) : 0)
+    ? priceOf(product) + selectedOpts.reduce((s, o) => s + Number(o.additional_price || 0), 0)
+    : priceOf(product) + (size ? Number(size.additional_price) : 0)
       + toppings.reduce((s, t) => s + Number(t.additional_price), 0);
 
   const pickSingle = (gid, oid) => setSel((p) => ({ ...p, [gid]: oid }));
@@ -69,7 +69,7 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
     const line = {
       key,
       optionIds,
-      product: { id: product.id, name: product.name, base_price: product.base_price, image_url: product.image_url },
+      product: { id: product.id, name: product.name, base_price: priceOf(product), image_url: product.image_url },
       optionId: useGroups ? null : sizeId,
       optionName: useGroups ? null : (size ? size.name : null),
       toppings: useGroups ? [] : toppings.map((t) => t.name),

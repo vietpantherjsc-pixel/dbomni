@@ -149,6 +149,11 @@ class AttendanceController extends Controller
                     if ($en->lte($st)) $en->addDay(); // ca qua đêm
                     return (int) $st->diffInMinutes($en);
                 });
+                // Gói 40: giờ bắt đầu ca sớm nhất trong ngày (HH:MM) — frontend tô đỏ khi đi trễ
+                $scheduledStart = $schedList->map(function ($s) {
+                    $t = $s->custom_start_time ?: ($s->workShift?->start_time);
+                    return $t ? substr((string) $t, 0, 5) : null;
+                })->filter()->min();
                 $hours = ($rec && $rec->check_in && $rec->check_out)
                     ? round(Carbon::parse($rec->check_in)->diffInMinutes($rec->check_out) / 60, 1) : null;
                 // xanh = đủ công, vàng = thiếu/về sớm hoặc chưa ra, xám = nghỉ
@@ -161,6 +166,7 @@ class AttendanceController extends Controller
                     'status' => $status,
                     'check_in' => $rec?->check_in, 'check_out' => $rec?->check_out,
                     'hours' => $hours, 'scheduled_hours' => $scheduledMin > 0 ? round($scheduledMin / 60, 1) : null,
+                    'scheduled_start' => $scheduledStart, // Gói 40: HH:MM, null nếu không có lịch
                 ];
             }
             return ['id' => $e->id, 'full_name' => $e->full_name, 'branch_id' => $e->branch_id, 'days' => $cells];
@@ -170,5 +176,48 @@ class AttendanceController extends Controller
             'success' => true,
             'data' => ['week_start' => $days[0], 'week_end' => $days[6], 'days' => $days, 'rows' => $rows],
         ]);
+    }
+
+    // Gói 46: Thống kê ca theo tháng cho cột "Tổng số ca" (bảng chấm công).
+    // numerator = số ca (ngày, ca) DISTINCT đã duyệt hoặc đã xếp; denominator = tổng ca đã đăng ký.
+    public function shiftStats(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'month' => 'required|date_format:Y-m',
+            'branch_id' => 'nullable|exists:branches,id',
+        ]);
+        [$y, $m] = explode('-', $v['month']);
+
+        $empQ = Employee::where('is_active', true)->select('id');
+        if (!empty($v['branch_id'])) $empQ->where('branch_id', $v['branch_id']);
+        $empIds = $empQ->pluck('id');
+
+        $regs = \App\Models\ShiftRegistration::whereIn('employee_id', $empIds)
+            ->whereYear('date', $y)->whereMonth('date', $m)
+            ->get(['employee_id', 'date', 'work_shift_id', 'status']);
+        $scheds = WorkSchedule::whereIn('employee_id', $empIds)
+            ->whereYear('date', $y)->whereMonth('date', $m)
+            ->get(['employee_id', 'date', 'work_shift_id']);
+
+        $byEmp = [];
+        foreach ($empIds as $eid) $byEmp[$eid] = ['registered' => 0, 'done_keys' => []];
+        foreach ($regs as $r) {
+            $b = &$byEmp[$r->employee_id];
+            $b['registered']++;
+            if ($r->status === 'approved') $b['done_keys'][$r->date->toDateString() . '|' . $r->work_shift_id] = true;
+            unset($b);
+        }
+        foreach ($scheds as $s) {
+            $byEmp[$s->employee_id]['done_keys'][$s->date->toDateString() . '|' . $s->work_shift_id] = true;
+        }
+        $data = [];
+        foreach ($byEmp as $eid => $b) {
+            $data[] = [
+                'employee_id' => $eid,
+                'done' => count($b['done_keys']),
+                'registered' => $b['registered'],
+            ];
+        }
+        return response()->json(['success' => true, 'data' => $data]);
     }
 }

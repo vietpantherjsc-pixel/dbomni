@@ -98,4 +98,10 @@ class Product extends Model
         $price = $this->prices->firstWhere('priceList.code', $map[$channel] ?? $channel);
         return $price ? (float) $price->price : (float) $this->base_price;
     }
+
+    // Gói 49i: giá kênh online cho Zalo Mini App (dùng kèm eager load prices.priceList)
+    public function getOnlinePriceAttribute(): float
+    {
+        return $this->priceFor('zalo');
+    }
 }

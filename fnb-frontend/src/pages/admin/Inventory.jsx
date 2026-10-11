@@ -89,6 +89,7 @@ export default function Inventory() {
                             ['stock', 'Tồn kho'],
                             ['cats', 'Loại NL'],
                             ['inbound', 'Nhập kho'],
+                            ['transfer', 'Chuyển kho'],
                             ['production', 'Chế biến'],
                             ['stocktake', 'Kiểm kê'],
                         ].map(([key, label]) => (
@@ -107,7 +108,8 @@ export default function Inventory() {
                     <div className="p-4">
                         {tab === 'stock' && <StockTab stock={stock} materials={materials} categories={categories} onChange={() => fetchAll(effBranchId)} addSignal={addMaterialSignal} />}
                         {tab === 'cats' && <CategoryTab categories={categories} onChange={fetchCats} />}
-                        {tab === 'inbound' && <InboundTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
+                        {tab === 'inbound' && <InboundTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} branches={branches} />}
+                        {tab === 'transfer' && <TransferTab materials={materials} branches={branches} branchId={effBranchId} onDone={() => fetchAll(effBranchId)} />}
                         {tab === 'production' && <ProductionTab materials={materials} matById={matById} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} />}
                         {tab === 'stocktake' && <StocktakeTab materials={materials} categories={categories} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} showAll={branchId === '0'} />}
                     </div>
@@ -186,6 +188,16 @@ function StockTab({ stock, materials, categories, onChange, addSignal }) {
     };
 
     const lowCount = stock.filter((s) => s.is_low_stock).length;
+
+    // Gói 46: xóa nguyên liệu/BTP khi tồn=0 (xóa mềm, giữ lịch sử); chặn khi còn trong BOM
+    const delMaterial = async (s) => {
+        if (!window.confirm(`Xóa "${s.name}"?\nLịch sử nhập/xuất trước đó vẫn được giữ lại.`)) return;
+        try {
+            const res = await axios.delete(`${API}/materials/${s.material_id}`);
+            alert(res.data?.message || 'Đã xóa.');
+            onChange();
+        } catch (err) { alert(err.response?.data?.message || 'Xóa thất bại'); }
+    };
 
     return (
         <div>
@@ -294,9 +306,11 @@ function StockTab({ stock, materials, categories, onChange, addSignal }) {
                                         ? <span className="text-red-600 font-medium text-xs">⚠ Sắp hết</span>
                                         : <span className="text-emerald-600 text-xs">Ổn định</span>}
                                 </td>
-                                <td className="px-4 py-3 text-right">
+                                <td className="px-4 py-3 text-right whitespace-nowrap">
                                     <button onClick={() => startEdit(s.material_id)}
-                                        className="text-[#0d6efd] hover:underline text-[13px]">Sửa</button>
+                                        className="text-[#0d6efd] hover:underline text-[13px] mr-3">Sửa</button>
+                                    <button onClick={() => delMaterial(s)}
+                                        className="text-red-600 hover:underline text-[13px]">Xóa</button>
                                 </td>
                             </tr>
                         ))}
@@ -310,171 +324,701 @@ function StockTab({ stock, materials, categories, onChange, addSignal }) {
     );
 }
 
-// ================= TAB NHẬP KHO (danh sách nhiều dòng) =================
-// Gói 4 (2026-10-04): nhập đơn hàng nhiều món — mỗi nguyên liệu 1 dòng,
-// điền số lượng vào các dòng cần nhập rồi bấm 1 nút, gọi API bulk 1 lần.
-function InboundTab({ materials, onDone, branchId }) {
-    const [rows, setRows] = useState({}); // {materialId: {purchase_quantity, unit_cost, expired_at, batch_code}}
-    const [search, setSearch] = useState('');
-    const [submitting, setSubmitting] = useState(false);
+// ================= TAB NHẬP KHO (Gói 43: phiếu nhập theo hóa đơn) =================
+const todayLocal = () => {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+};
+const vnd = (n) => Number(n || 0).toLocaleString('vi-VN');
 
-    const setRow = (id, field, value) => {
-        setRows((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [field]: value } }));
-    };
+function InboundTab({ materials, onDone, branchId, branches }) {
+    const [receipts, setReceipts] = useState([]);
+    const [suppliers, setSuppliers] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showForm, setShowForm] = useState(false);
+    const [detail, setDetail] = useState(null); // receipt chi tiết
+    const [editing, setEditing] = useState(false);
 
-    const filtered = materials.filter((m) =>
-        m.name.toLowerCase().includes(search.trim().toLowerCase())
-    );
-
-    const activeMats = filtered.filter((m) => Number(rows[m.id]?.purchase_quantity) > 0);
-    const totalCost = activeMats.reduce(
-        (s, m) => s + Number(rows[m.id]?.purchase_quantity || 0) * Number(rows[m.id]?.unit_cost || 0), 0
-    );
-
-    const clearRow = (id) => {
-        setRows((prev) => { const next = { ...prev }; delete next[id]; return next; });
-    };
-
-    const handleSubmit = async () => {
-        if (activeMats.length === 0) return alert('Nhập số lượng cho ít nhất 1 nguyên liệu');
-        if (!window.confirm(`Nhập kho ${activeMats.length} mặt hàng, tổng tiền hàng ${totalCost.toLocaleString('vi-VN')}đ?`)) return;
-        setSubmitting(true);
+    const fetchReceipts = async () => {
+        setLoading(true);
         try {
-            const items = activeMats.map((m) => ({
-                material_id: m.id,
-                purchase_quantity: Number(rows[m.id].purchase_quantity),
-                unit_cost: Number(rows[m.id].unit_cost) || 0,
-                expired_at: rows[m.id].expired_at || null,
-                batch_code: rows[m.id].batch_code || null,
-            }));
-            const res = await axios.post(`${API}/inbound/bulk`, { branch_id: branchId, items });
-            if (res.data?.success) {
-                alert(res.data.message);
-                setRows({});
-                onDone();
-            }
-        } catch (err) { alert(err.response?.data?.message || 'Nhập kho thất bại'); }
-        finally { setSubmitting(false); }
+            const res = await axios.get(`${API}/inbound-receipts`, { params: { branch_id: branchId, per_page: 50 } });
+            setReceipts(res.data?.data?.data || res.data?.data || []);
+        } catch { /* bỏ qua */ }
+        setLoading(false);
+    };
+    useEffect(() => {
+        fetchReceipts();
+        axios.get(`${API}/partners`, { params: { type: 'supplier', is_active: 1 } })
+            .then((r) => setSuppliers(r.data?.data || []))
+            .catch(() => {});
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [branchId]);
+
+    const openDetail = async (id) => {
+        try {
+            const res = await axios.get(`${API}/inbound-receipts/${id}`);
+            setDetail(res.data?.data);
+            setEditing(false);
+        } catch (e) { alert(e.response?.data?.message || 'Không tải được phiếu'); }
+    };
+    const cancelReceipt = async (id) => {
+        if (!window.confirm('Hủy phiếu nhập này? Chỉ hủy được khi nguyên liệu chưa xuất dùng.')) return;
+        try {
+            await axios.post(`${API}/inbound-receipts/${id}/cancel`);
+            setDetail(null);
+            fetchReceipts();
+            onDone();
+        } catch (e) { alert(e.response?.data?.message || 'Không hủy được'); }
     };
 
     return (
         <div>
             <div className="flex items-center justify-between mb-3">
-                <input
-                    value={search} onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Tìm nguyên liệu..."
-                    className="w-64 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]"
-                />
-                <div className="text-[13px] text-gray-600">
-                    {activeMats.length > 0 && (
-                        <span className="mr-4">
-                            <b className="text-[#0d6efd]">{activeMats.length}</b> dòng có số lượng —
-                            tổng <b className="text-[#0d6efd]">{totalCost.toLocaleString('vi-VN')}đ</b>
-                        </span>
-                    )}
-                    <button
-                        onClick={handleSubmit} disabled={submitting || activeMats.length === 0}
-                        className="px-5 py-2.5 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] disabled:opacity-40"
-                    >
-                        {submitting ? 'Đang nhập...' : `Nhập kho${activeMats.length ? ` (${activeMats.length})` : ''}`}
-                    </button>
-                </div>
+                <div className="text-[13px] text-gray-500">Phiếu nhập hàng theo hóa đơn nhà cung cấp</div>
+                <button onClick={() => setShowForm(true)}
+                    className="px-5 py-2.5 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    ＋ Tạo phiếu nhập
+                </button>
             </div>
-
-            <div className="border border-gray-100 rounded overflow-x-auto">
-                <table className="w-full text-[13px] min-w-[900px]">
-                    <thead className="sticky top-0 bg-gray-50">
-                        <tr className="text-left text-gray-500 border-b border-gray-100">
-                            <th className="px-4 py-3 font-medium w-[20%]">Nguyên liệu</th>
-                            <th className="px-2 py-3 font-medium text-right w-[10%]">Số lượng nhập</th>
-                            <th className="px-2 py-3 font-medium text-right w-[11%]">Giá vốn (đ)</th>
-                            <th className="px-2 py-3 font-medium text-right w-[12%]">Thành tiền (đ)</th>
-                            <th className="px-2 py-3 font-medium text-right w-[12%]">Quy đổi tồn kho</th>
-                            <th className="px-2 py-3 font-medium w-[12%]">Hạn dùng</th>
-                            <th className="px-2 py-3 font-medium w-[14%]">Mã lô</th>
-                            <th className="px-3 py-3 w-[5%]"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.map((m) => {
-                            const r = rows[m.id] || {};
-                            const qty = Number(r.purchase_quantity) || 0;
-                            const hasQty = qty > 0;
-                            const baseQty = qty * Number(m.conversion_rate || 1);
-                            return (
-                                <tr key={m.id} className={`border-b border-gray-50 ${hasQty ? 'bg-blue-50/50' : 'hover:bg-gray-50/60'}`}>
-                                    <td className="px-4 py-2">
-                                        <div className="font-medium">{m.name}</div>
-                                        <div className="text-[11px] text-gray-400">
-                                            Nhập theo {m.purchase_unit || m.unit}
-                                            {m.purchase_unit && ` (1 ${m.purchase_unit} = ${Number(m.conversion_rate).toLocaleString('vi-VN')} ${m.unit})`}
-                                        </div>
+            {loading ? <div className="text-gray-400 text-[13px] py-8 text-center">Đang tải...</div> : (
+                <div className="border border-gray-100 rounded overflow-x-auto">
+                    <table className="w-full text-[13px] min-w-[860px]">
+                        <thead className="bg-gray-50">
+                            <tr className="text-left text-gray-500 border-b border-gray-100">
+                                <th className="px-4 py-3 font-medium">Mã phiếu</th>
+                                <th className="px-2 py-3 font-medium">Ngày</th>
+                                <th className="px-2 py-3 font-medium">Nhà cung cấp</th>
+                                <th className="px-2 py-3 font-medium text-right">Tổng tiền</th>
+                                <th className="px-2 py-3 font-medium">Thanh toán</th>
+                                <th className="px-2 py-3 font-medium">Trạng thái</th>
+                                <th className="px-3 py-3"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {receipts.map((r) => (
+                                <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50/60">
+                                    <td className="px-4 py-2.5 font-semibold text-[#0d6efd]">{r.code}</td>
+                                    <td className="px-2 py-2.5">{fmtDate(r.receipt_date)}{r.invoice_no && <div className="text-[11px] text-gray-400">HĐ: {r.invoice_no}</div>}</td>
+                                    <td className="px-2 py-2.5">{r.partner?.name || <span className="text-gray-400">Mua lẻ</span>}</td>
+                                    <td className="px-2 py-2.5 text-right font-bold">{vnd(r.grand_total)}đ</td>
+                                    <td className="px-2 py-2.5">
+                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${r.payment_type === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                            {r.payment_type === 'paid' ? 'Trả ngay' : 'Công nợ'}
+                                        </span>
                                     </td>
-                                    <td className="px-2 py-2">
-                                        <input
-                                            type="number" min="0" step="any"
-                                            value={r.purchase_quantity ?? ''}
-                                            onChange={(e) => setRow(m.id, 'purchase_quantity', e.target.value)}
-                                            placeholder="0"
-                                            className={`w-full px-2 py-1.5 text-[13px] border rounded text-right focus:outline-none focus:border-[#0d6efd] ${hasQty ? 'border-[#0d6efd] font-bold' : 'border-gray-300'}`}
-                                        />
+                                    <td className="px-2 py-2.5">
+                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${r.status === 'confirmed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                                            {r.status === 'confirmed' ? 'Đã nhập' : 'Đã hủy'}
+                                        </span>
                                     </td>
-                                    <td className="px-2 py-2">
-                                        <input
-                                            type="number" min="0"
-                                            value={r.unit_cost ?? ''}
-                                            onChange={(e) => setRow(m.id, 'unit_cost', e.target.value)}
-                                            placeholder="0"
-                                            title="Đơn giá trên 1 đơn vị nhập"
-                                            className="w-full px-2 py-1.5 text-[13px] border border-gray-300 rounded text-right focus:outline-none focus:border-[#0d6efd]"
-                                        />
-                                    </td>
-                                    <td className="px-2 py-2 text-right">
-                                        {hasQty && Number(r.unit_cost) > 0
-                                            ? <span className="font-bold text-[13px]">{(qty * Number(r.unit_cost)).toLocaleString('vi-VN')}</span>
-                                            : <span className="text-gray-300 text-xs">—</span>}
-                                    </td>
-                                    <td className="px-2 py-2 text-right">
-                                        {hasQty
-                                            ? <span className="text-emerald-600 font-medium text-xs">= {baseQty.toLocaleString('vi-VN')} {m.unit}</span>
-                                            : <span className="text-gray-300 text-xs">—</span>}
-                                    </td>
-                                    <td className="px-2 py-2">
-                                        <DateInput
-                                            value={r.expired_at ?? ''}
-                                            onChange={(v) => setRow(m.id, 'expired_at', v)}
-                                            className="w-full px-2 py-1.5 text-[12px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]"
-                                        />
-                                    </td>
-                                    <td className="px-2 py-2">
-                                        <input
-                                            value={r.batch_code ?? ''}
-                                            onChange={(e) => setRow(m.id, 'batch_code', e.target.value)}
-                                            placeholder="Tự sinh"
-                                            className="w-full px-2 py-1.5 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]"
-                                        />
-                                    </td>
-                                    <td className="px-3 py-2 text-center">
-                                        {hasQty && (
-                                            <button onClick={() => clearRow(m.id)} title="Xóa dòng"
-                                                className="text-gray-300 hover:text-red-500 text-lg leading-none">×</button>
+                                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                        <button onClick={() => openDetail(r.id)} className="text-[#0d6efd] text-[12px] font-medium mr-3">Xem</button>
+                                        {r.status === 'confirmed' && (
+                                            <button onClick={() => cancelReceipt(r.id)} className="text-red-500 text-[12px]">Hủy</button>
                                         )}
                                     </td>
                                 </tr>
-                            );
-                        })}
-                        {filtered.length === 0 && (
-                            <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Không tìm thấy nguyên liệu.</td></tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
-            <p className="text-[11px] text-gray-400 mt-2">
-                Chỉ các dòng có số lượng &gt; 0 mới được nhập. Tất cả dòng được tạo trong 1 lần bấm nút.
-            </p>
+                            ))}
+                            {receipts.length === 0 && (
+                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu nhập nào.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            {showForm && (
+                <ReceiptForm
+                    materials={materials} suppliers={suppliers} branchId={branchId}
+                    onClose={() => setShowForm(false)}
+                    onDone={() => { setShowForm(false); fetchReceipts(); onDone(); }}
+                />
+            )}
+            {detail && (
+                <ReceiptDetail
+                    receipt={detail} suppliers={suppliers} editing={editing} setEditing={setEditing}
+                    onClose={() => setDetail(null)}
+                    onDone={() => { setDetail(null); fetchReceipts(); onDone(); }}
+                />
+            )}
         </div>
     );
 }
+
+// Form tạo phiếu nhập
+function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
+    const [partnerId, setPartnerId] = useState('');
+    const [invoiceNo, setInvoiceNo] = useState('');
+    const [receiptDate, setReceiptDate] = useState(todayLocal());
+    const [paymentType, setPaymentType] = useState('paid');
+    const [taxIncluded, setTaxIncluded] = useState(true);
+    const [taxRate, setTaxRate] = useState(10);
+    const [discount, setDiscount] = useState('');
+    const [shipping, setShipping] = useState('');
+    const [note, setNote] = useState('');
+    const [lines, setLines] = useState([]); // [{material_id, purchase_quantity, unit_cost, expired_at}]
+    const [matSearch, setMatSearch] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const addLine = (m) => {
+        if (lines.some((l) => l.material_id === m.id)) return;
+        setLines([...lines, { material_id: m.id, name: m.name, unit: m.unit, purchase_unit: m.purchase_unit || m.unit, conversion_rate: m.conversion_rate || 1, purchase_quantity: '', unit_cost: '', expired_at: '' }]);
+        setMatSearch('');
+    };
+    const setLine = (mid, field, value) => {
+        setLines(lines.map((l) => l.material_id === mid ? { ...l, [field]: value } : l));
+    };
+    const removeLine = (mid) => setLines(lines.filter((l) => l.material_id !== mid));
+
+    const subtotal = lines.reduce((s, l) => s + Number(l.purchase_quantity || 0) * Number(l.unit_cost || 0), 0);
+    const rate = Number(taxRate) || 0;
+    const vat = taxIncluded ? (rate > 0 ? subtotal * rate / (100 + rate) : 0) : (rate > 0 ? subtotal * rate / 100 : 0);
+    const grand = subtotal - Number(discount || 0) + Number(shipping || 0) + (taxIncluded ? 0 : vat);
+
+    const matFiltered = matSearch.trim()
+        ? materials.filter((m) => m.name.toLowerCase().includes(matSearch.trim().toLowerCase())).slice(0, 8)
+        : [];
+
+    const submit = async () => {
+        const items = lines.filter((l) => Number(l.purchase_quantity) > 0);
+        if (!items.length) return alert('Thêm ít nhất 1 nguyên liệu có số lượng');
+        if (paymentType === 'debt' && !partnerId) return alert('Công nợ phải chọn nhà cung cấp');
+        if (!window.confirm(`Tạo phiếu nhập ${items.length} dòng, tổng ${vnd(grand)}đ (${paymentType === 'paid' ? 'trả ngay' : 'công nợ'})?`)) return;
+        setSubmitting(true);
+        try {
+            const res = await axios.post(`${API}/inbound-receipts`, {
+                branch_id: branchId,
+                partner_id: partnerId || null,
+                invoice_no: invoiceNo || null,
+                receipt_date: receiptDate,
+                tax_included: taxIncluded,
+                tax_rate: rate,
+                discount_amount: Number(discount) || 0,
+                shipping_fee: Number(shipping) || 0,
+                payment_type: paymentType,
+                note: note || null,
+                items: items.map((l) => ({
+                    material_id: l.material_id,
+                    purchase_quantity: Number(l.purchase_quantity),
+                    unit_cost: Number(l.unit_cost) || 0,
+                    expired_at: l.expired_at || null,
+                })),
+            });
+            if (res.data?.success) { alert(res.data.message); onDone(); }
+        } catch (e) { alert(e.response?.data?.message || 'Tạo phiếu thất bại'); }
+        setSubmitting(false);
+    };
+
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    return (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="p-5 pb-3 shrink-0">
+                    <h2 className="font-bold text-[16px]">Tạo phiếu nhập hàng</h2>
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 pb-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Nhà cung cấp</div>
+                            <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} className={inp + ' w-full'}>
+                                <option value="">— Mua lẻ —</option>
+                                {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Số hóa đơn</div>
+                            <input value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} placeholder="VD: 0001234" className={inp + ' w-full'} />
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Ngày chứng từ</div>
+                            <DateInput value={receiptDate} onChange={setReceiptDate} className={inp + ' w-full'} />
+                        </label>
+                        <div>
+                            <div className="text-[12px] text-gray-500 mb-1">Thanh toán</div>
+                            <div className="flex gap-2">
+                                {[['paid', 'Trả ngay'], ['debt', 'Công nợ']].map(([v, l]) => (
+                                    <button key={v} onClick={() => setPaymentType(v)}
+                                        className={`flex-1 py-2 rounded text-[13px] font-medium border ${paymentType === v ? 'bg-[#0d6efd] text-white border-[#0d6efd]' : 'border-gray-300 text-gray-600'}`}>{l}</button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-[12px] text-gray-500 mb-1">Nguyên liệu</div>
+                        <input value={matSearch} onChange={(e) => setMatSearch(e.target.value)} placeholder="Gõ tên để thêm dòng..." className={inp + ' w-full'} />
+                        {matFiltered.length > 0 && (
+                            <div className="border border-gray-200 rounded mt-1 max-h-[140px] overflow-y-auto">
+                                {matFiltered.map((m) => (
+                                    <button key={m.id} onClick={() => addLine(m)} className="w-full text-left px-3 py-2 text-[13px] hover:bg-blue-50">
+                                        {m.name} <span className="text-gray-400 text-[11px]">({m.purchase_unit || m.unit})</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {lines.map((l) => (
+                        <div key={l.material_id} className="border border-gray-200 rounded p-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <b className="text-[13px]">{l.name}</b>
+                                <button onClick={() => removeLine(l.material_id)} className="text-red-400 text-lg leading-none">×</button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                <label className="block">
+                                    <div className="text-[11px] text-gray-400">SL ({l.purchase_unit})</div>
+                                    <input type="number" min="0" step="any" value={l.purchase_quantity} onChange={(e) => setLine(l.material_id, 'purchase_quantity', e.target.value)} className={inp + ' w-full text-right'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[11px] text-gray-400">Đơn giá (đ)</div>
+                                    <input type="number" min="0" value={l.unit_cost} onChange={(e) => setLine(l.material_id, 'unit_cost', e.target.value)} className={inp + ' w-full text-right'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[11px] text-gray-400">Hạn dùng</div>
+                                    <DateInput value={l.expired_at} onChange={(v) => setLine(l.material_id, 'expired_at', v)} className={inp + ' w-full'} />
+                                </label>
+                            </div>
+                            {Number(l.purchase_quantity) > 0 && (
+                                <div className="text-[12px] text-gray-500 mt-1 text-right">
+                                    = <b>{vnd(Number(l.purchase_quantity) * Number(l.unit_cost || 0))}đ</b>
+                                    {l.conversion_rate !== 1 && <span className="text-emerald-600"> → {(Number(l.purchase_quantity) * Number(l.conversion_rate)).toLocaleString('vi-VN')} {l.unit}</span>}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                    <div className="grid grid-cols-2 gap-3">
+                        <label className="flex items-center gap-2 text-[13px]">
+                            <input type="checkbox" checked={taxIncluded} onChange={(e) => setTaxIncluded(e.target.checked)} className="w-4 h-4" />
+                            Giá đã gồm VAT
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Thuế suất (%)</div>
+                            <div className="flex gap-1">
+                                {[0, 8, 10].map((r) => (
+                                    <button key={r} onClick={() => setTaxRate(r)} className={`px-3 py-1.5 rounded text-[12px] border ${rate === r ? 'bg-[#0d6efd] text-white border-[#0d6efd]' : 'border-gray-300'}`}>{r}%</button>
+                                ))}
+                                <input type="number" min="0" max="100" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} className={inp + ' w-16 text-right'} />
+                            </div>
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Chiết khấu (đ)</div>
+                            <input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} className={inp + ' w-full text-right'} />
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Phí vận chuyển (đ)</div>
+                            <input type="number" min="0" value={shipping} onChange={(e) => setShipping(e.target.value)} className={inp + ' w-full text-right'} />
+                        </label>
+                    </div>
+                    <label className="block">
+                        <div className="text-[12px] text-gray-500 mb-1">Ghi chú</div>
+                        <input value={note} onChange={(e) => setNote(e.target.value)} className={inp + ' w-full'} />
+                    </label>
+                    <div className="bg-gray-50 rounded p-3 text-[13px] space-y-1">
+                        <div className="flex justify-between"><span>Tiền hàng</span><b>{vnd(subtotal)}đ</b></div>
+                        {rate > 0 && <div className="flex justify-between text-gray-500"><span>Trong đó VAT {rate}%</span><span>{vnd(vat)}đ</span></div>}
+                        {Number(discount) > 0 && <div className="flex justify-between text-gray-500"><span>Chiết khấu</span><span>−{vnd(discount)}đ</span></div>}
+                        {Number(shipping) > 0 && <div className="flex justify-between text-gray-500"><span>Phí vận chuyển</span><span>+{vnd(shipping)}đ</span></div>}
+                        <div className="flex justify-between text-[15px] pt-1 border-t"><span className="font-bold">Tổng thanh toán</span><b className="text-[#0d6efd]">{vnd(grand)}đ</b></div>
+                    </div>
+                </div>
+                <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
+                    <div className="flex gap-2">
+                        <button onClick={onClose} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
+                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                            {submitting ? 'Đang tạo...' : 'Tạo phiếu nhập'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Xem / sửa phiếu nhập
+function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDone }) {
+    const [form, setForm] = useState(null);
+    const [saving, setSaving] = useState(false);
+    useEffect(() => {
+        if (editing && receipt) {
+            setForm({
+                partner_id: receipt.partner_id || '',
+                invoice_no: receipt.invoice_no || '',
+                receipt_date: (receipt.receipt_date || '').slice(0, 10),
+                tax_included: !!receipt.tax_included,
+                tax_rate: receipt.tax_rate || 0,
+                discount_amount: receipt.discount_amount || '',
+                shipping_fee: receipt.shipping_fee || '',
+                note: receipt.note || '',
+                items: receipt.items.map((it) => ({
+                    id: it.id, name: it.material?.name, purchase_quantity: it.purchase_quantity,
+                    unit_cost: it.unit_cost, expired_at: (it.expired_at || '').slice(0, 10),
+                    touched: it.batch && Number(it.batch.current_quantity) !== Number(it.batch.initial_quantity),
+                })),
+            });
+        }
+    }, [editing, receipt]);
+    const setF = (k, v) => setForm({ ...form, [k]: v });
+    const setItem = (id, field, value) => setForm({ ...form, items: form.items.map((l) => l.id === id ? { ...l, [field]: value } : l) });
+
+    const save = async () => {
+        setSaving(true);
+        try {
+            const res = await axios.patch(`${API}/inbound-receipts/${receipt.id}`, {
+                partner_id: form.partner_id || null,
+                invoice_no: form.invoice_no || null,
+                receipt_date: form.receipt_date,
+                tax_included: form.tax_included,
+                tax_rate: Number(form.tax_rate) || 0,
+                discount_amount: Number(form.discount_amount) || 0,
+                shipping_fee: Number(form.shipping_fee) || 0,
+                note: form.note || null,
+                items: form.items.map((l) => ({
+                    id: l.id, purchase_quantity: Number(l.purchase_quantity), unit_cost: Number(l.unit_cost) || 0,
+                    expired_at: l.expired_at || null,
+                })),
+            });
+            if (res.data?.success) { alert(res.data.message); onDone(); }
+        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
+        setSaving(false);
+    };
+
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    const r = receipt;
+    return (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="p-5 pb-3 shrink-0 flex items-center justify-between">
+                    <h2 className="font-bold text-[16px]">Phiếu {r.code}</h2>
+                    {r.status === 'confirmed' && !editing && (
+                        <button onClick={() => setEditing(true)} className="text-[#0d6efd] text-[13px] font-medium">✎ Sửa</button>
+                    )}
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 pb-4">
+                    {!editing ? (
+                        <div className="space-y-2 text-[13px]">
+                            <div className="grid grid-cols-2 gap-2">
+                                <div><span className="text-gray-400">NCC: </span><b>{r.partner?.name || 'Mua lẻ'}</b></div>
+                                <div><span className="text-gray-400">Ngày: </span><b>{fmtDate(r.receipt_date)}</b></div>
+                                <div><span className="text-gray-400">Số HĐ: </span><b>{r.invoice_no || '—'}</b></div>
+                                <div><span className="text-gray-400">Thanh toán: </span><b>{r.payment_type === 'paid' ? 'Trả ngay' : 'Công nợ'}</b></div>
+                            </div>
+                            {r.note && <div><span className="text-gray-400">Ghi chú: </span>{r.note}</div>}
+                            <div className="border-t pt-2 mt-2">
+                                {r.items.map((it) => (
+                                    <div key={it.id} className="flex justify-between py-1.5 border-b border-gray-50">
+                                        <div>
+                                            <div className="font-medium">{it.material?.name}</div>
+                                            <div className="text-[11px] text-gray-400">{Number(it.purchase_quantity)} {it.purchase_unit} × {vnd(it.unit_cost)}đ</div>
+                                        </div>
+                                        <b>{vnd(it.line_total)}đ</b>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="bg-gray-50 rounded p-3 space-y-1">
+                                <div className="flex justify-between"><span>Tiền hàng</span><span>{vnd(r.subtotal)}đ</span></div>
+                                {Number(r.vat_amount) > 0 && <div className="flex justify-between text-gray-500"><span>VAT</span><span>{vnd(r.vat_amount)}đ</span></div>}
+                                {Number(r.discount_amount) > 0 && <div className="flex justify-between text-gray-500"><span>Chiết khấu</span><span>−{vnd(r.discount_amount)}đ</span></div>}
+                                {Number(r.shipping_fee) > 0 && <div className="flex justify-between text-gray-500"><span>Phí VC</span><span>+{vnd(r.shipping_fee)}đ</span></div>}
+                                <div className="flex justify-between text-[15px] pt-1 border-t"><b>Tổng</b><b className="text-[#0d6efd]">{vnd(r.grand_total)}đ</b></div>
+                            </div>
+                        </div>
+                    ) : form && (
+                        <div className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Nhà cung cấp</div>
+                                    <select value={form.partner_id} onChange={(e) => setF('partner_id', e.target.value)} className={inp + ' w-full'}>
+                                        <option value="">— Mua lẻ —</option>
+                                        {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                    </select>
+                                </label>
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Số hóa đơn</div>
+                                    <input value={form.invoice_no} onChange={(e) => setF('invoice_no', e.target.value)} className={inp + ' w-full'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Ngày chứng từ</div>
+                                    <DateInput value={form.receipt_date} onChange={(v) => setF('receipt_date', v)} className={inp + ' w-full'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Thuế suất (%)</div>
+                                    <input type="number" min="0" max="100" value={form.tax_rate} onChange={(e) => setF('tax_rate', e.target.value)} className={inp + ' w-full'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Chiết khấu (đ)</div>
+                                    <input type="number" min="0" value={form.discount_amount} onChange={(e) => setF('discount_amount', e.target.value)} className={inp + ' w-full text-right'} />
+                                </label>
+                                <label className="block">
+                                    <div className="text-[12px] text-gray-500 mb-1">Phí vận chuyển (đ)</div>
+                                    <input type="number" min="0" value={form.shipping_fee} onChange={(e) => setF('shipping_fee', e.target.value)} className={inp + ' w-full text-right'} />
+                                </label>
+                            </div>
+                            <label className="flex items-center gap-2 text-[13px]">
+                                <input type="checkbox" checked={form.tax_included} onChange={(e) => setF('tax_included', e.target.checked)} className="w-4 h-4" />
+                                Giá đã gồm VAT
+                            </label>
+                            {form.items.map((l) => (
+                                <div key={l.id} className="border border-gray-200 rounded p-3">
+                                    <div className="font-medium text-[13px] mb-2">{l.name}
+                                        {l.touched && <span className="ml-2 text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">đã xuất dùng — không sửa SL</span>}
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <label className="block">
+                                            <div className="text-[11px] text-gray-400">Số lượng</div>
+                                            <input type="number" min="0" step="any" value={l.purchase_quantity} disabled={l.touched}
+                                                onChange={(e) => setItem(l.id, 'purchase_quantity', e.target.value)} className={inp + ' w-full text-right disabled:bg-gray-100'} />
+                                        </label>
+                                        <label className="block">
+                                            <div className="text-[11px] text-gray-400">Đơn giá</div>
+                                            <input type="number" min="0" value={l.unit_cost} onChange={(e) => setItem(l.id, 'unit_cost', e.target.value)} className={inp + ' w-full text-right'} />
+                                        </label>
+                                        <label className="block">
+                                            <div className="text-[11px] text-gray-400">Hạn dùng</div>
+                                            <DateInput value={l.expired_at} onChange={(v) => setItem(l.id, 'expired_at', v)} className={inp + ' w-full'} />
+                                        </label>
+                                    </div>
+                                </div>
+                            ))}
+                            <label className="block">
+                                <div className="text-[12px] text-gray-500 mb-1">Ghi chú</div>
+                                <input value={form.note} onChange={(e) => setF('note', e.target.value)} className={inp + ' w-full'} />
+                            </label>
+                        </div>
+                    )}
+                </div>
+                <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
+                    <div className="flex gap-2">
+                        <button onClick={() => editing ? setEditing(false) : onClose()} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">
+                            {editing ? 'Quay lại' : 'Đóng'}
+                        </button>
+                        {editing && (
+                            <button onClick={save} disabled={saving} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                                {saving ? 'Đang lưu...' : 'Lưu thay đổi'}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ================= TAB CHUYỂN KHO (Gói 43) =================
+function TransferTab({ materials, branches, branchId, onDone }) {
+    const [transfers, setTransfers] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [showForm, setShowForm] = useState(false);
+
+    const fetchTransfers = async () => {
+        setLoading(true);
+        try {
+            const res = await axios.get(`${API}/stock-transfers`, { params: { per_page: 50 } });
+            setTransfers(res.data?.data?.data || res.data?.data || []);
+        } catch { /* bỏ qua */ }
+        setLoading(false);
+    };
+    useEffect(() => { fetchTransfers(); }, []);
+
+    const doConfirm = async (id) => {
+        if (!window.confirm('Chốt chuyển kho? Tồn kho 2 chi nhánh sẽ thay đổi ngay.')) return;
+        try {
+            const res = await axios.post(`${API}/stock-transfers/${id}/confirm`);
+            alert(res.data?.message + (res.data?.data?.total_cost ? ` (Giá vốn: ${vnd(res.data.data.total_cost)}đ)` : ''));
+            fetchTransfers();
+            onDone();
+        } catch (e) { alert(e.response?.data?.message || 'Chốt thất bại'); }
+    };
+    const doCancel = async (id) => {
+        if (!window.confirm('Hủy phiếu chuyển kho này?')) return;
+        try {
+            await axios.post(`${API}/stock-transfers/${id}/cancel`);
+            fetchTransfers();
+        } catch (e) { alert(e.response?.data?.message || 'Hủy thất bại'); }
+    };
+
+    const stLabel = { draft: ['Nháp', 'bg-gray-100 text-gray-600'], confirmed: ['Đã chuyển', 'bg-green-100 text-green-700'], cancelled: ['Đã hủy', 'bg-red-50 text-red-400'] };
+
+    return (
+        <div>
+            <div className="flex items-center justify-between mb-3">
+                <div className="text-[13px] text-gray-500">Điều chuyển nguyên liệu giữa các chi nhánh (kèm giá vốn)</div>
+                <button onClick={() => setShowForm(true)}
+                    className="px-5 py-2.5 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    ＋ Tạo phiếu chuyển
+                </button>
+            </div>
+            {loading ? <div className="text-gray-400 text-[13px] py-8 text-center">Đang tải...</div> : (
+                <div className="border border-gray-100 rounded overflow-x-auto">
+                    <table className="w-full text-[13px] min-w-[820px]">
+                        <thead className="bg-gray-50">
+                            <tr className="text-left text-gray-500 border-b border-gray-100">
+                                <th className="px-4 py-3 font-medium">Mã phiếu</th>
+                                <th className="px-2 py-3 font-medium">Từ kho</th>
+                                <th className="px-2 py-3 font-medium">Đến kho</th>
+                                <th className="px-2 py-3 font-medium">Mặt hàng</th>
+                                <th className="px-2 py-3 font-medium text-right">Giá vốn</th>
+                                <th className="px-2 py-3 font-medium">Trạng thái</th>
+                                <th className="px-3 py-3"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {transfers.map((t) => (
+                                <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50/60">
+                                    <td className="px-4 py-2.5 font-semibold text-[#0d6efd]">{t.code}</td>
+                                    <td className="px-2 py-2.5">{t.from_branch?.name}</td>
+                                    <td className="px-2 py-2.5">{t.to_branch?.name}</td>
+                                    <td className="px-2 py-2.5 text-[12px] text-gray-600">
+                                        {(t.items || []).map((it) => `${it.material?.name} (${Number(it.quantity)})`).join(', ')}
+                                    </td>
+                                    <td className="px-2 py-2.5 text-right font-bold">{vnd(t.total_cost)}đ</td>
+                                    <td className="px-2 py-2.5">
+                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${stLabel[t.status]?.[1] || ''}`}>{stLabel[t.status]?.[0] || t.status}</span>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                        {t.status === 'draft' && (
+                                            <>
+                                                <button onClick={() => doConfirm(t.id)} className="text-green-600 text-[12px] font-medium mr-3">✓ Chốt</button>
+                                                <button onClick={() => doCancel(t.id)} className="text-red-500 text-[12px]">Hủy</button>
+                                            </>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                            {transfers.length === 0 && (
+                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu chuyển kho nào.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            {showForm && (
+                <TransferForm materials={materials} branches={branches} defaultFrom={branchId}
+                    onClose={() => setShowForm(false)}
+                    onDone={() => { setShowForm(false); fetchTransfers(); onDone(); }}
+                />
+            )}
+        </div>
+    );
+}
+
+function TransferForm({ materials, branches, defaultFrom, onClose, onDone }) {
+    const [fromId, setFromId] = useState(String(defaultFrom || ''));
+    const [toId, setToId] = useState('');
+    const [note, setNote] = useState('');
+    const [lines, setLines] = useState([]);
+    const [matSearch, setMatSearch] = useState('');
+    const [stocks, setStocks] = useState({}); // {materialId: {quantity, unit}}
+    const [submitting, setSubmitting] = useState(false);
+
+    useEffect(() => {
+        setStocks({});
+        setLines([]);
+    }, [fromId]);
+
+    const addLine = async (m) => {
+        if (lines.some((l) => l.material_id === m.id)) return;
+        setLines([...lines, { material_id: m.id, name: m.name, unit: m.unit, quantity: '' }]);
+        setMatSearch('');
+        try {
+            const res = await axios.get(`${API}/stock-transfer-stock`, { params: { branch_id: fromId, material_id: m.id } });
+            setStocks((prev) => ({ ...prev, [m.id]: res.data?.data }));
+        } catch { /* bỏ qua */ }
+    };
+    const setLine = (mid, v) => setLines(lines.map((l) => l.material_id === mid ? { ...l, quantity: v } : l));
+    const removeLine = (mid) => setLines(lines.filter((l) => l.material_id !== mid));
+
+    const matFiltered = matSearch.trim()
+        ? materials.filter((m) => m.name.toLowerCase().includes(matSearch.trim().toLowerCase())).slice(0, 8)
+        : [];
+
+    const submit = async () => {
+        const items = lines.filter((l) => Number(l.quantity) > 0);
+        if (!fromId || !toId) return alert('Chọn kho nguồn và kho đích');
+        if (fromId === toId) return alert('Kho nguồn và kho đích phải khác nhau');
+        if (!items.length) return alert('Thêm ít nhất 1 nguyên liệu có số lượng');
+        const fromName = branches.find((b) => String(b.id) === String(fromId))?.name;
+        const toName = branches.find((b) => String(b.id) === String(toId))?.name;
+        if (!window.confirm(`Tạo phiếu chuyển ${items.length} dòng từ ${fromName} → ${toName}? (Chốt sau mới trừ/cộng kho)`)) return;
+        setSubmitting(true);
+        try {
+            const res = await axios.post(`${API}/stock-transfers`, {
+                from_branch_id: Number(fromId), to_branch_id: Number(toId), note: note || null,
+                items: items.map((l) => ({ material_id: l.material_id, quantity: Number(l.quantity) })),
+            });
+            if (res.data?.success) { alert(res.data.message + ' Bấm "Chốt" để thực hiện chuyển kho.'); onDone(); }
+        } catch (e) { alert(e.response?.data?.message || 'Tạo phiếu thất bại'); }
+        setSubmitting(false);
+    };
+
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    return (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[560px] max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="p-5 pb-3 shrink-0">
+                    <h2 className="font-bold text-[16px]">Tạo phiếu chuyển kho</h2>
+                </div>
+                <div className="flex-1 overflow-y-auto px-5 pb-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Kho nguồn</div>
+                            <select value={fromId} onChange={(e) => setFromId(e.target.value)} className={inp + ' w-full'}>
+                                <option value="">— Chọn —</option>
+                                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                            </select>
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Kho đích</div>
+                            <select value={toId} onChange={(e) => setToId(e.target.value)} className={inp + ' w-full'}>
+                                <option value="">— Chọn —</option>
+                                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                            </select>
+                        </label>
+                    </div>
+                    <div>
+                        <div className="text-[12px] text-gray-500 mb-1">Nguyên liệu {!fromId && <span className="text-red-400">(chọn kho nguồn trước)</span>}</div>
+                        <input value={matSearch} disabled={!fromId} onChange={(e) => setMatSearch(e.target.value)} placeholder="Gõ tên để thêm dòng..." className={inp + ' w-full disabled:bg-gray-100'} />
+                        {matFiltered.length > 0 && (
+                            <div className="border border-gray-200 rounded mt-1 max-h-[140px] overflow-y-auto">
+                                {matFiltered.map((m) => (
+                                    <button key={m.id} onClick={() => addLine(m)} className="w-full text-left px-3 py-2 text-[13px] hover:bg-blue-50">
+                                        {m.name} <span className="text-gray-400 text-[11px]">({m.unit})</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {lines.map((l) => (
+                        <div key={l.material_id} className="border border-gray-200 rounded p-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <b className="text-[13px]">{l.name}</b>
+                                <button onClick={() => removeLine(l.material_id)} className="text-red-400 text-lg leading-none">×</button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <input type="number" min="0" step="any" value={l.quantity} onChange={(e) => setLine(l.material_id, e.target.value)}
+                                    placeholder="Số lượng" className={inp + ' flex-1 text-right'} />
+                                <span className="text-[12px] text-gray-500">{l.unit}</span>
+                            </div>
+                            <div className="text-[11px] text-gray-400 mt-1">
+                                Tồn khả dụng tại nguồn: {stocks[l.material_id] ? <b className="text-gray-600">{vnd(stocks[l.material_id].quantity)} {stocks[l.material_id].unit}</b> : '...'}
+                            </div>
+                        </div>
+                    ))}
+                    <label className="block">
+                        <div className="text-[12px] text-gray-500 mb-1">Ghi chú</div>
+                        <input value={note} onChange={(e) => setNote(e.target.value)} className={inp + ' w-full'} />
+                    </label>
+                </div>
+                <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
+                    <div className="flex gap-2">
+                        <button onClick={onClose} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
+                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                            {submitting ? 'Đang tạo...' : 'Tạo phiếu'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 
 // ================= TAB CHẾ BIẾN =================
 function ProductionTab({ materials, matById, onDone, branchId }) {

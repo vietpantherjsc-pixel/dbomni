@@ -32,11 +32,15 @@ export default function DateInput({ value, onChange, className, placeholder, min
   };
 
   // Mask thông minh:
+  // - Paste dạng yyyy-mm-dd (VD từ Excel): convert thẳng sang dd/mm/yyyy trước.
   // - Nếu dấu "/" trong chuỗi tạo thành cấu trúc dd/mm/yyyy hợp lệ (mỗi phần ≤ 2/2/4 số)
   //   → tôn trọng cách người dùng gõ ("1/2/2026", "01/8/2026" khi sửa giữa chuỗi).
   // - Ngược lại (VD đang gõ dở "01/022") → mask theo vị trí 2-2-4 trên dãy số.
   const mask = (raw) => {
-    const clean = String(raw).replace(/[^\d/]/g, '');
+    let r = String(raw);
+    const isoM = r.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoM) r = isoM[3] + '/' + isoM[2] + '/' + isoM[1];
+    const clean = r.replace(/[^\d/]/g, '');
     if (clean.includes('/')) {
       const parts = clean.split('/').slice(0, 3);
       const lim = [2, 2, 4];
@@ -53,6 +57,9 @@ export default function DateInput({ value, onChange, className, placeholder, min
   const handleChange = (e) => {
     const out = mask(e.target.value);
     setText(out);
+    // Chỉ propagate khi là ngày ĐẦY ĐỦ dd/mm/yyyy — chuỗi dở dang ("01/02")
+    // mà đưa qua toApiDate sẽ rơi vào fallback new Date() mơ hồ (VD "01/02" → năm 2001).
+    if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(out)) return;
     const api = toApiDate(out);
     if (api) {
       lastGood.current = out;

@@ -41,9 +41,16 @@ class OnlineOrderController extends Controller
         $menu = Category::where('is_active', true)
             ->orderBy('sort_order', 'asc')
             ->with(['products' => function ($query) {
-                $query->where('is_active', true)->where('is_service_fee', false)->with('options');
+                $query->where('is_active', true)->where('is_service_fee', false)->with(['options', 'prices.priceList']);
             }])
             ->get();
+
+        // Gói 49i: gắn giá kênh online cho Mini App
+        $menu->each(function ($cat) {
+            $cat->products->each(function ($p) {
+                $p->setAppends(array_unique(array_merge($p->getAppends(), ['online_price'])));
+            });
+        });
 
         return response()->json(['success' => true, 'data' => $menu]);
     }
@@ -95,9 +102,9 @@ class OnlineOrderController extends Controller
             };
             foreach ($ids as $pid) {
                 $product = Product::where('id', $pid)->where('is_active', true)
-                    ->where('is_service_fee', false)->first();
+                    ->where('is_service_fee', false)->with('prices.priceList')->first();
                 if (!$product) continue;
-                $base = (float) $product->base_price;
+                $base = $product->online_price;
                 $sale = $promo->type === 'percent'
                     ? $base * (1 - (float) $promo->value / 100)
                     : min($base, (float) $promo->value);
@@ -118,6 +125,7 @@ class OnlineOrderController extends Controller
                 'name' => $p->name,
                 'image_url' => $p->image_url,
                 'base_price' => (float) $p->base_price,
+                'online_price' => $p->online_price,
                 'sale_price' => $b['sale_price'],
                 'promo_name' => $b['promo_name'],
             ];
@@ -264,6 +272,15 @@ class OnlineOrderController extends Controller
             'points_redeem' => 'nullable|integer|min:0',
             'note' => 'nullable|string|max:255',
             'referred_by' => 'nullable|string|max:20', // Gói 9: mã TV người giới thiệu
+            // Gói 48: hóa đơn VAT + địa chỉ chi tiết + ghi chú giao hàng
+            'need_vat_invoice' => 'nullable|boolean',
+            'vat_tax_code' => 'required_if:need_vat_invoice,true|nullable|string|max:30',
+            'vat_company_name' => 'required_if:need_vat_invoice,true|nullable|string|max:200',
+            'vat_company_address' => 'nullable|string|max:255',
+            'vat_email' => 'required_if:need_vat_invoice,true|nullable|email|max:150',
+            'delivery_note' => 'nullable|string|max:500',
+            'province' => 'nullable|string|max:100',
+            'ward' => 'nullable|string|max:100',
             'items' => 'required|array|min:1|max:50',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.product_option_id' => 'nullable|exists:product_options,id',
@@ -279,9 +296,9 @@ class OnlineOrderController extends Controller
                 $orderItemsData = [];
                 $promoItems = [];
 
-                // 1. Tính tiền theo GIÁ MENU phía server
+                // 1. Tính tiền theo GIÁ MENU phía server (Gói 49i: giá kênh online)
                 foreach ($validated['items'] as $item) {
-                    $product = Product::findOrFail($item['product_id']);
+                    $product = Product::with('prices.priceList')->findOrFail($item['product_id']);
                     if ($product->is_service_fee) {
                         throw new Exception('Món phí dịch vụ do hệ thống tự tính.');
                     }
@@ -292,7 +309,7 @@ class OnlineOrderController extends Controller
                     $groupOpts = !empty($item['option_ids'])
                         ? ProductOption::whereIn('id', $item['option_ids'])->get()
                         : collect();
-                    $unitPrice = (float) $product->base_price
+                    $unitPrice = $product->online_price
                         + ($option ? (float) $option->additional_price : 0)
                         + $groupOpts->sum(fn($o) => (float) $o->additional_price);
                     $lineTotal = $unitPrice * $item['quantity'];
@@ -305,7 +322,7 @@ class OnlineOrderController extends Controller
                             ? $groupOpts->pluck('name', 'id')->toArray()
                             : null,
                         'product_name' => $product->name,
-                        'price' => $product->base_price,
+                        'price' => $product->online_price,
                         'unit_price' => $unitPrice,
                         'quantity' => $item['quantity'],
                         'subtotal' => $lineTotal,
@@ -478,6 +495,15 @@ class OnlineOrderController extends Controller
                     'status' => 'pending',
                     'stock_deducted' => false,
                     'note' => $validated['note'] ?? null,
+                    // Gói 48: VAT + địa chỉ chi tiết
+                    'need_vat_invoice' => (bool) ($validated['need_vat_invoice'] ?? false),
+                    'vat_tax_code' => $validated['vat_tax_code'] ?? null,
+                    'vat_company_name' => $validated['vat_company_name'] ?? null,
+                    'vat_company_address' => $validated['vat_company_address'] ?? null,
+                    'vat_email' => $validated['vat_email'] ?? null,
+                    'delivery_note' => $validated['delivery_note'] ?? null,
+                    'province' => $validated['province'] ?? null,
+                    'ward' => $validated['ward'] ?? null,
                 ]);
 
                 foreach ($orderItemsData as $itemData) {

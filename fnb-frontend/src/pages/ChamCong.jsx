@@ -94,7 +94,7 @@ export default function ChamCong() {
         params: { branch_id: (emp && emp.branch_id) || params.b || undefined },
       });
       setToday(r.data && r.data.data ? r.data.data : null);
-    } catch (e) { /* giữ nguyên trạng thái cũ */ }
+    } catch (e) { if (!expired(e)) { /* giữ nguyên trạng thái cũ */ } }
   };
 
   const loadMe = async (tk) => {
@@ -106,7 +106,7 @@ export default function ChamCong() {
         localStorage.setItem('emp_info', JSON.stringify(info));
         return info;
       }
-    } catch (e) { /* token cũ */ }
+    } catch (e) { if (expired(e)) return null; /* token cũ */ }
     return emp;
   };
 
@@ -151,12 +151,13 @@ export default function ChamCong() {
     try {
       const r = await axios.post(
         API + '/employee/attendance/check-' + kind,
-        { branch_id: (emp && emp.branch_id) || params.b, token: params.t },
+        { branch_id: params.b || (emp && emp.branch_id), token: params.t },
         auth(token)
       );
       setMsg({ ok: true, text: (r.data && r.data.message) || (kind === 'in' ? 'Đã chấm công vào.' : 'Đã chấm công ra.') });
       await loadToday(token);
     } catch (e) {
+      if (expired(e)) return;
       setMsg({ ok: false, text: errMsg(e, 'Chấm công thất bại. Vui lòng thử lại.') });
     } finally { setBusy(false); }
   };
@@ -171,6 +172,7 @@ export default function ChamCong() {
         setHistory(r.data && r.data.data ? r.data.data : []);
         setHistoryLoaded(true);
       } catch (e) {
+        if (expired(e)) return;
         setMsg({ ok: false, text: errMsg(e, 'Không tải được lịch sử chấm công.') });
       }
     }
@@ -184,6 +186,7 @@ export default function ChamCong() {
         setRequests(r.data && r.data.data ? r.data.data : []);
         setReqLoaded(true);
       } catch (e) {
+        if (expired(e)) return;
         setMsg({ ok: false, text: errMsg(e, 'Không tải được danh sách yêu cầu.') });
       }
     }
@@ -203,6 +206,7 @@ export default function ChamCong() {
       setFType('nghi'); setFFrom(''); setFTo(''); setFReason('');
       setMsg({ ok: true, text: 'Đã gửi yêu cầu. Quản lý sẽ duyệt sau.' });
     } catch (e) {
+      if (expired(e)) return;
       setMsg({ ok: false, text: errMsg(e, 'Gửi yêu cầu thất bại. Vui lòng thử lại.') });
     } finally { setBusy(false); }
   };
@@ -211,6 +215,17 @@ export default function ChamCong() {
     localStorage.removeItem('emp_token');
     localStorage.removeItem('emp_info');
     setToken(''); setEmp(null); setPin(''); setMsg(null); setTab('today'); setToday(null);
+    setHistory([]); setHistoryLoaded(false); setRequests([]); setReqLoaded(false);
+  };
+
+  // Token hết hạn (401) → đăng xuất về màn hình nhập PIN, không để hiện tên NV cũ
+  const expired = (e) => {
+    if (e && e.response && e.response.status === 401) {
+      logout();
+      setMsg({ ok: false, text: 'Phiên đăng nhập đã hết hạn. Vui lòng nhập PIN để đăng nhập lại.' });
+      return true;
+    }
+    return false;
   };
 
   const statusBadge = (st) => {

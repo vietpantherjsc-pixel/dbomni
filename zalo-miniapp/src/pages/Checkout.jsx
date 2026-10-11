@@ -1,8 +1,45 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, fmt, getProfile, setProfile, getRef } from '../api';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
 import { useShop } from '../store';
+
+// Gói 48: địa chỉ tách Tỉnh/Phường-Xã (API v2, 34 tỉnh mới) + số nhà/đường;
+// tự động tính khoảng cách (bỏ nút bấm tay); ghi chú giao hàng;
+// xuất hóa đơn VAT; hẹn giờ lấy dùng ô ngày/giờ chuẩn (dd/mm/yyyy + HH:MM 24h).
+
+const PROV_API = 'https://provinces.open-api.vn/api/v2';
+
+// Ô nhập ngày dd/mm/yyyy đơn giản cho Mini App
+function DateField({ value, onChange }) {
+  const mask = (raw) => {
+    const d = String(raw).replace(/\D/g, '').slice(0, 8);
+    if (d.length > 4) return d.slice(0, 2) + '/' + d.slice(2, 4) + '/' + d.slice(4);
+    if (d.length > 2) return d.slice(0, 2) + '/' + d.slice(2);
+    return d;
+  };
+  return (
+    <input value={value} onChange={(e) => onChange(mask(e.target.value))}
+      placeholder="dd/mm/yyyy" inputMode="numeric" maxLength={10} />
+  );
+}
+// Ô nhập giờ HH:MM 24h đơn giản cho Mini App
+function TimeField({ value, onChange }) {
+  const mask = (raw) => {
+    const d = String(raw).replace(/\D/g, '').slice(0, 4);
+    if (d.length > 2) return d.slice(0, 2) + ':' + d.slice(2);
+    return d;
+  };
+  return (
+    <input value={value} onChange={(e) => onChange(mask(e.target.value))}
+      placeholder="HH:MM" inputMode="numeric" maxLength={5} />
+  );
+}
+const toApiDate = (v) => {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim());
+  return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null;
+};
+const validTime = (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(v || '');
 
 export default function Checkout() {
   const { branch, cart, subtotal, clearCart } = useShop();
@@ -10,23 +47,42 @@ export default function Checkout() {
   const [type, setType] = useState('delivery'); // delivery | takeaway | scheduled
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
+  // Địa chỉ giao hàng
+  const [provinces, setProvinces] = useState([]);
+  const [province, setProvince] = useState('');
+  const [wards, setWards] = useState([]);
+  const [ward, setWard] = useState('');
+  const [street, setStreet] = useState('');
   const [km, setKm] = useState(null);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [deliveryNote, setDeliveryNote] = useState('');
   const [shipCfg, setShipCfg] = useState(null);
-  const [scheduledAt, setScheduledAt] = useState('');
+  // Hẹn giờ lấy
+  const [schedDate, setSchedDate] = useState('');
+  const [schedTime, setSchedTime] = useState('');
   const [payment, setPayment] = useState('transfer');
   const [promos, setPromos] = useState([]);
   const [promoId, setPromoId] = useState('');
   const [voucher, setVoucher] = useState('');
   const [points, setPoints] = useState(0);
   const [redeem, setRedeem] = useState(0);
-  // Gói 13: tỉ giá đổi điểm từ server (không hardcode). Mặc định 10đ = 1.000đ nếu server chưa trả.
   const [redeemRate, setRedeemRate] = useState({ points: 10, amount: 1000 });
+  // Hóa đơn VAT
+  const [needVat, setNeedVat] = useState(false);
+  const [vatCode, setVatCode] = useState('');
+  const [vatName, setVatName] = useState('');
+  const [vatAddr, setVatAddr] = useState('');
+  const [vatEmail, setVatEmail] = useState('');
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
+  // Gói 49: sổ địa chỉ
+  const [customerId, setCustomerId] = useState(null);
+  const [addrBook, setAddrBook] = useState([]);
+  const [addrId, setAddrId] = useState('');
+  const [saveAddr, setSaveAddr] = useState(false);
+  const [addrLabel, setAddrLabel] = useState('Nhà');
+  const geoTimer = useRef(null);
 
-  // Gói 10c: xóa lựa chọn KM khi nó không còn trong danh sách đủ điều kiện (VD: đổi km)
   useEffect(() => {
     if (promoId && promos.length > 0 && !promos.some((p) => String(p.id) === String(promoId))) setPromoId('');
   }, [promos]);
@@ -37,10 +93,40 @@ export default function Checkout() {
     const p = getProfile();
     if (p) { setName(p.name || ''); setPhone(p.phone || ''); }
     api.shipConfig().then(setShipCfg).catch(() => {});
+    fetch(`${PROV_API}/p/`).then((r) => r.json()).then(setProvinces).catch(() => {});
   }, []);
 
-  // Nạp KM đủ điều kiện + điểm KH khi có SĐT
-  // Gói 10c: gửi kèm shipping_fee để server tính KM phí ship; load lại khi km đổi
+  // Nạp phường/xã khi đổi tỉnh
+  useEffect(() => {
+    if (!province) { setWards([]); setWard(''); return; }
+    fetch(`${PROV_API}/p/${province}?depth=2`).then((r) => r.json())
+      .then((d) => { setWards(d.wards || []); setWard(''); })
+      .catch(() => {});
+  }, [province]);
+
+  // Tự động tính khoảng cách khi địa chỉ đủ (debounce 800ms)
+  const fullAddress = () => [street.trim(), wardName(), provName()].filter(Boolean).join(', ');
+  const wardName = () => (wards.find((w) => String(w.code) === String(ward)) || {}).name || '';
+  const provName = () => (provinces.find((p) => String(p.code) === String(province)) || {}).name || '';
+  useEffect(() => {
+    if (type !== 'delivery') return;
+    if (!street.trim() || !ward || !province) { setKm(null); return; }
+    clearTimeout(geoTimer.current);
+    geoTimer.current = setTimeout(async () => {
+      if (!branch.latitude || !branch.longitude) return;
+      setGeoLoading(true);
+      try {
+        const g = await geocodeAddress(fullAddress() + ', Việt Nam');
+        const d = haversineKm(Number(branch.latitude), Number(branch.longitude), g.lat, g.lng);
+        setKm(Math.round(d * 10) / 10);
+      } catch (e) { setKm(null); }
+      finally { setGeoLoading(false); }
+    }, 800);
+    return () => clearTimeout(geoTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [street, ward, province, type]);
+
+  // Nạp KM + điểm
   useEffect(() => {
     if (!phone || phone.length < 9) return;
     const fee = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
@@ -50,11 +136,11 @@ export default function Checkout() {
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.qty, line_total: l.unitPrice * l.qty })),
         shipping_fee: fee,
       };
-      // Gói 13: truyền member_code từ profile (Gói 11 yêu cầu backend bắt buộc member_code)
       api.customerByPhone(phone, getProfile()?.member_code || '').then((c) => {
         if (c) {
           setPoints(c.points || 0);
-          // Gói 13: lấy tỉ giá đổi điểm từ server
+          setCustomerId(c.id); // Gói 49: để nạp sổ địa chỉ
+          api.addresses(c.id).then((r) => setAddrBook(r?.data || [])).catch(() => {});
           if (c.redeem_points && c.redeem_amount) {
             setRedeemRate({ points: Number(c.redeem_points), amount: Number(c.redeem_amount) });
           }
@@ -66,35 +152,32 @@ export default function Checkout() {
     return () => clearTimeout(t);
   }, [phone, subtotal, km, shipCfg, type]);
 
-  const calcDist = async () => {
-    if (!address.trim()) { alert('Nhập địa chỉ nhận hàng trước.'); return; }
-    if (!branch.latitude || !branch.longitude) {
-      alert('Quán chưa cài tọa độ chi nhánh — Đại Vương cần nhập tọa độ trong quản trị. Tạm thời nhập số km thủ công.');
-      return;
-    }
-    setGeoLoading(true);
-    try {
-      const g = await geocodeAddress(address + ', Việt Nam');
-      const d = haversineKm(Number(branch.latitude), Number(branch.longitude), g.lat, g.lng);
-      setKm(Math.round(d * 10) / 10);
-    } catch (e) {
-      alert(e.message);
-    } finally { setGeoLoading(false); }
-  };
-
   const shipFee = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
   const promo = promos.find((p) => String(p.id) === String(promoId));
-  // Gói 10c: KM phí ship trừ thẳng vào phí ship (không cộng vào discount chung)
   const isShipPromo = !!(promo && (promo.is_shipping || promo.type === 'shipping') && type === 'delivery');
   const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
   const promoDisc = promo && !isShipPromo ? Number(promo.discount) : 0;
-  const pointDisc = Math.min(redeem, points) * (redeemRate.amount / redeemRate.points); // Gói 13: tỉ giá từ server
+  const pointDisc = Math.min(redeem, points) * (redeemRate.amount / redeemRate.points);
   const total = Math.max(0, subtotal + shipFee - shipDisc - promoDisc - pointDisc);
 
   const place = async () => {
     if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
-    if (type === 'delivery' && (!address.trim() || km == null)) { alert('Nhập địa chỉ và bấm "Tính khoảng cách".'); return; }
-    if (type === 'scheduled' && !scheduledAt) { alert('Chọn giờ muốn tới lấy.'); return; }
+    if (type === 'delivery') {
+      if (!province || !ward || !street.trim()) { alert('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường.'); return; }
+      if (km == null) { alert('Đang tính khoảng cách, vui lòng đợi giây lát...'); return; }
+    }
+    let scheduledAt = null;
+    if (type === 'scheduled') {
+      const d = toApiDate(schedDate);
+      if (!d) { alert('Nhập ngày muốn tới lấy (dd/mm/yyyy).'); return; }
+      if (!validTime(schedTime)) { alert('Nhập giờ muốn tới lấy (HH:MM, 24h).'); return; }
+      scheduledAt = `${d}T${schedTime}`;
+      if (new Date(scheduledAt) <= new Date()) { alert('Giờ hẹn phải sau thời điểm hiện tại.'); return; }
+    }
+    if (needVat) {
+      if (!vatCode.trim() || !vatName.trim() || !vatEmail.trim()) { alert('Nhập MST, tên công ty và email để xuất hóa đơn VAT.'); return; }
+      if (!/^\S+@\S+\.\S+$/.test(vatEmail.trim())) { alert('Email nhận hóa đơn chưa đúng.'); return; }
+    }
     setPlacing(true);
     try {
       const order = await api.createOrder({
@@ -102,15 +185,23 @@ export default function Checkout() {
         order_type: type === 'delivery' ? 'delivery' : 'takeaway',
         customer_name: name.trim(),
         customer_phone: phone.trim(),
-        delivery_address: type === 'delivery' ? address.trim() : null,
+        delivery_address: type === 'delivery' ? fullAddress() : null,
+        province: type === 'delivery' ? provName() : null,
+        ward: type === 'delivery' ? wardName() : null,
         distance_km: type === 'delivery' ? km : null,
-        scheduled_at: type === 'scheduled' ? scheduledAt : null,
+        delivery_note: type === 'delivery' && deliveryNote.trim() ? deliveryNote.trim() : null,
+        scheduled_at: scheduledAt,
         payment_method: payment,
         voucher_code: voucher.trim() || null,
         promotion_id: promoId || null,
         points_redeem: redeem || null,
+        need_vat_invoice: needVat,
+        vat_tax_code: needVat ? vatCode.trim() : null,
+        vat_company_name: needVat ? vatName.trim() : null,
+        vat_company_address: needVat && vatAddr.trim() ? vatAddr.trim() : null,
+        vat_email: needVat && vatEmail.trim() ? vatEmail.trim() : null,
         note: note.trim() || null,
-        referred_by: getRef() || null, // Gói 9: mã giới thiệu (?ref=)
+        referred_by: getRef() || null,
         items: cart.map((l) => ({
           product_id: l.product.id,
           product_option_id: l.optionId || null,
@@ -119,7 +210,14 @@ export default function Checkout() {
           note: [l.optText, l.note].filter(Boolean).join(' | ') || null,
         })),
       });
-      setProfile({ ...(getProfile() || {}), name: name.trim(), phone: phone.trim() }); // Gói 9: giữ member_code
+      setProfile({ ...(getProfile() || {}), name: name.trim(), phone: phone.trim() });
+      // Gói 49: lưu địa chỉ mới vào sổ
+      if (type === 'delivery' && customerId && saveAddr && !addrId) {
+        api.saveAddress({
+          customer_id: customerId, label: addrLabel,
+          province: provName(), ward: wardName(), street: street.trim(),
+        }).catch(() => {});
+      }
       clearCart();
       nav(`/success/${order.code}`);
     } catch (e) {
@@ -151,32 +249,84 @@ export default function Checkout() {
 
         {type === 'delivery' && (
           <>
+            {/* Gói 49: sổ địa chỉ */}
+            {addrBook.length > 0 && (
+              <div className="zm-field">
+                <label>📒 Sổ địa chỉ</label>
+                <select value={addrId} onChange={(e) => {
+                  const id = e.target.value;
+                  setAddrId(id);
+                  if (!id) return;
+                  const a = addrBook.find((x) => String(x.id) === id);
+                  if (!a) return;
+                  // Map tên tỉnh/xã -> code
+                  const pc = provinces.find((p) => p.name === a.province)?.code;
+                  if (pc) {
+                    setProvince(String(pc));
+                    fetch(`${PROV_API}/p/${pc}?depth=2`).then((r) => r.json()).then((d) => {
+                      const ws = d.wards || [];
+                      setWards(ws);
+                      const wc = ws.find((w) => w.name === a.ward)?.code;
+                      setWard(wc ? String(wc) : '');
+                    }).catch(() => {});
+                  }
+                  setStreet(a.street || '');
+                }}>
+                  <option value="">— Nhập địa chỉ mới —</option>
+                  {addrBook.map((a) => (
+                    <option key={a.id} value={a.id}>{a.is_default ? '★ ' : ''}{a.label}: {a.full_address}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="zm-field">
-              <label>Địa chỉ nhận hàng *</label>
-              <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Số nhà, đường, phường/quận..." />
+              <label>Tỉnh / Thành phố *</label>
+              <select value={province} onChange={(e) => { setProvince(e.target.value); setAddrId(''); }}>
+                <option value="">— Chọn tỉnh/thành —</option>
+                {provinces.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}
+              </select>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-              <button className="zm-btn-outline" style={{ width: 'auto', flex: 1 }} onClick={calcDist} disabled={geoLoading}>
-                {geoLoading ? 'Đang tìm...' : '📍 Tính khoảng cách'}
-              </button>
-              <input
-                style={{ width: 110, border: '1px solid #e0e0e0', borderRadius: 12, padding: 10, fontSize: 14 }}
-                placeholder="km"
-                type="number" step="0.1" min="0"
-                value={km ?? ''}
-                onChange={(e) => setKm(e.target.value === '' ? null : Number(e.target.value))}
-              />
+            <div className="zm-field">
+              <label>Phường / Xã *</label>
+              <select value={ward} onChange={(e) => setWard(e.target.value)} disabled={!province}>
+                <option value="">— Chọn phường/xã —</option>
+                {wards.map((w) => <option key={w.code} value={w.code}>{w.name}</option>)}
+              </select>
             </div>
-            {km != null && shipCfg && shipFee > 0 && (
-              <div className="zm-alert">📏 Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự cộng vào "Phí dịch vụ")</div>
+            <div className="zm-field">
+              <label>Số nhà, tên đường *</label>
+              <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="VD: 123 Nguyễn Huệ" />
+            </div>
+            {geoLoading && <div className="zm-note">📍 Đang tự động tính khoảng cách...</div>}
+            {km != null && shipCfg && (
+              <div className="zm-alert">📏 Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
+            )}
+            <div className="zm-field">
+              <label>Ghi chú giao hàng</label>
+              <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
+            </div>
+            {/* Gói 49: lưu địa chỉ cho lần sau */}
+            {customerId && !addrId && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 14 }}>
+                <input type="checkbox" checked={saveAddr} onChange={(e) => setSaveAddr(e.target.checked)} style={{ width: 18, height: 18 }} />
+                Lưu địa chỉ này vào sổ địa chỉ
+                {saveAddr && (
+                  <select value={addrLabel} onChange={(e) => setAddrLabel(e.target.value)} style={{ marginLeft: 4, padding: '4px 8px', borderRadius: 8, border: '1px solid #e0e0e0' }}>
+                    <option>Nhà</option><option>Công ty</option><option>Khác</option>
+                  </select>
+                )}
+              </label>
             )}
           </>
         )}
 
         {type === 'scheduled' && (
           <div className="zm-field">
-            <label>Giờ muốn tới lấy *</label>
-            <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+            <label>Ngày giờ muốn tới lấy *</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ flex: 1 }}><DateField value={schedDate} onChange={setSchedDate} /></div>
+              <div style={{ width: 110 }}><TimeField value={schedTime} onChange={setSchedTime} /></div>
+            </div>
           </div>
         )}
 
@@ -188,6 +338,27 @@ export default function Checkout() {
         </div>
         <div className={`zm-pay-opt ${payment === 'pay_at_store' ? 'on' : ''}`} onClick={() => setPayment('pay_at_store')}>
           <div className="dot" /><div><b>Thanh toán tại quán</b><div style={{ fontSize: 12, color: '#888' }}>Trả tiền khi nhận món</div></div>
+        </div>
+
+        {/* Hóa đơn VAT — card riêng tách biệt khỏi mã giảm giá */}
+        <div style={{ background: needVat ? '#eff6ff' : '#f8fafc', border: `1.5px solid ${needVat ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 12, padding: 12, marginBottom: 14 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14 }}>
+            <input type="checkbox" checked={needVat} onChange={(e) => setNeedVat(e.target.checked)} style={{ width: 20, height: 20 }} />
+            🧾 Xuất hóa đơn VAT
+          </label>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Dành cho khách hàng công ty cần hóa đơn đỏ</div>
+          {needVat && (
+            <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+              <div className="zm-field" style={{ margin: 0 }}><label>Mã số thuế *</label>
+                <input value={vatCode} onChange={(e) => setVatCode(e.target.value)} placeholder="VD: 0312345678" inputMode="numeric" /></div>
+              <div className="zm-field" style={{ margin: 0 }}><label>Tên công ty *</label>
+                <input value={vatName} onChange={(e) => setVatName(e.target.value)} placeholder="Tên công ty" /></div>
+              <div className="zm-field" style={{ margin: 0 }}><label>Địa chỉ công ty</label>
+                <input value={vatAddr} onChange={(e) => setVatAddr(e.target.value)} placeholder="Địa chỉ xuất hóa đơn" /></div>
+              <div className="zm-field" style={{ margin: 0 }}><label>Email nhận hóa đơn *</label>
+                <input value={vatEmail} onChange={(e) => setVatEmail(e.target.value)} placeholder="email@congty.vn" inputMode="email" /></div>
+            </div>
+          )}
         </div>
 
         {promos.length > 0 && (
@@ -203,9 +374,12 @@ export default function Checkout() {
             </select>
           </div>
         )}
-        <div className="zm-field">
-          <label>Mã voucher</label>
-          <input value={voucher} onChange={(e) => setVoucher(e.target.value)} placeholder="Nhập mã nếu có" style={{ textTransform: 'uppercase' }} />
+        {/* Mã giảm giá — nhóm riêng */}
+        <div style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎟️ Mã giảm giá</div>
+          <div className="zm-field" style={{ margin: 0 }}>
+            <input value={voucher} onChange={(e) => setVoucher(e.target.value)} placeholder="NHẬP MÃ NẾU CÓ" style={{ textTransform: 'uppercase' }} />
+          </div>
         </div>
         {points > 0 && (
           <div className="zm-field">
@@ -220,7 +394,6 @@ export default function Checkout() {
 
         <div style={{ margin: '8px 0 16px' }}>
           <div className="zm-total-row"><span>Tạm tính ({cart.reduce((s, l) => s + l.qty, 0)} món)</span><span>{fmt(subtotal)}đ</span></div>
-          {/* Hiện phí gốc, KM trừ ở dòng riêng — tránh nhìn như trừ 2 lần */}
           {type === 'delivery' && shipFee > 0 && <div className="zm-total-row"><span>Phí dịch vụ (ship ~{km ?? '?'}km)</span><span>{fmt(shipFee)}đ</span></div>}
           {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
           {promoDisc > 0 && <div className="zm-total-row disc"><span>Khuyến mại</span><span>−{fmt(promoDisc)}đ</span></div>}

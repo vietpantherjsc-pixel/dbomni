@@ -15,10 +15,8 @@ import { fmtDateTime as fmtDateTimeShared } from '../../utils/format';
 
 const TABS = [
     { key: 'all', label: 'Tất cả hóa đơn' },
-    // Gói 11: đơn Zalo chờ xác nhận (xác nhận ở KDS xong mới vào Hóa đơn)
-    { key: 'awaiting_confirm', label: '🕐 Chờ xác nhận (Zalo)' },
     { key: 'paid', label: 'Đã thanh toán' },
-    { key: 'pending_payment', label: 'Chờ xác nhận thanh toán' },
+    { key: 'pending_payment', label: 'Chờ xác nhận' },
     { key: 'cancelled', label: 'Đã hủy' },
 ];
 
@@ -54,6 +52,8 @@ const Orders = () => {
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState(null);
+    const [expandItems, setExpandItems] = useState(false); // Gói 49: xổ chi tiết món
+    const [expandDisc, setExpandDisc] = useState(false); // Gói 49: xổ chi tiết giảm giá
     const [showImport, setShowImport] = useState(false); // Gói 23
 
     // Gói 3: tách/gộp đơn
@@ -338,7 +338,7 @@ const Orders = () => {
                                     orders.map((o) => (
                                         <tr
                                             key={o.id}
-                                            onClick={() => setSelected(o)}
+                                            onClick={() => { setSelected(o); setExpandItems(false); setExpandDisc(false); }}
                                             className="border-b border-gray-50 hover:bg-blue-50/40 cursor-pointer"
                                         >
                                             <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -409,51 +409,84 @@ const Orders = () => {
                 />
             )}
 
-            {/* Modal chi tiết */}
+            {/* Modal chi tiết — Gói 48: bố cục theo mẫu GrabFood */}
             {selected && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelected(null)}>
-                    <div className="bg-white rounded-lg w-full max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                            <h3 className="font-semibold text-gray-800">
-                                Hóa đơn <span className="text-[#0d6efd]">{selected.code}</span>
+                    <div className="bg-white rounded-lg w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                        <div className="px-5 py-4 border-b border-gray-100">
+                            <h3 className="font-bold text-[15px] text-gray-800">
+                                #{selected.code} <span className="font-normal text-gray-500">· Doanh thu {Number(selected.total_amount).toLocaleString('vi-VN')}đ</span>
                             </h3>
-                            <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
                         </div>
-                        <div className="px-5 py-4 space-y-2 text-[13px]">
-                            <div className="flex justify-between"><span className="text-gray-500">Thời gian:</span><span>{fmtDateTime(selected.created_at)}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-500">Thu ngân:</span><span>{selected.user?.name || '-'}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-500">Khách hàng:</span><span>{selected.customer_name || 'Khách lẻ'}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-500">Thanh toán:</span><span>{PAYMENT_LABELS[selected.payment_method] || selected.payment_method}</span></div>
-                            <div className="flex justify-between"><span className="text-gray-500">Trạng thái:</span><span>{statusPill(selected.status)}</span></div>
-                            {/* Gói 3: loại đơn + chiết khấu */}
-                            {selected.order_type && (
-                                <div className="flex justify-between"><span className="text-gray-500">Loại đơn:</span><span>{ORDER_TYPE_LABELS[selected.order_type] || selected.order_type}</span></div>
-                            )}
-                            {Number(selected.discount_amount) > 0 && (
-                                <div className="flex justify-between"><span className="text-gray-500">Chiết khấu:</span><span className="text-emerald-600">-{Number(selected.discount_amount).toLocaleString('vi-VN')} đ</span></div>
-                            )}
-                            {selected.cancel_reason && (
-                                <div className="flex justify-between"><span className="text-gray-500">Lý do hủy:</span><span className="text-red-600">{selected.cancel_reason}</span></div>
-                            )}
-                            <div className="pt-2 border-t border-gray-100">
-                                <div className="font-medium text-gray-700 mb-2">Mặt hàng:</div>
-                                <div className="space-y-1.5">
-                                    {(selected.items || []).map((it) => (
-                                        <div key={it.id} className="flex justify-between">
-                                            <span>
-                                                {it.product?.name || it.product_name} × {it.quantity}
-                                                {it.option?.name && <span className="text-gray-400 text-xs"> ({it.option.name})</span>}
-                                            </span>
-                                            <span className="font-medium">{Number(it.price * it.quantity).toLocaleString('vi-VN')} đ</span>
-                                        </div>
-                                    ))}
+                        <div className="px-5 py-4 text-[13px]">
+                            <div className="font-bold text-gray-800 mb-2">Thông tin thanh toán</div>
+                            <div className="space-y-2 pb-3 border-b border-gray-100">
+                                <div className="flex justify-between items-center cursor-pointer" onClick={() => setExpandItems(!expandItems)}>
+                                    <span className="text-gray-600">Tiền mặt hàng, combo</span>
+                                    <span>{Number(selected.subtotal_amount).toLocaleString('vi-VN')}đ <span className="text-[10px] text-gray-400">{expandItems ? '▲' : '▼'}</span></span>
                                 </div>
+                                {expandItems && (
+                                    <div className="bg-gray-50 rounded p-2 space-y-2">
+                                        {(selected.items || []).map((it) => (
+                                            <div key={it.id}>
+                                                <div className="flex justify-between text-[12px]">
+                                                    <span>{it.product?.name || it.product_name} (x{it.quantity})</span>
+                                                    <span className="font-medium">{Number(it.price * it.quantity).toLocaleString('vi-VN')}đ</span>
+                                                </div>
+                                                {/* Gói 49b: hiện nhóm tùy chọn từ cột Tùy chọn (import) + option/note */}
+                                                {((it.options && it.options.length > 0) || it.option?.name || it.note) && (
+                                                    <div className="text-[11px] text-gray-500 pl-2 space-y-0.5">
+                                                        {(it.options || []).map((op, oi) => (
+                                                            <div key={oi}>{op.name}{op.price > 0 ? ` (+${Number(op.price).toLocaleString('vi-VN')}đ)` : ''}</div>
+                                                        ))}
+                                                        {[it.option?.name, it.note].filter(Boolean).map((t, ti) => (
+                                                            <div key={'t'+ti}>{t}</div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {Number(selected.discount_amount) > 0 && (() => {
+                                    // Gói 49c: chỉ xổ khi có chi tiết để hiện
+                                    const hasDiscDetail = selected.promotion_id || selected.voucher_code || Number(selected.points_redeemed) > 0;
+                                    return (
+                                    <>
+                                        <div className={`flex justify-between items-center ${hasDiscDetail ? 'cursor-pointer' : ''}`} onClick={() => hasDiscDetail && setExpandDisc(!expandDisc)}>
+                                            <span className="text-gray-600">Giảm giá</span>
+                                            <span className="text-emerald-600">-{Number(selected.discount_amount).toLocaleString('vi-VN')}đ{hasDiscDetail && <span className="text-[10px]"> {expandDisc ? '▲' : '▼'}</span>}</span>
+                                        </div>
+                                        {hasDiscDetail && expandDisc && (
+                                            <div className="bg-gray-50 rounded p-2 space-y-1 text-[12px]">
+                                                {selected.promotion_id && <div className="flex justify-between"><span>Khuyến mại</span><span>-{Number(selected.promotion_discount || 0).toLocaleString('vi-VN')}đ</span></div>}
+                                                {selected.voucher_code && <div className="flex justify-between"><span>Voucher {selected.voucher_code}</span><span>-{Number((selected.discount_amount || 0) - (selected.promotion_discount || 0)).toLocaleString('vi-VN')}đ</span></div>}
+                                                {Number(selected.points_redeemed) > 0 && <div className="flex justify-between"><span>Đổi {selected.points_redeemed} điểm</span><span></span></div>}
+                                            </div>
+                                        )}
+                                    </>
+                                    );
+                                })()}
+                                <div className="flex justify-between"><span className="text-gray-600">Phí</span><span>{Number(selected.shipping_fee || 0).toLocaleString('vi-VN')}đ</span></div>
+                                <div className="flex justify-between"><span className="text-gray-600">Thuế</span><span className="text-gray-500">Giá đã bao gồm thuế</span></div>
+                                <div className="flex justify-between font-bold text-[14px]"><span>Thanh toán</span><span>{Number(selected.total_amount).toLocaleString('vi-VN')}đ</span></div>
                             </div>
-                            <div className="flex justify-between pt-2 border-t border-gray-100 text-[15px] font-bold">
-                                <span>Tổng cộng:</span>
-                                <span>{Number(selected.total_amount).toLocaleString('vi-VN')} đ</span>
+                            <div className="font-bold text-gray-800 mt-4 mb-2">Thông tin giao dịch</div>
+                            <div className="space-y-2 pb-3 border-b border-gray-100">
+                                <div className="flex justify-between"><span className="text-gray-600">Mã tham chiếu</span><span>{selected.order_number || selected.code}</span></div>
+                                <div className="flex justify-between items-center"><span className="text-gray-600">Trạng thái đơn hàng</span>{statusPill(selected.status)}</div>
+                                <div className="flex justify-between"><span className="text-gray-600">Hình thức phục vụ</span><span>{ORDER_TYPE_LABELS[selected.order_type] || selected.online_channel || selected.order_type || '-'}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-600">Thông tin khách hàng</span><span>{selected.customer_name || 'Khách lẻ'}</span></div>
+                                {selected.customer_phone && (
+                                    <div className="flex justify-between"><span className="text-gray-600">SĐT</span><span>{selected.customer_phone}</span></div>
+                                )}
+                                <div className="flex justify-between"><span className="text-gray-600">Thời gian</span><span>{fmtDateTime(selected.created_at)}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-600">Thanh toán</span><span>{PAYMENT_LABELS[selected.payment_method] || selected.payment_method}</span></div>
+                                {selected.cancel_reason && (
+                                    <div className="flex justify-between"><span className="text-gray-600">Lý do hủy</span><span className="text-red-600">{selected.cancel_reason}</span></div>
+                                )}
                             </div>
-                            {/* Gói 6: xác nhận đơn online (đã nhận tiền -> trừ kho, vào KDS) */}
+
                             {selected.online_channel === 'zalo' && selected.payment_status === 'pending' && selected.status !== 'cancelled' && (
                                 <button
                                     onClick={async () => {
@@ -464,56 +497,51 @@ const Orders = () => {
                                             else alert(res.data?.message || 'Lỗi');
                                         } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
                                     }}
-                                    className="w-full py-2.5 bg-green-600 text-white rounded text-[13px] font-bold hover:bg-green-700"
+                                    className="w-full py-2.5 mt-4 bg-green-600 text-white rounded text-[13px] font-bold hover:bg-green-700"
                                 >
                                     ✅ Xác nhận đã nhận tiền (vào KDS)
                                 </button>
                             )}
-                            {/* Gói 3: tách đơn + in lại */}
-                            <div className="flex gap-2 pt-2">
+                            <div className="flex gap-2 pt-4">
                                 {!['cancelled', 'completed'].includes(selected.status) && (
-                                    <button
-                                        onClick={() => openSplit(selected)}
-                                        className="flex-1 py-2 bg-[#7c3aed] text-white rounded text-[13px] font-medium hover:bg-[#6d28d9]"
-                                    >
-                                        Tách đơn
-                                    </button>
+                                    <button onClick={() => openSplit(selected)}
+                                        className="flex-1 py-2 bg-[#7c3aed] text-white rounded text-[13px] font-medium hover:bg-[#6d28d9]">Tách đơn</button>
                                 )}
-                                <button
-                                    onClick={() => printBill({
-                                        code: selected.code,
-                                        date: fmtDateTime(selected.created_at),
-                                        customer_name: selected.customer_name,
-                                        order_type: selected.order_type,
-                                        subtotal: selected.subtotal_amount,
-                                        discount: selected.discount_amount,
-                                        total: selected.total_amount,
-                                        payment_method: selected.payment_method,
+                                <button onClick={() => printBill({
+                                        code: selected.code, date: fmtDateTime(selected.created_at),
+                                        customer_name: selected.customer_name, order_type: selected.order_type,
+                                        subtotal: selected.subtotal_amount, discount: selected.discount_amount,
+                                        total: selected.total_amount, payment_method: selected.payment_method,
                                         items: (selected.items || []).map((it) => ({
-                                            product_name: it.product?.name || it.product_name,
-                                            quantity: it.quantity,
-                                            unit_price: it.unit_price ?? it.price,
+                                            product_name: it.product?.name || it.product_name, quantity: it.quantity,
+                                            unit_price: it.unit_price ?? it.price, note: it.option?.name || it.note,
+                                        })),
+                                    })}
+                                    className="flex-1 py-2 bg-slate-700 text-white rounded text-[13px] font-medium hover:bg-slate-800">In bill</button>
+                                <button onClick={() => printLabels({
+                                        code: selected.code,
+                                        items: (selected.items || []).map((it) => ({
+                                            product_name: it.product?.name || it.product_name, quantity: it.quantity,
                                             note: it.option?.name || it.note,
                                         })),
                                     })}
-                                    className="flex-1 py-2 bg-slate-700 text-white rounded text-[13px] font-medium hover:bg-slate-800"
-                                >
-                                    In bill
-                                </button>
-                                <button
-                                    onClick={() => printLabels({
-                                        code: selected.code,
-                                        items: (selected.items || []).map((it) => ({
-                                            product_name: it.product?.name || it.product_name,
-                                            quantity: it.quantity,
-                                            note: it.option?.name || it.note,
-                                        })),
-                                    })}
-                                    className="flex-1 py-2 bg-amber-600 text-white rounded text-[13px] font-medium hover:bg-amber-700"
-                                >
-                                    In tem
-                                </button>
+                                    className="flex-1 py-2 bg-amber-600 text-white rounded text-[13px] font-medium hover:bg-slate-800">In tem</button>
                             </div>
+                        </div>
+                        <div className="flex gap-3 px-5 py-4 border-t border-gray-100">
+                            <button
+                                onClick={async () => {
+                                    if (!confirm(`Xóa hóa đơn ${selected.code}? Không khôi phục được.`)) return;
+                                    try {
+                                        await axios.post('http://localhost/api/orders/bulk-action', { ids: [selected.id], action: 'delete' });
+                                        setSelected(null); fetchOrders();
+                                    } catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
+                                }}
+                                className="px-5 py-2.5 border border-red-500 text-red-600 rounded text-[13px] font-medium hover:bg-red-50"
+                            >Xóa hóa đơn</button>
+                            <div className="flex-1" />
+                            <button onClick={() => setSelected(null)}
+                                className="px-8 py-2.5 bg-[#0d6efd] text-white rounded text-[13px] font-medium hover:bg-[#0b5ed7]">Đóng</button>
                         </div>
                     </div>
                 </div>

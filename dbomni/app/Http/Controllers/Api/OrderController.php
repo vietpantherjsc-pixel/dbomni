@@ -30,26 +30,12 @@ class OrderController extends Controller
             ->orderBy('created_at', 'desc');
 
         $tab = $request->query('tab', 'all');
-        // Gói 11: đơn Zalo chờ xác nhận (chưa thu tiền) tách khỏi list chính —
-        // xác nhận xong (ở KDS) mới nhảy vào Hóa đơn.
-        $awaitingConfirm = function ($q) {
-            $q->where('online_channel', 'zalo')
-                ->where('payment_status', 'pending')
-                ->where('stock_deducted', false)
-                ->where('status', '!=', 'cancelled');
-        };
+        // Gói 49: bỏ tab "Chờ xác nhận (Zalo)" — đơn Zalo giờ xác nhận ở KDS.
         match ($tab) {
             'paid' => $query->where('payment_status', 'paid')->where('status', '!=', 'cancelled'),
-            'pending_payment' => $query->where('payment_status', 'pending'),
+            'pending_payment' => $query->where('payment_status', 'pending')->where('status', '!=', 'cancelled'),
             'cancelled' => $query->where('status', 'cancelled'),
-            'awaiting_confirm' => $awaitingConfirm($query),
-            default => $query->where(function ($q) {
-                // NOT (đơn chờ xác nhận)
-                $q->where('online_channel', '!=', 'zalo')
-                    ->orWhere('payment_status', '!=', 'pending')
-                    ->orWhere('stock_deducted', true)
-                    ->orWhere('status', 'cancelled');
-            }),
+            default => $query, // Tất cả hóa đơn
         };
 
         if ($request->filled('search')) {

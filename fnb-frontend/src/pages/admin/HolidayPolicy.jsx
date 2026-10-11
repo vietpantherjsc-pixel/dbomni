@@ -7,6 +7,12 @@ import DateInput from '../../components/DateInput';
 
 const API = 'http://localhost/api';
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
+const VIOL_CATS = [
+    ['chuyen_can', 'Chuyên Cần'],
+    ['chuyen_mon', 'Chuyên Môn'],
+    ['chuyen_nghiep', 'Chuyên Nghiệp'],
+];
+const violCatName = (c, fallback) => (VIOL_CATS.find(([k]) => k === c)?.[1]) || fallback || c;
 
 // Gói 30: Chính sách lương lễ/tết + lương trách nhiệm theo vi phạm (chung toàn chuỗi).
 export default function HolidayPolicy() {
@@ -15,18 +21,24 @@ export default function HolidayPolicy() {
     const [holidays, setHolidays] = useState([]);
     const [form, setForm] = useState({ date: '', name: '', multiplier: 2 });
     const [editing, setEditing] = useState(null);
+    // Gói 40: danh mục lỗi vi phạm 3 Chuyên
+    const [types, setTypes] = useState([]);
+    const [typeForm, setTypeForm] = useState({ category: 'chuyen_can', name: '', default_points: 1 });
+    const [editingType, setEditingType] = useState(null);
 
     const fetchAll = async () => {
         try {
-            const [p, h] = await Promise.all([axios.get(API + '/salary-policies'), axios.get(API + '/holidays')]);
+            const [p, h, t] = await Promise.all([axios.get(API + '/salary-policies'), axios.get(API + '/holidays'), axios.get(API + '/violation-types')]);
             if (p.data?.success) setPol(p.data.data);
             if (h.data?.success) setHolidays(h.data.data || []);
+            if (t.data?.success) setTypes(t.data.data || []);
         } catch (e) { alert(e.response?.data?.message || 'Tải dữ liệu thất bại'); }
     };
     useEffect(() => { fetchAll(); }, []);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
     const editable = can('staff.edit');
+    const canEditTypes = can('settings.edit'); // Gói 40: danh mục lỗi thuộc quyền settings.edit
     const inp = 'border border-gray-300 rounded px-2 py-1.5 text-[13px] w-full';
     const btn = 'px-3 py-1.5 rounded text-[13px] font-medium ';
 
@@ -56,6 +68,24 @@ export default function HolidayPolicy() {
     const delHoliday = async (id) => {
         if (!window.confirm('Xóa ngày lễ này?')) return;
         try { await axios.delete(API + '/holidays/' + id); fetchAll(); }
+        catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
+    };
+
+    // Gói 40: CRUD danh mục lỗi vi phạm
+    const openAddType = () => { setEditingType(null); setTypeForm({ category: 'chuyen_can', name: '', default_points: 1 }); };
+    const openEditType = (t) => { setEditingType(t); setTypeForm({ category: t.category, name: t.name || '', default_points: t.default_points ?? 1 }); };
+    const saveType = async () => {
+        if (!typeForm.name.trim()) return alert('Nhập tên lỗi vi phạm');
+        try {
+            const body = { category: typeForm.category, name: typeForm.name.trim(), default_points: Number(typeForm.default_points) || 1 };
+            if (editingType) await axios.put(API + '/violation-types/' + editingType.id, body);
+            else await axios.post(API + '/violation-types', body);
+            openAddType(); fetchAll();
+        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
+    };
+    const delType = async (id) => {
+        if (!window.confirm('Xóa loại lỗi này? Các lỗi đã ghi nhận giữ nguyên tên.')) return;
+        try { await axios.delete(API + '/violation-types/' + id); fetchAll(); }
         catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
     };
 
@@ -132,6 +162,54 @@ export default function HolidayPolicy() {
                                     <div className="flex gap-2">
                                         <button onClick={saveHoliday} className={btn + 'bg-[#24305E] text-white flex-1'}>{editing ? 'Cập nhật' : 'Thêm'}</button>
                                         {editing && <button onClick={openAdd} className={btn + 'border border-gray-300'}>Hủy</button>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    {/* Gói 40: Danh mục lỗi vi phạm 3 Chuyên */}
+                    <div className="m-card p-4 lg:col-span-2">
+                        <h3 className="font-bold mb-1">Danh mục lỗi vi phạm 3 Chuyên</h3>
+                        <p className="text-[12px] text-gray-500 mb-3">Số lỗi mặc định tự điền khi ghi nhận — vẫn sửa tay được từng lần. {!canEditTypes && 'Bạn không có quyền settings.edit nên chỉ xem.'}</p>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-[13px] min-w-[520px]">
+                                <thead><tr className="text-left text-gray-500 border-b border-gray-100">
+                                    <th className="py-2 font-medium">Nhóm</th><th className="py-2 font-medium">Tên lỗi vi phạm</th>
+                                    <th className="py-2 font-medium text-center">Mặc định (lỗi)</th>{canEditTypes && <th className="py-2"></th>}
+                                </tr></thead>
+                                <tbody>
+                                    {VIOL_CATS.map(([ck, cn]) => (
+                                        <React.Fragment key={ck}>
+                                            <tr><td colSpan={canEditTypes ? 4 : 3} className="py-2 font-bold text-[#24305E] bg-gray-50 px-2">{cn}</td></tr>
+                                            {types.filter((t) => t.category === ck).map((t) => (
+                                                <tr key={t.id} className="border-b border-gray-50">
+                                                    <td className="py-2"></td>
+                                                    <td className="py-2 font-medium">{t.name}{t.is_active === false && <span className="ml-2 text-[11px] text-gray-400">(đã ẩn)</span>}</td>
+                                                    <td className="py-2 text-center font-bold text-[#24305E]">{t.default_points}</td>
+                                                    {canEditTypes && <td className="py-2 text-right whitespace-nowrap">
+                                                        <button onClick={() => openEditType(t)} className="text-[#0d6efd] text-[12px] mr-3">Sửa</button>
+                                                        <button onClick={() => delType(t.id)} className="text-red-500 text-[12px]">Xóa</button>
+                                                    </td>}
+                                                </tr>
+                                            ))}
+                                        </React.Fragment>
+                                    ))}
+                                    {types.length === 0 && <tr><td colSpan={canEditTypes ? 4 : 3} className="py-6 text-center text-gray-400">Chưa có loại lỗi nào.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
+                        {canEditTypes && (
+                            <div className="mt-3">
+                                <h4 className="text-[13px] font-bold mb-2">{editingType ? 'Sửa loại lỗi' : 'Thêm loại lỗi'}</h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                    <select value={typeForm.category} onChange={(e) => setTypeForm({ ...typeForm, category: e.target.value })} className={inp}>
+                                        {VIOL_CATS.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                                    </select>
+                                    <input placeholder="Tên lỗi vi phạm *" value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} className={inp + ' md:col-span-2'} />
+                                    <input type="number" min="1" value={typeForm.default_points} onChange={(e) => setTypeForm({ ...typeForm, default_points: e.target.value })} className={inp} title="Số lỗi mặc định" />
+                                    <div className="flex gap-2 col-span-2 md:col-span-4">
+                                        <button onClick={saveType} className={btn + 'bg-[#24305E] text-white'}>{editingType ? 'Cập nhật' : '＋ Thêm lỗi'}</button>
+                                        {editingType && <button onClick={openAddType} className={btn + 'border border-gray-300'}>Hủy</button>}
                                     </div>
                                 </div>
                             </div>

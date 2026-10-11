@@ -6,6 +6,13 @@ import TimeInput from '../../components/TimeInput';
 import { fmtDate, fmtDateTime } from '../../utils/format';
 
 const API = 'http://localhost/api';
+// Gói 49l: ghép URL ảnh với host backend (Vite chạy port khác, URL tương đối sẽ sai)
+const imgSrc = (u) => {
+  if (!u) return '';
+  if (/^https?:\/\//i.test(u)) return u;
+  try { return new URL(API).origin + (u.startsWith('/') ? u : '/' + u); }
+  catch { return u; }
+};
 
 const TYPE_LABELS = { percent: 'Theo phần trăm', fixed: 'Theo số tiền', fixed_price: 'Đồng giá', gift: 'Tặng món', shipping: '🚚 Giảm/miễn phí vận chuyển' };
 const SCOPE_LABELS = { order: 'Hóa đơn', category: 'Danh mục', menu: 'Thực đơn', product: 'Mặt hàng' };
@@ -32,7 +39,7 @@ export default function Promotions() {
         min_order_amount: 0, max_discount_amount: '', gift_product_id: '', gift_quantity: 1,
         target: 'all', tier_ids: [], starts_at: '', expires_at: '', has_expires: false,
         days_of_week: [], use_days: false, time_from: '', time_to: '', use_time: false,
-        channels: ['pos'], is_active: true,
+        channels: ['pos'], is_active: true, banner_url: '',
     });
     const [form, setForm] = useState(emptyForm());
 
@@ -90,7 +97,7 @@ export default function Promotions() {
                     days_of_week: p.days_of_week || [], use_days: !!(p.days_of_week && p.days_of_week.length),
                     time_from: p.time_from ? p.time_from.slice(0, 5) : '', time_to: p.time_to ? p.time_to.slice(0, 5) : '',
                     use_time: !!(p.time_from && p.time_to),
-                    channels: p.channels || ['pos'], is_active: !!p.is_active,
+                    channels: p.channels || ['pos'], is_active: !!p.is_active, banner_url: p.banner_url || '',
                 });
                 setMode('form');
             }
@@ -121,6 +128,7 @@ export default function Promotions() {
                 time_from: form.use_time ? form.time_from : null,
                 time_to: form.use_time ? form.time_to : null,
                 channels: form.channels, is_active: form.is_active,
+                banner_url: form.banner_url || null, // Gói 48: ảnh banner cho Mini App
             };
             const res = editing
                 ? await axios.patch(`${API}/promotions/${editing}`, payload)
@@ -189,6 +197,36 @@ export default function Promotions() {
                                     placeholder="Nhập tên khuyến mại" className="m-input w-full" />
                             </div>
 
+                            {/* Gói 48: ảnh banner cho Zalo Mini App */}
+                            <div className="m-card p-4">
+                                <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Ảnh banner (Zalo Mini App)</h3>
+                                {form.banner_url && (
+                                    <img src={imgSrc(form.banner_url)} alt="Banner" className="w-full rounded-lg mb-3" style={{ aspectRatio: '16/9', objectFit: 'cover' }} />
+                                )}
+                                <div className="flex items-center gap-3">
+                                    <label className="m-btn m-btn-sm cursor-pointer">
+                                        📤 Tải ảnh lên
+                                        <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                                            onChange={async (e) => {
+                                                const file = e.target.files?.[0];
+                                                if (!file) return;
+                                                if (file.size > 1024 * 1024) return alert('File tối đa 1MB.');
+                                                const fd = new FormData();
+                                                fd.append('image', file);
+                                                try {
+                                                    const res = await axios.post(`${API}/uploads/promo-banner`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                                    const url = res.data?.data?.url;
+                                                    if (url) setForm({ ...form, banner_url: url });
+                                                } catch (err) { alert('Tải ảnh thất bại'); }
+                                            }} />
+                                    </label>
+                                    {form.banner_url && (
+                                        <button type="button" onClick={() => setForm({ ...form, banner_url: '' })} className="text-[13px] text-red-600 hover:underline">Xóa ảnh</button>
+                                    )}
+                                    <span className="text-[11px]" style={{ color: 'var(--m-ink-faint)' }}>Tỉ lệ 16:9, jpg/png/webp ≤ 1MB. Hiện trong mục Thành viên trên Mini App.</span>
+                                </div>
+                            </div>
+
                             <div className="m-card p-4">
                                 <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Tùy chọn khuyến mại</h3>
                                 <div className="grid grid-cols-2 gap-4">
@@ -247,12 +285,14 @@ export default function Promotions() {
                                     <div><label className="m-label">Ngày bắt đầu</label>
                                         <DateTimeInput value={form.starts_at} onChange={(v) => setForm({ ...form, starts_at: v })} className="m-input w-full" /></div>
                                     <div>
-                                        <label className="flex items-center gap-2 text-xs mt-6" style={{ color: 'var(--m-ink-soft)' }}>
+                                        <label className="m-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                             <input type="checkbox" checked={form.has_expires} onChange={(e) => setForm({ ...form, has_expires: e.target.checked })} />
                                             Thời gian kết thúc
                                         </label>
-                                        {form.has_expires && (
+                                        {form.has_expires ? (
                                             <DateTimeInput value={form.expires_at} onChange={(v) => setForm({ ...form, expires_at: v })} className="m-input w-full" />
+                                        ) : (
+                                            <div className="text-xs py-2" style={{ color: 'var(--m-ink-faint)' }}>Không giới hạn</div>
                                         )}
                                     </div>
                                 </div>

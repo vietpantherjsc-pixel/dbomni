@@ -13,7 +13,7 @@ export default function Cart() {
       <div className="zm-page">
         <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Giỏ hàng</h1></div>
         <div className="zm-empty">🛒<br />Giỏ hàng trống.<br />Quay lại chọn món ngon nhé!</div>
-        <div className="zm-cartbar"><button className="zm-btn-primary" onClick={() => nav('/')}>Xem thực đơn</button></div>
+        <div className="zm-cartbar above-tab"><button className="zm-btn-primary" onClick={() => nav('/')}>Xem thực đơn</button></div>
         <TabBar />
       </div>
     );
@@ -42,7 +42,7 @@ export default function Cart() {
         <div className="zm-total-row grand"><span>Tạm tính</span><span>{fmt(subtotal)}đ</span></div>
         <div className="zm-note">Phí ship (nếu giao hàng), khuyến mại và điểm tích lũy sẽ tính ở bước thanh toán.</div>
       </div>
-      <div className="zm-cartbar">
+      <div className="zm-cartbar above-tab">
         <button className="zm-btn-primary" onClick={() => nav('/checkout')}>Tiếp tục đặt món</button>
       </div>
       <TabBar />

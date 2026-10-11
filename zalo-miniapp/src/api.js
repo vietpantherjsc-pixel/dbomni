@@ -1,5 +1,8 @@
 // Gói 6 (2026-10-05): Zalo Mini App đặt món — mobile-first, phong cách GrabFood.
-export const API = 'http://localhost/api/online';
+// API tương đối để chạy được trên điện thoại thật (qua proxy Vite lúc dev,
+// hoặc cùng host lúc production). Build cho server riêng:
+// VITE_API_BASE=https://ten-mien.com/api/online npm run build
+export const API = import.meta.env.VITE_API_BASE || '/api/online';
 export const GREEN = '#24305E'; // fallback; màu thật lấy từ /theme qua loadTheme()
 
 async function req(path, opts = {}) {
@@ -32,6 +35,12 @@ export const api = {
   claimOrder: (code, payload) => req(`/orders/${encodeURIComponent(code)}/claim`, { method: 'POST', body: JSON.stringify(payload) }),
   shippingFee: (distance_km) => req('/shipping-fee', { method: 'POST', body: JSON.stringify({ distance_km }) }),
   eligiblePromotions: (payload) => req('/promotions/eligible', { method: 'POST', body: JSON.stringify(payload) }),
+  promoBanners: () => req('/promo-banners'), // Gói 48: banner KM carousel
+  // Gói 49: sổ địa chỉ giao hàng
+  addresses: (customerId) => req(`/addresses?customer_id=${customerId}`),
+  saveAddress: (payload) => req('/addresses', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAddress: (id, payload) => req(`/addresses/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteAddress: (id, customerId) => req(`/addresses/${id}?customer_id=${customerId}`, { method: 'DELETE' }),
   customerByPhone: (phone, memberCode) => req(`/customer?phone=${encodeURIComponent(phone)}&member_code=${encodeURIComponent(memberCode)}`),
   createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   trackOrder: (code) => req(`/orders/${encodeURIComponent(code)}`),
@@ -49,6 +58,23 @@ export const getProfile = () => {
   try { return JSON.parse(localStorage.getItem('zm_profile') || 'null'); } catch { return null; }
 };
 export const setProfile = (p) => localStorage.setItem('zm_profile', JSON.stringify(p));
+
+// Gói 49i: giá bán — ưu tiên giá kênh online, fallback về giá gốc
+export const priceOf = (p) => Number(p?.online_price ?? p?.base_price ?? 0);
+
+// Gói 49k: ghép URL ảnh — backend trả đường dẫn tương đối, Mini App ghép với host API.
+// Đồng thời sửa URL localhost cũ (dữ liệu trước đây) thành host thật.
+export const imgUrl = (u) => {
+  if (!u) return '';
+  try {
+    const apiOrigin = new URL(API, window.location.href).origin;
+    if (/^https?:\/\/localhost(:\d+)?/i.test(u)) {
+      return u.replace(/^https?:\/\/localhost(:\d+)?/i, apiOrigin);
+    }
+    if (/^https?:\/\//i.test(u)) return u;
+    return apiOrigin + (u.startsWith('/') ? u : '/' + u);
+  } catch { return u; }
+};
 
 // Gói 9: mã giới thiệu (?ref=) — lưu để gửi kèm khi đặt đơn
 export const getRef = () => {
@@ -73,13 +99,29 @@ export const saveMyGroup = (code, info) => {
 };
 
 // Gói 7p: đồng bộ màu chủ đạo từ Thiết lập (Đại Vương pick)
+// Gói 47: đồng bộ font chữ (chỉ các font đã verify tiếng Việt)
+const FONT_ALLOW = ['Inter', "'Be Vietnam Pro'", 'Nunito', 'Quicksand', "'Plus Jakarta Sans'", 'Manrope', 'Lexend'];
+const loadedMiniFonts = new Set();
+function applyMiniFont(family) {
+  if (!FONT_ALLOW.includes(family)) return;
+  if (!loadedMiniFonts.has(family)) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=' + encodeURIComponent(family.replace(/'/g, '')) + ':wght@400;500;600;700;800&display=swap';
+    document.head.appendChild(link);
+    loadedMiniFonts.add(family);
+  }
+  document.body.style.fontFamily = family + ", -apple-system, 'Segoe UI', Roboto, sans-serif";
+}
 export async function loadTheme() {
   try {
     const res = await fetch(`${API}/theme`, { headers: { 'Accept': 'application/json' } });
     const data = await res.json();
-    const primary = data && (data.primary || (data.data && data.data.primary));
+    const d = data && (data.data || data);
+    const primary = d && d.primary;
     if (primary && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(primary)) {
       document.documentElement.style.setProperty('--zm-primary', primary.toUpperCase());
     }
-  } catch (e) { /* giữ màu mặc định */ }
+    if (d && d.font_family) applyMiniFont(d.font_family);
+  } catch (e) { /* giữ mặc định */ }
 }
