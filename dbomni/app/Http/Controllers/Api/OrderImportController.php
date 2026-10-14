@@ -8,6 +8,7 @@ use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\PaymentMethod;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductAlias;
 use App\Models\User;
@@ -157,6 +158,51 @@ class OrderImportController extends Controller
             }
         }
 
+        // Gói 56: preview dữ liệu sẽ tự tạo (kênh + PTTT) — CHƯA tạo thật ở bước này
+        $channelCandidates = []; // code => displayName
+        $paymentCandidates = []; // lower => original name
+        foreach ($cached['rows'] as $raw) {
+            $d = $this->applyMapping($raw, $mapping);
+            $chCode = $this->resolveChannel($d['service_type'] ?? '', $d['partner'] ?? '', $d['source'] ?? '');
+            if ($chCode !== '' && !in_array(mb_strtolower($chCode), ['pos', 'zalo'], true) && !isset($channelCandidates[$chCode])) {
+                $partnerName = trim((string) ($d['partner'] ?? ''));
+                $channelCandidates[$chCode] = $partnerName !== '' ? $partnerName : $chCode;
+            }
+            $pay = trim((string) ($d['payment'] ?? ''));
+            if ($pay !== '' && !isset($paymentCandidates[mb_strtolower($pay)])) {
+                $paymentCandidates[mb_strtolower($pay)] = $pay;
+            }
+        }
+        $newChannels = [];
+        if ($channelCandidates) {
+            $codes = array_keys($channelCandidates);
+            $placeholders = implode(',', array_fill(0, count($codes), '?'));
+            $existingPl = PriceList::whereRaw('LOWER(code) IN (' . $placeholders . ')', array_map('mb_strtolower', $codes))
+                ->pluck('code')->map(fn($c) => mb_strtolower((string) $c))->all();
+            foreach ($channelCandidates as $code => $displayName) {
+                if (!in_array(mb_strtolower($code), $existingPl, true)) {
+                    $newChannels[] = [
+                        'code' => $code,
+                        'name' => $displayName,
+                        'commission_rate' => 25,
+                        'commission_tax_included' => true,
+                    ];
+                }
+            }
+        }
+        $newPaymentMethods = [];
+        if ($paymentCandidates) {
+            $names = array_keys($paymentCandidates);
+            $placeholders = implode(',', array_fill(0, count($names), '?'));
+            $existingPm = PaymentMethod::whereRaw('LOWER(name) IN (' . $placeholders . ')', $names)
+                ->pluck('name')->map(fn($n) => mb_strtolower((string) $n))->all();
+            foreach ($paymentCandidates as $lower => $name) {
+                if (!in_array($lower, $existingPm, true)) {
+                    $newPaymentMethods[] = $name;
+                }
+            }
+        }
+
         return response()->json(['success' => true, 'data' => [
             'rows' => $rows,
             'summary' => [
@@ -165,6 +211,8 @@ class OrderImportController extends Controller
                 'errors' => $nErr,
                 'warnings' => $nWarn,
             ],
+            'new_channels' => $newChannels,
+            'new_payment_methods' => $newPaymentMethods,
         ]]);
     }
 
@@ -299,11 +347,25 @@ class OrderImportController extends Controller
                     $this->ensurePaymentMethod($payText);
                 }
 
+                // Gói 56: xác định kênh từ cột AK/AO + snapshot phí sàn
+                $channelCode = $this->resolveChannel(
+                    $first['service_type'] ?? '',
+                    $first['partner'] ?? '',
+                    $first['source'] ?? ''
+                );
+                $priceList = $this->ensurePriceList($channelCode, $first['partner'] ?? '');
+                $commissionRate = $priceList ? (float) $priceList->commission_rate : 0;
+                $orderTotal = $subtotal + $fee;
+                // Gói 56: đơn hủy không phát sinh phí sàn
+                $commissionAmount = (!$isCancelled && $commissionRate > 0) ? (int) round($orderTotal * $commissionRate / 100) : 0;
+
                 $order = Order::create([
                     'user_id' => $cashierUser?->id ?? $authUserId,
                     'branch_id' => $branchId,
-                    'order_type' => $this->mapOrderType($first['source'] ?? ''),
-                    'online_channel' => $this->mapChannel($first['source'] ?? ''),
+                    'order_type' => $this->resolveOrderType($channelCode, $first['service_type'] ?? '', $first['source'] ?? ''),
+                    'online_channel' => $channelCode,
+                    'commission_rate' => $commissionRate,
+                    'commission_amount' => $commissionAmount,
                     'order_number' => $code,
                     'code' => $code,
                     'customer_id' => $customerId,
@@ -312,7 +374,7 @@ class OrderImportController extends Controller
                     'subtotal_amount' => $subtotal,
                     'discount_amount' => 0,
                     'shipping_fee' => $fee,
-                    'total_amount' => $subtotal + $fee,
+                    'total_amount' => $orderTotal,
                     'status' => $isCancelled ? 'cancelled' : 'completed',
                     'payment_method' => trim((string) ($first['payment'] ?? '')) !== '' ? trim((string) $first['payment']) : null,
                     'payment_status' => $isCancelled ? 'unpaid' : 'paid',
@@ -404,6 +466,8 @@ class OrderImportController extends Controller
             'item_name' => 'Tên mặt hàng',
             'qty' => 'Số lượng',
             'price' => 'Giá bán',
+            'service_type' => 'Loại hình phục vụ',
+            'partner' => 'Chi tiết đối tác',
             default => $field,
         };
     }
@@ -413,7 +477,8 @@ class OrderImportController extends Controller
     {
         $raw = array_values($raw);
         $d = [
-            'order_code' => '', 'source' => '', 'status_text' => '', 'order_date_raw' => null,
+            'order_code' => '', 'source' => '', 'service_type' => '', 'partner' => '',
+            'status_text' => '', 'order_date_raw' => null,
             'item_name' => '', 'qty' => '', 'unit' => '', 'price' => '',
             'option' => '', 'payment' => '', 'customer' => '', 'phone' => '',
             'cashier' => '', 'note' => '', 'fee' => 0,
@@ -443,6 +508,8 @@ class OrderImportController extends Controller
             'order_date' => '',
             'order_date_raw' => $d['order_date_raw'],
             'source' => trim((string) ($d['source'] ?? '')),
+            'service_type' => trim((string) ($d['service_type'] ?? '')),
+            'partner' => trim((string) ($d['partner'] ?? '')),
             'status_text' => trim((string) ($d['status_text'] ?? '')),
             'option' => trim((string) ($d['option'] ?? '')),
             'payment' => trim((string) ($d['payment'] ?? '')),
@@ -620,17 +687,27 @@ class OrderImportController extends Controller
         return $p;
     }
 
-    // Gói 55: tách hậu tố kênh khỏi tên món ("Cà phê sữa - CH" → "Cà phê sữa")
+    // Gói 58: tách hậu tố kênh khỏi tên món ("Cà phê sữa - CH" → "Cà phê sữa")
+    // Danh sách hậu tố: thêm mới vào mảng $suffixes khi phát sinh thêm
     private function stripChannelSuffix(string $name): string
     {
         $name = trim($name);
-        // Hậu tố: "- CH", "-CH", "- KM Giờ Vàng" (không phân biệt hoa thường, có/không dấu cách)
-        $patterns = [
-            '/\s*-\s*CH\s*$/iu',
-            '/\s*-\s*KM\s*Giờ\s*Vàng\s*$/iu',
+        // Hậu tố kênh bán (không phân biệt hoa thường, linh hoạt dấu cách quanh gạch ngang)
+        $suffixes = [
+            'CH',
+            'KM Giờ Vàng',
+            'Grab', 'GrabFood',
+            'Shopee', 'ShopeeFood',
+            'Be', 'BeFood',
+            'Zalo',
+            'Online',
+            'Mang Về',
+            'Tại Bàn', 'Tại Quán',
+            'Giao Hàng',
         ];
-        foreach ($patterns as $pt) {
-            $name = preg_replace($pt, '', $name);
+        foreach ($suffixes as $sfx) {
+            $escaped = str_replace(' ', '\s+', preg_quote($sfx, '/'));
+            $name = preg_replace('/\s*-\s*' . $escaped . '\s*$/iu', '', $name);
         }
         return trim($name);
     }
@@ -666,6 +743,90 @@ class OrderImportController extends Controller
     {
         $t = mb_strtolower(trim($s));
         return $t !== '' && (str_contains($t, 'hủy') || str_contains($t, 'huy') || str_contains($t, 'cancel'));
+    }
+
+    // Gói 56: chuẩn hóa text thành code kênh — bỏ dấu, bỏ ký tự đặc biệt, lowercase.
+    // VD: "GrabFood" → "grabfood", "Be Food" → "befood", "Ăn tại bàn" → "antaiban".
+    private function normalizeChannelCode(string $s): string
+    {
+        $s = trim($s);
+        if ($s === '') return '';
+        $s = Str::ascii($s); // bỏ dấu tiếng Việt
+        $s = mb_strtolower($s);
+        return (string) preg_replace('/[^a-z0-9]/', '', $s);
+    }
+
+    // Gói 56: xác định kênh từ cột AK (loại hình phục vụ) + AO (chi tiết đối tác).
+    // - "Ăn tại bàn"/"mua trực tiếp" hoặc cả 2 cột trống → 'pos'
+    // - Có đối tác → chuẩn hóa thành code (vd "GrabFood" → "grabfood")
+    // - Fallback: logic mapChannel cũ theo cột nguồn.
+    private function resolveChannel(string $serviceType, string $partner, string $source): string
+    {
+        $stNorm = $this->normalizeChannelCode($serviceType);
+        $partnerNorm = $this->normalizeChannelCode($partner);
+        $p = trim($partner);
+
+        // Zalo luôn về kênh zalo
+        if (str_contains($stNorm, 'zalo') || str_contains($partnerNorm, 'zalo')) {
+            return 'zalo';
+        }
+
+        // Ăn tại bàn / mua trực tiếp, hoặc cả 2 cột đều trống → kênh tại quầy
+        if (
+            str_contains($stNorm, 'antaiban')
+            || str_contains($stNorm, 'muatructiep')
+            || ($stNorm === '' && $p === '')
+        ) {
+            return 'pos';
+        }
+
+        // Có đối tác cụ thể → dùng code đã chuẩn hóa
+        if ($partnerNorm !== '') {
+            return $partnerNorm;
+        }
+
+        // Fallback: logic cũ theo cột nguồn
+        return $this->mapChannel($source);
+    }
+
+    // Gói 56: xác định loại đơn từ kênh + loại hình phục vụ.
+    private function resolveOrderType(string $channel, string $serviceType, string $source): string
+    {
+        $stNorm = $this->normalizeChannelCode($serviceType);
+
+        // Tại bàn ăn ở quán
+        if ($channel === 'pos' && (str_contains($stNorm, 'antaiban') || str_contains($stNorm, 'muatructiep'))) {
+            return 'dine_in';
+        }
+
+        // Kênh sàn (khác pos/zalo) → giao hàng
+        if ($channel !== 'pos' && $channel !== 'zalo') {
+            return 'delivery';
+        }
+
+        return $this->mapOrderType($source);
+    }
+
+    // Gói 56: đảm bảo bảng giá kênh tồn tại — chưa có thì tự tạo mới với
+    // phí sàn mặc định 25% đã gồm VAT (Đại Vương chỉnh lại sau).
+    private function ensurePriceList(string $code, string $displayName): ?PriceList
+    {
+        $code = trim($code);
+        if ($code === '') return null;
+        $pl = PriceList::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+        if ($pl) return $pl;
+        // Kênh nội bộ (pos/zalo) không có phí sàn → không tự tạo, trả null
+        if (in_array(mb_strtolower($code), ['pos', 'zalo'], true)) {
+            return null;
+        }
+        return PriceList::create([
+            'code' => $code,
+            'name' => trim($displayName) !== '' ? trim($displayName) : $code,
+            'commission_rate' => 25,
+            'commission_tax_included' => true,
+            'commission_tax_rate' => 0,
+            'is_active' => true,
+        ]);
     }
 
     private function mapChannel(string $source): string

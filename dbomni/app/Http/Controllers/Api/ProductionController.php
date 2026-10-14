@@ -101,7 +101,8 @@ class ProductionController extends Controller
         }
 
         try {
-            $production = DB::transaction(function () use ($validated, $inventoryService) {
+            $movementIds = []; // Gói 55 p11af: nhận id nhật ký xuất kho để gắn production_id sau
+            $production = DB::transaction(function () use ($validated, $inventoryService, &$movementIds) {
                 $material = Material::findOrFail($validated['material_id']);
                 // Gói 55 p11o: bỏ gate type cũ — check định mức bên dưới đã đủ
 
@@ -123,7 +124,13 @@ class ProductionController extends Controller
                 }
 
                 // 2. Trừ kho FIFO (ném Exception nếu thiếu)
-                $inventoryService->deductMaterials($validated['branch_id'], $needs);
+                // Gói 55 p11af: ghi nhật ký xuất kho từng lô, gắn production_id sau khi tạo phiếu
+                $inventoryService->deductMaterials(
+                    $validated['branch_id'],
+                    $needs,
+                    ['type' => 'production', 'note' => 'Chế biến ' . $material->name],
+                    $movementIds
+                );
 
                 // 3. Nhập lô mới cho bán thành phẩm
                 $inventoryService->addStock($validated['branch_id'], $material->id, $qty);
@@ -142,6 +149,10 @@ class ProductionController extends Controller
                         'material_id' => $rawId,
                         'quantity' => $usedQty,
                     ]);
+                }
+                // Gói 55 p11af: gắn production_id vào nhật ký xuất kho
+                if (!empty($movementIds)) {
+                    \App\Models\StockMovement::whereIn('id', $movementIds)->update(['reference_id' => $production->id]);
                 }
 
                 return $production->load(['material', 'items.material']);
@@ -171,7 +182,11 @@ class ProductionController extends Controller
                 'trace' => $e->getTraceAsString(),
                 'input' => $request->only(['branch_id', 'material_id', 'quantity']),
             ]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            // Gói SEC2: không lộ message SQL thô ra client
+            $message = $e instanceof \Illuminate\Database\QueryException
+                ? 'Có lỗi xảy ra. Vui lòng thử lại.'
+                : $e->getMessage();
+            return response()->json(['success' => false, 'message' => $message], 400);
         }
     }
 }

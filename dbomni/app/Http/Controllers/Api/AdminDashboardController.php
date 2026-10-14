@@ -136,6 +136,17 @@ class AdminDashboardController extends Controller
             ? (float) OrderItem::whereIn('order_id', $validOrders->pluck('id'))->sum('quantity')
             : 0;
 
+        // Gói 55 p11af (P0-14): Food cost % = giá vốn NL đã chốt (unit_cost) / doanh thu.
+        // Dùng total_amount làm mẫu số (gồm VAT) cho dashboard nhanh; báo cáo chi tiết
+        // (ReportController) dùng doanh thu thuần sau VAT.
+        $foodCostValue = 0.0;
+        if ($ordersCount > 0) {
+            $foodCostValue = (float) OrderItem::whereIn('order_id', $validOrders->pluck('id'))
+                ->selectRaw('SUM(COALESCE(unit_cost, 0) * quantity) AS c')
+                ->value('c');
+        }
+        $foodCostPct = $grossSales > 0 ? round($foodCostValue / $grossSales * 100, 1) : 0;
+
         // Dữ liệu biểu đồ: theo giờ (today) hoặc theo ngày (7d/30d)
         $chartData = [];
         if ($range === 'today') {
@@ -173,6 +184,8 @@ class AdminDashboardController extends Controller
             'orders_count' => $ordersCount,       // Số hóa đơn
             'avg_items_per_order' => $ordersCount > 0 ? round($totalItems / $ordersCount, 1) : 0,
             'avg_revenue_per_order' => $ordersCount > 0 ? round($grossSales / $ordersCount) : 0,
+            'food_cost_pct' => $foodCostPct, // Gói 55 p11af (P0-14)
+            'food_cost_value' => round($foodCostValue),
             'chart' => $chartData,
         ];
     }

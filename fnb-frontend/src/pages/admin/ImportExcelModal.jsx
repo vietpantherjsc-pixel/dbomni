@@ -14,6 +14,9 @@ const SYS_FIELDS = [
     { v: '', t: '— Bỏ qua cột này —' },
     { v: 'order_code', t: 'Mã hóa đơn *' },
     { v: 'source', t: 'Nguồn đơn' },
+    // Gói 55 p11ah (2026-10-14): thêm cột AK (loại hình phục vụ) + AO (chi tiết đối tác)
+    { v: 'service_type', t: 'Loại hình phục vụ (cột AK)' },
+    { v: 'partner', t: 'Chi tiết đối tác (cột AO)' },
     { v: 'status', t: 'Trạng thái đơn hàng' },
     { v: 'order_date', t: 'Ngày tạo đơn' },
     { v: 'item_name', t: 'Tên mặt hàng *' },
@@ -46,6 +49,9 @@ function autoMap(headerName) {
     const n = ' ' + norm(headerName) + ' ';
     if (n.includes(' ma hoa don ')) return 'order_code';
     if (n.includes(' nguon don ')) return 'source';
+    // Gói 55 p11ah (2026-10-14): tự nhận diện cột AK (loại hình phục vụ) + AO (chi tiết đối tác)
+    if (n.includes(' loai hinh ') || n.includes(' phuc vu ')) return 'service_type';
+    if (n.includes(' doi tac ') || n.includes(' partner ')) return 'partner';
     if (n.includes(' trang thai ')) return 'status';
     if (n.includes(' thoi gian tao ') || n.includes(' ngay tao ')) return 'order_date';
     if (n.includes(' ten mat hang ')) return 'item_name';
@@ -413,6 +419,36 @@ export default function ImportExcelModal({ onClose, onDone }) {
                                 <span className="px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-[13px] font-bold">⚠ {valid.summary.warnings} cảnh báo</span>
                                 <span className="px-3 py-1.5 rounded-full bg-red-100 text-red-700 text-[13px] font-bold">✕ {valid.summary.errors} lỗi</span>
                             </div>
+                            {/* Gói 55 p11ah (2026-10-14): preview dữ liệu tự động tạo — kênh mới + PTTT mới */}
+                            {(valid.new_channels || []).length > 0 && (
+                                <div className="mb-3">
+                                    <h4 className="font-semibold text-gray-800 mb-2 text-[14px]">🏪 Kênh bán mới sẽ tạo ({valid.new_channels.length})</h4>
+                                    <div className="flex flex-wrap gap-2">
+                                        {valid.new_channels.map((c, i) => {
+                                            const nm = typeof c === 'string' ? c : (c.name || c.code || '');
+                                            return (
+                                                <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-50 border border-[#F5A623] text-[13px] text-gray-800">
+                                                    <b>{nm}</b>
+                                                    <span className="text-[12px] text-gray-500">· phí sàn 25% (đã gồm VAT)</span>
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                            {(valid.new_payment_methods || []).length > 0 && (
+                                <div className="mb-3">
+                                    <h4 className="font-semibold text-gray-800 mb-2 text-[14px]">💳 PTTT mới sẽ tạo ({valid.new_payment_methods.length})</h4>
+                                    <div className="flex flex-wrap gap-2">
+                                        {valid.new_payment_methods.map((m, i) => {
+                                            const nm = typeof m === 'string' ? m : (m.name || '');
+                                            return (
+                                                <span key={i} className="inline-flex items-center px-3 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-[13px] text-gray-800">{nm}</span>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             <div className="overflow-x-auto border border-gray-200 rounded-lg max-h-[320px] overflow-y-auto">
                                 <table className="w-full text-[13px] min-w-[680px]">
                                     <thead className="sticky top-0">

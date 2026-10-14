@@ -50,7 +50,9 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Gói 55 p11ae: token hết hạn sau 30 ngày (trước đây null = vĩnh viễn, token rò rỉ nguy hiểm).
+    // Lưu ý: token đã cấp trước đó vẫn hiệu lực đến khi user đăng xuất / xóa token.
+    'expiration' => 60 * 24 * 30,
 
     /*
     |--------------------------------------------------------------------------

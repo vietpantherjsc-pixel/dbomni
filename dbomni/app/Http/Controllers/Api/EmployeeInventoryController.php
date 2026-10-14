@@ -264,7 +264,25 @@ class EmployeeInventoryController extends Controller
             'employee_id' => $st->employee_id ?? $emp->id,
         ]);
         // Gói 19: chốt chỉ ghi nhận chênh lệch, KHÔNG tự điều chỉnh kho
-        return response()->json(['success' => true, 'message' => 'Đã chốt kiểm kê.']);
+        // Gói 55 p11b: tổng giá trị chênh vượt ngưỡng → tự sinh đề xuất điều chỉnh (chờ duyệt)
+        $rows = $st->items->map(fn ($it) => [
+            'material_id' => $it->material_id,
+            'system_qty' => (float) $it->system_qty,
+            'counted_qty' => (float) $it->counted_qty,
+            'diff' => (float) $it->counted_qty - (float) $it->system_qty,
+        ])->all();
+        $adjCount = 0;
+        try {
+            $adjCount = \App\Models\StocktakeAdjustment::createFromConfirmed($st->fresh(), $rows, $emp->id);
+        } catch (\Exception $adjEx) {
+            \Log::warning('Không tạo được đề xuất điều chỉnh kiểm kê #' . $st->id . ': ' . $adjEx->getMessage());
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã chốt kiểm kê.'
+                . ($adjCount > 0 ? " Đã tạo {$adjCount} đề xuất điều chỉnh chờ quản lý duyệt." : ''),
+            'adjustments_created' => $adjCount,
+        ]);
     }
 
     // Gói 55 p11w: thêm nguyên liệu vào phiếu nháp
@@ -388,7 +406,8 @@ class EmployeeInventoryController extends Controller
             return response()->json(['success' => false, 'message' => 'Chưa có định mức cho nguyên liệu này.'], 422);
         }
         try {
-            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv) {
+            $movementIds = []; // Gói 55 p11af: nhận id nhật ký xuất kho để gắn production_id sau
+            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv, &$movementIds) {
                 $needs = [];
                 foreach ($recipes as $r) {
                     // Gói 55 p11c: định mức theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
@@ -396,7 +415,11 @@ class EmployeeInventoryController extends Controller
                     $batches = (float) $v['quantity'] / $batchOut;
                     $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
                 }
-                $deducted = $inv->deductMaterialsDetailed((int) $emp->branch_id, $needs);
+                // Gói 55 p11af: ghi nhật ký xuất kho từng lô, gắn production_id sau
+                $deducted = $inv->deductMaterialsDetailed((int) $emp->branch_id, $needs, [
+                    'type' => 'production',
+                    'note' => 'Chế biến ' . $material->name,
+                ], $movementIds);
                 $inv->addStock((int) $emp->branch_id, (int) $material->id, (float) $v['quantity']);
                 $production = Production::create([
                     'branch_id' => $emp->branch_id,
@@ -412,6 +435,10 @@ class EmployeeInventoryController extends Controller
                         'material_id' => $matId,
                         'quantity' => $qty,
                     ]);
+                }
+                // Gói 55 p11af: gắn production_id vào nhật ký xuất kho
+                if (!empty($movementIds)) {
+                    \App\Models\StockMovement::whereIn('id', $movementIds)->update(['reference_id' => $production->id]);
                 }
                 return $production;
             });

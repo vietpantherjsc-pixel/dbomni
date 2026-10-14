@@ -43,13 +43,16 @@ class InboundController extends Controller
 
         $batchCode = $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8)));
 
+        // Gói 55 p11ae: batch.unit_cost phải là giá theo ĐƠN VỊ CƠ SỞ
+        // (trừ kho tính theo baseQuantity), nên chia cho rate.
+        $batchUnitCost = $rate > 0 ? (float) ($item['unit_cost'] ?? 0) / $rate : (float) ($item['unit_cost'] ?? 0);
         $batch = Batch::create([
             'branch_id' => $branchId,
             'material_id' => $item['material_id'],
             'batch_code' => $batchCode,
             'initial_quantity' => $baseQuantity,
             'current_quantity' => $baseQuantity,
-            'unit_cost' => $item['unit_cost'] ?? 0,
+            'unit_cost' => $batchUnitCost,
             'expired_at' => $item['expired_at'] ?? null,
             'status' => 'active',
         ]);

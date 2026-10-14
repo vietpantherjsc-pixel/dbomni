@@ -134,27 +134,33 @@ class LoyaltyService
 
     /**
      * Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận tích điểm rồi hủy).
+     * Gói 55 p11ae: earnForOrder() LUÔN cộng total_spent dù points_earned = 0, nên hủy đơn
+     * đã paid phải trừ lại total_spent trong mọi trường hợp; chỉ skip phần trừ ĐIỂM khi
+     * points_earned = 0. Tham số $hadPaid cho biết đơn đã từng paid (earn đã chạy) —
+     * đơn held hủy khi chưa paid thì earn chưa bao giờ chạy, không được trừ total_spent.
      */
-    public function revokeEarn(Order $order): void
+    public function revokeEarn(Order $order, bool $hadPaid = false): void
     {
-        if (!$order->customer_id || $order->points_earned <= 0) {
+        if (!$order->customer_id || !$hadPaid) {
             return;
         }
         $customer = Customer::lockForUpdate()->findOrFail($order->customer_id);
-        // Gói SEC: cho phép số dư âm (đúng bản chất kế toán) — chống gian lận tích → tiêu → hủy
-        $customer->points = $customer->points - $order->points_earned;
-        // Gói 55 p11ad: trừ lại tổng chi tiêu đã cộng lúc tích điểm + hạ hạng nếu rớt ngưỡng
+        // Trừ lại tổng chi tiêu đã cộng lúc tích điểm + hạ hạng nếu rớt ngưỡng
         $customer->total_spent = max(0, (float) $customer->total_spent - (float) $order->total_amount);
         $this->recalculateTier($customer);
-        $customer->save();
 
-        PointTransaction::create([
-            'customer_id' => $customer->id,
-            'order_id' => $order->id,
-            'change' => -$order->points_earned,
-            'type' => 'revoke',
-            'note' => "Thu hồi điểm đã tích do hủy đơn {$order->code}",
-        ]);
+        if ($order->points_earned > 0) {
+            // Gói SEC: cho phép số dư âm (đúng bản chất kế toán) — chống gian lận tích → tiêu → hủy
+            $customer->points = $customer->points - $order->points_earned;
+            PointTransaction::create([
+                'customer_id' => $customer->id,
+                'order_id' => $order->id,
+                'change' => -$order->points_earned,
+                'type' => 'revoke',
+                'note' => "Thu hồi điểm đã tích do hủy đơn {$order->code}",
+            ]);
+        }
+        $customer->save();
     }
 
     /**

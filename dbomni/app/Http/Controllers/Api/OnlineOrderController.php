@@ -13,6 +13,7 @@ use App\Models\ProductOption;
 use App\Models\Promotion;
 use App\Models\Setting;
 use App\Models\Voucher;
+use App\Models\VoucherUsage;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
 use App\Services\PromotionService;
@@ -566,7 +567,9 @@ class OnlineOrderController extends Controller
 
                 $discountAmount = 0;
 
-                // 4. Voucher
+                // 4. Voucher — tính riêng, chưa cộng vào tổng
+                // (quyết định cộng dồn hay lấy max ở sau theo công tắc promo_allow_stack)
+                $voucherDiscount = 0;
                 $appliedVoucher = null;
                 if (!empty($validated['voucher_code'])) {
                     $voucher = Voucher::where('code', $validated['voucher_code'])
@@ -585,21 +588,33 @@ class OnlineOrderController extends Controller
                     if ($subtotal < $voucher->min_order_amount) {
                         throw new Exception('Chưa đạt giá trị tối thiểu của voucher.');
                     }
-                    $discountAmount = $voucher->type === 'fixed'
+                    // Gói 55 p11af (P0-12): giới hạn số lần mỗi khách được dùng voucher
+                    if ($voucher->per_customer_limit && $customer) {
+                        $usedTimes = VoucherUsage::where('voucher_id', $voucher->id)
+                            ->where('customer_id', $customer->id)
+                            ->lockForUpdate()
+                            ->count();
+                        if ($usedTimes >= $voucher->per_customer_limit) {
+                            throw new Exception('Bạn đã dùng hết lượt của mã khuyến mãi này.');
+                        }
+                    }
+                    $voucherDiscount = $voucher->type === 'fixed'
                         ? (float) $voucher->value
                         : ($subtotal * (float) $voucher->value) / 100;
                     if ($voucher->max_discount_amount) {
-                        $discountAmount = min($discountAmount, (float) $voucher->max_discount_amount);
+                        $voucherDiscount = min($voucherDiscount, (float) $voucher->max_discount_amount);
                     }
-                    $voucher->increment('used_count');
+                    $voucherDiscount = min($voucherDiscount, $subtotal);
                     $appliedVoucher = $voucher;
+                    // used_count chỉ tăng khi voucher thực sự được áp dụng (xem bước 5d)
                 }
 
-                // 5. Khuyến mại (validate server)
+                // 5. Khuyến mại (validate server) — tính riêng
                 $promotionDiscount = 0;
                 $appliedPromotion = null;
                 $shippingDiscount = 0; // Gói 10c
                 $shippingPromotion = null; // Gói 10c
+                $giftLinePending = null;
                 if (!empty($validated['promotion_id'])) {
                     $eligible = $promotionService->eligiblePromotions([
                         'subtotal' => $subtotal,
@@ -618,11 +633,12 @@ class OnlineOrderController extends Controller
                         $shippingPromotion = $appliedPromotion;
                         $appliedPromotion = null;
                     } else {
-                        $promotionDiscount = (float) $found['discount'];
+                        $promotionDiscount = min((float) $found['discount'], $subtotal);
                     }
                     if ($appliedPromotion && $appliedPromotion->type === 'gift' && $appliedPromotion->gift_product_id) {
                         $giftProduct = Product::findOrFail($appliedPromotion->gift_product_id);
-                        $orderItemsData[] = [
+                        // Chuẩn bị dòng quà (thêm vào đơn ở bước 5d; gift không tham gia so sánh cộng dồn)
+                        $giftLinePending = [
                             'product_id' => $giftProduct->id,
                             'product_option_id' => null,
                             'product_name' => $giftProduct->name . ' (KM tặng)',
@@ -634,13 +650,47 @@ class OnlineOrderController extends Controller
                     }
                 }
 
-                // 6. Đổi điểm
+                // 5d. Gói 55 p11af (P0-13): công tắc cộng dồn KM + trần % giảm giá.
+                // - promo_allow_stack=true (mặc định Gói 57): cộng dồn các loại giảm giá
+                //   (voucher vs KM), không cộng dồn. KM phí ship và KM tặng món không phải
+                //   giảm giá tiền nên giữ nguyên.
+                // - Trần: tổng giảm giá KM không vượt promo_max_discount_pct % subtotal.
+                $allowStack = filter_var(Setting::get('promo_allow_stack', true), FILTER_VALIDATE_BOOLEAN);
+                $maxDiscountPct = (float) Setting::get('promo_max_discount_pct', 50);
+                if ($allowStack) {
+                    $discountAmount = $voucherDiscount + $promotionDiscount;
+                    if ($appliedVoucher) {
+                        $appliedVoucher->increment('used_count');
+                    }
+                } else {
+                    $discountAmount = max($voucherDiscount, $promotionDiscount);
+                    $voucherWins = $appliedVoucher && $voucherDiscount > 0 && $voucherDiscount >= $promotionDiscount;
+                    if ($voucherWins) {
+                        $appliedVoucher->increment('used_count');
+                    } else {
+                        $appliedVoucher = null;
+                    }
+                    $promoWins = $appliedPromotion && $appliedPromotion->type !== 'gift' && $promotionDiscount > 0
+                        && $promotionDiscount >= $voucherDiscount;
+                    if (!$promoWins) {
+                        $appliedPromotion = null;
+                        $promotionDiscount = 0;
+                    }
+                }
+                if ($giftLinePending) {
+                    $orderItemsData[] = $giftLinePending;
+                }
+                if ($maxDiscountPct > 0 && $maxDiscountPct < 100) {
+                    $discountAmount = min($discountAmount, $subtotal * $maxDiscountPct / 100);
+                }
+
+                // 6. Đổi điểm (loyalty — tiền KH đã tích, không bị trần KM)
                 $pointsUsed = 0;
                 if (!empty($validated['points_redeem']) && (int) $validated['points_redeem'] > 0) {
                     $preview = $loyaltyService->previewRedeem(
                         $customer,
                         (int) $validated['points_redeem'],
-                        $subtotal + $shippingFee - $discountAmount - $promotionDiscount
+                        $subtotal + $shippingFee - $discountAmount
                     );
                     if ($preview['points_used'] <= 0) {
                         throw new Exception('Điểm không đủ để đổi.');
@@ -649,7 +699,6 @@ class OnlineOrderController extends Controller
                     $discountAmount += $preview['discount'];
                 }
 
-                $discountAmount += $promotionDiscount;
                 $discountAmount = min($discountAmount, $subtotal + $shippingFee);
                 $finalAmount = $subtotal + $shippingFee - $discountAmount;
 
@@ -672,11 +721,17 @@ class OnlineOrderController extends Controller
                 }
 
                 // 7. Tạo đơn — CHỜ XÁC NHẬN (chưa trừ kho, chưa tích điểm)
+                // Gói 57: snapshot phí sàn kênh zalo lúc tạo đơn
+                $zaloPriceList = \App\Models\PriceList::whereRaw('LOWER(code) = ?', ['zalo'])->first();
+                $zaloCommissionRate = $zaloPriceList ? (float) $zaloPriceList->commission_rate : 0;
+                $zaloCommissionAmount = $zaloCommissionRate > 0 ? (int) round($finalAmount * $zaloCommissionRate / 100) : 0;
                 $order = Order::create([
                     'user_id' => null,
                     'branch_id' => $validated['branch_id'],
                     'order_type' => $validated['order_type'],
                     'online_channel' => 'zalo',
+                    'commission_rate' => $zaloCommissionRate,
+                    'commission_amount' => $zaloCommissionAmount,
                     'order_number' => 'ONL-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
                     'code' => 'ZL-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
                     'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
@@ -724,6 +779,16 @@ class OnlineOrderController extends Controller
                     $loyaltyService->applyRedeem($customer, $order, $pointsUsed);
                 }
 
+                // Gói 55 p11af (P0-12): ghi log lượt dùng voucher theo khách
+                if ($appliedVoucher && $customer) {
+                    VoucherUsage::create([
+                        'voucher_id' => $appliedVoucher->id,
+                        'customer_id' => $customer->id,
+                        'order_id' => $order->id,
+                        'used_at' => now(),
+                    ]);
+                }
+
                 return $order->load(['items.product', 'customer']);
             });
 
@@ -733,7 +798,20 @@ class OnlineOrderController extends Controller
                 'data' => $order,
             ], 201);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            // Gói SEC2: race idempotency — 2 request cùng client_key song song, 1 request
+            // qua check nhưng dính unique violation khi insert → trả về đơn đã tạo thay vì 400
+            $clientKey = $validated['client_key'] ?? null;
+            if ($clientKey && $e instanceof \Illuminate\Database\QueryException && ($e->errorInfo[1] ?? null) == 1062) {
+                $existing = Order::with('items')->where('client_key', $clientKey)->first();
+                if ($existing) {
+                    return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
+                }
+            }
+            // Gói SEC2: không lộ message SQL thô ra client
+            $message = $e instanceof \Illuminate\Database\QueryException
+                ? 'Có lỗi xảy ra. Vui lòng thử lại.'
+                : $e->getMessage();
+            return response()->json(['success' => false, 'message' => $message], 400);
         }
     }
 
@@ -785,18 +863,37 @@ class OnlineOrderController extends Controller
         ]]);
     }
 
-    // KH hủy đơn đang chờ xác nhận
-    public function cancel(string $code, LoyaltyService $loyaltyService): JsonResponse
+    // KH hủy đơn đang chờ xác nhận — Gói SEC2: yêu cầu SĐT khớp với đơn để chống hủy đơn người khác
+    public function cancel(Request $request, string $code, LoyaltyService $loyaltyService): JsonResponse
     {
         try {
-            $order = DB::transaction(function () use ($code, $loyaltyService) {
+            $validated = $request->validate([
+                'phone' => 'required|string|max:20',
+            ]);
+            $order = DB::transaction(function () use ($code, $validated, $loyaltyService) {
                 $order = Order::where('code', $code)->where('online_channel', 'zalo')->lockForUpdate()->firstOrFail();
+                // Xác thực SĐT người hủy khớp với SĐT đặt đơn (chuẩn hóa +84/84 -> 0)
+                $norm = function ($p) {
+                    $d = preg_replace('/[^0-9]/', '', (string) $p);
+                    if (str_starts_with($d, '84') && strlen($d) >= 11) {
+                        $d = '0' . substr($d, 2);
+                    }
+                    return $d;
+                };
+                $reqPhone = $norm($validated['phone']);
+                $orderPhone = $norm($order->customer_phone);
+                if ($reqPhone === '' || $orderPhone === '' || !hash_equals($orderPhone, $reqPhone)) {
+                    throw new Exception('Số điện thoại không khớp với đơn hàng.');
+                }
                 if ($order->status !== 'pending' || $order->payment_status !== 'pending') {
                     throw new Exception('Đơn đang được chuẩn bị, không thể hủy online. Vui lòng gọi quán.');
                 }
                 $order->status = 'cancelled';
                 $order->cancel_reason = 'Khách hủy trên Mini App';
                 $order->cancelled_at = now();
+                // Gói 55 p11ag: truy vết người hủy (khách tự hủy online)
+                $order->cancelled_by = 'customer:' . $reqPhone;
+                $order->cancelled_by_type = 'customer';
                 $order->save();
 
                 // Gói 13: hoàn điểm đã đổi qua LoyaltyService (ghi sổ PointTransaction)
@@ -808,6 +905,8 @@ class OnlineOrderController extends Controller
                     \App\Models\Voucher::where('code', $order->voucher_code)
                         ->where('used_count', '>', 0)
                         ->decrement('used_count');
+                    // Gói 55 p11af (P0-12): xóa log lượt dùng để hoàn lại lượt cho khách
+                    VoucherUsage::where('order_id', $order->id)->delete();
                 }
                 return $order;
             });
@@ -854,10 +953,15 @@ class OnlineOrderController extends Controller
                     throw new Exception('Đơn đã được gán cho thành viên khác.');
                 }
 
+                // Gói 55 p11ae: chỉ tích bù khi TV vừa được gán trong lần claim NÀY.
+                // Nếu đơn đã có TV từ trước (điểm đã xử lý lúc tạo/thanh toán), claim lại bằng
+                // QR mới với đơn 0 điểm (points_earned = 0 là falsy) sẽ cộng dồn total_spent
+                // → leo hạng thành viên gian lận.
+                $justAssigned = empty($order->customer_id);
                 $order->customer_id = $customer->id;
                 // Đơn đã thanh toán mà chưa tích điểm → tích bù ngay
                 // Gói SEC: token đã null sau lần claim đầu nên không thể claim 2 lần
-                if ($order->payment_status === 'paid' && !$order->points_earned) {
+                if ($order->payment_status === 'paid' && $justAssigned && !$order->points_earned) {
                     $order->points_earned = $loyaltyService->earnForOrder(
                         $customer, $order, (float) $order->total_amount
                     );
@@ -981,21 +1085,48 @@ class OnlineOrderController extends Controller
 
     /**
      * Gói 55 p11ac: tính giá vốn 1 đơn vị món = Σ (định mức NL × giá vốn BQ lô đã trừ).
+     * Gói 55 p11ae: viết lại để KHỚP 100% logic trừ kho của InventoryService::calculateNeeds:
+     * - Định mức cơ bản: whereNull('product_option_id') (trước đây lấy cả dòng per-option → đếm trùng)
+     * - Tùy chọn: phân biệt fixed (product_id NULL) / per_product (đúng món) theo quantity_mode
+     * - Gộp product_option_id (size) của dòng đơn vào danh sách option (trước đây bỏ sót)
      */
     private function calcItemUnitCost($item, array $materialCosts): float
     {
         if (empty($materialCosts) || empty($item->product_id)) {
             return 0;
         }
+        // Gộp product_option_id vào danh sách option — giống calculateNeeds
+        $optionIds = $item->options ? array_keys((array) $item->options) : [];
+        if (!empty($item->product_option_id)) {
+            $optionIds[] = $item->product_option_id;
+        }
+        $optionIds = array_values(array_unique(array_filter($optionIds)));
         $cost = 0;
-        $recipes = \App\Models\Recipe::where('product_id', $item->product_id)->get();
+        // Định mức CƠ BẢN của món (không tính dòng định mức theo tùy chọn)
+        $recipes = \App\Models\Recipe::where('product_id', $item->product_id)
+            ->whereNull('product_option_id')
+            ->get();
         foreach ($recipes as $r) {
             $cost += (float) $r->quantity * ($materialCosts[$r->material_id] ?? 0);
         }
-        $optionIds = $item->options ? array_keys((array) $item->options) : [];
-        if (!empty($optionIds)) {
-            $optRecipes = \App\Models\Recipe::whereIn('product_option_id', $optionIds)->get();
-            foreach ($optRecipes as $r) {
+        // Định mức của từng tùy chọn đã chọn — phân biệt fixed/per_product
+        $modeCache = [];
+        foreach ($optionIds as $oid) {
+            if (!array_key_exists($oid, $modeCache)) {
+                $opt = \App\Models\ProductOption::with('group')->find($oid);
+                $modeCache[$oid] = ($opt && $opt->group && $opt->group->quantity_mode === 'per_product')
+                    ? 'per_product' : 'fixed';
+            }
+            if ($modeCache[$oid] === 'per_product') {
+                $optionRecipes = \App\Models\Recipe::where('product_id', $item->product_id)
+                    ->where('product_option_id', $oid)
+                    ->get();
+            } else {
+                $optionRecipes = \App\Models\Recipe::whereNull('product_id')
+                    ->where('product_option_id', $oid)
+                    ->get();
+            }
+            foreach ($optionRecipes as $r) {
                 $cost += (float) $r->quantity * ($materialCosts[$r->material_id] ?? 0);
             }
         }

@@ -52,20 +52,58 @@ class InventoryController extends Controller
     }
 
     // Gói 55 p11: điều chỉnh tồn nhanh ± (từ nút −/+ trong danh sách)
+    // Gói 55 p11b: bắt buộc nhập lý do (min 10 ký tự); vượt ngưỡng giá trị
+    // (settings.inventory_adjust_threshold, mặc định 500k) thì CHẶN + ghi log
+    // yêu cầu vào stock_movements để quản lý duyệt, không thực hiện ngay.
     public function quickAdjust(Request $request): JsonResponse
     {
         $v = $request->validate([
             'material_id' => 'required|exists:materials,id',
             'quantity' => 'required|numeric', // dương = nhập, âm = xuất
             'branch_id' => 'required|exists:branches,id',
+            'reason' => 'required|string|min:10|max:500', // Gói 55 p11b: lý do bắt buộc
         ]);
         $material = Material::findOrFail($v['material_id']);
         $qty = (float) $v['quantity'];
+        $reason = trim($v['reason']);
 
-        return DB::transaction(function () use ($material, $qty, $v) {
+        // Gói 55 p11b: tính giá trị điều chỉnh theo giá vốn bình quân lô đang có
+        $avgCost = (float) \App\Models\Batch::where('material_id', $material->id)
+            ->where('branch_id', $v['branch_id'])
+            ->where('status', 'active')
+            ->where('current_quantity', '>', 0)
+            ->selectRaw('SUM(current_quantity * unit_cost) / NULLIF(SUM(current_quantity), 0) AS avg_cost')
+            ->value('avg_cost');
+        $adjustValue = abs($qty) * $avgCost;
+        $threshold = (float) \App\Models\Setting::get('inventory_adjust_threshold', '500000');
+        if ($threshold > 0 && $adjustValue > $threshold) {
+            // Vượt ngưỡng: không thực hiện, ghi log yêu cầu chờ duyệt (số lượng 0 = chưa đổi kho)
+            \App\Models\StockMovement::create([
+                'branch_id' => $v['branch_id'],
+                'material_id' => $material->id,
+                'batch_id' => null,
+                'quantity' => 0,
+                'unit_cost' => $avgCost,
+                'reference_type' => 'adjustment',
+                'reference_id' => null,
+                'note' => 'Yêu cầu điều chỉnh vượt ngưỡng - CHỜ DUYỆT: ' . ($qty > 0 ? '+' : '') . $qty . ' ' . $material->unit
+                    . ' (giá trị ≈ ' . number_format($adjustValue, 0, ',', '.') . 'đ, ngưỡng ' . number_format($threshold, 0, ',', '.') . 'đ)'
+                    . ' | Lý do: ' . $reason
+                    . ' | Người yêu cầu: ' . $this->actorName($request),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Giá trị điều chỉnh (≈ ' . number_format($adjustValue, 0, ',', '.') . 'đ) vượt ngưỡng '
+                    . number_format($threshold, 0, ',', '.') . 'đ. Yêu cầu đã được ghi lại, vui lòng nhờ quản lý duyệt.',
+                'needs_approval' => true,
+            ], 403);
+        }
+
+        // Gói SEC2: return nằm NGOÀI closure transaction (không return response trong transaction)
+        $result = DB::transaction(function () use ($material, $qty, $v, $reason, $request) {
             if ($qty > 0) {
                 // Nhập: tạo lô mới
-                Batch::create([
+                $batch = Batch::create([
                     'material_id' => $material->id,
                     'branch_id' => $v['branch_id'],
                     'batch_code' => 'ADJ-' . now()->format('YmdHis') . '-' . $material->id,
@@ -73,6 +111,17 @@ class InventoryController extends Controller
                     'current_quantity' => $qty,
                     'unit_cost' => 0,
                     'status' => 'active',
+                ]);
+                // Gói 55 p11af: nhật ký điều chỉnh (nhập = số âm theo quy ước stock_movements)
+                \App\Models\StockMovement::create([
+                    'branch_id' => $v['branch_id'],
+                    'material_id' => $material->id,
+                    'batch_id' => $batch->id,
+                    'quantity' => -$qty,
+                    'unit_cost' => 0,
+                    'reference_type' => 'adjustment',
+                    'reference_id' => null,
+                    'note' => 'Điều chỉnh nhanh: nhập ' . $qty . ' ' . $material->unit . ' | Lý do: ' . $reason,
                 ]);
             } else {
                 // Xuất: trừ FIFO
@@ -86,10 +135,11 @@ class InventoryController extends Controller
                     ->get();
                 $available = $batches->sum('current_quantity');
                 if ($available < $need) {
-                    return response()->json([
+                    return [
                         'success' => false,
                         'message' => "Tồn kho không đủ (còn {$available} {$material->unit}).",
-                    ], 422);
+                        'status' => 422,
+                    ];
                 }
                 foreach ($batches as $b) {
                     if ($need <= 0) break;
@@ -97,14 +147,38 @@ class InventoryController extends Controller
                     $remaining = (float) $b->current_quantity - $take;
                     $b->decrement('current_quantity', $take);
                     $need -= $take;
-                    // Gói 55: set exhausted khi hết (đồng nhất với InventoryService)
-                    if ($remaining <= 0) {
+                    // Gói 55 p11af: nhật ký điều chỉnh từng lô (xuất = số dương)
+                    \App\Models\StockMovement::create([
+                        'branch_id' => $v['branch_id'],
+                        'material_id' => $material->id,
+                        'batch_id' => $b->id,
+                        'quantity' => (float) $take,
+                        'unit_cost' => (float) $b->unit_cost,
+                        'reference_type' => 'adjustment',
+                        'reference_id' => null,
+                        'note' => 'Điều chỉnh nhanh: xuất ' . $take . ' ' . $material->unit . ' | Lý do: ' . $reason,
+                    ]);
+                    // Gói SEC2: dùng epsilon < 0.001 đồng nhất với InventoryService
+                    if ($remaining < 0.001) {
                         $b->status = 'exhausted';
                         $b->save();
                     }
                 }
             }
-            return response()->json(['success' => true, 'message' => 'Đã cập nhật tồn kho.']);
+            return ['success' => true, 'message' => 'Đã cập nhật tồn kho.', 'status' => 200];
         });
+
+        return response()->json(
+            ['success' => $result['success'], 'message' => $result['message']],
+            $result['status']
+        );
+    }
+
+    // Gói 55 p11b: tên người gọi để ghi log yêu cầu điều chỉnh
+    private function actorName(Request $request): string
+    {
+        $actor = $request->user();
+        if (!$actor) return '';
+        return trim((string) ($actor->full_name ?? $actor->name ?? $actor->username ?? ''));
     }
 }

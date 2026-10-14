@@ -9,7 +9,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 // Gói 5 (2026-10-05): Khách hàng — SĐT làm định danh, mã QR thành viên.
 class Customer extends Model
 {
-    protected $guarded = [];
+    // Gói SEC2: fillable显式 thay vì $guarded = [] để tránh mass assignment ngoài ý muốn
+    protected $fillable = [
+        'member_code', 'name', 'phone', 'birthday',
+        'membership_tier_id', 'note', 'referred_by',
+    ];
 
     protected $casts = [
         'birthday' => 'date',

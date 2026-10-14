@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { api, fmt } from '../api';
+import { api, fmt, getProfile } from '../api';
 import { fmtDateTime } from '../utils/format';
 import { TabBar } from './Home';
 
@@ -45,9 +45,16 @@ export default function TrackOrder() {
   const [cancelling, setCancelling] = useState(false);
   const cancel = async () => {
     if (!confirm('Chắc chắn hủy đơn này?')) return;
+    // Gói SEC2: gửi SĐT đặt đơn để server xác thực người hủy
+    let phone = getProfile()?.phone || '';
+    if (!phone) {
+      phone = prompt('Nhập SĐT đã dùng để đặt đơn (để xác nhận hủy):') || '';
+      phone = phone.trim();
+    }
+    if (!phone) { alert('Cần SĐT đặt đơn để hủy.'); return; }
     setCancelling(true);
     try {
-      await api.cancelOrder(order.code);
+      await api.cancelOrder(order.code, phone);
       alert('Đã hủy đơn.');
       lookup(order.code);
     } catch (e) { alert(e.message); }

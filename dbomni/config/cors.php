@@ -19,7 +19,9 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['http://localhost:5174', 'http://localhost:3000','*'],
+    // Gói 55 p11ae: bỏ '*' (trước đây mọi website đều gọi được API). Chỉ giữ localhost dev.
+    // Khi deploy production, thêm domain thật của frontend/Mini App vào đây.
+    'allowed_origins' => ['http://localhost:5174', 'http://localhost:3000'],
 
     'allowed_origins_patterns' => [],
 

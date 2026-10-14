@@ -10,6 +10,8 @@ use App\Models\OrderItem;
 use App\Models\Recipe;
 use App\Models\Setting;
 use App\Models\ShiftExpense;
+use App\Models\StockMovement;
+use App\Models\Stocktake;
 use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,8 +30,11 @@ use Illuminate\Support\Facades\Schema;
 // - VAT: orders không lưu tax_amount nên tính theo từng dòng món:
 //   vat = line_total * r/(1+r), với r = products.tax_rate ?? settings.default_tax_rate.
 //   Toggle tax_included chỉ đổi cách HIỂN THỊ (gồm/chưa gồm thuế), số gốc không đổi.
-// - Kênh bán: online_channel='zalo' -> Zalo Mini App; payment_method chứa
-//   'grab' -> GrabFood; còn lại -> Tại quầy.
+// - Kênh bán (Gói 56): động theo online_channel thực tế của đơn
+//   (chuẩn hóa lowercase; rỗng -> 'pos'). Tên hiển thị: 'pos' -> Tại quầy,
+//   'zalo' -> Zalo Mini App, còn lại lấy name từ price_lists theo code.
+//   Lãi gộp/kênh = doanh thu - phí sàn (commission_rate của price_lists)
+//   - giá vốn (SUM unit_cost × SL).
 // - Chi phí gồm 2 phần: (1) vốn nguyên liệu ước tính từ BOM (recipes × SL bán
 //   × giá vốn bình quân các lô active); (2) chi phí ca từ shift_expenses
 //   (reason chứa "lương" -> Lương, còn lại -> Chi khác).
@@ -82,6 +87,14 @@ class ReportController extends Controller
         $cur = $this->buildPeriod($branchId, $from, $to, $vatRate, $tz);
         $ref = $this->buildPeriod($branchId, $cFrom, $cTo, $vatRate, $tz);
 
+        // Gói 55 p11af (P0-14): Food cost % = giá vốn nguyên liệu / doanh thu thuần (sau VAT).
+        // Tính 1 lần ở đây để tái dùng cho cả Tab 1 (KPI) và Tab 2 (chi phí), tránh tính 2 lần.
+        $foodCostValue = $this->bomCost($cur);
+        $netRevenueForFoodCost = max(0, $cur['gross'] - $cur['vat']);
+        $foodCostPct = $netRevenueForFoodCost > 0
+            ? round($foodCostValue / $netRevenueForFoodCost * 100, 1)
+            : 0;
+
         $disp = fn(float $gross, float $vat): float => $taxIncluded ? $gross : max(0, $gross - $vat);
 
         // Tỉ lệ hiển thị theo toggle thuế — dùng cho các số liệu không tách được VAT
@@ -91,18 +104,21 @@ class ReportController extends Controller
         // ---------- Tab 1: Doanh thu ----------
         $revDisplayed = $disp($cur['gross'], $cur['vat']);
         $refDisplayed = $disp($ref['gross'], $ref['vat']);
+        // Gói 57: AOV = Net Revenue / số bill thành công (net = doanh thu sau VAT, đã trừ giảm giá)
+        $netRevenue = max(0, $cur['gross'] - $cur['vat']);
+        $refNetRevenue = max(0, $ref['gross'] - $ref['vat']);
         $revenue = [
             'gross' => $this->r2($cur['gross']),
             'vat' => $this->r2($cur['vat']),
-            'net' => $this->r2(max(0, $cur['gross'] - $cur['vat'])),
+            'net' => $this->r2($netRevenue),
             'displayed' => $this->r2($revDisplayed),
             'orders' => $cur['orders'],
-            'avg' => $cur['orders'] > 0 ? $this->r2($revDisplayed / $cur['orders']) : 0,
+            'avg' => $cur['orders'] > 0 ? $this->r2($netRevenue / $cur['orders']) : 0,
             'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
             'delta_orders' => $this->pct($cur['orders'], $ref['orders']),
             'delta_avg' => $this->pct(
-                $cur['orders'] > 0 ? $revDisplayed / $cur['orders'] : 0,
-                $ref['orders'] > 0 ? $refDisplayed / $ref['orders'] : 0
+                $cur['orders'] > 0 ? $netRevenue / $cur['orders'] : 0,
+                $ref['orders'] > 0 ? $refNetRevenue / $ref['orders'] : 0
             ),
             'delta_vat' => $this->pct($cur['vat'], $ref['vat']),
             'buckets' => $this->buckets($period, $branchId, $from, $to, $tz, $taxRatio),
@@ -112,15 +128,26 @@ class ReportController extends Controller
             // Gói 17: thêm 2 block chi tiết (cộng thêm, frontend cũ bỏ qua)
             'by_payment' => $this->byPayment($branchId, $from, $to, $cFrom, $cTo, $taxRatio),
             'by_category' => $this->byCategory($branchId, $from, $to, $cFrom, $cTo, $taxRatio),
+            // Gói 55 p11af (P0-14): KPI Food cost % = giá vốn NL / doanh thu thuần
+            'food_cost_pct' => $foodCostPct,
+            'food_cost_value' => $this->r2($foodCostValue),
         ];
 
         // ---------- Tab 2: Thu – Chi – Lợi nhuận ----------
-        $costs = $this->costs($cur);
+        // Gói 55 p11af: tái dùng $foodCostValue đã tính ở trên (tránh tính giá vốn 2 lần)
+        $costs = $this->costs($cur, $foodCostValue);
         $refCosts = $this->costs($ref);
         $costTotal = array_sum(array_column($costs, 'value'));
         $refCostTotal = array_sum(array_column($refCosts, 'value'));
         $profit = $revDisplayed - $costTotal;
         $refProfit = $refDisplayed - $refCostTotal;
+        // Gói 57: Prime Cost = Giá vốn NL + Lương; cảnh báo đỏ khi > 55% Net Revenue
+        $laborCost = 0.0;
+        foreach ($costs as $c) {
+            if (($c['name'] ?? '') === 'Lương') { $laborCost = (float) $c['value']; break; }
+        }
+        $primeCost = $foodCostValue + $laborCost;
+        $primeCostPct = $netRevenue > 0 ? round($primeCost / $netRevenue * 100, 1) : 0;
         $profitData = [
             'revenue' => $this->r2($revDisplayed),
             'costs' => array_map(fn($c) => [
@@ -129,6 +156,9 @@ class ReportController extends Controller
             'cost_total' => $this->r2($costTotal),
             'profit' => $this->r2($profit),
             'margin' => $revDisplayed > 0 ? $this->r2($profit / $revDisplayed * 100) : 0,
+            'prime_cost' => $this->r2($primeCost),
+            'prime_cost_pct' => $primeCostPct,
+            'prime_cost_alert' => $primeCostPct > 55,
             'delta_profit' => $this->pct($profit, $refProfit),
             'delta_cost' => $this->pct($costTotal, $refCostTotal),
             'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
@@ -138,8 +168,11 @@ class ReportController extends Controller
         // ---------- Tab 3: Hao hụt ----------
         $wasteData = [
             'items' => $this->waste($cur, $branchId),
-            'note' => 'Thực tế tiêu hao = lượng nhập kho trong kỳ (giả định tồn đầu ≈ tồn cuối). '
-                . 'Số liệu sẽ chính xác hơn khi có lịch sử kiểm kho (Gói 16).',
+            // Gói 55 p11ag: hao hụt từ số kiểm kê thực tế (phát hiện bán chui).
+            // Công thức: (tồn đầu kỳ + nhập trong kỳ − tồn thực tế kiểm kê) − tiêu thụ BOM.
+            // Không có phiếu kiểm kê → fallback ước tính (nhập − BOM).
+            'note' => 'Hao hụt = (Tồn đầu kỳ + Nhập trong kỳ − Tồn thực tế kiểm kê) − Tiêu thụ theo BOM. '
+                . 'Dòng không có số kiểm kê là ước tính (Nhập − BOM).',
         ];
 
         // ---------- Tab 4: Mặt hàng ----------
@@ -242,13 +275,17 @@ class ReportController extends Controller
         $vat = 0.0;
         if ($orderCount > 0) {
             // Gói 55 p11ac: lấy CK cấp đơn để phân bổ về từng dòng
+            // Gói 55 p11ae: discount_amount đã GỒM promotion_discount (OrderController và
+            // OnlineOrderController đều cộng $promotionDiscount vào $discountAmount trước khi lưu;
+            // cột promotion_discount chỉ để breakdown hiển thị) → dùng discount_amount, KHÔNG
+            // cộng thêm promotion_discount, tránh trừ KM 2 lần trong báo cáo.
             $orderDiscounts = $this->baseOrders($branchId, $from, $to)
-                ->select('id', 'subtotal_amount', 'discount_amount', 'promotion_discount')
+                ->select('id', 'subtotal_amount', 'discount_amount')
                 ->get()
                 ->keyBy('id')
                 ->map(fn ($o) => [
                     'subtotal' => (float) ($o->subtotal_amount ?: 0),
-                    'discount' => (float) ($o->discount_amount ?: 0) + (float) ($o->promotion_discount ?: 0),
+                    'discount' => (float) ($o->discount_amount ?: 0),
                 ]);
             $items = DB::table('order_items')
                 ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
@@ -277,13 +314,32 @@ class ReportController extends Controller
             }
         }
 
-        // Kênh bán: gom theo đơn
+        // Kênh bán: gom theo đơn — Gói 56 (2026-10-14): kênh ĐỘNG từ price_lists
+        // (tất cả code active) + 'pos' + 'zalo', không gộp cứng 3 nhóm như trước.
         $orders = $this->baseOrders($branchId, $from, $to)
             ->select('id', 'online_channel', 'payment_method', 'total_amount', 'created_at')
             ->get();
-        $channels = ['counter' => 0.0, 'zalo' => 0.0, 'grabfood' => 0.0];
+        $channelCodes = ['pos', 'zalo'];
+        if (Schema::hasTable('price_lists')) {
+            $plQuery = DB::table('price_lists')->select('code');
+            if (Schema::hasColumn('price_lists', 'is_active')) {
+                $plQuery->where('is_active', true);
+            }
+            foreach ($plQuery->pluck('code') as $c) {
+                $channelCodes[] = strtolower(trim((string) $c));
+            }
+        }
+        $channelCodes = array_values(array_unique(array_filter($channelCodes)));
+        $channels = array_fill_keys($channelCodes, 0.0);
+        $orderChannels = [];
         foreach ($orders as $o) {
-            $channels[$this->channelKey($o)] += (float) $o->total_amount;
+            $key = $this->channelKey($o);
+            if (!array_key_exists($key, $channels)) {
+                // Kênh phát sinh từ đơn nhưng price_lists chưa có — vẫn ghi nhận
+                $channels[$key] = 0.0;
+            }
+            $channels[$key] += (float) $o->total_amount;
+            $orderChannels[$o->id] = $key;
         }
 
         return [
@@ -291,18 +347,17 @@ class ReportController extends Controller
             'from' => $from, 'to' => $to,
             'gross' => $gross, 'vat' => $vat, 'orders' => $orderCount,
             'items' => $items, 'channels' => $channels,
+            'order_channels' => $orderChannels, // Gói 56: map order_id -> kênh (tính COGS/kênh)
         ];
     }
 
     private function channelKey($order): string
     {
-        if (($order->online_channel ?? '') === 'zalo') {
-            return 'zalo';
-        }
-        if (stripos((string) ($order->payment_method ?? ''), 'grab') !== false) {
-            return 'grabfood';
-        }
-        return 'counter';
+        // Gói 56 (2026-10-14): kênh động — trả về online_channel thực tế của đơn
+        // (chuẩn hóa lowercase + trim), không gộp cứng nhóm như trước.
+        // Fallback 'pos' khi đơn không có kênh.
+        $ch = strtolower(trim((string) ($order->online_channel ?? '')));
+        return $ch !== '' ? $ch : 'pos';
     }
 
     // ================= Tab 1: Doanh thu =================
@@ -354,24 +409,93 @@ class ReportController extends Controller
         return $agg;
     }
 
+    /**
+     * Gói 56 (2026-10-14): kênh động + lãi gộp theo kênh.
+     * - cogs: SUM(order_items.unit_cost * quantity) của các đơn thuộc kênh
+     * - commission: doanh thu kênh × commission_rate/100 (từ price_lists)
+     * - gross_profit = value - commission - cogs ; margin_pct = gross_profit/value*100
+     * Giữ nguyên các field cũ: key, name, value, share, delta, color.
+     */
     private function channels(array $cur, array $ref, float $taxRatio): array
     {
-        $labels = ['counter' => 'Tại quầy', 'zalo' => 'Zalo Mini App', 'grabfood' => 'GrabFood'];
-        $colors = ['counter' => '#24305E', 'zalo' => '#F5A623', 'grabfood' => '#5B8DEF'];
+        $labels = $this->channelLabelMap();
+        $rates = $this->commissionRates();
+        $orderChannels = $cur['order_channels'] ?? [];
+
+        // Giá vốn theo kênh từ snapshot unit_cost lúc trừ kho
+        $cogsByChannel = [];
+        foreach ($cur['items'] as $it) {
+            $ck = $orderChannels[$it->order_id] ?? 'pos';
+            $cogsByChannel[$ck] = ($cogsByChannel[$ck] ?? 0.0)
+                + (float) ($it->unit_cost ?? 0) * (float) ($it->quantity ?? 0);
+        }
+
+        // Màu: giữ 3 màu cũ cho 3 kênh cũ, kênh mới xoay vòng palette
+        $baseColors = ['pos' => '#24305E', 'zalo' => '#F5A623', 'grabfood' => '#5B8DEF'];
+        $palette = ['#34C77B', '#E5646E', '#9B5DE5', '#00BBF9', '#F15BB5', '#FF8C42', '#2EC4B6', '#E71D36'];
+        $pi = 0;
         $out = [];
-        foreach ($labels as $key => $name) {
-            $v = $cur['channels'][$key] ?? 0.0;
-            $rv = $ref['channels'][$key] ?? 0.0;
+        foreach (array_keys($cur['channels'] ?? []) as $key) {
+            $v = (float) ($cur['channels'][$key] ?? 0.0);
+            $rv = (float) ($ref['channels'][$key] ?? 0.0);
+            $cogs = (float) ($cogsByChannel[$key] ?? 0.0);
+            $rate = (float) ($rates[$key] ?? 0.0);
+            $commission = $v * $rate / 100;
+            $grossProfit = $v - $commission - $cogs;
+            $marginPct = $v > 0 ? $grossProfit / $v * 100 : 0;
+            if (isset($baseColors[$key])) {
+                $color = $baseColors[$key];
+            } else {
+                $color = $palette[$pi % count($palette)];
+                $pi++;
+            }
             $out[] = [
                 'key' => $key,
-                'name' => $name,
+                'name' => $labels[$key] ?? ucfirst($key),
                 'value' => $this->r2($v * $taxRatio),
                 'share' => $cur['gross'] > 0 ? $this->r2($v / $cur['gross'] * 100) : 0,
                 'delta' => $this->pct($v, $rv),
-                'color' => $colors[$key],
+                'color' => $color,
+                'cogs' => $this->r2($cogs * $taxRatio),
+                'commission' => $this->r2($commission * $taxRatio),
+                'gross_profit' => $this->r2($grossProfit * $taxRatio),
+                'margin_pct' => $this->r2($marginPct),
             ];
         }
         return $out;
+    }
+
+    /** % phí sàn theo code price_list (lowercase) — 0 nếu kênh không có bảng giá. */
+    private function commissionRates(): array
+    {
+        $rates = [];
+        if (Schema::hasTable('price_lists') && Schema::hasColumn('price_lists', 'commission_rate')) {
+            foreach (DB::table('price_lists')->select('code', 'commission_rate')->get() as $pl) {
+                $code = strtolower(trim((string) $pl->code));
+                if ($code !== '') {
+                    $rates[$code] = (float) $pl->commission_rate;
+                }
+            }
+        }
+        return $rates;
+    }
+
+    /**
+     * Tên hiển thị kênh: 'pos' => "Tại quầy", 'zalo' => "Zalo Mini App",
+     * các kênh khác lấy name từ price_lists (không đè 2 tên cố định trên).
+     */
+    private function channelLabelMap(): array
+    {
+        $map = ['pos' => 'Tại quầy', 'zalo' => 'Zalo Mini App'];
+        if (Schema::hasTable('price_lists')) {
+            foreach (DB::table('price_lists')->select('code', 'name')->get() as $pl) {
+                $code = strtolower(trim((string) $pl->code));
+                if ($code !== '' && !isset($map[$code])) {
+                    $map[$code] = $pl->name ?: $code;
+                }
+            }
+        }
+        return $map;
     }
 
     /** Doanh thu theo giờ 6h→22h (giờ có đơn đầu tiên → cuối cùng trong ngày). */
@@ -467,9 +591,9 @@ class ReportController extends Controller
      * Gói 55 p11ac: GHI CHÚ — dòng "Nguyên liệu" là giá vốn ước tính theo BOM,
      * CHƯA gồm tiền nhập hàng thực tế đã chi (xem Sổ thu-chi). Không cộng 2 số này lại.
      */
-    private function costs(array $p): array
+    private function costs(array $p, ?float $bomOverride = null): array
     {
-        $bom = $this->bomCost($p);
+        $bom = $bomOverride ?? $this->bomCost($p);
         $exp = $this->shiftExpenses($p);
         return [
             ['name' => 'Nguyên liệu', 'value' => $bom, 'color' => '#F5A623',
@@ -525,11 +649,23 @@ class ReportController extends Controller
 
         $total = 0.0;
         foreach ($p['items'] as $it) {
+            // Gói SEC2: gộp product_option_id (size) + options JSON (topping nhóm)
+            // để khớp định mức tùy chọn — giống calculateNeeds trong InventoryService
+            $itemOptionIds = [];
+            if (!empty($it->product_option_id)) {
+                $itemOptionIds[] = (int) $it->product_option_id;
+            }
+            $opts = $it->options ? (array) $it->options : [];
+            foreach (array_keys($opts) as $oid) {
+                $itemOptionIds[] = (int) $oid;
+            }
+            $itemOptionIds = array_values(array_unique($itemOptionIds));
+
             foreach ($recipes as $r) {
                 if ((int) $r->product_id !== (int) $it->product_id) {
                     continue;
                 }
-                if ($r->product_option_id !== null && (int) $r->product_option_id !== (int) $it->product_option_id) {
+                if ($r->product_option_id !== null && !in_array((int) $r->product_option_id, $itemOptionIds, true)) {
                     continue;
                 }
                 $unitCost = $avgCost[$r->material_id] ?? 0.0;
@@ -636,6 +772,18 @@ class ReportController extends Controller
 
     // ================= Tab 3: Hao hụt =================
 
+    /**
+     * Gói 55 p11ag (2026-10-14): hao hụt từ SỐ KIỂM KÊ THỰC TẾ — phát hiện bán chui.
+     * Công thức: hao_hụt = (tồn_đầu_kỳ + nhập_trong_kỳ − tồn_cuối_thực_tế) − tiêu_thụ_BOM
+     * - tồn_cuối_thực_tế: số đếm từ phiếu kiểm kê đã chốt gần nhất (mỗi NL lấy lần
+     *   kiểm mới nhất có checked_at <= cuối kỳ).
+     * - tồn_đầu_kỳ: tồn hệ thống hiện tại + net biến động từ đầu kỳ (nhật ký
+     *   stock_movements: xuất = dương, nhập = âm). Nếu chưa có nhật ký → dùng tồn
+     *   hiện tại làm ước tính và đánh dấu is_estimate.
+     * - Không có phiếu kiểm kê nào → fallback công thức cũ (nhập − BOM) và gắn
+     *   cờ is_estimate + frontend hiện cảnh báo "Chưa có số kiểm kê".
+     * - Đỏ khi waste_pct > waste_threshold_pct của NL (mặc định 5%).
+     */
     private function waste(array $cur, int $branchId): array
     {
         $recipes = Recipe::query()->select('product_id', 'product_option_id', 'material_id', 'quantity')->get();
@@ -646,34 +794,117 @@ class ReportController extends Controller
         if (empty($bomCur)) {
             return [];
         }
+        $from = $cur['from'];
+        $to = $cur['to'];
 
-        // Thực tế tiêu hao ≈ lượng nhập trong kỳ (giả định tồn đầu ≈ tồn cuối)
-        $actual = [];
+        // Nhập trong kỳ (lô batches tạo trong kỳ)
+        $inbound = [];
         $bq = Batch::query()
-            ->whereBetween('created_at', [$cur['from']->toDateTimeString(), $cur['to']->toDateTimeString()]);
+            ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
         if ($branchId > 0) {
             $bq->where('branch_id', $branchId);
         }
         foreach ($bq->select('material_id', DB::raw('SUM(initial_quantity) AS q'))->groupBy('material_id')->get() as $row) {
-            $actual[$row->material_id] = (float) $row->q;
+            $inbound[$row->material_id] = (float) $row->q;
         }
 
-        $materials = DB::table('materials')->select('id', 'name', 'unit')->get()->keyBy('id');
+        // Tồn hệ thống hiện tại (tổng current_quantity các lô còn tồn)
+        $sysNow = [];
+        $sq = Batch::query()->where('current_quantity', '>', 0.0009);
+        if ($branchId > 0) {
+            $sq->where('branch_id', $branchId);
+        }
+        foreach ($sq->select('material_id', DB::raw('SUM(current_quantity) AS q'))->groupBy('material_id')->get() as $row) {
+            $sysNow[$row->material_id] = (float) $row->q;
+        }
+
+        // Net biến động từ đầu kỳ (stock_movements: xuất = dương, nhập = âm)
+        // → tồn_đầu_kỳ = tồn_hiện_tại + net_biến_động_từ_đầu_kỳ
+        $netMove = [];
+        $hasMovements = false;
+        if (Schema::hasTable('stock_movements')) {
+            $mq = StockMovement::query()->where('created_at', '>=', $from->toDateTimeString());
+            if ($branchId > 0) {
+                $mq->where('branch_id', $branchId);
+            }
+            foreach ($mq->select('material_id', DB::raw('SUM(quantity) AS q'))->groupBy('material_id')->get() as $row) {
+                $netMove[$row->material_id] = (float) $row->q;
+                $hasMovements = true;
+            }
+        }
+
+        // Số kiểm kê thực tế: mỗi NL lấy lần đếm mới nhất
+        // (phiếu đã chốt, checked_at <= cuối kỳ)
+        $counted = []; // material_id => ['qty' => float, 'date' => string]
+        if (Schema::hasTable('stocktakes') && Schema::hasTable('stocktake_items')) {
+            $stQ = DB::table('stocktake_items')
+                ->join('stocktakes', 'stocktakes.id', '=', 'stocktake_items.stocktake_id')
+                ->where('stocktakes.status', 'confirmed')
+                ->where('stocktakes.checked_at', '<=', $to->toDateTimeString());
+            if ($branchId > 0) {
+                $stQ->where('stocktakes.branch_id', $branchId);
+            }
+            $seen = []; // "mid:bid" => true (chỉ lấy lần mới nhất mỗi NL/CN)
+            foreach (
+                $stQ->select('stocktake_items.material_id', 'stocktakes.branch_id', 'stocktake_items.counted_qty', 'stocktakes.checked_at')
+                    ->orderByDesc('stocktakes.checked_at')->get() as $r
+            ) {
+                if ($r->counted_qty === null) {
+                    continue;
+                }
+                $k = $r->material_id . ':' . $r->branch_id;
+                if (isset($seen[$k])) {
+                    continue;
+                }
+                $seen[$k] = true;
+                $mid = (int) $r->material_id;
+                if (!isset($counted[$mid])) {
+                    $counted[$mid] = ['qty' => 0.0, 'date' => null];
+                }
+                $counted[$mid]['qty'] += (float) $r->counted_qty;
+                if ($counted[$mid]['date'] === null || $r->checked_at > $counted[$mid]['date']) {
+                    $counted[$mid]['date'] = $r->checked_at;
+                }
+            }
+        }
+
+        $materials = DB::table('materials')->select('id', 'name', 'unit', 'waste_threshold_pct')->get()->keyBy('id');
         $out = [];
         foreach ($bomCur as $mid => $bom) {
-            $act = $actual[$mid] ?? 0.0;
-            $diff = $act - $bom;
-            $pct = $bom > 0 ? $diff / $bom * 100 : null;
+            $inb = $inbound[$mid] ?? 0.0;
             $m = $materials[$mid] ?? null;
+            $threshold = $m && $m->waste_threshold_pct !== null ? (float) $m->waste_threshold_pct : 5.0;
+            if (isset($counted[$mid])) {
+                // Công thức mới: có số kiểm kê thực tế
+                $opening = ($sysNow[$mid] ?? 0.0) + ($netMove[$mid] ?? 0.0);
+                $actual = $counted[$mid]['qty'];
+                $waste = ($opening + $inb - $actual) - $bom;
+                $isEstimate = !$hasMovements; // không có nhật ký → tồn đầu kỳ chỉ là ước tính
+                $stocktakeDate = $counted[$mid]['date'];
+            } else {
+                // Fallback công thức cũ khi chưa có kiểm kê
+                $opening = null;
+                $actual = null;
+                $waste = $inb - $bom;
+                $isEstimate = true;
+                $stocktakeDate = null;
+            }
+            $pct = $bom > 0 ? $waste / $bom * 100 : null;
             $out[] = [
                 'material_id' => $mid,
                 'material' => $m->name ?? ('Nguyên liệu #' . $mid),
                 'unit' => $m->unit ?? '',
+                'opening_qty' => $opening === null ? null : $this->r2($opening),
+                'inbound_qty' => $this->r2($inb),
                 'bom_qty' => $this->r2($bom),
-                'actual_qty' => $this->r2($act),
-                'diff' => $this->r2($diff),
+                'actual_qty' => $actual === null ? null : $this->r2($actual),
+                'stocktake_date' => $stocktakeDate,
+                'diff' => $this->r2($waste),
                 'waste_pct' => $pct === null ? null : $this->r2($pct),
-                'delta_pct' => null, // chưa có kỳ SS cho số nhập — ghi rõ
+                'threshold_pct' => $threshold,
+                'over_threshold' => $pct !== null && $pct > $threshold,
+                'is_estimate' => $isEstimate,
+                'delta_pct' => null,
                 '_sort' => $pct ?? -9999,
             ];
         }
@@ -849,26 +1080,58 @@ class ReportController extends Controller
     }
 
     // ================= Gói 17: Chiết khấu kênh bán =================
+    // Gói 56 (2026-10-14): viết lại ĐỘNG theo kênh thực tế trong dữ liệu
+    // (duyệt keys của $p['channels'], không hardcode danh sách kênh).
+    // Alias tương thích: 'pos' (tại quầy) -> price_lists 'nha_hang' rồi 'pos';
+    // 'zalo' -> 'online' rồi 'zalo'. Kênh mới: khớp đúng code.
 
     /**
-     * Map kênh báo cáo -> mã price_lists (thứ tự ưu tiên khi tìm).
-     * Quy tắc (ghi rõ cho Đại Vương kiểm chứng):
-     * - counter (Tại quầy: online_channel='pos', PTTT không chứa 'grab') -> 'nha_hang'
-     * - zalo (Zalo Mini App: online_channel='zalo') -> 'online', rồi 'zalo'
-     * - grabfood (PTTT chứa 'grab') -> 'grabfood'
+     * Gói 57 (2026-10-14): chi phí phân bổ từ prepaid_expenses.
+     * Mỗi khoản chia đều total_amount/months; tính số ngày giao nhau giữa
+     * kỳ báo cáo và [start_date, start_date + months] rồi quy ra tiền.
+     * Trả về ['items' => [{name, category, amount}], 'total' => float].
      */
-    private function channelPriceListCodes(): array
+    private function allocatedExpenses(int $branchId, Carbon $from, Carbon $to): array
     {
-        return [
-            'counter' => ['nha_hang'],
-            'zalo' => ['online', 'zalo'],
-            'grabfood' => ['grabfood'],
-        ];
-    }
-
-    private function channelLabels(): array
-    {
-        return ['counter' => 'Tại quầy', 'zalo' => 'Zalo Mini App', 'grabfood' => 'GrabFood'];
+        $out = ['items' => [], 'total' => 0.0];
+        if (!Schema::hasTable('prepaid_expenses')) {
+            return $out;
+        }
+        $q = DB::table('prepaid_expenses')->where('is_active', true);
+        if ($branchId > 0) {
+            $q->where(function ($w) use ($branchId) {
+                $w->whereNull('branch_id')->orWhere('branch_id', $branchId);
+            });
+        }
+        foreach ($q->get() as $e) {
+            $months = max(1, (int) $e->months);
+            $monthly = (float) $e->total_amount / $months;
+            try {
+                $start = Carbon::parse($e->start_date)->startOfDay();
+            } catch (\Exception $ex) {
+                continue;
+            }
+            $end = $start->copy()->addMonths($months)->subDay()->endOfDay();
+            // Giao nhau giữa kỳ báo cáo và kỳ phân bổ
+            $overlapStart = $from->copy()->max($start);
+            $overlapEnd = $to->copy()->min($end);
+            if ($overlapEnd->lt($overlapStart)) {
+                continue;
+            }
+            $overlapDays = $overlapStart->diffInDays($overlapEnd) + 1;
+            $amount = round($monthly * $overlapDays / 30, 0);
+            if ($amount <= 0) {
+                continue;
+            }
+            $out['items'][] = [
+                'name' => $e->name,
+                'category' => $e->category,
+                'amount' => $this->r2($amount),
+            ];
+            $out['total'] += $amount;
+        }
+        $out['total'] = $this->r2($out['total']);
+        return $out;
     }
 
     /**
@@ -886,11 +1149,13 @@ class ReportController extends Controller
             ->get() as $pl) {
             $byCode[strtolower((string) $pl->code)] = $pl;
         }
-        $labels = $this->channelLabels();
+        $labels = $this->channelLabelMap();
+        $aliases = ['pos' => ['nha_hang', 'pos'], 'zalo' => ['online', 'zalo']];
         $out = [];
-        foreach ($this->channelPriceListCodes() as $chKey => $codes) {
+        foreach (($p['channels'] ?? []) as $chKey => $rev) {
+            $rev = (float) $rev;
             $pl = null;
-            foreach ($codes as $c) {
+            foreach (($aliases[$chKey] ?? [$chKey]) as $c) {
                 if (isset($byCode[strtolower($c)])) {
                     $pl = $byCode[strtolower($c)];
                     break;
@@ -900,7 +1165,6 @@ class ReportController extends Controller
             if ($rate <= 0) {
                 continue;
             }
-            $rev = (float) ($p['channels'][$chKey] ?? 0.0);
             $cost = $rev * $rate / 100;
             $taxNote = 'đã gồm thuế';
             if (!$pl->commission_tax_included) {
@@ -914,7 +1178,7 @@ class ReportController extends Controller
             }
             $out[] = [
                 'channel_key' => $chKey,
-                'channel' => $labels[$chKey] ?? $chKey,
+                'channel' => $labels[$chKey] ?? ucfirst($chKey),
                 'price_list' => $pl->name ?? $pl->code,
                 'rate' => $this->r2($rate),
                 'tax_note' => $taxNote,
@@ -952,15 +1216,26 @@ class ReportController extends Controller
         $vatRate = (float) Setting::get('default_tax_rate', 8);
 
         $cur = $this->buildPeriod($branchId, $from, $to, $vatRate, $tz);
+        $wasteRows = $this->waste($cur, $branchId);
+        // Gói 55 p11ag: hao hụt từ số kiểm kê thực tế (phát hiện bán chui).
+        // actual_qty giờ là TỒN THỰC TẾ từ phiếu kiểm kê (null nếu chưa kiểm).
         $materials = array_map(fn($m) => [
             'material_id' => $m['material_id'],
             'material' => $m['material'],
             'unit' => $m['unit'],
-            'imported_qty' => $m['actual_qty'],
+            'opening_qty' => $m['opening_qty'],
+            'imported_qty' => $m['inbound_qty'],
             'exported_bom_qty' => $m['bom_qty'],
+            'actual_qty' => $m['actual_qty'],
+            'stocktake_date' => $m['stocktake_date'],
             'diff' => $m['diff'],
             'waste_pct' => $m['waste_pct'],
-        ], $this->waste($cur, $branchId));
+            'threshold_pct' => $m['threshold_pct'],
+            'over_threshold' => $m['over_threshold'],
+            'is_estimate' => $m['is_estimate'],
+        ], $wasteRows);
+        // Cảnh báo chung nếu chưa có số kiểm kê nào trong kỳ
+        $hasAnyStocktake = count(array_filter($wasteRows, fn($m) => !$m['is_estimate'])) > 0;
 
         $branchName = $branchId > 0
             ? (Branch::find($branchId)->name ?? ('Chi nhánh #' . $branchId))
@@ -979,6 +1254,128 @@ class ReportController extends Controller
                 ],
                 'materials' => $materials,
                 'expiry' => $this->expiryBatches($branchId),
+                // Gói 55 p11ag: false = chưa có số kiểm kê nào → số liệu chỉ là ước tính
+                'has_stocktake' => $hasAnyStocktake,
+            ],
+        ]);
+    }
+
+    /**
+     * Gói 55 p11ag (2026-10-14): Báo cáo đơn hủy theo nhân viên — chống gian lận
+     * hủy đơn đã thanh toán rồi bỏ tiền túi.
+     * GET /api/reports/cancelled-by-staff?branch_id=&period=&date=
+     * - Gom theo ngày + người hủy: số đơn hủy, tổng tiền hủy.
+     * - Cảnh báo đỏ: NV hủy > 5 đơn/ngày HOẶC tổng tiền hủy > 500k/ngày.
+     */
+    public function cancelledByStaff(Request $request): JsonResponse
+    {
+        $tz = 'Asia/Ho_Chi_Minh';
+        $branchId = (int) $request->query('branch_id', 0);
+        $period = $request->query('period', 'week');
+        if (!in_array($period, ['day', 'week', 'month', 'year'], true)) {
+            $period = 'week';
+        }
+        try {
+            $anchor = $request->query('date')
+                ? Carbon::parse($request->query('date'), $tz)->startOfDay()
+                : Carbon::now($tz)->startOfDay();
+        } catch (\Exception $e) {
+            $anchor = Carbon::now($tz)->startOfDay();
+        }
+        [$from, $to] = $this->window($period, $anchor);
+
+        $q = Order::query()
+            ->where('status', 'cancelled')
+            ->whereBetween('cancelled_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
+        if ($branchId > 0) {
+            $q->where('branch_id', $branchId);
+        }
+        $orders = $q->select(
+            'id', 'code', 'branch_id', 'total_amount', 'payment_status',
+            'cancel_reason', 'cancelled_at', 'cancelled_by', 'cancelled_by_type', 'created_at'
+        )->orderByDesc('cancelled_at')->get();
+
+        // Gom theo ngày + người hủy
+        $groups = [];
+        foreach ($orders as $o) {
+            $day = $o->cancelled_at ? Carbon::parse($o->cancelled_at)->setTimezone($tz)->toDateString() : '—';
+            $by = $o->cancelled_by ?: '(không rõ)';
+            $type = $o->cancelled_by_type ?: 'unknown';
+            $key = $day . '|' . $type . '|' . $by;
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'date' => $day,
+                    'cancelled_by' => $by,
+                    'cancelled_by_type' => $type,
+                    'count' => 0,
+                    'total_amount' => 0.0,
+                    'paid_count' => 0, // số đơn đã thu tiền rồi mới hủy (đáng ngờ nhất)
+                ];
+            }
+            $groups[$key]['count']++;
+            $groups[$key]['total_amount'] += (float) $o->total_amount;
+            if (in_array($o->payment_status, ['paid', 'refunded'], true)) {
+                $groups[$key]['paid_count']++;
+            }
+        }
+        $rows = array_values($groups);
+        foreach ($rows as &$r) {
+            // Cảnh báo đỏ: > 5 đơn/ngày hoặc tổng tiền hủy > 500k/ngày
+            $r['flagged'] = $r['count'] > 5 || $r['total_amount'] > 500000;
+            $r['total_amount'] = $this->r2($r['total_amount']);
+        }
+        unset($r);
+        usort($rows, fn($a, $b) => [$b['flagged'], $b['total_amount']] <=> [$a['flagged'], $a['total_amount']]);
+
+        $detail = $orders->map(fn($o) => [
+            'code' => $o->code,
+            'cancelled_at' => $o->cancelled_at ? Carbon::parse($o->cancelled_at)->setTimezone($tz)->format('d/m/Y H:i') : '—',
+            'total_amount' => (float) $o->total_amount,
+            'payment_status' => $o->payment_status,
+            'cancelled_by' => $o->cancelled_by ?: '(không rõ)',
+            'cancelled_by_type' => $o->cancelled_by_type ?: 'unknown',
+            'cancel_reason' => $o->cancel_reason,
+        ])->values()->all();
+
+        // Gói 57: gom đơn hủy theo lý do
+        $byReason = [];
+        if (Schema::hasColumn('orders', 'cancel_reason')) {
+            foreach ($orders as $o) {
+                $reason = trim((string) ($o->cancel_reason ?? ''));
+                if ($reason === '') $reason = '(không ghi lý do)';
+                if (!isset($byReason[$reason])) $byReason[$reason] = 0;
+                $byReason[$reason]++;
+            }
+        }
+        $byReasonOut = [];
+        foreach ($byReason as $reason => $count) {
+            $byReasonOut[] = ['reason' => $reason, 'count' => $count];
+        }
+        usort($byReasonOut, fn($a, $b) => $b['count'] <=> $a['count']);
+
+        $branchName = $branchId > 0
+            ? (Branch::find($branchId)->name ?? ('Chi nhánh #' . $branchId))
+            : 'Tất cả chi nhánh';
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'meta' => [
+                    'branch_id' => $branchId,
+                    'branch_name' => $branchName,
+                    'period' => $period,
+                    'date' => $anchor->toDateString(),
+                    'from' => $from->toDateTimeString(),
+                    'to' => $to->toDateTimeString(),
+                ],
+                'summary' => [
+                    'total_cancelled' => $orders->count(),
+                    'total_amount' => $this->r2($orders->sum(fn($o) => (float) $o->total_amount)),
+                    'flagged_groups' => count(array_filter($rows, fn($r) => $r['flagged'])),
+                ],
+                'groups' => $rows,
+                'by_reason' => $byReasonOut,
+                'detail' => $detail,
             ],
         ]);
     }
@@ -1092,13 +1489,29 @@ class ReportController extends Controller
         if ($commTotal > 0) {
             $costs[] = ['name' => 'Chiết khấu kênh', 'value' => $commTotal, 'color' => '#9B59B6'];
         }
+        // Gói 57: chi phí phân bổ từ prepaid_expenses (thuê trả trước, CAPEX...)
+        $allocated = $this->allocatedExpenses($branchId, $from, $to);
+        if ($allocated['total'] > 0) {
+            $costs[] = ['name' => 'Chi phí phân bổ', 'value' => $allocated['total'], 'color' => '#8E44AD',
+                'note' => 'Tiền thuê trả trước / CAPEX chia đều theo tháng'];
+        }
         $costTotal = array_sum(array_column($costs, 'value'));
 
         $refCostTotal = array_sum(array_column($this->costs($ref), 'value'))
-            + array_sum(array_column($this->commissions($ref), 'cost'));
+            + array_sum(array_column($this->commissions($ref), 'cost'))
+            + $this->allocatedExpenses($branchId, $cFrom, $cTo)['total'];
 
         $profit = $revDisplayed - $costTotal;
         $refProfit = $refDisplayed - $refCostTotal;
+
+        // Gói 57: Net Revenue làm mốc 100% cho % các dòng chi phí
+        $netRevenuePnl = max(0, $cur['gross'] - $cur['vat']) + $otherIncome;
+        $costsOut = array_map(fn($c) => [
+            'name' => $c['name'],
+            'value' => $this->r2($c['value']),
+            'color' => $c['color'],
+            'pct' => $netRevenuePnl > 0 ? $this->r2($c['value'] / $netRevenuePnl * 100) : 0,
+        ], $costs);
 
         return response()->json([
             'success' => true,
@@ -1120,18 +1533,17 @@ class ReportController extends Controller
                     'displayed' => $this->r2($revDisplayed),
                     'gross' => $this->r2($cur['gross']),
                     'vat' => $this->r2($cur['vat']),
+                    'net' => $this->r2($netRevenuePnl),
                     'other_income' => $this->r2($otherIncome),
                     'orders' => $cur['orders'],
                     'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
                     'delta_orders' => $this->pct($cur['orders'], $ref['orders']),
                 ],
                 'income_channels' => $this->channels($cur, $ref, $taxRatio),
-                'costs' => array_map(fn($c) => [
-                    'name' => $c['name'],
-                    'value' => $this->r2($c['value']),
-                    'color' => $c['color'],
-                ], $costs),
+                'costs' => $costsOut,
                 'commissions' => $commissions,
+                'allocated_expenses' => $allocated['items'],
+                'allocated_total' => $this->r2($allocated['total']),
                 'cost_total' => $this->r2($costTotal),
                 'profit' => $this->r2($profit),
                 'margin' => $revDisplayed > 0 ? $this->r2($profit / $revDisplayed * 100) : 0,
@@ -1139,6 +1551,153 @@ class ReportController extends Controller
                 'delta_cost' => $this->pct($costTotal, $refCostTotal),
                 'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
                 'groups' => $this->profitGroups($period, $branchId, $from, $to, $vatRate, $tz, $disp, true),
+            ],
+        ]);
+    }
+
+    /**
+     * Gói 56 (2026-10-14): KPI vận hành trong ngày.
+     * GET /api/reports/operations?date=Y-m-d&branch_id=
+     * - avg_prep_minutes: TB phút từ tạo đơn -> bếp bấm sẵn sàng (ready_at)
+     * - cancel_rate: % đơn hủy; cancel_by_reason: gom theo lý do hủy
+     * - orders_per_hour_per_staff: đơn hoàn thành / tổng giờ công (chấm công;
+     *   fallback số ca đã xếp ở work_schedules)
+     * - hourly: 24 giờ, mỗi giờ có orders/staff/understaffed
+     *   (understaffed = orders > staff * 15)
+     * - alerts: cảnh báo thiếu người / hủy vượt ngưỡng / pha chế chậm
+     */
+    public function operations(Request $request): JsonResponse
+    {
+        $tz = 'Asia/Ho_Chi_Minh';
+        $branchId = (int) $request->query('branch_id', 0);
+        $dateStr = $request->query('date');
+        try {
+            $day = $dateStr
+                ? Carbon::parse($dateStr, $tz)->startOfDay()
+                : Carbon::now($tz)->startOfDay();
+        } catch (\Exception $e) {
+            $day = Carbon::now($tz)->startOfDay();
+        }
+        $from = $day->copy()->startOfDay();
+        $to = $day->copy()->endOfDay();
+        $dayStr = $day->toDateString();
+
+        $dayOrders = Order::query()
+            ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
+        if ($branchId > 0) {
+            $dayOrders->where('branch_id', $branchId);
+        }
+
+        $totalOrders = (int) (clone $dayOrders)->count();
+        $cancelledOrders = (int) (clone $dayOrders)->where('status', 'cancelled')->count();
+        $completedOrders = (int) (clone $dayOrders)->where('status', 'completed')->count();
+        $cancelRate = $totalOrders > 0 ? round($cancelledOrders / $totalOrders * 100, 1) : 0.0;
+
+        // 1. Thời gian pha chế trung bình (phút) — cần cột ready_at (migration 000055)
+        $avgPrepMinutes = null;
+        if (Schema::hasColumn('orders', 'ready_at')) {
+            $avg = (clone $dayOrders)
+                ->where('status', 'completed')
+                ->whereNotNull('ready_at')
+                ->avg(DB::raw('TIMESTAMPDIFF(MINUTE, created_at, ready_at)'));
+            $avgPrepMinutes = $avg !== null ? round((float) $avg, 1) : null;
+        }
+
+        // 2. Đơn hủy gom theo lý do
+        $cancelByReason = [];
+        if (Schema::hasColumn('orders', 'cancel_reason')) {
+            $cancelByReason = (clone $dayOrders)
+                ->where('status', 'cancelled')
+                ->select('cancel_reason', DB::raw('COUNT(*) AS c'))
+                ->groupBy('cancel_reason')
+                ->pluck('c', 'cancel_reason')
+                ->mapWithKeys(fn($c, $r) => [
+                    ($r === null || $r === '') ? 'Không rõ lý do' : (string) $r => (int) $c,
+                ])
+                ->toArray();
+        }
+
+        // 3. Tổng giờ công từ chấm công; fallback: số ca đã xếp
+        $attBase = DB::table('attendances')
+            ->where('date', $dayStr)
+            ->whereNotNull('check_in')
+            ->whereNotNull('check_out');
+        if ($branchId > 0) {
+            $attBase->where('branch_id', $branchId);
+        }
+        $staffHours = (float) (clone $attBase)->sum(DB::raw('TIMESTAMPDIFF(HOUR, check_in, check_out)'));
+        if ($staffHours <= 0 && Schema::hasTable('work_schedules')) {
+            $wsQuery = DB::table('work_schedules')->where('date', $dayStr);
+            if ($branchId > 0) {
+                $wsQuery->where('branch_id', $branchId);
+            }
+            $staffHours = (float) $wsQuery->count();
+        }
+        $ordersPerHourPerStaff = $staffHours > 0 ? round($completedOrders / $staffHours, 1) : 0.0;
+
+        // 4. Chi tiết từng giờ
+        $attRows = DB::table('attendances')
+            ->where('date', $dayStr)
+            ->whereNotNull('check_in')
+            ->select('check_in', 'check_out');
+        if ($branchId > 0) {
+            $attRows->where('branch_id', $branchId);
+        }
+        $attRows = $attRows->get();
+        $orderHours = (clone $dayOrders)
+            ->where('status', '!=', 'cancelled')
+            ->select(DB::raw('HOUR(created_at) AS h'), DB::raw('COUNT(*) AS c'))
+            ->groupBy('h')
+            ->pluck('c', 'h');
+
+        $hourly = [];
+        $alerts = [];
+        for ($h = 0; $h < 24; $h++) {
+            $hStart = $day->copy()->setTime($h, 0, 0);
+            $hEnd = $day->copy()->setTime($h, 59, 59);
+            $staff = 0;
+            foreach ($attRows as $a) {
+                $in = Carbon::parse($a->check_in, $tz);
+                $out = $a->check_out ? Carbon::parse($a->check_out, $tz) : null;
+                if ($in->lte($hEnd) && ($out === null || $out->gte($hStart))) {
+                    $staff++;
+                }
+            }
+            $orders = (int) ($orderHours[$h] ?? 0);
+            $understaffed = $orders > $staff * 15;
+            $hourly[] = [
+                'hour' => $h,
+                'orders' => $orders,
+                'staff' => $staff,
+                'understaffed' => $understaffed,
+            ];
+            if ($understaffed) {
+                $alerts[] = "Giờ {$h}h: {$orders} đơn/{$staff} NV - thiếu người";
+            }
+        }
+
+        // 5. Cảnh báo ngưỡng
+        if ($cancelRate > 5) {
+            $alerts[] = "Tỷ lệ hủy {$cancelRate}% vượt ngưỡng 5%";
+        }
+        if ($avgPrepMinutes !== null && $avgPrepMinutes > 15) {
+            $alerts[] = "Thời gian pha chế TB {$avgPrepMinutes} phút vượt ngưỡng 15 phút";
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'date' => $dayStr,
+                'branch_id' => $branchId,
+                'avg_prep_minutes' => $avgPrepMinutes,
+                'cancel_rate' => $cancelRate,
+                'cancelled_orders' => $cancelledOrders,
+                'total_orders' => $totalOrders,
+                'cancel_by_reason' => $cancelByReason,
+                'orders_per_hour_per_staff' => $ordersPerHourPerStaff,
+                'staff_hours' => $staffHours,
+                'hourly' => $hourly,
+                'alerts' => $alerts,
             ],
         ]);
     }
@@ -1158,5 +1717,136 @@ class ReportController extends Controller
     private function r2($v): float
     {
         return round((float) $v, 2);
+    }
+
+    /**
+     * Gói 57: Menu Engineering — ma trận 4 ô (Stars/Plowhorses/Puzzles/Dogs).
+     * GET /api/reports/menu-engineering?from=Y-m-d&to=Y-m-d&branch_id=
+     */
+    public function menuEngineering(Request $request): JsonResponse
+    {
+        $from = $request->query('from', now()->startOfMonth()->toDateString());
+        $to = $request->query('to', now()->toDateString());
+        $branchId = $request->query('branch_id');
+
+        $rows = DB::table('order_items as oi')
+            ->join('orders as o', 'o.id', '=', 'oi.order_id')
+            ->join('products as p', 'p.id', '=', 'oi.product_id')
+            ->where('o.status', '!=', 'cancelled')
+            ->where('o.payment_status', 'paid')
+            ->whereDate('o.created_at', '>=', $from)
+            ->whereDate('o.created_at', '<=', $to)
+            ->when($branchId, fn($q) => $q->where('o.branch_id', $branchId))
+            ->groupBy('oi.product_id', 'p.name')
+            ->selectRaw('oi.product_id, p.name as product_name')
+            ->selectRaw('SUM(oi.quantity) as qty_sold')
+            ->selectRaw('SUM(oi.quantity * oi.price) as revenue')
+            ->selectRaw('SUM(oi.quantity * COALESCE(oi.unit_cost, 0)) as cogs')
+            ->get();
+
+        $items = [];
+        $maxQty = 0;
+        foreach ($rows as $r) {
+            $qty = (float) $r->qty_sold;
+            if ($qty > $maxQty) $maxQty = $qty;
+            $revenue = (float) $r->revenue;
+            $cogs = (float) $r->cogs;
+            $gp = $revenue - $cogs;
+            $items[] = [
+                'product_id' => $r->product_id,
+                'product_name' => $r->product_name,
+                'qty_sold' => $qty,
+                'revenue' => $this->r2($revenue),
+                'cogs' => $this->r2($cogs),
+                'gross_profit' => $this->r2($gp),
+                'margin_pct' => $revenue > 0 ? $this->r2($gp / $revenue * 100) : 0,
+            ];
+        }
+
+        $avgMargin = 0;
+        if (count($items) > 0) {
+            $avgMargin = $this->r2(array_sum(array_column($items, 'margin_pct')) / count($items));
+        }
+
+        $summary = ['star' => 0, 'plowhorse' => 0, 'puzzle' => 0, 'dog' => 0];
+        foreach ($items as &$it) {
+            $popularity = $maxQty > 0 ? $it['qty_sold'] / $maxQty : 0;
+            $it['popularity'] = $this->r2($popularity);
+            $highMargin = $it['margin_pct'] >= $avgMargin;
+            $highPop = $popularity >= 0.7;
+            if ($highMargin && $highPop) $q = 'star';
+            elseif ($highMargin && !$highPop) $q = 'puzzle';
+            elseif (!$highMargin && $highPop) $q = 'plowhorse';
+            else $q = 'dog';
+            $it['quadrant'] = $q;
+            $summary[$q]++;
+        }
+        unset($it);
+
+        usort($items, fn($a, $b) => $b['gross_profit'] <=> $a['gross_profit']);
+
+        return response()->json(['success' => true, 'data' => [
+            'items' => $items,
+            'summary' => $summary,
+            'avg_margin' => $avgMargin,
+            'meta' => ['from' => $from, 'to' => $to, 'branch_id' => $branchId],
+        ]]);
+    }
+
+    /**
+     * Gói 57: Xuất Excel chi tiết từng bill trong kỳ.
+     * GET /api/reports/revenue/export?from=&to=&branch_id=
+     */
+    public function exportRevenue(Request $request)
+    {
+        $from = $request->query('from', now()->startOfMonth()->toDateString());
+        $to = $request->query('to', now()->toDateString());
+        $branchId = $request->query('branch_id');
+
+        $orders = Order::with(['items.product:id,name'])
+            ->where('payment_status', 'paid')
+            ->where('status', '!=', 'cancelled')
+            ->whereDate('created_at', '>=', $from)
+            ->whereDate('created_at', '<=', $to)
+            ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
+            ->orderBy('created_at')
+            ->get();
+
+        $ss = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $ss->getActiveSheet();
+        $sheet->setTitle('Chi tiet bill');
+        $headers = ['Mã đơn', 'Ngày', 'Kênh', 'PTTT', 'Món (gộp)', 'Số lượng', 'Doanh thu', 'Giảm giá', 'Phí sàn', 'Tổng thu'];
+        $sheet->fromArray($headers, null, 'A1');
+        $sheet->getStyle('A1:J1')->getFont()->setBold(true);
+
+        $row = 2;
+        foreach ($orders as $o) {
+            $itemNames = $o->items->map(fn($i) => ($i->product->name ?? $i->product_name ?? 'Món') . ' x' . $i->quantity)->implode('; ');
+            $qty = $o->items->sum('quantity');
+            $sheet->fromArray([
+                $o->code ?? $o->order_number,
+                $o->created_at ? $o->created_at->format('d/m/Y H:i') : '',
+                $o->online_channel ?? 'pos',
+                $o->payment_method ?? '',
+                $itemNames,
+                $qty,
+                (float) $o->subtotal_amount,
+                (float) $o->discount_amount,
+                (float) ($o->commission_amount ?? 0),
+                (float) $o->total_amount,
+            ], null, 'A' . $row);
+            $row++;
+        }
+        foreach (range('A', 'J') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
+
+        $fname = 'chi-tiet-bill_' . str_replace('-', '', $from) . '_' . str_replace('-', '', $to) . '.xlsx';
+        $tmp = tempnam(sys_get_temp_dir(), 'rev_exp_') . '.xlsx';
+        (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($ss))->save($tmp);
+
+        return response()->download($tmp, $fname, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
     }
 }

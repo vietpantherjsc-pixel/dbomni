@@ -47,7 +47,10 @@ class Order extends Model
         'note',
         'cancel_reason',
         'cancelled_at',
+        'cancelled_by', // Gói 55 p11ag: người hủy (tên NV/admin hoặc customer:SĐT)
+        'cancelled_by_type', // Gói 55 p11ag: user|employee|customer
         'completed_at', // Gói 12a
+        'ready_at', // Gói 56: mốc bếp bấm sẵn sàng (tính thời gian pha chế TB)
         'claim_token', // Gói 11: token QR tích điểm
         'claim_expires_at', // Gói 11: hạn token QR tích điểm
         'need_vat_invoice', // Gói 48: yêu cầu xuất VAT
@@ -59,6 +62,9 @@ class Order extends Model
         'province', // Gói 48: tỉnh/thành
         'ward', // Gói 48: phường/xã
         'referred_by', // Gói 9: mã giới thiệu affiliate
+        'commission_rate', // Gói 56: % phí sàn snapshot lúc tạo/chốt đơn
+        'commission_amount', // Gói 56: tiền phí sàn snapshot
+        'ready_at', // Gói 56: lúc bếp bấm sẵn sàng — tính thời gian pha chế
     ];
 
     protected $casts = [
@@ -71,6 +77,8 @@ class Order extends Model
         'total_amount' => 'decimal:2',
         'cancelled_at' => 'datetime',
         'completed_at' => 'datetime', // Gói 12a: mốc hoàn thành để giới hạn tra cứu Mini App 24h
+        'ready_at' => 'datetime', // Gói 56: mốc bếp sẵn sàng
+        'ready_at' => 'datetime', // Gói 56: lúc bếp bấm sẵn sàng
         'claim_expires_at' => 'datetime', // Gói 13: fix crash QR claim (isPast() trên string)
         'scheduled_at' => 'datetime',
         'stock_deducted' => 'boolean',

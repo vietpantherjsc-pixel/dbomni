@@ -24,6 +24,19 @@ class PaymentMethodController extends Controller
         return response()->json(['success' => true, 'data' => $items]);
     }
 
+    // Gói SEC2: endpoint public cho POS/Mini App — LUÔN chỉ trả PTTT đang bật,
+    // không tin tham số 'active' của client
+    public function publicActive(Request $request): JsonResponse
+    {
+        $q = PaymentMethod::where('is_active', true)->orderBy('sort_order')->orderBy('id');
+        if ($channel = $request->query('channel')) {
+            $items = $q->get()->filter(fn($m) => $m->forChannel($channel))->values();
+        } else {
+            $items = $q->get();
+        }
+        return response()->json(['success' => true, 'data' => $items]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $v = $request->validate([

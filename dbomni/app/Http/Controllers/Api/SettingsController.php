@@ -54,6 +54,15 @@ class SettingsController extends Controller
             'code_digits_transfer' => Setting::get('code_digits_transfer', '4'),
             'code_prefix_stocktake' => Setting::get('code_prefix_stocktake', 'KK'),
             'code_digits_stocktake' => Setting::get('code_digits_stocktake', '4'),
+            // Gói 55 p11af (P0-13): công tắc cộng dồn KM + trần % giảm giá — Gói 57 đổi mặc định BẬT cộng dồn (trần 50%)
+            'promo_allow_stack' => Setting::get('promo_allow_stack', '1'),
+            'promo_max_discount_pct' => Setting::get('promo_max_discount_pct', '50'),
+            // Gói 55 p11af (P0-14): ngưỡng cảnh báo Food cost % trên Dashboard
+            'food_cost_alert_pct' => Setting::get('food_cost_alert_pct', '30'),
+            // Gói 55 p11ag: ngưỡng kiểm soát kho & nhập hàng (chống thất thoát)
+            'inventory_adjust_threshold' => Setting::get('inventory_adjust_threshold', '500000'),
+            'price_increase_alert_pct' => Setting::get('price_increase_alert_pct', '10'),
+            'stocktake_diff_threshold' => Setting::get('stocktake_diff_threshold', '200000'),
             // Gói SEC: 9 key mẫu in (Gói 52)
             'show_logo' => Setting::get('show_logo', '1'),
             'show_address' => Setting::get('show_address', '1'),

@@ -232,10 +232,13 @@ export default function OptionGroups() {
                   ))}
                 </tbody>
               </table>
-              <div className="flex gap-2 mt-3">
-                <input className={input + ' flex-1'} placeholder="Tên tùy chọn mới…" value={newOpt[g.id]?.name || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], name: e.target.value } }))} />
-                <input type="number" min="0" step="500" className={input + ' w-32'} placeholder="Giá thêm" value={newOpt[g.id]?.price || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], price: e.target.value } }))} />
-                <button onClick={() => addOption(g.id)} className="m-btn m-btn-primary m-btn-sm">+ Thêm</button>
+              <div className="flex gap-2 mt-3 items-center">
+                <div style={{width: 32, flexShrink: 0}}></div>
+                <input className={input} style={{flex: 1, minWidth: 0, width: 'auto'}} placeholder="Tên tùy chọn mới…" value={newOpt[g.id]?.name || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], name: e.target.value } }))} />
+                <input type="number" min="0" step="500" className={input} style={{width: 112, flexShrink: 0}} placeholder="Giá thêm" value={newOpt[g.id]?.price || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], price: e.target.value } }))} />
+                <div style={{width: 192, flexShrink: 0, textAlign: 'right'}}>
+                  <button onClick={() => addOption(g.id)} className="m-btn m-btn-primary m-btn-sm">+ Thêm</button>
+                </div>
               </div>
             </div>
           )}

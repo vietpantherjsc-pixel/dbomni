@@ -192,8 +192,7 @@ export default function ReportsPnl() {
 
                     {/* CHI TIẾT CHIẾT KHẤU KÊNH */}
                     <div className="card">
-                        <h3>Chi tiết chiết khấu kênh bán</h3>
-                        <div className="sub">Chiết khấu nền tảng thu trên doanh thu từng kênh — cấu hình tại trang Kênh bán hàng.</div>
+                        <h3>Chi tiết chiết khấu kênh bán</h3>                        <div className="sub">Chiết khấu nền tảng thu trên doanh thu từng kênh — cấu hình tại trang Kênh bán hàng.</div>
                         {(data.commissions || []).length === 0 ? (
                             <div className="sub">Chưa cấu hình chiết khấu cho kênh nào (vào Kênh bán hàng → Sửa → nhập % chiết khấu).</div>
                         ) : (
@@ -214,6 +213,28 @@ export default function ReportsPnl() {
                         )}
                     </div>
 
+                    {/* Gói 58: CHI PHÍ PHÂN BỔ (thuê trả trước / CAPEX) — chỉ hiện khi API trả về */}
+                    {Array.isArray(data.allocated_expenses) && data.allocated_expenses.length > 0 && (
+                    <div className="card">
+                        <h3>Chi phí phân bổ theo kỳ</h3>
+                        <div className="sub">Tiền thuê trả trước &amp; CAPEX được phân bổ đều vào từng kỳ kế toán (thay vì ghi 1 cục lúc chi tiền).</div>
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Khoản mục</th><th>Loại</th><th className="num">Tổng giá trị</th><th className="num">Số kỳ</th><th className="num">Phân bổ kỳ này</th></tr>
+                            {(data.allocated_expenses || []).map((c, i) => (
+                                <tr key={i}>
+                                    <td className="prod">{c.name}</td>
+                                    <td>{c.type === 'capex' ? 'CAPEX' : 'Trả trước'}</td>
+                                    <td className="num">{fmtVND(c.total_amount)}</td>
+                                    <td className="num">{fmtInt(c.periods)} tháng</td>
+                                    <td className="num"><b>{fmtVND(c.allocated_amount)}</b></td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table></div>
+                    </div>
+                    )}
+
                     {/* THU CHI THEO KỲ */}
                     <div className="card">
                         <h3>Thu – Chi – Lợi nhuận theo kỳ <span dangerouslySetInnerHTML={{ __html: deltaBadge(data.delta_profit) }} /></h3>
@@ -226,6 +247,20 @@ export default function ReportsPnl() {
                     </div>
 
                     <div className="foot">
+                        <h4>📖 Chú thích thuật ngữ</h4>
+                        <div className="tbl-wrap"><table className="tbl" style={{ minWidth: 0 }}>
+                            <tbody>
+                            <tr><th>Thuật ngữ</th><th>Ý nghĩa</th></tr>
+                            <tr><td><b>Net Revenue (Doanh thu thuần)</b></td><td>Gross − Giảm giá − Phí sàn. Mốc 100% để tính mọi tỷ trọng chi phí.</td></tr>
+                            <tr><td><b>COGS (Cost of Goods Sold)</b></td><td>Giá vốn hàng bán — tính theo FIFO từ snapshot lúc bán.</td></tr>
+                            <tr><td><b>Prime Cost</b></td><td>COGS + Chi phí nhân sự. "Chỉ số sống còn" — phải dưới 55%.</td></tr>
+                            <tr><td><b>EBITDA</b></td><td>Lợi nhuận vận hành = Lợi nhuận gộp − Nhân sự − Chi phí vận hành (chưa trừ khấu hao, thuế).</td></tr>
+                            <tr><td><b>Commission</b></td><td>Phí chiết khấu sàn (GrabFood/ShopeeFood ~20–25%) trích trên mỗi đơn.</td></tr>
+                            </tbody>
+                        </table></div>
+                    </div>
+
+                    <div className="foot" style={{ marginTop: 12 }}>
                         <h4>Ghi chú về số liệu</h4>
                         <ul>
                             <li><b>Thu</b> = doanh thu đơn đã thanh toán (payment_status = paid, chưa hủy) + <b>thu khác</b> (phiếu thu tay trong Sổ thu-chi).</li>

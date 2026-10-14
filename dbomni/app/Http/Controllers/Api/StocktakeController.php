@@ -215,10 +215,23 @@ class StocktakeController extends Controller
                 ];
             });
 
+            // Gói 55 p11b: tổng giá trị chênh vượt ngưỡng → tự sinh đề xuất điều chỉnh (chờ duyệt)
+            // Bọc try/catch để không làm hỏng kết quả chốt nếu sinh đề xuất lỗi
+            $adjCount = 0;
+            try {
+                $adjCount = \App\Models\StocktakeAdjustment::createFromConfirmed(
+                    $result['stocktake'], $result['rows'], $result['stocktake']->employee_id ?? null
+                );
+            } catch (\Exception $adjEx) {
+                \Log::warning('Không tạo được đề xuất điều chỉnh kiểm kê #' . $result['stocktake']->id . ': ' . $adjEx->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Đã chốt kiểm kê và lưu lịch sử.',
+                'message' => 'Đã chốt kiểm kê và lưu lịch sử.'
+                    . ($adjCount > 0 ? " Đã tạo {$adjCount} đề xuất điều chỉnh chờ duyệt." : ''),
                 'data' => $result,
+                'adjustments_created' => $adjCount,
             ]);
         } catch (Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);

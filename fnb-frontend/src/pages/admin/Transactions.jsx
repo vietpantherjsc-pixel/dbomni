@@ -34,6 +34,7 @@ const emptyForm = (type) => ({
     type, category_id: '', branch_id: '', amount: '', paid_at: todayISO(),
     status: 'paid', payment_method: 'cash', note: '',
     partner_id: '', is_debt: false, // Gói 29: đối tác + ghi công nợ
+    account_id: '', occurred_at: todayISO(), attachment: '', // Gói 56: quỹ + ngày thực chi + chứng từ
 });
 
 const Transactions = () => {
@@ -84,6 +85,15 @@ const Transactions = () => {
         } catch { /* bỏ qua */ }
     }, []);
 
+    // Gói 56: danh sách quỹ cho dropdown trong form phiếu.
+    const [accounts, setAccounts] = useState([]);
+    const fetchAccounts = useCallback(async () => {
+        try {
+            const res = await axios.get(`${API}/accounts`);
+            if (res.data?.success) setAccounts(res.data.data || []);
+        } catch { /* bỏ qua */ }
+    }, []);
+
     const fetchRows = useCallback(async () => {
         setLoading(true);
         try {
@@ -107,7 +117,7 @@ const Transactions = () => {
         }
     }, [tab, page, branchId, fCat, fFrom, fTo, fStatus, search]);
 
-    useEffect(() => { fetchCategories(); fetchBranches(); fetchPartners(); }, [fetchCategories, fetchBranches, fetchPartners]);
+    useEffect(() => { fetchCategories(); fetchBranches(); fetchPartners(); fetchAccounts(); }, [fetchCategories, fetchBranches, fetchPartners, fetchAccounts]);
     useEffect(() => { fetchRows(); }, [fetchRows]);
     useEffect(() => { setPage(1); }, [tab, branchId, fCat, fFrom, fTo, fStatus, search]);
 
@@ -130,6 +140,9 @@ const Transactions = () => {
             note: row.note || '',
             partner_id: row.partner_id || '', // Gói 29
             is_debt: row.status === 'pending' && !!row.partner_id, // Gói 29
+            account_id: row.account_id || '', // Gói 56
+            occurred_at: (row.occurred_at || '').slice(0, 10) || todayISO(), // Gói 56
+            attachment: row.attachment || '', // Gói 56
         });
         setShowNewCat(false);
         setShowForm(true);
@@ -167,6 +180,9 @@ const Transactions = () => {
                 status: form.is_debt && !editing ? 'pending' : form.status, // Gói 29: ghi nợ -> chờ thanh toán
                 payment_method: form.payment_method,
                 note: form.note || null,
+                account_id: form.account_id || null, // Gói 56
+                occurred_at: form.occurred_at || null, // Gói 56
+                attachment: form.attachment || null, // Gói 56
             };
             if (editing) {
                 // Gói 27: phiếu tự sinh chỉ cho sửa ghi chú.
@@ -279,7 +295,7 @@ const Transactions = () => {
 
                     {/* Bảng */}
                     <div className="overflow-x-auto border-t border-gray-100">
-                        <table className="w-full text-[13px] min-w-[880px]">
+                        <table className="w-full text-[13px] min-w-[1080px]">
                             <thead>
                                 <tr className="text-left text-gray-500 border-b border-gray-100">
                                     <th className="px-3 py-3 font-medium">Mã phiếu</th>
@@ -287,7 +303,9 @@ const Transactions = () => {
                                     <th className="px-3 py-3 font-medium">Danh mục</th>
                                     <th className="px-3 py-3 font-medium">Chi nhánh</th>
                                     <th className="px-3 py-3 font-medium">Đối tác</th> {/* Gói 29 */}
+                                    <th className="px-3 py-3 font-medium">Quỹ</th> {/* Gói 56 */}
                                     <th className="px-3 py-3 font-medium text-right">Số tiền</th>
+                                    <th className="px-3 py-3 font-medium text-right">Số dư lũy kế</th> {/* Gói 56 */}
                                     <th className="px-3 py-3 font-medium">Trạng thái</th>
                                     <th className="px-3 py-3 font-medium">Ghi chú</th>
                                     <th className="px-3 py-3 font-medium text-right">Thao tác</th>
@@ -295,9 +313,9 @@ const Transactions = () => {
                             </thead>
                             <tbody>
                                 {loading ? (
-                                    <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
+                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : rows.length === 0 ? (
-                                    <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Chưa có phiếu nào.</td></tr>
+                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Chưa có phiếu nào.</td></tr>
                                 ) : rows.map((r) => (
                                     <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
                                         <td className="px-3 py-3 font-medium text-[#0d6efd] whitespace-nowrap">{r.code}</td>
@@ -305,9 +323,11 @@ const Transactions = () => {
                                         <td className="px-3 py-3">{r.category?.name || '-'}</td>
                                         <td className="px-3 py-3">{r.branch?.name || 'Tất cả CN'}</td>
                                         <td className="px-3 py-3">{r.partner?.name || '-'}</td> {/* Gói 29 */}
+                                        <td className="px-3 py-3 whitespace-nowrap">{r.account?.name || '-'}</td> {/* Gói 56 */}
                                         <td className={`px-3 py-3 text-right font-semibold whitespace-nowrap ${r.type === 'income' ? 'text-green-700' : 'text-red-600'}`}>
                                             {r.type === 'income' ? '+' : '-'}{fmtMoney(r.amount)}
                                         </td>
+                                        <td className="px-3 py-3 text-right whitespace-nowrap text-gray-600">{r.running_balance != null ? fmtMoney(r.running_balance) : '-'}</td> {/* Gói 56 */}
                                         <td className="px-3 py-3 whitespace-nowrap">
                                             <span className={`px-2.5 py-1 rounded-full text-[11.5px] font-medium border ${
                                                 r.status === 'paid'
@@ -322,6 +342,10 @@ const Transactions = () => {
                                                 </span>
                                             )}
                                             <div className="text-gray-600 truncate">{r.note || '-'}</div>
+                                            {r.attachment && ( // Gói 56
+                                                <a href={r.attachment} target="_blank" rel="noreferrer"
+                                                    className="text-[11.5px] text-[#0d6efd] hover:underline">📎 Xem chứng từ</a>
+                                            )}
                                         </td>
                                         <td className="px-3 py-3 text-right whitespace-nowrap">
                                             <button onClick={() => openEdit(r)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
@@ -420,6 +444,65 @@ const Transactions = () => {
                                     </select>
                                 </div>
                             </div>
+                            {/* Gói 56: quỹ + ngày thực chi */}
+                            {!isAuto && (
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-[12.5px] text-gray-500 block mb-1">Quỹ</label>
+                                        <select value={form.account_id}
+                                            onChange={(e) => setForm({ ...form, account_id: e.target.value })}
+                                            className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]">
+                                            <option value="">-- Chọn quỹ --</option>
+                                            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[12.5px] text-gray-500 block mb-1">Ngày thực chi</label>
+                                        <DateInput value={form.occurred_at}
+                                            onChange={(v) => setForm({ ...form, occurred_at: v })}
+                                            className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]" />
+                                    </div>
+                                </div>
+                            )}
+                            {/* Gói 56: đính kèm ảnh chứng từ */}
+                            {!isAuto && (
+                                <div>
+                                    <label className="text-[12.5px] text-gray-500 block mb-1">Chứng từ (ảnh)</label>
+                                    <div className="flex items-center gap-3">
+                                        <label className="px-4 py-2.5 border border-gray-300 rounded-lg text-[13px] cursor-pointer min-h-[44px] flex items-center hover:bg-gray-50">
+                                            📎 Chọn ảnh
+                                            <input type="file" accept="image/*" className="hidden"
+                                                onChange={async (e) => {
+                                                    const f = e.target.files?.[0];
+                                                    if (!f) return;
+                                                    if (f.size > 2 * 1024 * 1024) { alert('Ảnh tối đa 2MB'); return; }
+                                                    const fd = new FormData();
+                                                    fd.append('image', f);
+                                                    try {
+                                                        const res = await axios.post(`${API}/uploads/product-image`, fd, {
+                                                            headers: { 'Content-Type': 'multipart/form-data' },
+                                                        });
+                                                        const url = res.data?.data?.url;
+                                                        if (url) setForm({ ...form, attachment: url });
+                                                        else alert('Upload thất bại');
+                                                    } catch (err) {
+                                                        alert(err.response?.data?.message || 'Upload thất bại');
+                                                    }
+                                                    e.target.value = '';
+                                                }} />
+                                        </label>
+                                        {form.attachment && (
+                                            <div className="flex items-center gap-2">
+                                                <img src={form.attachment} alt="Chứng từ"
+                                                    className="w-12 h-12 object-cover rounded-lg border"
+                                                    onError={(e) => { e.target.style.display = 'none'; }} />
+                                                <button type="button" onClick={() => setForm({ ...form, attachment: '' })}
+                                                    className="text-red-600 text-[12px]">Xóa</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                             <div>
                                 <label className="text-[12.5px] text-gray-500 block mb-1">Trạng thái</label>
                                 <select value={form.status} disabled={isAuto || form.is_debt}

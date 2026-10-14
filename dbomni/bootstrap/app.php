@@ -21,6 +21,8 @@ $app = Application::configure(basePath: dirname(__DIR__))
         ]);
         // Gói 26: kiểm tra quyền theo ma trận roles.permissions (vd "staff.view").
         $middleware->alias(['permission' => \App\Http\Middleware\CheckPermission::class]);
+        // Gói 59: mã QR hub nhân viên (?t= khớp staff_hub_token).
+        $middleware->alias(['staff_hub_token' => \App\Http\Middleware\StaffHubToken::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

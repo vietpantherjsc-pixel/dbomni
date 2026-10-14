@@ -11,6 +11,9 @@ import PaymentMethodManager from './PaymentMethodManager'; // Gói 52
 import ProductAliasManager from './ProductAliasManager'; // Gói 55
 import UnitManager from './UnitManager'; // Gói 52
 import PrintTemplateSettings from './PrintTemplateSettings'; // Gói 52
+import AccountManager from './AccountManager'; // Gói 56: quản lý quỹ
+import PrepaidExpenseManager from './PrepaidExpenseManager'; // Gói 56: chi phí trả trước
+import StaffHubQr from './StaffHubQr'; // Gói 59: QR trang hub nhân viên
 import { API } from '../../utils/api';
 
 // Gói 22 (2026-10-09): Quản lý chi nhánh ngay trong Thiết lập.
@@ -238,6 +241,18 @@ const Settings = () => {
     const [savingSlide, setSavingSlide] = useState(false);
     const [slideMsg, setSlideMsg] = useState('');
     const [fontMsg, setFontMsg] = useState('');
+    // Gói 55 p11af (P0-13/P0-14): chính sách khuyến mại + ngưỡng Food cost
+    const [allowStack, setAllowStack] = useState(false);
+    const [maxDiscPct, setMaxDiscPct] = useState('50');
+    const [foodCostAlert, setFoodCostAlert] = useState('30');
+    // Gói 55 p11ag: ngưỡng kiểm soát kho & nhập hàng
+    const [adjustThreshold, setAdjustThreshold] = useState('500000');
+    const [priceIncAlert, setPriceIncAlert] = useState('10');
+    const [stocktakeDiffThreshold, setStocktakeDiffThreshold] = useState('200000');
+    const [savingInv, setSavingInv] = useState(false);
+    const [invMsg, setInvMsg] = useState('');
+    const [savingPromo, setSavingPromo] = useState(false);
+    const [promoMsg, setPromoMsg] = useState('');
     // Gói 55 p11ab: quy tắc sinh mã
     const CODE_TYPES = [
         { key: 'member', label: 'Mã thành viên', withDate: false },
@@ -287,6 +302,14 @@ const Settings = () => {
                     if (res.data.font_family) setFont(res.data.font_family);
                     // Gói 49c: thời gian trượt banner
                     if (res.data.promo_slide_interval) setSlideInt(String(res.data.promo_slide_interval));
+                    // Gói 55 p11af (P0-13/P0-14): chính sách KM + ngưỡng Food cost
+                    if (res.data.promo_allow_stack !== undefined) setAllowStack(res.data.promo_allow_stack === '1' || res.data.promo_allow_stack === true);
+                    if (res.data.promo_max_discount_pct) setMaxDiscPct(String(res.data.promo_max_discount_pct));
+                    if (res.data.food_cost_alert_pct) setFoodCostAlert(String(res.data.food_cost_alert_pct));
+                    // Gói 55 p11ag: ngưỡng kiểm soát kho & nhập hàng
+                    if (res.data.inventory_adjust_threshold !== undefined && res.data.inventory_adjust_threshold !== '') setAdjustThreshold(String(res.data.inventory_adjust_threshold));
+                    if (res.data.price_increase_alert_pct !== undefined && res.data.price_increase_alert_pct !== '') setPriceIncAlert(String(res.data.price_increase_alert_pct));
+                    if (res.data.stocktake_diff_threshold !== undefined && res.data.stocktake_diff_threshold !== '') setStocktakeDiffThreshold(String(res.data.stocktake_diff_threshold));
                     // Gói 55 p11ab: quy tắc sinh mã
                     setCodeRules((prev) => {
                         const next = { ...prev };
@@ -462,6 +485,110 @@ const Settings = () => {
                             {savingSlide ? 'Đang lưu...' : 'Lưu'}
                         </button>
                         {slideMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{slideMsg}</span>}
+                    </div>
+                </div>
+
+                {/* Gói 55 p11af (P0-13/P0-14): Chính sách khuyến mại */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Chính sách khuyến mại</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Kiểm soát việc cộng dồn giảm giá trên mỗi đơn hàng (voucher + khuyến mại + chiết khấu tay).
+                        Điểm đổi là tiền khách đã tích, không bị các giới hạn này.
+                    </p>
+                    <div className="space-y-4 max-w-xl">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input type="checkbox" checked={allowStack}
+                                onChange={(e) => setAllowStack(e.target.checked)}
+                                className="mt-1 w-4 h-4" />
+                            <span>
+                                <span className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>
+                                    Cho phép cộng dồn các loại giảm giá
+                                </span>
+                                <span className="block text-xs mt-0.5" style={{ color: 'var(--m-ink-soft)' }}>
+                                    Tắt (khuyên dùng): mỗi đơn chỉ áp dụng 1 loại giảm giá cao nhất.
+                                    Bật: voucher + KM + CK tay cộng dồn với nhau.
+                                </span>
+                            </span>
+                        </label>
+                        <div className="flex items-center gap-3">
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Trần giảm giá tối đa</label>
+                            <input type="number" min="1" max="100" value={maxDiscPct}
+                                onChange={(e) => setMaxDiscPct(e.target.value)}
+                                className="!w-[76px] m-input text-center" />
+                            <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>% tiền hàng / đơn</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Ngưỡng cảnh báo Food cost</label>
+                            <input type="number" min="1" max="100" value={foodCostAlert}
+                                onChange={(e) => setFoodCostAlert(e.target.value)}
+                                className="!w-[76px] m-input text-center" />
+                            <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>% — Dashboard báo đỏ khi vượt</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <button onClick={async () => {
+                                setSavingPromo(true); setPromoMsg('');
+                                try {
+                                    await axios.post(API + '/settings', { settings: {
+                                        promo_allow_stack: allowStack ? '1' : '0',
+                                        promo_max_discount_pct: maxDiscPct,
+                                        food_cost_alert_pct: foodCostAlert,
+                                    } });
+                                    setPromoMsg('Đã lưu.');
+                                } catch (e) { setPromoMsg('Lưu thất bại.'); }
+                                finally { setSavingPromo(false); }
+                            }} disabled={savingPromo} className="m-btn m-btn-primary" style={savingPromo ? { opacity: 0.5 } : {}}>
+                                {savingPromo ? 'Đang lưu...' : 'Lưu chính sách'}
+                            </button>
+                            {promoMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{promoMsg}</span>}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Gói 55 p11ag: Ngưỡng kiểm soát kho & nhập hàng (chống thất thoát) */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Kiểm soát kho & nhập hàng</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Các ngưỡng cảnh báo/chặn tự động để chống thất thoát kho và giá nhập bất thường.
+                    </p>
+                    <div className="space-y-4 max-w-xl">
+                        <div className="flex items-center gap-3">
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Ngưỡng chặn điều chỉnh kho nhanh</label>
+                            <input type="number" min="0" step="1000" value={adjustThreshold}
+                                onChange={(e) => setAdjustThreshold(e.target.value)}
+                                className="!w-[120px] m-input text-center" />
+                            <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>đ — vượt ngưỡng thì bị chặn, phải lập phiếu</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Cảnh báo giá nhập tăng</label>
+                            <input type="number" min="1" max="100" value={priceIncAlert}
+                                onChange={(e) => setPriceIncAlert(e.target.value)}
+                                className="!w-[76px] m-input text-center" />
+                            <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>% so với lần nhập trước cùng NCC</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Ngưỡng sinh đề xuất điều chỉnh kiểm kê</label>
+                            <input type="number" min="0" step="1000" value={stocktakeDiffThreshold}
+                                onChange={(e) => setStocktakeDiffThreshold(e.target.value)}
+                                className="!w-[120px] m-input text-center" />
+                            <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>đ — tổng giá trị chênh vượt ngưỡng thì tự sinh đề xuất chờ duyệt</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <button onClick={async () => {
+                                setSavingInv(true); setInvMsg('');
+                                try {
+                                    await axios.post(API + '/settings', { settings: {
+                                        inventory_adjust_threshold: adjustThreshold,
+                                        price_increase_alert_pct: priceIncAlert,
+                                        stocktake_diff_threshold: stocktakeDiffThreshold,
+                                    } });
+                                    setInvMsg('Đã lưu.');
+                                } catch (e) { setInvMsg('Lưu thất bại.'); }
+                                finally { setSavingInv(false); }
+                            }} disabled={savingInv} className="m-btn m-btn-primary" style={savingInv ? { opacity: 0.5 } : {}}>
+                                {savingInv ? 'Đang lưu...' : 'Lưu ngưỡng kho'}
+                            </button>
+                            {invMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{invMsg}</span>}
+                        </div>
                     </div>
                 </div>
 
@@ -658,6 +785,33 @@ const Settings = () => {
                         Bật/tắt từng dòng và sửa nội dung. Bill khổ K80, tem 50×30.
                     </p>
                     <PrintTemplateSettings />
+                </div>
+
+                {/* Gói 56: Quản lý quỹ */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Quản lý Quỹ</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Tiền mặt tại quầy, két sắt, tài khoản ngân hàng, ví/sàn. Chọn quỹ khi tạo phiếu thu/chi.
+                    </p>
+                    <AccountManager />
+                </div>
+
+                {/* Gói 56: Chi phí trả trước */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Chi phí trả trước</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Tiền thuê trả nhiều tháng, CAPEX... được phân bổ đều vào P&L theo số tháng.
+                    </p>
+                    <PrepaidExpenseManager />
+                </div>
+
+                {/* Gói 59: QR Nhân viên */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">QR Nhân viên</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Mã QR mở trang hub nhân viên (/nhan-vien). In và dán tại quầy để nhân viên quét.
+                    </p>
+                    <StaffHubQr />
                 </div>
             </div>
         </AdminLayout>

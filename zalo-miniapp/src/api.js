@@ -60,7 +60,7 @@ export const api = {
   customerByPhone: (phone, memberCode) => req(`/customer?phone=${encodeURIComponent(phone)}&member_code=${encodeURIComponent(memberCode)}`),
   createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   trackOrder: (code) => req(`/orders/${encodeURIComponent(code)}`),
-  cancelOrder: (code) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST' }),
+  cancelOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST', body: JSON.stringify({ phone }) }),
 };
 
 export const fmt = (n) => Number(n || 0).toLocaleString('vi-VN');

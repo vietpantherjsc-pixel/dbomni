@@ -48,8 +48,10 @@ const CSS = `
 .ck-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
 `;
 
-function auth(token) {
-  return { headers: { Authorization: 'Bearer ' + token } };
+function auth(token, hubT) {
+  const h = { headers: { Authorization: 'Bearer ' + token } };
+  if (hubT) h.params = { t: hubT };
+  return h;
 }
 function errMsg(err, fallback) {
   if (err && err.response && err.response.data && err.response.data.message) return err.response.data.message;
@@ -60,9 +62,11 @@ function qtyNum(s) {
   return Number.isNaN(n) ? 0 : n;
 }
 
-export default function ChuyenKho() {
-  const [token, setToken] = useState(() => localStorage.getItem('chuyenkho_token') || '');
+export default function ChuyenKho({ embed } = {}) {
+  const hubT = (embed && embed.hubT) || '';
+  const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('chuyenkho_token') || '');
   const [emp, setEmp] = useState(() => {
+    if (embed && embed.emp) return embed.emp;
     try { return JSON.parse(localStorage.getItem('chuyenkho_emp') || 'null'); } catch (e) { return null; }
   });
   const [phone, setPhone] = useState('');
@@ -101,7 +105,8 @@ export default function ChuyenKho() {
 
   const expired = (e) => {
     if (e && e.response && e.response.status === 401) {
-      logout();
+      if (embed && embed.onExpired) { embed.onExpired(); }
+      else logout();
       toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
       return true;
     }
@@ -132,8 +137,8 @@ export default function ChuyenKho() {
     setLoading(true);
     try {
       const [m, meta] = await Promise.all([
-        axios.get(API + '/employee/materials', auth(tk)),
-        axios.get(API + '/employee/stocktake-meta', auth(tk)).catch(() => ({ data: { data: {} } })),
+        axios.get(API + '/employee/materials', auth(tk, hubT)),
+        axios.get(API + '/employee/stocktake-meta', auth(tk, hubT)).catch(() => ({ data: { data: {} } })),
       ]);
       setMaterials((m.data && m.data.data) || []);
       const d = (meta.data && meta.data.data) || {};
@@ -204,7 +209,7 @@ export default function ChuyenKho() {
           material_id: it.materialId,
           quantity: qtyNum(it.qty),
         })),
-      }, auth(token));
+      }, auth(token, hubT));
       const d = (r.data && r.data.data) || {};
       setSuccess({ code: d.code || '', from: fromName, to: toName });
       setItems([]); setNote(''); setToId('');
@@ -215,7 +220,7 @@ export default function ChuyenKho() {
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
 
-  if (!token) {
+  if (!token && !embed) {
     return (
       <div className="ck-wrap">
         <style>{CSS}</style>
@@ -246,7 +251,7 @@ export default function ChuyenKho() {
               <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
               <div className="ck-sub">{(emp && emp.branch_name) || ''}</div>
             </div>
-            <button className="ck-logout" onClick={logout}>Đăng xuất</button>
+            <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
           <div className="ck-title">🔄 Chuyển kho</div>
         </header>
@@ -271,7 +276,7 @@ export default function ChuyenKho() {
             <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="ck-sub">{(emp && emp.branch_name) || ''}</div>
           </div>
-          <button className="ck-logout" onClick={logout}>Đăng xuất</button>
+          <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>
         <div className="ck-title">🔄 Chuyển kho</div>
       </header>

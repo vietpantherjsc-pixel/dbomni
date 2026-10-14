@@ -563,15 +563,13 @@ export default function KiemKe() {
                 {g.items.map((it) => {
                   const key = String(it.id);
                   const val = counts[key] || '';
-                  const sys = it.system_qty;
                   const entered = parseQty(val) !== null;
                   return (
                     <div className="kk-item" key={it.id}>
                       <div className="kk-item-n">
                         <div className="kk-item-name">{(it.material || {}).name}</div>
-                        <div className="kk-item-sub">
-                          Tồn hệ thống: {sys !== null && sys !== undefined ? sys : '—'} {((it.material || {}).unit) || ''}
-                        </div>
+                        {/* Gói 56: blind count — trang này chỉ dành cho NV (đăng nhập PIN),
+                            luôn ẩn tồn hệ thống để NV đếm khách quan. Admin xem tồn ở trang kho. */}
                       </div>
                       <input
                         className={'kk-qty' + (entered ? ' done' : '')}

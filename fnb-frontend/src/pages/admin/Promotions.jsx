@@ -431,8 +431,9 @@ export default function Promotions() {
                         <h1 className="text-xl font-bold" style={{ color: 'var(--m-ink)' }}>Khuyến mại</h1>
                         <p className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>Tự động áp dụng khi đơn hàng đủ điều kiện.</p>
                         <p className="text-xs mt-1" style={{ color: 'var(--m-ink-faint)' }}>
-                            📌 Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>,
-                            không giới hạn theo từng khách hàng. Hủy đơn sẽ hoàn lại lượt dùng.
+                            📌 Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>
+                            và có thể đặt thêm <b>giới hạn mỗi khách hàng</b> (cột <i>per_customer_limit</i> trong DB — tạo/sửa trực tiếp trong DB).
+                            Mỗi lượt dùng được ghi log theo khách để truy vết khi mã bị share. Hủy đơn sẽ hoàn lại lượt dùng.
                         </p>
                     </div>
                     <button onClick={startCreate} className="m-btn m-btn-primary">+ Khuyến mại</button>

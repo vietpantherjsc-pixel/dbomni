@@ -147,7 +147,12 @@ class OutboundController extends Controller
                 }
 
                 $service = new InventoryService();
-                $details = $service->deductMaterialsDetailed($receipt->branch_id, $needs);
+                // Gói 55 p11af: ghi nhật ký xuất kho từng lô
+                $details = $service->deductMaterialsDetailed($receipt->branch_id, $needs, [
+                    'type' => 'outbound',
+                    'id' => $receipt->id,
+                    'note' => 'Chốt phiếu xuất ' . $receipt->code,
+                ]);
 
                 $locked->update(['status' => 'confirmed']);
 

@@ -79,8 +79,10 @@ const CSS = `
 .nk-grand{font-size:30px;font-weight:800;color:${ORANGE};margin-top:6px;}
 `;
 
-function auth(token) {
-  return { headers: { Authorization: 'Bearer ' + token } };
+function auth(token, hubT) {
+  const h = { headers: { Authorization: 'Bearer ' + token } };
+  if (hubT) h.params = { t: hubT };
+  return h;
 }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 function isoToday() {
@@ -110,9 +112,11 @@ function errMsg(err, fallback) {
   return fallback;
 }
 
-export default function NhapKho() {
-  const [token, setToken] = useState(() => localStorage.getItem('nhapkho_token') || '');
+export default function NhapKho({ embed } = {}) {
+  const hubT = (embed && embed.hubT) || '';
+  const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('nhapkho_token') || '');
   const [emp, setEmp] = useState(() => {
+    if (embed && embed.emp) return embed.emp;
     try { return JSON.parse(localStorage.getItem('nhapkho_emp') || 'null'); } catch (e) { return null; }
   });
   const [phone, setPhone] = useState('');
@@ -164,7 +168,8 @@ export default function NhapKho() {
 
   const expired = (e) => {
     if (e && e.response && e.response.status === 401) {
-      logout();
+      if (embed && embed.onExpired) { embed.onExpired(); }
+      else logout();
       toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
       return true;
     }
@@ -186,10 +191,10 @@ export default function NhapKho() {
     setLoading(true);
     try {
       const [s, m, u, c] = await Promise.all([
-        axios.get(API + '/employee/suppliers', auth(tk)),
-        axios.get(API + '/employee/materials', auth(tk)),
-        axios.get(API + '/employee/units', auth(tk)).catch(() => ({ data: { data: [] } })),
-        axios.get(API + '/employee/stocktake-meta', auth(tk)).catch(() => ({ data: { data: {} } })),
+        axios.get(API + '/employee/suppliers', auth(tk, hubT)),
+        axios.get(API + '/employee/materials', auth(tk, hubT)),
+        axios.get(API + '/employee/units', auth(tk, hubT)).catch(() => ({ data: { data: [] } })),
+        axios.get(API + '/employee/stocktake-meta', auth(tk, hubT)).catch(() => ({ data: { data: {} } })),
       ]);
       setSuppliers((s.data && s.data.data) || []);
       setMaterials((m.data && m.data.data) || []);
@@ -312,13 +317,15 @@ export default function NhapKho() {
           unit_cost: num(it.unitCost),
           expired_at: it.expiredAt || null,
         })),
-      }, auth(token));
+      }, auth(token, hubT));
       const d = (r.data && r.data.data) || {};
       setSuccess({
         code: d.code || '',
         grand: d.grand_total != null ? d.grand_total : grand,
         payLabel: paymentType === 'paid' ? 'Trả ngay' : 'Công nợ',
         supplierName: supName,
+        // Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất
+        priceWarnings: r.data && Array.isArray(r.data.price_warnings) ? r.data.price_warnings : [],
       });
       resetForm(false);
     } catch (e) {
@@ -328,7 +335,8 @@ export default function NhapKho() {
   };
 
   // ================= MÀN HÌNH ĐĂNG NHẬP =================
-  if (!token) {
+  // Gói 59: khi nhúng trong StaffHub (embed) thì dùng token/emp của hub, bỏ qua login riêng
+  if (!token && !embed) {
     return (
       <div className="nk-wrap">
         <style>{CSS}</style>
@@ -384,7 +392,7 @@ export default function NhapKho() {
               <div className="nk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
               <div className="nk-sub">{(emp && emp.branch_name) || ''}</div>
             </div>
-            <button className="nk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
+            <button className="nk-logout" onClick={embed && embed.onBack ? embed.onBack : logout} aria-label={embed && embed.onBack ? 'Quay lại' : 'Đăng xuất'}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
           <div className="nk-title">📦 Phiếu nhập hàng</div>
         </header>
@@ -396,6 +404,17 @@ export default function NhapKho() {
           <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8, lineHeight: 1.6 }}>
             {success.supplierName} · {success.payLabel}
           </div>
+          {/* Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất */}
+          {success.priceWarnings && success.priceWarnings.length > 0 && (
+            <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 10, background: '#fffbeb', border: '1px solid #fcd34d', textAlign: 'left', fontSize: 13 }}>
+              <div style={{ fontWeight: 800, color: '#92400e', marginBottom: 6 }}>⚠️ Giá nhập tăng so với lần trước</div>
+              {success.priceWarnings.map((w, i) => (
+                <div key={i} style={{ color: '#78350f', marginTop: 4, lineHeight: 1.5 }}>
+                  • {w.material_name}: {fmtVND(w.old_price)} → {fmtVND(w.new_price)} <b>(+{w.pct}%)</b>
+                </div>
+              ))}
+            </div>
+          )}
           <button className="nk-submit" onClick={() => setSuccess(null)}>
             ＋ Tạo phiếu mới
           </button>
@@ -417,7 +436,7 @@ export default function NhapKho() {
             <div className="nk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="nk-sub">{(emp && emp.branch_name) || ''}</div>
           </div>
-          <button className="nk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
+          <button className="nk-logout" onClick={embed && embed.onBack ? embed.onBack : logout} aria-label={embed && embed.onBack ? 'Quay lại' : 'Đăng xuất'}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>
         <div className="nk-title">📦 Phiếu nhập hàng</div>
       </header>

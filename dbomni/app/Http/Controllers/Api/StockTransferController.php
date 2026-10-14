@@ -86,7 +86,12 @@ class StockTransferController extends Controller
                     $needs[$it->material_id] = ($needs[$it->material_id] ?? 0) + (float) $it->quantity;
                 }
                 // Trừ nguồn, lấy chi tiết từng lô (ném Exception nếu tồn không đủ → chặn cứng)
-                $deducted = $inv->deductMaterialsDetailed((int) $t->from_branch_id, $needs);
+                // Gói 55 p11af: ghi nhật ký xuất kho từng lô phía nguồn (nhập đích không log)
+                $deducted = $inv->deductMaterialsDetailed((int) $t->from_branch_id, $needs, [
+                    'type' => 'transfer',
+                    'id' => $t->id,
+                    'note' => 'Chuyển kho ' . $t->code,
+                ]);
                 $total = 0;
                 $lotRows = []; // Gói 55: gom chi tiết lô để insert 1 lần (tránh last-wins)
                 // Gộp theo nguyên liệu để tránh nhân đôi khi phiếu có 2 dòng cùng NL

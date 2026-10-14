@@ -33,6 +33,7 @@ class MaterialController extends Controller
             // Gói 55 p11o: bỏ trường type — dùng is_semi_finished từ định mức chế biến
             'material_category_id' => 'nullable|exists:material_categories,id', // Gói 22
             'minimum_stock' => 'nullable|numeric|min:0',
+            'waste_threshold_pct' => 'nullable|numeric|min:0|max:100', // Gói 55 p11b: ngưỡng hao hụt cho phép
             'is_active' => 'nullable|boolean', // Gói 55 p11w
             'units' => 'nullable|array', // Gói 55 p11m+p11ab: [{unit_name, conversion_rate}] — conversion_rate = số ĐV mua / 1 ĐV cơ sở
             'units.*.unit_name' => 'required|string|max:30|distinct',
@@ -45,6 +46,7 @@ class MaterialController extends Controller
             'type' => 'raw', // Gói 55 p11o: giữ giá trị mặc định, không dùng nữa
             'material_category_id' => $validated['material_category_id'] ?? null, // Gói 22
             'minimum_stock' => $validated['minimum_stock'] ?? 0,
+            'waste_threshold_pct' => $validated['waste_threshold_pct'] ?? 5, // Gói 55 p11b
             'is_active' => $validated['is_active'] ?? true, // Gói 55 p11w
         ]);
 
@@ -75,6 +77,7 @@ class MaterialController extends Controller
             'unit' => 'sometimes|string|max:20',
             'material_category_id' => 'sometimes|nullable|exists:material_categories,id', // Gói 22
             'minimum_stock' => 'nullable|numeric|min:0',
+            'waste_threshold_pct' => 'nullable|numeric|min:0|max:100', // Gói 55 p11b: ngưỡng hao hụt cho phép
             'units' => 'nullable|array', // Gói 55 p11m+p11ab: [{unit_name, conversion_rate}] — conversion_rate = số ĐV mua / 1 ĐV cơ sở
             'units.*.unit_name' => 'required|string|max:30|distinct',
             'units.*.conversion_rate' => 'required|numeric|min:0.0001',

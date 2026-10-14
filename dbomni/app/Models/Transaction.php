@@ -12,13 +12,17 @@ class Transaction extends Model
 {
     protected $fillable = [
         'code', 'type', 'category_id', 'branch_id', 'partner_id', 'amount', 'paid_amount',
-        'paid_at', 'status', 'payment_method', 'related_type', 'related_id', 'note', 'created_by',
+        'paid_at', 'occurred_at', 'account_id', 'attachment', // Gói 57
+        'approved_by', 'approved_at', // Gói 59: duyệt phiếu (null = chờ duyệt)
+        'status', 'payment_method', 'related_type', 'related_id', 'note', 'created_by',
     ];
 
     protected $casts = [
         'amount' => 'float',
         'paid_amount' => 'float',
         'paid_at' => 'date',
+        'occurred_at' => 'date', // Gói 57
+        'approved_at' => 'datetime', // Gói 59
     ];
 
     public function category(): BelongsTo
@@ -36,10 +40,22 @@ class Transaction extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    // Gói 59: người duyệt phiếu (null = chờ duyệt)
+    public function approver(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
     /** Gói 29: đối tác gắn với phiếu (công nợ). */
     public function partner(): BelongsTo
     {
         return $this->belongsTo(Partner::class);
+    }
+
+    // Gói 57: quỹ/tài khoản tiền của phiếu
+    public function account(): BelongsTo
+    {
+        return $this->belongsTo(Account::class, 'account_id');
     }
 
     /** Gói 29: lịch sử thanh toán trừ dần. */

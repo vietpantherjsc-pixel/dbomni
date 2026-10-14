@@ -200,6 +200,19 @@ export default function PosScreen({ onBackToApp }) {
   const [heldChecked, setHeldChecked] = useState({});
   const [resumingHeldId, setResumingHeldId] = useState(null);
   const [resumingHeldCode, setResumingHeldCode] = useState('');
+  // Gói SEC2: snapshot trạng thái lúc nạp đơn lưu — nếu KH thanh toán mà không sửa gì
+  // thì dùng finalize (giữ mã đơn gốc); nếu có sửa thì tạo đơn mới + hủy đơn cũ như cũ
+  const [resumingHeldSnapshot, setResumingHeldSnapshot] = useState(null);
+  // Chuẩn hóa dòng giỏ để so sánh (bỏ cartItemId/name là field hiển thị)
+  const normCartForCompare = (items) => (items || []).map((it) => ({
+    product_id: Number(it.product_id),
+    product_option_id: it.product_option_id ? Number(it.product_option_id) : null,
+    optionsText: it.optionsText || null,
+    customNote: it.customNote || null,
+    price: Number(it.price),
+    quantity: Number(it.quantity),
+    itemDiscount: Number(it.itemDiscount) || 0,
+  }));
 
   // ---- Khách hàng ----
   const [customerName, setCustomerName] = useState('Khách lẻ');
@@ -663,7 +676,60 @@ export default function PosScreen({ onBackToApp }) {
     // Gói 5: reset CRM
     setMemberCustomer(null); setCustomerName('Khách lẻ');
     setPointsRedeemInput(''); setSelectedPromoId(null); setEligiblePromos([]);
+    // P0-4: xóa nháp giỏ đã lưu (đã thanh toán / xóa giỏ)
+    try { localStorage.removeItem(`pos_cart_draft_${effBranchId || 'none'}`); } catch (e) {}
+    setShowDraftBanner(false);
   };
+
+  // P0-4: persist giỏ hàng vào localStorage — mất điện/F5 không mất giỏ (mỗi CN 1 key riêng)
+  const [showDraftBanner, setShowDraftBanner] = useState(false);
+  const draftRestoredFor = useRef({});
+
+  // Khôi phục nháp giỏ khi có chi nhánh
+  useEffect(() => {
+    const bid = String(effBranchId || '');
+    if (!bid || draftRestoredFor.current[bid]) return;
+    draftRestoredFor.current[bid] = true;
+    if (cart.length > 0 || resumingHeldId) return; // đang có giỏ / đang nạp đơn lưu thì không đè
+    try {
+      const raw = localStorage.getItem(`pos_cart_draft_${bid}`);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (!d || !Array.isArray(d.cart) || d.cart.length === 0) return;
+      setCart(d.cart);
+      if (d.discountType) setDiscountType(d.discountType);
+      if (d.discountValue !== undefined) setDiscountValue(d.discountValue);
+      if (d.selectedTableId !== undefined) setSelectedTableId(d.selectedTableId);
+      if (d.orderType) setOrderType(d.orderType);
+      if (d.customerName) setCustomerName(d.customerName);
+      if (d.guestCount) setGuestCount(d.guestCount);
+      if (d.paymentMethod) setPaymentMethod(d.paymentMethod);
+      if (d.memberCustomer) setMemberCustomer(d.memberCustomer);
+      if (d.pointsRedeemInput !== undefined) setPointsRedeemInput(d.pointsRedeemInput);
+      if (d.selectedPromoId !== undefined) setSelectedPromoId(d.selectedPromoId);
+      if (d.receivedCash !== undefined) setReceivedCash(d.receivedCash);
+      setShowDraftBanner(true);
+    } catch (e) { /* bỏ qua */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effBranchId]);
+
+  // Lưu nháp giỏ mỗi khi thay đổi (debounce 500ms)
+  useEffect(() => {
+    const bid = String(effBranchId || '');
+    if (!bid) return;
+    const t = setTimeout(() => {
+      try {
+        if (cart.length === 0 && !memberCustomer && !discountValue && !selectedTableId) return; // giỏ trống thì không lưu
+        localStorage.setItem(`pos_cart_draft_${bid}`, JSON.stringify({
+          cart, discountType, discountValue, selectedTableId, orderType,
+          customerName, guestCount, paymentMethod, memberCustomer,
+          pointsRedeemInput, selectedPromoId, receivedCash, savedAt: Date.now(),
+        }));
+      } catch (e) { /* bỏ qua (hết quota) */ }
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, discountType, discountValue, selectedTableId, orderType, customerName, guestCount, paymentMethod, memberCustomer, pointsRedeemInput, selectedPromoId, receivedCash, effBranchId]);
 
   // ================= THANH TOÁN =================
   const handleCheckout = async () => {
@@ -674,8 +740,61 @@ export default function PosScreen({ onBackToApp }) {
     if (paymentMethod === 'cash' && Number(receivedCash) < totalAmount) {
       return alert('Số tiền khách đưa không đủ');
     }
+    // P0-5: PTTT chuyển khoản — bắt buộc xác nhận đã nhận tiền trước khi tạo đơn
+    const selPm = payMethods.find((m) => String(m.type) === String(paymentMethod));
+    const isTransfer = String(paymentMethod) === 'transfer' || /chuy.n kho.n/i.test(selPm?.name || '');
+    if (isTransfer) {
+      const ok = window.confirm(
+        `XÁC NHẬN CHUYỂN KHOẢN\n\nSố tiền: ${Number(totalAmount || 0).toLocaleString('vi-VN')}đ\n\nKhách đã chuyển khoản thành công chưa?\n→ Bấm OK khi ĐÃ NHẬN được tiền\n→ Bấm Cancel nếu CHƯA nhận`
+      );
+      if (!ok) return;
+    }
     setIsProcessing(true);
     try {
+      // Gói SEC2: nếu đang sửa đơn lưu mà KHÔNG thay đổi gì so với lúc nạp
+      // -> dùng finalize để GIỮ MÃ ĐƠN gốc (trừ kho 1 lần trong finalize).
+      // Nếu có sửa (thêm/bớt món, đổi CK/KM/điểm/KH/bàn) -> tạo đơn mới + hủy đơn cũ như cũ.
+      let useFinalize = false;
+      if (resumingHeldId && resumingHeldSnapshot) {
+        const currentState = JSON.stringify({
+          cart: normCartForCompare(cart),
+          discountAmount: discountAmount,
+          customerId: memberCustomer?.id || null,
+          orderType: orderType,
+          tableId: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
+          promoId: selectedPromoId || null,
+          pointsRedeem: redeemPreview.points || 0,
+        });
+        useFinalize = currentState === resumingHeldSnapshot;
+      }
+
+      if (useFinalize) {
+        // Thanh toán đơn lưu nguyên trạng — giữ mã đơn gốc
+        const res = await fetch(`${API_BASE}/orders/${resumingHeldId}/finalize`, {
+          method: 'POST', headers: authHeaders(),
+          body: JSON.stringify({ payment_method: paymentMethod }),
+        });
+        const data = await res.json();
+        if (data.success && data.data) {
+          const o = data.data;
+          const completedOrder = {
+            id: o.id,
+            code: o.code,
+            items: [...cart],
+            subtotal: subtotalAmount, discount: discountAmount, total: totalAmount,
+            method: paymentMethod, order_type: orderType,
+            customer_name: customerName.trim() || 'Khách lẻ',
+            table_name: orderType === 'dine_in' ? (tables.find(t => t.id === Number(selectedTableId))?.name || '') : '',
+            date: fmtTime(new Date()),
+          };
+          setLastOrderCompleted(completedOrder);
+          resetCartState();
+          setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null);
+          fetchHeldOrders(); fetchCurrentShift(); fetchTables();
+        } else {
+          alert(data.message || 'Thanh toán đơn lưu thất bại, vui lòng thử lại');
+        }
+      } else {
       const orderPayload = {
         // Gói 55 p11ac: idempotency key chống tạo trùng đơn khi retry
         client_key: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
@@ -715,13 +834,14 @@ export default function PosScreen({ onBackToApp }) {
               body: JSON.stringify({ reason: 'Đã thanh toán (đơn mới ' + completedOrder.code + ')', restock: false }),
             });
           } catch (e) { console.error('Lỗi hủy đơn lưu cũ:', e); }
-          setResumingHeldId(null); setResumingHeldCode('');
+          setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null);
           fetchHeldOrders();
         }
         fetchCurrentShift(); fetchTables();
       } else {
         alert(data.message || 'Tạo đơn thất bại, vui lòng thử lại');
       }
+      } // end else (giỏ có sửa đổi -> tạo đơn mới)
     } catch (err) { alert('Không thể tạo đơn POS'); }
     finally { setIsProcessing(false); }
   };
@@ -767,7 +887,7 @@ export default function PosScreen({ onBackToApp }) {
             });
           } catch (e) { console.error('Lỗi hủy đơn lưu cũ:', e); }
         }
-        setResumingHeldId(null); setResumingHeldCode('');
+        setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null);
         resetCartState();
         fetchHeldOrders(); fetchTables();
       } else {
@@ -810,10 +930,28 @@ export default function PosScreen({ onBackToApp }) {
     }
     setPointsRedeemInput(''); setSelectedPromoId(null);
     setResumingHeldId(o.id); setResumingHeldCode(o.code);
+    // Gói SEC2: snapshot để handleCheckout biết có sửa gì sau khi nạp không
+    setResumingHeldSnapshot(JSON.stringify({
+      cart: normCartForCompare((o.items || []).map((it) => ({
+        product_id: it.product_id,
+        product_option_id: it.product_option_id,
+        optionsText: it.note || null,
+        customNote: null,
+        price: Number(it.unit_price),
+        quantity: it.quantity,
+        itemDiscount: Number(it.discount_amount) || 0,
+      }))),
+      discountAmount: Number(o.discount_amount) || 0,
+      customerId: o.customer_id || null,
+      orderType: o.order_type || 'takeaway',
+      tableId: o.table_id ? Number(o.table_id) : null,
+      promoId: null,
+      pointsRedeem: 0,
+    }));
     setIsHeldDrawerOpen(false); setReceivedCash('');
   };
 
-  const cancelResuming = () => { setResumingHeldId(null); setResumingHeldCode(''); };
+  const cancelResuming = () => { setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null); };
 
   const cancelHeldOrder = async (o, e) => {
     e.stopPropagation();
@@ -1100,6 +1238,14 @@ export default function PosScreen({ onBackToApp }) {
             <div className="mx-3 mt-2 px-3 py-2 bg-amber-500/15 border border-amber-500/40 rounded-lg flex items-center justify-between">
               <span className="text-xs font-semibold text-amber-300">Đang sửa đơn lưu <b>{resumingHeldCode}</b></span>
               <button onClick={cancelResuming} className="text-[11px] text-slate-400 hover:text-slate-200 underline">Bỏ</button>
+            </div>
+          )}
+
+          {/* P0-4: Banner khôi phục giỏ chưa thanh toán (mất điện/F5) */}
+          {showDraftBanner && !resumingHeldId && (
+            <div className="mx-3 mt-2 px-3 py-2 bg-sky-500/15 border border-sky-500/40 rounded-lg flex items-center justify-between">
+              <span className="text-xs font-semibold text-sky-300">↩️ Đã khôi phục giỏ hàng chưa thanh toán</span>
+              <button onClick={() => { resetCartState(); setShowDraftBanner(false); }} className="text-[11px] text-slate-400 hover:text-slate-200 underline">Bỏ giỏ này</button>
             </div>
           )}
 

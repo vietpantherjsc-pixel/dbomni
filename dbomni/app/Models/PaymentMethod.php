@@ -7,7 +7,10 @@ use Illuminate\Database\Eloquent\Model;
 // Gói 52: phương thức thanh toán (tên + loại + kênh áp dụng)
 class PaymentMethod extends Model
 {
-    protected $guarded = [];
+    // Gói SEC2: fillable显式 thay vì $guarded = []
+    protected $fillable = [
+        'name', 'type', 'channels', 'is_active', 'sort_order',
+    ];
 
     protected $casts = [
         'channels' => 'array',

@@ -21,10 +21,12 @@ const EXP_STATUS = {
     expiring_30: { label: 'Sắp hết (≤30 ngày)', cls: 'g' },
 };
 
-const wastePill = (pct) => {
-    const cls = pct === null || pct === undefined ? 'y' : (pct < 2 ? 'g' : (pct <= 5 ? 'y' : 'r'));
+const wastePill = (pct, threshold, overThreshold) => {
+    // Gói 55 p11ag: đỏ khi vượt ngưỡng hao hụt cho phép của từng NL (mặc định 5%)
+    const th = threshold === null || threshold === undefined ? 5 : Number(threshold);
+    const cls = pct === null || pct === undefined ? 'y' : (overThreshold ? 'r' : (pct < 2 ? 'g' : 'y'));
     const txt = pct === null || pct === undefined ? '—' : trimN(pct) + '%';
-    return '<span class="pill ' + cls + '">' + txt + '</span>';
+    return '<span class="pill ' + cls + '" title="Ngưỡng: ' + trimN(th) + '%">' + txt + '</span>';
 };
 
 export default function ReportsInventory() {
@@ -149,28 +151,38 @@ export default function ReportsInventory() {
                         )}
                     </div>
 
-                    {/* 2. HAO HỤT */}
+                    {/* 2. HAO HỤT — Gói 55 p11ag: từ số kiểm kê thực tế (phát hiện bán chui) */}
                     <div className="card">
                         <h3>Báo cáo hao hụt nguyên liệu</h3>
                         <div className="explain">
-                            Tỷ lệ hao hụt = Chênh lệch / Xuất theo BOM. “Thực tế tiêu hao” hiện ước tính bằng
-                            lượng <b>nhập kho trong kỳ</b> (giả định tồn đầu ≈ tồn cuối).
+                            <b>Công thức:</b> Hao hụt = (Tồn đầu kỳ + Nhập trong kỳ − Tồn thực tế kiểm kê) − Tiêu thụ theo BOM.
+                            Dòng có <b>⚠ ước tính</b> là chưa có phiếu kiểm kê → dùng công thức cũ (Nhập − BOM), độ tin cậy thấp.
+                            <b style={{ color: 'var(--red)' }}>% đỏ</b> = vượt ngưỡng hao hụt cho phép → nghi ngờ bán chui/thất thoát.
                         </div>
+                        {data.has_stocktake === false && (
+                            <div style={{ border: '1px solid #f5c2c7', background: '#fff5f5', borderRadius: 8, padding: '10px 14px', marginBottom: 12, color: '#b42318', fontWeight: 600 }}>
+                                ⚠ Chưa có số kiểm kê trong kỳ — số liệu dưới đây chỉ là ước tính. Hãy kiểm kê kho để có số liệu chính xác.
+                            </div>
+                        )}
                         {mats.length === 0 ? (
                             <div className="sub">Chưa có số liệu.</div>
                         ) : (
                         <div className="tbl-wrap"><table className="tbl">
                             <tbody>
-                            <tr><th>Nguyên liệu</th><th className="num">Xuất theo BOM</th><th className="num">Thực tế (nhập)</th><th className="num">Chênh lệch</th><th className="num">% hao hụt</th></tr>
+                            <tr><th>Nguyên liệu</th><th className="num">Tồn đầu kỳ</th><th className="num">Nhập trong kỳ</th><th className="num">Xuất theo BOM</th><th className="num">Tồn thực tế (kiểm kê)</th><th className="num">Hao hụt</th><th className="num">% hao hụt</th></tr>
                             {mats.map((m) => (
-                                <tr key={m.material_id}>
-                                    <td className="prod">{m.material} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({m.unit})</span></td>
-                                    <td className="num">{fmtInt(m.exported_bom_qty)}</td>
+                                <tr key={m.material_id} style={m.over_threshold ? { background: '#fff5f5' } : undefined}>
+                                    <td className="prod">{m.material} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({m.unit})</span>
+                                        {m.is_estimate && <span className="pill y" style={{ marginLeft: 6 }} title="Chưa có phiếu kiểm kê — số liệu chỉ là ước tính">⚠ ước tính</span>}
+                                    </td>
+                                    <td className="num">{m.opening_qty === null || m.opening_qty === undefined ? '—' : fmtInt(m.opening_qty)}</td>
                                     <td className="num">{fmtInt(m.imported_qty)}</td>
+                                    <td className="num">{fmtInt(m.exported_bom_qty)}</td>
+                                    <td className="num">{m.actual_qty === null || m.actual_qty === undefined ? '—' : fmtInt(m.actual_qty)}</td>
                                     <td className="num" style={{ color: m.diff > 0 ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>
                                         {(m.diff > 0 ? '+' : '') + fmtInt(m.diff)}
                                     </td>
-                                    <td className="num"><span dangerouslySetInnerHTML={{ __html: wastePill(m.waste_pct) }} /></td>
+                                    <td className="num"><span dangerouslySetInnerHTML={{ __html: wastePill(m.waste_pct, m.threshold_pct, m.over_threshold) }} /></td>
                                 </tr>
                             ))}
                             </tbody>
@@ -178,8 +190,9 @@ export default function ReportsInventory() {
                         )}
                         <div className="legend" style={{ marginTop: 10 }}>
                             <span><span className="pill g">&lt; 2%</span> Tốt</span>
-                            <span><span className="pill y">2–5%</span> Cần theo dõi</span>
-                            <span><span className="pill r">&gt; 5%</span> Cảnh báo</span>
+                            <span><span className="pill y">2% – ngưỡng</span> Cần theo dõi</span>
+                            <span><span className="pill r">&gt; ngưỡng</span> Cảnh báo thất thoát</span>
+                            <span><span className="pill y">⚠ ước tính</span> Chưa có số kiểm kê</span>
                         </div>
                     </div>
 
@@ -215,7 +228,7 @@ export default function ReportsInventory() {
                     <div className="foot">
                         <h4>Ghi chú về số liệu</h4>
                         <ul>
-                            <li>“Thực tế tiêu hao” hiện dùng lượng nhập kho trong kỳ làm ước tính (giả định tồn đầu ≈ tồn cuối) — sẽ chính xác khi có lịch sử kiểm kho.</li>
+                            <li>Hao hụt = (Tồn đầu kỳ + Nhập trong kỳ − Tồn thực tế kiểm kê) − Tiêu thụ BOM. Dòng “⚠ ước tính” là chưa có phiếu kiểm kê.</li>
                             <li>Hạn tồn kho chỉ liệt kê lô còn tồn (số lượng &gt; 0) có hạn SD trong 30 ngày tới hoặc đã quá hạn.</li>
                         </ul>
                     </div>

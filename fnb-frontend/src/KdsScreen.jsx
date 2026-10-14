@@ -24,6 +24,9 @@ const itemName = (it) => {
   return { base, opts: opts.filter(Boolean).join(', ') };
 };
 
+// P0-2: escape HTML cho ghi chú món khi in (chống vỡ layout tem/bill)
+const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 // In tem 50x30 qua hộp thoại in của trình duyệt
 function printLabels(order, itemIds) {
   const items = [];
@@ -35,7 +38,8 @@ function printLabels(order, itemIds) {
     const { base, opts } = itemName(it);
     for (let q = 0; q < (it.quantity || 1); q++) {
       seq++;
-      items.push({ seq, total, name: base, opts });
+      // P0-2: in ghi chú món lên tem để barista pha đúng
+      items.push({ seq, total, name: base, opts, note: it.note || '' });
     }
   }
   if (!items.length) { alert('Không có món nào cần in tem.'); return; }
@@ -44,8 +48,9 @@ function printLabels(order, itemIds) {
 .label{width:50mm;height:30mm;padding:2mm;box-sizing:border-box;page-break-after:always;overflow:hidden}
 .code{font-family:monospace;font-size:9pt;font-weight:bold}
 .name{font-size:11pt;font-weight:bold;margin:1mm 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.opts{font-size:8pt;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}</style></head><body>` +
-    items.map((l) => `<div class="label"><div class="code">${order.code} - ${l.seq}/${l.total}</div><div class="name">${l.name}</div><div class="opts">${l.opts}</div></div>`).join('') +
+.opts{font-size:8pt;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note{font-size:9pt;font-weight:bold;color:#000;background:#ffe08a;padding:0.5mm 1mm;margin-top:0.5mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}</style></head><body>` +
+    items.map((l) => `<div class="label"><div class="code">${order.code} - ${l.seq}/${l.total}</div><div class="name">${escHtml(l.name)}</div><div class="opts">${escHtml(l.opts)}</div>${l.note ? `<div class="note">📝 ${escHtml(l.note)}</div>` : ''}</div>`).join('') +
     `</body></html>`;
   const w = window.open('', '_blank');
   w.document.write(html);
@@ -60,7 +65,9 @@ function printBill(order) {
     const { base, opts } = itemName(it);
     const qty = it.quantity || 1;
     const amt = Number(it.line_total || it.price * qty || 0);
-    return `<tr><td>${qty}x ${base}${opts ? `<br><small>${opts}</small>` : ''}</td><td align="right">${amt.toLocaleString('vi-VN')}</td></tr>`;
+    // P0-2: in ghi chú món lên bill
+    const noteHtml = it.note ? `<br><small>📝 ${escHtml(it.note)}</small>` : '';
+    return `<tr><td>${qty}x ${escHtml(base)}${opts ? `<br><small>${escHtml(opts)}</small>` : ''}${noteHtml}</td><td align="right">${amt.toLocaleString('vi-VN')}</td></tr>`;
   }).join('');
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bill ${order.code}</title>
 <style>@media print{@page{size:80mm auto;margin:0}}body{margin:0;font-family:monospace;font-size:10pt;padding:3mm}
@@ -79,6 +86,8 @@ td{padding:1mm 0;border-bottom:1px dashed #999}.t{font-weight:bold;font-size:12p
 
 // Dòng đơn hàng dạng danh sách
 function KdsOrderRow({ ord, elapsed, typeLabel, children }) {
+  // P0-2: badge cảnh báo khi có món ghi chú (ít đá/ít đường...) để barista mở chi tiết
+  const hasItemNote = (ord.items || []).some((it) => it.note && String(it.note).trim());
   return (
     <div className="bg-slate-800/90 rounded-2xl p-4 border border-slate-700 space-y-2.5">
       <div className="flex justify-between items-center">
@@ -87,6 +96,11 @@ function KdsOrderRow({ ord, elapsed, typeLabel, children }) {
           <Clock className="w-3.5 h-3.5" /> {elapsed} phút
         </span>
       </div>
+      {hasItemNote && (
+        <div className="px-2.5 py-1.5 rounded-xl bg-amber-400 text-slate-900 text-xs font-extrabold animate-pulse">
+          📝 Đơn có ghi chú món — bấm "Xem" để đọc kỹ
+        </div>
+      )}
       <div className="flex items-center justify-between">
         {typeLabel ? (
           <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 font-bold border border-sky-500/30 text-xs">
@@ -122,6 +136,12 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
                 <div>
                   <span className="font-bold">{it.quantity}x {base}</span>
                   {opts && <div className="text-xs text-slate-400">{opts}</div>}
+                  {/* P0-2: ghi chú từng món (ít đá/ít đường...) hiển thị nổi bật */}
+                  {it.note && (
+                    <div className="mt-1 inline-block px-2 py-1 rounded-lg bg-amber-400 text-slate-900 text-xs font-extrabold">
+                      📝 {it.note}
+                    </div>
+                  )}
                 </div>
                 <span className="font-mono">{Number(it.line_total || 0).toLocaleString('vi-VN')}đ</span>
               </div>

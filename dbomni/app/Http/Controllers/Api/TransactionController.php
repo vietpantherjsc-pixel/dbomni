@@ -25,12 +25,15 @@ class TransactionController extends Controller
     /** Danh sách phiếu + tổng kết kỳ theo bộ lọc. */
     public function index(Request $request): JsonResponse
     {
-        $q = Transaction::with(['category:id,name,type', 'branch:id,name', 'partner:id,code,name'])
+        $q = Transaction::with(['category:id,name,type', 'branch:id,name', 'partner:id,code,name', 'account:id,name,type'])
             ->when($request->filled('type'), fn($qq) => $qq->where('type', $request->type))
             ->when($request->filled('branch_id'), fn($qq) => $qq->where('branch_id', $request->branch_id))
             ->when($request->filled('category_id'), fn($qq) => $qq->where('category_id', $request->category_id))
             ->when($request->filled('partner_id'), fn($qq) => $qq->where('partner_id', $request->partner_id))
             ->when($request->filled('status'), fn($qq) => $qq->where('status', $request->status))
+            ->when($request->filled('account_id'), fn($qq) => $qq->where('account_id', $request->account_id)) // Gói 57
+            // Gói 59: lọc phiếu chờ duyệt cho trang duyệt của quản lý
+            ->when($request->input('pending_approval') == '1', fn($qq) => $qq->whereNull('approved_by'))
             ->when($request->filled('date_from'), fn($qq) => $qq->whereDate('paid_at', '>=', $request->date_from))
             ->when($request->filled('date_to'), fn($qq) => $qq->whereDate('paid_at', '<=', $request->date_to))
             ->when($request->filled('search'), function ($qq) use ($request) {
@@ -47,7 +50,33 @@ class TransactionController extends Controller
         $summary['balance'] = $summary['total_income'] - $summary['total_expense'];
 
         $page = $q->paginate(20)->appends($request->query());
-        return response()->json(['success' => true, 'data' => $page->items(), 'pagination' => [
+        $items = collect($page->items());
+
+        // Gói 57: running balance — số dư lũy kế theo thứ tự thời gian.
+        // Nếu lọc theo 1 quỹ: bắt đầu từ opening_balance của quỹ;
+        // ngược lại bắt đầu từ 0 (chỉ mang tính tham khảo vì nhiều quỹ).
+        $opening = 0.0;
+        if ($request->filled('account_id') && class_exists(\App\Models\Account::class)) {
+            $acc = \App\Models\Account::find($request->account_id);
+            if ($acc) $opening = (float) $acc->opening_balance;
+        }
+        $chrono = $items->sortBy([['paid_at', 'asc'], ['id', 'asc']])->values();
+        $bal = $opening;
+        $rbMap = [];
+        foreach ($chrono as $tx) {
+            if ($tx->status === 'paid') {
+                $bal += $tx->type === 'income' ? (float) $tx->amount : -(float) $tx->amount;
+            }
+            $rbMap[$tx->id] = round($bal, 0);
+        }
+        $data = $items->map(function ($tx) use ($rbMap) {
+            $d = $tx->toArray();
+            $d['running_balance'] = $rbMap[$tx->id] ?? null;
+            $d['is_approved'] = $tx->approved_by !== null; // Gói 59
+            return $d;
+        })->values();
+
+        return response()->json(['success' => true, 'data' => $data, 'pagination' => [
             'current_page' => $page->currentPage(),
             'last_page' => $page->lastPage(),
             'total' => $page->total(),
@@ -64,6 +93,9 @@ class TransactionController extends Controller
             'is_debt' => 'nullable|boolean', // Gói 29: tick "Ghi công nợ" -> pending, chưa trả
             'amount' => 'required|numeric|min:1',
             'paid_at' => 'nullable|date',
+            'occurred_at' => 'nullable|date', // Gói 57: ngày thực chi/phát sinh
+            'account_id' => 'nullable|exists:accounts,id', // Gói 57: quỹ/tài khoản
+            'attachment' => 'nullable|string|max:255', // Gói 57: path ảnh chứng từ (frontend upload riêng)
             'status' => 'nullable|in:paid,pending',
             'payment_method' => 'nullable|string|max:30',
             'note' => 'nullable|string|max:500',
@@ -79,24 +111,35 @@ class TransactionController extends Controller
         $isDebt = (bool) ($v['is_debt'] ?? false);
         $status = $isDebt ? 'pending' : ($v['status'] ?? 'paid');
 
-        $tx = DB::transaction(function () use ($v, $status) {
+        // Gói 59: NV tạo → chờ quản lý duyệt; admin tạo → duyệt ngay.
+        // NV mobile: ép chi nhánh theo tài khoản, không nhận từ client.
+        $actor = $request->user();
+        $isEmployee = $actor instanceof \App\Models\Employee;
+        $branchId = $isEmployee ? (int) $actor->branch_id : ($v['branch_id'] ?? null);
+
+        $tx = DB::transaction(function () use ($v, $status, $branchId, $isEmployee) {
             return Transaction::create([
                 'code' => Transaction::nextCode($v['type']),
                 'type' => $v['type'],
                 'category_id' => $v['category_id'],
-                'branch_id' => $v['branch_id'] ?? null,
+                'branch_id' => $branchId,
                 'partner_id' => $v['partner_id'] ?? null,
                 'amount' => $v['amount'],
                 'paid_amount' => $status === 'paid' ? $v['amount'] : 0,
                 'paid_at' => $v['paid_at'] ?? now()->toDateString(),
+                'occurred_at' => $v['occurred_at'] ?? null, // Gói 57
+                'account_id' => $v['account_id'] ?? null, // Gói 57
+                'attachment' => $v['attachment'] ?? null, // Gói 57
+                'approved_by' => $isEmployee ? null : auth()->id(), // Gói 59
+                'approved_at' => $isEmployee ? null : now(), // Gói 59
                 'status' => $status,
                 'payment_method' => $v['payment_method'] ?? null,
                 'note' => $v['note'] ?? null,
-                'created_by' => auth()->id(),
+                'created_by' => $isEmployee ? null : auth()->id(), // Gói 59: NV không có users.id
             ]);
         });
 
-        return response()->json(['success' => true, 'data' => $tx->load('category', 'branch', 'partner')], 201);
+        return response()->json(['success' => true, 'data' => $tx->load('category', 'branch', 'partner', 'account')], 201);
     }
 
     public function update(Request $request, int $id): JsonResponse
@@ -117,6 +160,9 @@ class TransactionController extends Controller
             'partner_id' => 'nullable|exists:partners,id', // Gói 29
             'amount' => 'sometimes|numeric|min:1',
             'paid_at' => 'nullable|date',
+            'occurred_at' => 'nullable|date', // Gói 57
+            'account_id' => 'nullable|exists:accounts,id', // Gói 57
+            'attachment' => 'nullable|string|max:255', // Gói 57
             'status' => 'nullable|in:paid,pending',
             'payment_method' => 'nullable|string|max:30',
             'note' => 'nullable|string|max:500',
@@ -203,6 +249,19 @@ class TransactionController extends Controller
             'transaction' => $fresh,
             'remaining' => $fresh->remaining(),
         ]]);
+    }
+
+    // Gói 59: quản lý duyệt phiếu do NV tạo (route đặt trong group permission:finance.manage).
+    public function approve(int $id): JsonResponse
+    {
+        $tx = Transaction::findOrFail($id);
+        if ($tx->approved_by !== null) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã được duyệt trước đó.'], 422);
+        }
+        $tx->update(['approved_by' => auth()->id(), 'approved_at' => now()]);
+        $d = $tx->fresh()->toArray();
+        $d['is_approved'] = true;
+        return response()->json(['success' => true, 'data' => $d]);
     }
 
     /** Sửa danh mục (tên; loại không cho đổi nếu đã có phiếu). */

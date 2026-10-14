@@ -149,7 +149,7 @@ export default function Inventory() {
 function StockTab({ stock, materials, categories, onChange, addSignal, branchId }) {
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState(null); // null = thêm mới
-    const [form, setForm] = useState({ name: '', unit: 'g', material_category_id: '', minimum_stock: 0 });
+    const [form, setForm] = useState({ name: '', unit: 'g', material_category_id: '', minimum_stock: 0, waste_threshold_pct: 5 });
     // Gói 55 p11m: nhiều đơn vị quy đổi [{unit_name, conversion_rate}]
     const [units, setUnits] = useState([]);
     const [newUnit, setNewUnit] = useState({ unit_name: '', conversion_rate: '' });
@@ -433,7 +433,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
     const resetForm = () => {
         setShowForm(false);
         setEditingId(null);
-        setForm({ name: '', unit: 'g', material_category_id: '', minimum_stock: 0, is_active: true }); // Gói 55 p11aa
+        setForm({ name: '', unit: 'g', material_category_id: '', minimum_stock: 0, waste_threshold_pct: 5, is_active: true }); // Gói 55 p11aa
         setUnits([]); setNewUnit({ unit_name: '', conversion_rate: '' });
         setLinkedProducts([]);
     };
@@ -454,6 +454,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
             unit: m.unit,
             material_category_id: m.material_category_id ?? '',
             minimum_stock: m.minimum_stock ?? 0,
+            waste_threshold_pct: m.waste_threshold_pct ?? 5, // Gói 55 p11b
             is_active: m.is_active ?? true, // Gói 55 p11aa
         });
         // Gói 55 p11m: nạp đơn vị quy đổi + mặt hàng liên kết
@@ -490,6 +491,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                 is_active: form.is_active ?? true, // Gói 55 p11aa
                 material_category_id: form.material_category_id === '' ? null : Number(form.material_category_id),
                 minimum_stock: Number(form.minimum_stock) || 0,
+                waste_threshold_pct: Math.min(100, Math.max(0, Number(form.waste_threshold_pct) || 0)), // Gói 55 p11b
                 units: units.map((u) => ({ unit_name: u.unit_name.trim(), conversion_rate: Number(u.conversion_rate) })),
             };
             let res;
@@ -521,6 +523,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
     };
 
     // Gói 55 p11: điều chỉnh tồn nhanh ± (mở popup nhập số lượng)
+    // Gói 55 p11ag: backend bắt buộc lý do (min 10 ký tự) — prompt thêm lý do
     const quickAdjust = async (s, dir) => {
         const qtyStr = window.prompt(
             `${dir > 0 ? 'Nhập' : 'Xuất'} nhanh: ${s.name}\nNhập số lượng (${s.unit}):`, '1'
@@ -528,11 +531,17 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
         if (qtyStr === null) return;
         const qty = Number(qtyStr);
         if (!qty || qty <= 0) { alert('Số lượng phải > 0.'); return; }
+        const reason = window.prompt(
+            `Lý do điều chỉnh kho (${dir > 0 ? 'nhập' : 'xuất'} ${qty} ${s.unit} — ${s.name}):\n(Bắt buộc, tối thiểu 10 ký tự)`
+        );
+        if (reason === null) return;
+        if (!reason || reason.trim().length < 10) { alert('Lý do phải từ 10 ký tự trở lên.'); return; }
         try {
             await axios.post(`${API}/inventory/quick-adjust`, {
                 material_id: s.material_id,
                 quantity: dir > 0 ? qty : -qty,
                 branch_id: branchId, // Gói 55: chi nhánh hiện tại thay vì hardcode 1
+                reason: reason.trim(),
             });
             onChange();
         } catch (err) {
@@ -685,6 +694,12 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                     <div>
                         <label className="text-xs text-gray-500">Tồn tối thiểu (báo hết)</label>
                         <input type="number" min="0" value={form.minimum_stock} onChange={(e) => setForm({ ...form, minimum_stock: e.target.value })}
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                    </div>
+                    {/* Gói 55 p11b: ngưỡng hao hụt cho phép (%) — báo cáo đánh dấu đỏ khi vượt */}
+                    <div>
+                        <label className="text-xs text-gray-500">Ngưỡng hao hụt cho phép (%)</label>
+                        <input type="number" min="0" max="100" step="0.5" value={form.waste_threshold_pct} onChange={(e) => setForm({ ...form, waste_threshold_pct: e.target.value })}
                             className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
                     </div>
                     {/* Gói 55 p11aa: trạng thái hoạt động/ngưng bán */}

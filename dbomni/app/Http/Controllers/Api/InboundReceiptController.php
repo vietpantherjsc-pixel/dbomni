@@ -43,6 +43,10 @@ class InboundReceiptController extends Controller
         // NV mobile: ép chi nhánh theo token, không nhận từ client
         $branchId = $isEmployee ? (int) $actor->branch_id : (int) $v['branch_id'];
 
+        // Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất (cùng NL + NCC).
+        // Chỉ cảnh báo, không chặn. Tính trước transaction (read-only).
+        $priceWarnings = $this->detectPriceIncreases($v, $branchId);
+
         try {
             $receipt = DB::transaction(function () use ($v, $branchId, $actor, $isEmployee) {
                 $totals = $this->calcTotals($v);
@@ -60,7 +64,8 @@ class InboundReceiptController extends Controller
                     'vat_amount' => $totals['vat_amount'],
                     'grand_total' => $totals['grand_total'],
                     'payment_type' => $v['payment_type'] ?? 'paid',
-                    'status' => 'confirmed',
+                    // Gói 59: NV tạo → nháp chờ quản lý duyệt; admin tạo → xác nhận ngay
+                    'status' => $isEmployee ? 'draft' : 'confirmed',
                     'note' => $v['note'] ?? null,
                     'created_by_user_id' => !$isEmployee && $actor instanceof \App\Models\User ? $actor->id : null,
                     'created_by_employee_id' => $isEmployee ? $actor->id : null,
@@ -84,6 +89,10 @@ class InboundReceiptController extends Controller
                     }
                     $baseQty = (float) $item['purchase_quantity'] * $rate;
                     $lineTotal = (float) $item['purchase_quantity'] * (float) ($item['unit_cost'] ?? 0);
+                    // Gói 55 p11ae: batch.unit_cost phải là giá theo ĐƠN VỊ CƠ SỞ
+                    // (trừ kho tính theo baseQty), nên chia cho rate.
+                    // Giá theo đơn vị mua giữ nguyên ở receipt item.
+                    $batchUnitCost = $rate > 0 ? (float) ($item['unit_cost'] ?? 0) / $rate : (float) ($item['unit_cost'] ?? 0);
                     $batch = Batch::create([
                         'material_id' => $material->id,
                         'branch_id' => $branchId,
@@ -91,7 +100,7 @@ class InboundReceiptController extends Controller
                         'batch_code' => $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8))),
                         'initial_quantity' => $baseQty,
                         'current_quantity' => $baseQty,
-                        'unit_cost' => $item['unit_cost'] ?? 0,
+                        'unit_cost' => $batchUnitCost,
                         'expired_at' => $item['expired_at'] ?? null,
                         'status' => 'active',
                     ]);
@@ -117,7 +126,60 @@ class InboundReceiptController extends Controller
             'success' => true,
             'message' => 'Đã tạo phiếu nhập ' . $receipt->code . '.',
             'data' => $receipt->load(['items.material', 'partner']),
+            // Gói 55 p11b: cảnh báo giá nhập tăng (frontend hiện banner vàng)
+            'price_warnings' => $priceWarnings,
         ], 201);
+    }
+
+    // Gói 55 p11b: so sánh đơn giá (quy về đơn vị cơ sở) với lần nhập gần nhất
+    // cùng nguyên liệu + cùng NCC. Tăng vượt ngưỡng settings.price_increase_alert_pct
+    // (mặc định 10%) thì trả về warning — không chặn phiếu.
+    private function detectPriceIncreases(array $v, int $branchId): array
+    {
+        $alertPct = (float) \App\Models\Setting::get('price_increase_alert_pct', '10');
+        if ($alertPct <= 0) return [];
+        $partnerId = $v['partner_id'] ?? null;
+        $warnings = [];
+        foreach ($v['items'] ?? [] as $item) {
+            $materialId = (int) ($item['material_id'] ?? 0);
+            $newBaseCost = (float) ($item['unit_cost'] ?? 0);
+            if ($materialId <= 0 || $newBaseCost <= 0) continue;
+            // Quy về đơn vị cơ sở để so sánh đúng (giống logic store)
+            $material = Material::find($materialId);
+            if ($material) {
+                $inputUnit = $item['purchase_unit'] ?? null;
+                $rate = 1;
+                if ($inputUnit && $inputUnit !== $material->unit) {
+                    $mu = $material->units()->where('unit_name', $inputUnit)->first();
+                    $rate = $mu ? (float) $mu->conversion_rate : (float) ($material->conversion_rate ?: 1);
+                }
+                if ($rate > 0) $newBaseCost = $newBaseCost / $rate;
+            }
+            // Lần nhập gần nhất cùng NL (+ cùng NCC nếu có)
+            $q = \App\Models\InboundReceiptItem::where('material_id', $materialId)
+                ->whereHas('receipt', function ($rq) use ($branchId, $partnerId) {
+                    $rq->where('branch_id', $branchId)->where('status', 'confirmed');
+                    if ($partnerId) $rq->where('partner_id', $partnerId);
+                })
+                ->orderByDesc('id');
+            $last = $q->first();
+            if (!$last) continue;
+            $lastRate = (float) ($last->conversion_rate ?: 1);
+            $lastBaseCost = $lastRate > 0 ? (float) $last->unit_cost / $lastRate : (float) $last->unit_cost;
+            if ($lastBaseCost <= 0) continue;
+            $pct = ($newBaseCost - $lastBaseCost) / $lastBaseCost * 100;
+            if ($pct >= $alertPct) {
+                $warnings[] = [
+                    'material_id' => $materialId,
+                    'material_name' => $material?->name ?? ('NL #' . $materialId),
+                    'unit' => $material?->unit ?? '',
+                    'old_price' => round($lastBaseCost, 2),
+                    'new_price' => round($newBaseCost, 2),
+                    'pct' => round($pct, 1),
+                ];
+            }
+        }
+        return $warnings;
     }
 
     // Admin sửa phiếu khi có sai sót: chỉ khi chưa phát sinh thanh toán công nợ

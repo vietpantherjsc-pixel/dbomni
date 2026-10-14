@@ -44,6 +44,7 @@ import NhapKho from './pages/NhapKho'; // Gói 43: trang nhập hàng NV (public
 import XuatKho from './pages/XuatKho'; // Gói 55 p11z: trang xuất kho NV (public)
 import ChuyenKho from './pages/ChuyenKho'; // Gói 55 p11z: trang chuyển kho NV (public)
 import XinNghi from './pages/XinNghi'; // Gói 46: trang NV xin nghỉ theo ca (public)
+import StaffHub from './pages/StaffHub'; // Gói 59: hub nhân viên (public, QR tại quầy)
 import WorkShifts from './pages/admin/WorkShifts'; // Gói 35: ca làm việc
 import AttendanceGrid from './pages/admin/AttendanceGrid'; // Gói 35: bảng chấm công tuần
 import LeaveRequests from './pages/admin/LeaveRequests'; // Gói 35: yêu cầu nghỉ
@@ -98,6 +99,7 @@ const App = () => {
                     <Route path="/xuat-kho" element={<XuatKho />} /> {/* Gói 55 p11z */}
                     <Route path="/chuyen-kho" element={<ChuyenKho />} /> {/* Gói 55 p11z */}
                     <Route path="/xin-nghi" element={<XinNghi />} /> {/* Gói 46 */}
+                    <Route path="/nhan-vien" element={<StaffHub />} /> {/* Gói 59: hub NV (QR tại quầy) */}
 
                     {/* Các Route Bảo mật */}
                     <Route 

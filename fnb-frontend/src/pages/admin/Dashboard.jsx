@@ -55,6 +55,10 @@ const Dashboard = () => {
     // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
     const branchCtx = useBranch();
     const branchId = (branchCtx && branchCtx.branchId) || '0';
+    // Gói 55 p11af (P0-14): ngưỡng cảnh báo Food cost % (mặc định 30)
+    const [foodCostAlertPct, setFoodCostAlertPct] = useState(30);
+    // Gói 56: Prime Cost % từ API overview (giá vốn + nhân công)
+    const [primeCostPct, setPrimeCostPct] = useState(null);
 
     useEffect(() => {
         const fetchStats = async () => {
@@ -74,6 +78,22 @@ const Dashboard = () => {
             }
         };
         fetchStats();
+    }, [range, branchId]);
+
+    useEffect(() => {
+        // Gói 55 p11af: lấy ngưỡng cảnh báo Food cost từ Thiết lập
+        axios.get(`${API}/settings`).then((res) => {
+            const v = Number(res.data?.food_cost_alert_pct);
+            if (v > 0) setFoodCostAlertPct(v);
+        }).catch(() => {});
+        // Gói 56: lấy Prime Cost % từ API overview
+        const bq = branchId !== '0' ? `&branch_id=${branchId}` : '';
+        const ovPeriod = range === 'today' ? 'day' : range === '7d' ? 'week' : 'month';
+        axios.get(`${API}/reports/overview?period=${ovPeriod}${bq}`)
+            .then((res) => {
+                const v = res.data?.data?.profit?.prime_cost_pct;
+                if (v !== null && v !== undefined) setPrimeCostPct(v);
+            }).catch(() => {});
     }, [range, branchId]);
 
     return (
@@ -116,12 +136,57 @@ const Dashboard = () => {
                             <StatCell label="Doanh thu" value={fmtMoney(data?.revenue)} hot />
                         </div>
 
-                        {/* Hàng 2: 4 thẻ thống kê */}
-                        <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        {/* Hàng 2: thẻ thống kê */}
+                        {/* Gói 55 p11af (P0-14): thêm thẻ Food cost % — báo đỏ khi vượt ngưỡng */}
+                        {/* Gói 56: thêm thẻ Prime Cost % — báo đỏ khi >55% */}
+                        <div className="mt-4 grid grid-cols-2 lg:grid-cols-6 gap-3">
                             <StatCard label="Khách hàng" value={fmtNum(data?.customers_count)} />
                             <StatCard label="Hóa đơn" value={fmtNum(data?.orders_count)} />
                             <StatCard label="TB món / hóa đơn" value={fmtNum(data?.avg_items_per_order)} />
                             <StatCard label="TB doanh thu / hóa đơn" value={fmtMoney(data?.avg_revenue_per_order)} />
+                            <div className="m-card px-5 py-4">
+                                <div className="m-kicker">Food cost %</div>
+                                <div className={`mt-1.5 text-[26px] font-bold m-num ${
+                                    (data?.food_cost_pct ?? 0) > foodCostAlertPct
+                                        ? 'text-[var(--m-danger)]'
+                                        : 'text-[var(--m-ink)]'
+                                }`}>
+                                    {data?.food_cost_pct !== null && data?.food_cost_pct !== undefined
+                                        ? `${data.food_cost_pct}%`
+                                        : 'N/A'}
+                                </div>
+                                {(data?.food_cost_pct ?? 0) > foodCostAlertPct && (
+                                    <div className="mt-1 text-[12px] font-semibold text-[var(--m-danger)]">
+                                        ⚠ Vượt ngưỡng {foodCostAlertPct}%
+                                    </div>
+                                )}
+                                {data?.food_cost_value > 0 && (
+                                    <div className="mt-1 text-[12px] text-[var(--m-ink-faint)]">
+                                        Giá vốn: {fmtMoney(data.food_cost_value)}
+                                    </div>
+                                )}
+                            </div>
+                            {/* Gói 56: thẻ Prime Cost % — đỏ khi >55% */}
+                            <div className="m-card px-5 py-4" title="Giá vốn hàng bán + chi phí nhân công">
+                                <div className="m-kicker">Prime Cost %</div>
+                                <div className={`mt-1.5 text-[26px] font-bold m-num ${
+                                    (primeCostPct ?? 0) > 55
+                                        ? 'text-[var(--m-danger)]'
+                                        : 'text-[var(--m-ink)]'
+                                }`}>
+                                    {primeCostPct !== null && primeCostPct !== undefined
+                                        ? `${primeCostPct}%`
+                                        : 'N/A'}
+                                </div>
+                                {(primeCostPct ?? 0) > 55 && (
+                                    <div className="mt-1 text-[12px] font-semibold text-[var(--m-danger)]">
+                                        ⚠ Vượt ngưỡng 55%
+                                    </div>
+                                )}
+                                <div className="mt-1 text-[12px] text-[var(--m-ink-faint)]">
+                                    Giá vốn + nhân công
+                                </div>
+                            </div>
                         </div>
 
                         {/* Biểu đồ */}
