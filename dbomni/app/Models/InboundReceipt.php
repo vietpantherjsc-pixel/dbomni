@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Helpers\CodeGenerator;
 
 // Gói 43: phiếu nhập hàng theo hóa đơn nhà cung cấp.
 class InboundReceipt extends Model
@@ -33,8 +34,10 @@ class InboundReceipt extends Model
 
     public static function nextCode(): string
     {
-        $datePart = now()->format('Ymd');
-        $count = static::whereDate('created_at', now()->toDateString())->count();
-        return sprintf('PN-%s-%04d', $datePart, $count + 1);
+        // Gói 55 p11w: lockForUpdate để tránh 2 request song song sinh trùng mã
+        // (hàm này luôn được gọi bên trong DB::transaction)
+        // Gói 55 p11ab: prefix + số chữ số đọc từ Thiết lập
+        $count = static::whereDate('created_at', now()->toDateString())->lockForUpdate()->count();
+        return CodeGenerator::generate('inbound', $count + 1, true);
     }
 }

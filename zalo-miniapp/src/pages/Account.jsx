@@ -1,7 +1,121 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, API, fmt, imgUrl, getProfile, setProfile } from '../api';
 import { fmtDate } from '../utils/format';
 import { TabBar } from './Home';
+
+// Gói 55 p5: Mục thu gọn — mặc định đóng, bấm mới xổ xuống (tránh trang dài)
+function Collapsible({ icon, title, badge, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ marginTop: 12, border: '1px solid #eee', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px', cursor: 'pointer', fontWeight: 700, fontSize: 15 }}
+      >
+        <span>{icon}</span>
+        <span style={{ flex: 1 }}>{title}</span>
+        {badge && <span style={{ fontSize: 11, background: '#f0f4ff', color: '#24305E', padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>{badge}</span>}
+        <span style={{ fontSize: 12, color: '#999', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>▼</span>
+      </div>
+      {open && <div style={{ padding: '0 16px 16px', borderTop: '1px solid #f5f5f5' }}>{children}</div>}
+    </div>
+  );
+}
+
+// Gói 55 p5: Quản lý quyền — xin trực tiếp, hiện trạng thái từng quyền
+function PermissionManager() {
+  const [perms, setPerms] = useState({ zalo: 'unknown', location: 'unknown', camera: 'unknown' });
+
+  const checkAll = async () => {
+    const next = { ...perms };
+    // Vị trí: dùng Permissions API nếu có
+    try {
+      if (navigator.permissions?.query) {
+        const r = await navigator.permissions.query({ name: 'geolocation' });
+        next.location = r.state === 'granted' ? 'granted' : r.state === 'denied' ? 'denied' : 'unknown';
+        const c = await navigator.permissions.query({ name: 'camera' });
+        next.camera = c.state === 'granted' ? 'granted' : c.state === 'denied' ? 'denied' : 'unknown';
+      }
+    } catch {}
+    // Zalo: kiểm tra đã lưu profile từ Zalo chưa
+    try {
+      const zp = localStorage.getItem('zm_zalo_profile');
+      if (zp) next.zalo = 'granted';
+    } catch {}
+    setPerms(next);
+  };
+
+  useEffect(() => { checkAll(); }, []);
+
+  const requestLocation = () => {
+    if (!navigator.geolocation) { alert('Thiết bị không hỗ trợ định vị.'); return; }
+    navigator.geolocation.getCurrentPosition(
+      () => { setPerms((p) => ({ ...p, location: 'granted' })); alert('Đã cấp quyền vị trí.'); },
+      (err) => {
+        if (err.code === 1) {
+          setPerms((p) => ({ ...p, location: 'denied' }));
+          alert('Bạn đã từ chối quyền vị trí. Hãy bật lại trong Cài đặt trình duyệt → Quyền riêng tư → Vị trí.');
+        }
+      },
+      { timeout: 10000 }
+    );
+  };
+
+  const requestCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.getTracks().forEach((t) => t.stop());
+      setPerms((p) => ({ ...p, camera: 'granted' }));
+      alert('Đã cấp quyền camera.');
+    } catch {
+      setPerms((p) => ({ ...p, camera: 'denied' }));
+      alert('Bạn đã từ chối quyền camera. Hãy bật lại trong Cài đặt trình duyệt → Quyền riêng tư → Camera.');
+    }
+  };
+
+  const requestZalo = () => {
+    // Gói 55 p5: xin quyền thông tin Zalo (qua Zalo SDK khi có, fallback nhập tay)
+    alert('Trên Zalo Mini App thật, bấm nút này sẽ hiện popup xin quyền thông tin Zalo.\nHiện tại hãy đăng nhập bằng SĐT + mã thành viên ở trên.');
+  };
+
+  const items = [
+    { key: 'zalo', icon: '👤', name: 'Thông tin Zalo', desc: 'Tên và số điện thoại để tự điền khi đặt hàng', action: requestZalo },
+    { key: 'location', icon: '📍', name: 'Vị trí', desc: 'Để tính phí ship chính xác theo khoảng cách', action: requestLocation },
+    { key: 'camera', icon: '📷', name: 'Camera', desc: 'Để quét QR tích điểm tại quầy', action: requestCamera },
+  ];
+
+  const statusLabel = { granted: ['✓ Đã cấp', 'status-granted'], denied: ['✕ Chưa cấp', 'status-denied'], unknown: ['? Chưa hỏi', 'status-unknown'] };
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      {items.map((it) => {
+        const [label, cls] = statusLabel[perms[it.key]];
+        return (
+          <div key={it.key} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 14, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: '#f0f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{it.icon}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{it.name}</div>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{it.desc}</div>
+              <span className={`perm-status ${cls}`}>{label}</span>
+            </div>
+            {perms[it.key] !== 'granted' && (
+              <button className="perm-btn btn-request" onClick={it.action}>Cấp quyền</button>
+            )}
+          </div>
+        );
+      })}
+      <style>{`
+        .perm-status { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 20px; margin-top: 6px; display: inline-block; }
+        .status-granted { background: #dcfce7; color: #166534; }
+        .status-denied { background: #fee2e2; color: #991b1b; }
+        .status-unknown { background: #f3f4f6; color: #6b7280; }
+        .perm-btn { padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; flex-shrink: 0; }
+        .btn-request { background: #24305E; color: #fff; }
+      `}</style>
+    </div>
+  );
+}
 
 // Gói 11: Tài khoản đăng nhập bằng SĐT + Mã thành viên (bỏ tra cứu tự do bằng SĐT
 // để tránh lộ thông tin khách hàng). Mã TV in trên thẻ/quét QR tại quầy.
@@ -36,7 +150,8 @@ function PromoCarousel() {
       <div style={{ display: 'flex', width: '100%', transform: `translateX(-${idx * 100}%)`, transition: 'transform .5s ease' }}>
         {banners.map((b) => (
           <img key={b.id} src={imgUrl(b.banner_url)} alt={b.name}
-            style={{ width: '100%', flexShrink: 0, aspectRatio: '16/9', objectFit: 'cover', display: 'block' }} />
+            style={{ width: '100%', flexShrink: 0, aspectRatio: '16/9', objectFit: 'cover', display: 'block' }}
+            onError={(e) => { e.target.style.display = 'none'; }} />
         ))}
       </div>
       {banners.length > 1 && (
@@ -52,8 +167,26 @@ function PromoCarousel() {
 }
 
 export default function Account() {
+  const nav = useNavigate();
   const [phone, setPhone] = useState(() => getProfile()?.phone || '');
   const [memberCode, setMemberCode] = useState(() => getProfile()?.member_code || '');
+  // Gói 55 p10: cover trang Tài khoản — user tự custom, lưu localStorage theo SĐT
+  const [accountCover, setAccountCover] = useState(() => {
+    try { return localStorage.getItem('zm_account_cover') || ''; } catch { return ''; }
+  });
+  const coverInputRef = useRef(null);
+  const handleCoverChange = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { alert('Ảnh tối đa 2MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result;
+      setAccountCover(url);
+      try { localStorage.setItem('zm_account_cover', url); } catch {}
+    };
+    reader.readAsDataURL(f);
+  };
   const [customer, setCustomer] = useState(null);
   const [loading, setLoading] = useState(false);
   // Gói 49: sổ địa chỉ
@@ -103,7 +236,18 @@ export default function Account() {
 
   return (
     <div className="zm-page">
-      <div className="zm-header"><h1>Tài khoản</h1></div>
+      {/* Gói 55 p10: cover trang Tài khoản — user tự custom. Ẩn header tiêu đề (tránh đè card). */}
+      <div style={{ position: 'relative', height: 150, background: 'linear-gradient(135deg, var(--zm-primary), #3b4a7a)', overflow: 'hidden' }}>
+        {accountCover && <img src={accountCover} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+        <input ref={coverInputRef} type="file" accept="image/*" onChange={handleCoverChange} style={{ display: 'none' }} />
+        <button
+          onClick={() => coverInputRef.current?.click()}
+          title="Đổi cover"
+          style={{ position: 'absolute', top: 10, right: 10, width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,0,0,.55)', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+        </button>
+      </div>
       {!customer && (
         <>
           <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
@@ -120,8 +264,8 @@ export default function Account() {
       )}
 
       {customer && (
-        <div style={{ padding: '4px 16px' }}>
-          <div style={{ background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 16, padding: 20, color: '#fff' }}>
+        <div style={{ padding: '4px 16px', marginTop: -30, position: 'relative', zIndex: 2 }}>
+          <div style={{ background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 16, padding: 20, color: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
             <div style={{ fontSize: 13, opacity: .85 }}>Thẻ thành viên</div>
             <div style={{ fontSize: 20, fontWeight: 800, margin: '4px 0' }}>{customer.name}</div>
             <div style={{ fontSize: 13 }}>{customer.member_code} · Hạng {customer.tier || 'Regular'}</div>
@@ -132,8 +276,17 @@ export default function Account() {
 
           <PromoCarousel />
 
-          {/* Gói 49: sổ địa chỉ */}
-          <div className="zm-section-title" style={{ padding: '16px 0 8px' }}>📒 Sổ địa chỉ</div>
+          {/* Gói 53: quét QR tích điểm tại quầy */}
+          <button
+            onClick={() => nav('/scan')}
+            className="zm-btn-primary"
+            style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+          >
+            📷 Quét QR tích điểm tại quầy
+          </button>
+
+          {/* Gói 49: sổ địa chỉ — dạng thu gọn */}
+          <Collapsible icon="📒" title="Sổ địa chỉ" badge={addrBook.length > 0 ? `${addrBook.length}` : null}>
           {addrBook.length === 0 && <div className="zm-empty" style={{ padding: 16 }}>Chưa có địa chỉ nào. Địa chỉ sẽ tự lưu khi đặt hàng.</div>}
           {addrBook.map((a) => (
             <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
@@ -154,13 +307,24 @@ export default function Account() {
               }}>Xóa</button>
             </div>
           ))}
+          </Collapsible>
+
+          {/* Gói 55 p5: quản lý quyền — dạng thu gọn */}
+          <Collapsible icon="🔐" title="Quản lý quyền">
+            <PermissionManager />
+          </Collapsible>
 
           <div className="zm-section-title" style={{ padding: '16px 0 8px' }}>Đơn gần đây</div>
           {customer.orders.length === 0 && <div className="zm-empty" style={{ padding: 20 }}>Chưa có đơn nào.</div>}
           {customer.orders.map((o) => (
-            <div key={o.id} className="zm-total-row" style={{ padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
+            <div key={o.id} className="zm-total-row"
+              onClick={() => nav(`/track?code=${encodeURIComponent(o.code)}`)}
+              style={{ padding: '10px 0', borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}>
               <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{fmtDate(o.created_at)} · {o.status}</span></span>
-              <span><b>{fmt(o.total_amount)}đ</b></span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <b>{fmt(o.total_amount)}đ</b>
+                <span style={{ color: '#0d6efd', fontSize: 16 }}>›</span>
+              </span>
             </div>
           ))}
           <button className="zm-btn-outline" style={{ margin: '20px 0 8px' }} onClick={logout}>Đăng xuất</button>

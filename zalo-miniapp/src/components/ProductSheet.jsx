@@ -62,6 +62,13 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
     const optNames = useGroups
       ? selectedOpts.map((o) => o.name)
       : [size ? size.name : null, ...toppings.map((t) => t.name)];
+    // Gói 50h: nhóm tùy chọn theo tên nhóm để hiện từng dòng ở tóm tắt đơn
+    const optGroups = useGroups
+      ? groups.map((g) => ({
+          name: g.name,
+          opts: g.options.filter((o) => selectedOpts.some((s) => s.id === o.id)).map((o) => o.name),
+        })).filter((g) => g.opts.length > 0)
+      : [];
     const key = useGroups
       ? [product.id, selectedOpts.map((o) => o.id).sort().join('-'), note].join('|')
       : [product.id, sizeId || 0, toppings.map((t) => t.id).sort().join('-'), note].join('|');
@@ -73,6 +80,7 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
       optionId: useGroups ? null : sizeId,
       optionName: useGroups ? null : (size ? size.name : null),
       toppings: useGroups ? [] : toppings.map((t) => t.name),
+      optGroups,
       unitPrice,
       qty,
       note,

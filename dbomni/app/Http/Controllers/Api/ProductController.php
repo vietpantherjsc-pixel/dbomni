@@ -350,16 +350,13 @@ class ProductController extends Controller
 
     private function syncPrices(Product $product, array $prices): void
     {
-        $ids = [];
+        // Gói 55 p11ac: upsert giữ lại dòng giá cũ (không xóa), tránh mất dữ liệu đã nhập
         foreach ($prices as $p) {
-            $row = ProductPrice::updateOrCreate(
+            ProductPrice::updateOrCreate(
                 ['product_id' => $product->id, 'price_list_id' => $p['price_list_id']],
                 ['price' => $p['price'], 'is_active' => $p['is_active'] ?? true]
             );
-            $ids[] = $row->id;
         }
-        // Xóa các dòng giá không còn trong form (kênh bị bỏ tick)
-        ProductPrice::where('product_id', $product->id)->whereNotIn('id', $ids)->delete();
     }
 
     private function syncRecipes(Product $product, array $recipes): void

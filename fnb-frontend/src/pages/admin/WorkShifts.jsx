@@ -3,8 +3,8 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Gói 36: dùng chung (thay bản tự chế Gói 35c)
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const EMPTY = { name: '', branch_id: '', start_time: '', end_time: '', is_active: true };
 
 

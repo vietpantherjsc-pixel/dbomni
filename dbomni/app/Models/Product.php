@@ -88,15 +88,36 @@ class Product extends Model
     }
 
     // Gói 7a: giá bán theo kênh (mặc định dùng base_price khi chưa có giá kênh)
+    // Gói 50c: giá kênh = 0 hoặc trống thì lấy giá cửa hàng (base_price),
+    // trừ món price_on_demand (nhập giá thủ công) thì giữ nguyên 0
     public function priceFor(string $channel): float
     {
-        $price = $this->prices->firstWhere('priceList.code', $channel);
-        if ($price) {
+        // Gói 55 p11ac: chỉ áp giá kênh đang is_active=true
+        $findActive = function ($code) {
+            return $this->prices->first(function ($p) use ($code) {
+                return ($p->priceList->code ?? null) === $code && !empty($p->is_active);
+            });
+        };
+        // Món nhập giá thủ công: không áp giá mặc định
+        if (!empty($this->price_on_demand)) {
+            $price = $findActive($channel);
+            if ($price && (float) $price->price > 0) {
+                return (float) $price->price;
+            }
+            $map = ['pos' => 'nha_hang', 'zalo' => 'online'];
+            $price = $findActive($map[$channel] ?? $channel);
+            return ($price && (float) $price->price > 0) ? (float) $price->price : 0.0;
+        }
+        $price = $findActive($channel);
+        if ($price && (float) $price->price > 0) {
             return (float) $price->price;
         }
         $map = ['pos' => 'nha_hang', 'zalo' => 'online'];
-        $price = $this->prices->firstWhere('priceList.code', $map[$channel] ?? $channel);
-        return $price ? (float) $price->price : (float) $this->base_price;
+        $price = $findActive($map[$channel] ?? $channel);
+        if ($price && (float) $price->price > 0) {
+            return (float) $price->price;
+        }
+        return (float) $this->base_price;
     }
 
     // Gói 49i: giá kênh online cho Zalo Mini App (dùng kèm eager load prices.priceList)

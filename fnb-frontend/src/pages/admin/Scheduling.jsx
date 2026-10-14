@@ -5,8 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { fmtTime, fmtDate, startOfWeek } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Gói 36: dùng chung
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const WD = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'CN'];
 const WD_FULL = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
 const WD_UP = ['THỨ 2', 'THỨ 3', 'THỨ 4', 'THỨ 5', 'THỨ 6', 'THỨ 7', 'CHỦ NHẬT'];

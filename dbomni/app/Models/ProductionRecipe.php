@@ -11,7 +11,7 @@ class ProductionRecipe extends Model
 {
     protected $guarded = [];
 
-    protected $casts = ['quantity' => 'decimal:2'];
+    protected $casts = ['quantity' => 'decimal:2', 'batch_output_qty' => 'decimal:2'];
 
     public function material(): BelongsTo
     {

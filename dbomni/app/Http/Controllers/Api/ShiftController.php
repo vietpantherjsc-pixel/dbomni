@@ -30,13 +30,16 @@ class ShiftController extends Controller
         }
 
         // Tự động tính toán doanh số tức thời trong ca
+        // Gói 55 p11ac: chỉ tính đơn ĐÃ THU TIỀN (loại đơn held/chưa thanh toán)
         $cashSales = Order::where('shift_id', $shift->id)
             ->where('status', '!=', 'cancelled')
+            ->where('payment_status', 'paid')
             ->where('payment_method', 'cash')
             ->sum('total_amount');
 
         $transferSales = Order::where('shift_id', $shift->id)
             ->where('status', '!=', 'cancelled')
+            ->where('payment_status', 'paid')
             ->where('payment_method', 'transfer')
             ->sum('total_amount');
 
@@ -127,13 +130,16 @@ class ShiftController extends Controller
 
         $shift = Shift::with('expenses')->where('id', $id)->where('status', 'open')->firstOrFail();
 
+        // Gói 55 p11ac: chỉ tính đơn ĐÃ THU TIỀN (loại đơn held/chưa thanh toán)
         $cashSales = Order::where('shift_id', $shift->id)
             ->where('status', '!=', 'cancelled')
+            ->where('payment_status', 'paid')
             ->where('payment_method', 'cash')
             ->sum('total_amount');
 
         $transferSales = Order::where('shift_id', $shift->id)
             ->where('status', '!=', 'cancelled')
+            ->where('payment_status', 'paid')
             ->where('payment_method', 'transfer')
             ->sum('total_amount');
 

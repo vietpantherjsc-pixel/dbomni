@@ -10,6 +10,9 @@ class StockTransferItem extends Model
 {
     protected $guarded = [];
 
+    // Gói 55: casts để tính toán chính xác
+    protected $casts = ['quantity' => 'decimal:2', 'unit_cost' => 'decimal:2'];
+
     public function transfer(): BelongsTo
     {
         return $this->belongsTo(StockTransfer::class, 'stock_transfer_id');

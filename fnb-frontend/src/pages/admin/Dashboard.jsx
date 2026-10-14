@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 7d (2026-10-05): Dashboard theo phong cách B (Matcha).
@@ -61,7 +62,7 @@ const Dashboard = () => {
             try {
                 const bq = branchId !== '0' ? `&branch_id=${branchId}` : '';
                 const res = await axios.get(
-                    `http://localhost/api/admin/dashboard/stats?range=${range}${bq}`
+                    `${API}/admin/dashboard/stats?range=${range}${bq}`
                 );
                 if (res.data?.success) {
                     setData(res.data.data.sapo || null);

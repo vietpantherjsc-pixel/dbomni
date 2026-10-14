@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 
-const BASE = 'http://localhost/api';
+const BASE = import.meta.env.VITE_API_BASE || '/api';
 
 const Switch = ({ checked, onChange, disabled }) => (
     <label className="visw-switch">

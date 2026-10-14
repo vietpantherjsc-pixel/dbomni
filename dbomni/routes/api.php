@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\BranchController;
 use App\Http\Controllers\Api\BranchVisibilityController; // Gói 25: ẩn/hiện mặt hàng & thực đơn theo CN
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\InboundController;
+use App\Http\Controllers\Api\OutboundController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\CustomerAddressController; // Gói 49: sổ địa chỉ
@@ -22,6 +23,9 @@ use App\Http\Controllers\Api\OptionGroupController;
 use App\Http\Controllers\Api\PriceListController;
 use App\Http\Controllers\Api\ProductionController;
 use App\Http\Controllers\Api\PromotionController;
+use App\Http\Controllers\Api\PaymentMethodController; // Gói 52
+use App\Http\Controllers\Api\ProductAliasController; // Gói 55
+use App\Http\Controllers\Api\UnitController; // Gói 52
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\StocktakeController;
@@ -79,6 +83,10 @@ Route::middleware('auth:sanctum')->prefix('employee')->group(function () {
     Route::get('/materials', [EmployeeInventoryController::class, 'materials']);
     Route::get('/suppliers', [EmployeeInventoryController::class, 'suppliers']);
     Route::get('/stocktakes', [EmployeeInventoryController::class, 'stocktakes']);
+    Route::get('/stocktake-meta', [EmployeeInventoryController::class, 'branches']); // Gói 55 p11t
+    Route::post('/stocktakes/{id}/items', [EmployeeInventoryController::class, 'addStocktakeItems']); // Gói 55 p11w
+    Route::delete('/stocktakes/{id}/items/{itemId}', [EmployeeInventoryController::class, 'removeStocktakeItem']); // Gói 55 p11w
+    Route::delete('/stocktakes/{id}', [EmployeeInventoryController::class, 'deleteStocktake']); // Gói 55 p11w
     Route::post('/stocktakes', [EmployeeInventoryController::class, 'storeStocktake']);
     Route::get('/stocktakes/{id}', [EmployeeInventoryController::class, 'showStocktake']);
     Route::patch('/stocktakes/{id}/counts', [EmployeeInventoryController::class, 'updateStocktakeCounts']);
@@ -88,6 +96,9 @@ Route::middleware('auth:sanctum')->prefix('employee')->group(function () {
     Route::post('/productions', [EmployeeInventoryController::class, 'storeProduction']);
     Route::get('/productions', [EmployeeInventoryController::class, 'productions']);
     Route::post('/inbound-receipts', [EmployeeInventoryController::class, 'storeInboundReceipt']);
+    Route::post('/outbound-receipts', [EmployeeInventoryController::class, 'storeOutboundReceipt']); // Gói 55 p11aa
+    Route::post('/stock-transfers', [EmployeeInventoryController::class, 'storeStockTransfer']); // Gói 55 p11aa
+    Route::get('/units', [UnitController::class, 'index']); // Gói 55 p11z: đơn vị tính cho NV chọn
 });
 // Gói 26: đăng nhập nhân viên (username/password)
 Route::post('/employee/login', [EmployeeAuthController::class, 'login'])->middleware('throttle:10,1');
@@ -100,9 +111,16 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
-    // Danh mục & mặt hàng
+    // Danh mục & mặt hàng — Gói SEC: ghi mặt hàng chỉ role có products.manage (đọc mở cho POS)
     Route::apiResource('categories', CategoryController::class);
-    Route::apiResource('products', ProductController::class);
+    Route::get('/products', [ProductController::class, 'index']);
+    Route::get('/products/{product}', [ProductController::class, 'show']);
+    Route::middleware('permission:products.manage')->group(function () {
+        Route::post('/products', [ProductController::class, 'store']);
+        Route::put('/products/{product}', [ProductController::class, 'update']);
+        Route::patch('/products/{product}', [ProductController::class, 'update']);
+        Route::delete('/products/{product}', [ProductController::class, 'destroy']);
+    });
     Route::patch('/products/{product}/favorite', [ProductController::class, 'toggleFavorite']); // Gói 9
     // Gói 33: thao tác hàng loạt mặt hàng — CHỈ admin cấp cao nhất (role có "*")
     Route::middleware('permission:products.bulk')->group(function () {
@@ -126,11 +144,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Chi nhánh (dropdown)
     Route::get('/branches', [BranchController::class, 'index']);
 
-    // Gói 15 (2026-10-08): Báo cáo Giám đốc — 1 endpoint trả đủ 4 tab
-    Route::get('/reports/overview', [ReportController::class, 'overview']);
-    // Gói 17: Báo cáo kho + Báo cáo thu chi/PNL
-    Route::get('/reports/inventory', [ReportController::class, 'inventory']);
-    Route::get('/reports/pnl', [ReportController::class, 'pnl']);
+    // Gói 15 (2026-10-08): Báo cáo Giám đốc — 1 endpoint trả đủ 4 tab — Gói SEC: chỉ role có reports.view
+    Route::middleware('permission:reports.view')->group(function () {
+        Route::get('/reports/overview', [ReportController::class, 'overview']);
+        // Gói 17: Báo cáo kho + Báo cáo thu chi/PNL
+        Route::get('/reports/inventory', [ReportController::class, 'inventory']);
+        Route::get('/reports/pnl', [ReportController::class, 'pnl']);
+    });
 
     // Đơn hàng
     Route::get('/orders', [OrderController::class, 'index']);
@@ -165,21 +185,26 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/shifts/{id}/expense', [ShiftController::class, 'addExpense']);
     Route::post('/shifts/{id}/close', [ShiftController::class, 'closeShift']);
 
-    // Kho
+    // Kho — Gói SEC: quick-adjust chỉ role có inventory.adjust
     Route::get('/inventory/branch/{branchId}', [InventoryController::class, 'getStockByBranch']);
-    Route::post('/inbound', [InboundController::class, 'store']);
-    Route::post('/inbound/bulk', [InboundController::class, 'storeBulk']);
+    Route::middleware('permission:inventory.adjust')->post('/inventory/quick-adjust', [InventoryController::class, 'quickAdjust']); // Gói 55 p11: −/+ nhanh
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::post('/inbound', [InboundController::class, 'store']);
+        Route::post('/inbound/bulk', [InboundController::class, 'storeBulk']);
+    });
 
-    // Gói 27 (2026-10-09): Thu-Chi
-    Route::get('/transactions', [TransactionController::class, 'index']);
-    Route::post('/transactions', [TransactionController::class, 'store']);
-    Route::put('/transactions/{id}', [TransactionController::class, 'update']);
-    Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
-    Route::post('/transactions/{id}/pay', [TransactionController::class, 'pay']); // Gói 29: thanh toán trừ dần
+    // Gói 27 (2026-10-09): Thu-Chi — Gói SEC: chỉ role có finance.manage
+    Route::middleware('permission:finance.manage')->group(function () {
+        Route::get('/transactions', [TransactionController::class, 'index']);
+        Route::post('/transactions', [TransactionController::class, 'store']);
+        Route::put('/transactions/{id}', [TransactionController::class, 'update']);
+        Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
+        Route::post('/transactions/{id}/pay', [TransactionController::class, 'pay']); // Gói 29: thanh toán trừ dần
+        Route::post('/transaction-categories', [TransactionController::class, 'storeCategory']);
+        Route::put('/transaction-categories/{id}', [TransactionController::class, 'updateCategory']); // Gói 29
+        Route::delete('/transaction-categories/{id}', [TransactionController::class, 'destroyCategory']);
+    });
     Route::get('/transaction-categories', [TransactionController::class, 'categories']);
-    Route::post('/transaction-categories', [TransactionController::class, 'storeCategory']);
-    Route::put('/transaction-categories/{id}', [TransactionController::class, 'updateCategory']); // Gói 29
-    Route::delete('/transaction-categories/{id}', [TransactionController::class, 'destroyCategory']);
 
     // Gói 29 (2026-10-09): Đối tác + công nợ (dùng chung toàn chuỗi)
     // Lưu ý: /partners/debt-summary PHẢI đứng trước /partners/{id} để không bị nuốt route.
@@ -193,9 +218,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Gói 4: nguyên vật liệu
     Route::get('/materials', [MaterialController::class, 'index']);
+    Route::get('/materials/{id}/linked-products', [MaterialController::class, 'linkedProducts']); // Gói 55 p11m
+    Route::post('/materials/{id}/unlink', [MaterialController::class, 'unlinkProduct']); // Gói 55 p11n
     Route::post('/materials', [MaterialController::class, 'store']);
     Route::patch('/materials/{id}', [MaterialController::class, 'update']);
     Route::delete('/materials/{id}', [MaterialController::class, 'destroy']);
+    Route::post('/materials/bulk', [MaterialController::class, 'bulk']); // Gói 55 p11l
+    Route::post('/materials/bulk-update', [MaterialController::class, 'bulkUpdate']); // Gói 55 p11w
+    Route::post('/materials/import-preview', [MaterialController::class, 'importPreview']); // Gói 55 p11s
 
     // Gói 22: loại danh mục nguyên liệu (nhóm kiểm kho động)
     Route::get('/material-categories', [MaterialCategoryController::class, 'index']);
@@ -211,26 +241,40 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/productions', [ProductionController::class, 'index']);
     Route::post('/productions', [ProductionController::class, 'produce']);
 
-    // Gói 4: kiểm kê kho
-    Route::get('/stocktakes', [StocktakeController::class, 'index']);
-    Route::get('/stocktakes/{id}', [StocktakeController::class, 'show']);
-    Route::post('/stocktakes', [StocktakeController::class, 'store']);
-    Route::patch('/stocktakes/{id}/counts', [StocktakeController::class, 'updateCounts']);
-    Route::post('/stocktakes/{id}/confirm', [StocktakeController::class, 'confirm']);
+    // Gói 4: kiểm kê kho — Gói SEC: chỉ role có inventory.manage
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::get('/stocktakes', [StocktakeController::class, 'index']);
+        Route::get('/stocktakes/{id}', [StocktakeController::class, 'show']);
+        Route::post('/stocktakes', [StocktakeController::class, 'store']);
+        Route::patch('/stocktakes/{id}/counts', [StocktakeController::class, 'updateCounts']);
+        Route::post('/stocktakes/{id}/confirm', [StocktakeController::class, 'confirm']);
+    });
 
-    // Gói 43: chuyển kho giữa các chi nhánh
-    Route::get('/stock-transfers', [StockTransferController::class, 'index']);
-    Route::get('/stock-transfers/{id}', [StockTransferController::class, 'show']);
-    Route::post('/stock-transfers', [StockTransferController::class, 'store']);
-    Route::post('/stock-transfers/{id}/confirm', [StockTransferController::class, 'confirm']);
-    Route::post('/stock-transfers/{id}/cancel', [StockTransferController::class, 'cancel']);
-    Route::get('/stock-transfer-stock', [StockTransferController::class, 'stock']);
-    // Gói 43: phiếu nhập hàng theo hóa đơn
-    Route::get('/inbound-receipts', [InboundReceiptController::class, 'index']);
-    Route::get('/inbound-receipts/{id}', [InboundReceiptController::class, 'show']);
-    Route::post('/inbound-receipts', [InboundReceiptController::class, 'store']);
-    Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update']);
-    Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel']);
+    // Gói 43: chuyển kho giữa các chi nhánh — Gói SEC
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::get('/stock-transfers', [StockTransferController::class, 'index']);
+        Route::get('/stock-transfers/{id}', [StockTransferController::class, 'show']);
+        Route::post('/stock-transfers', [StockTransferController::class, 'store']);
+        Route::post('/stock-transfers/{id}/confirm', [StockTransferController::class, 'confirm']);
+        Route::post('/stock-transfers/{id}/cancel', [StockTransferController::class, 'cancel']);
+        Route::get('/stock-transfer-stock', [StockTransferController::class, 'stock']);
+    });
+    // Gói 43: phiếu nhập hàng theo hóa đơn — Gói SEC
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::get('/inbound-receipts', [InboundReceiptController::class, 'index']);
+        Route::get('/inbound-receipts/{id}', [InboundReceiptController::class, 'show']);
+        Route::post('/inbound-receipts', [InboundReceiptController::class, 'store']);
+        Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update']);
+        Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel']);
+    });
+    // Gói 55 p11z: phiếu xuất kho (trừ kho FIFO khi chốt) — Gói SEC
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::get('/outbound-receipts', [OutboundController::class, 'index']);
+        Route::post('/outbound-receipts', [OutboundController::class, 'store']);
+        Route::get('/outbound-receipts/{id}', [OutboundController::class, 'show']);
+        Route::post('/outbound-receipts/{id}/confirm', [OutboundController::class, 'confirm']);
+        Route::post('/outbound-receipts/{id}/cancel', [OutboundController::class, 'cancel']);
+    });
 
     // Gói 5: CRM — khách hàng
     Route::get('/customers', [CustomerController::class, 'index']);
@@ -246,29 +290,47 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/membership-tiers/{id}', [MembershipTierController::class, 'destroy']);
     Route::post('/membership-tiers/redeem-config', [MembershipTierController::class, 'updateRedeemConfig']);
 
-    // Gói 5: khuyến mại
+    // Gói 5: khuyến mại — Gói SEC: ghi chỉ role có products.manage (eligible mở cho POS/Mini App)
     Route::get('/promotions', [PromotionController::class, 'index']);
     Route::post('/promotions/eligible', [PromotionController::class, 'eligible']);
-    Route::post('/promotions', [PromotionController::class, 'store']);
     Route::get('/promotions/{id}', [PromotionController::class, 'show']);
-    Route::patch('/promotions/{id}', [PromotionController::class, 'update']);
-    Route::delete('/promotions/{id}', [PromotionController::class, 'destroy']);
+    Route::middleware('permission:products.manage')->group(function () {
+        Route::post('/promotions', [PromotionController::class, 'store']);
+        Route::patch('/promotions/{id}', [PromotionController::class, 'update']);
+        Route::delete('/promotions/{id}', [PromotionController::class, 'destroy']);
+    });
 
     // Gói 6: nhân viên xác nhận đơn online (đã nhận tiền -> trừ kho, vào KDS)
     Route::post('/orders/{id}/confirm-payment', [OnlineOrderController::class, 'confirmPayment']);
     // Gói 11: tạo mã QR tích điểm cho đơn POS
     Route::post('/orders/{id}/claim-qr', [OrderController::class, 'claimQr']);
 
-    // Gói 6: cấu hình bán online
-    Route::post('/branches', [BranchController::class, 'store']);
-    Route::patch('/branches/{id}', [BranchController::class, 'update']);
+    // Gói 6: cấu hình bán online — Gói SEC: ghi chi nhánh chỉ role có branches.manage
+    Route::middleware('permission:branches.manage')->group(function () {
+        Route::post('/branches', [BranchController::class, 'store']);
+        Route::patch('/branches/{id}', [BranchController::class, 'update']);
+    });
 
     // Gói 10f: upload ảnh cover Mini App (jpg/png/webp <= 1MB, tự crop 1200x500)
     // Gói 38: settings + upload cover — CHỈ role có settings.edit
     Route::middleware('permission:settings.edit')->group(function () {
         Route::post('/uploads/cover', [UploadController::class, 'cover']);
         Route::post('/uploads/promo-banner', [UploadController::class, 'promoBanner']); // Gói 49e
+        Route::post('/uploads/product-image', [UploadController::class, 'productImage']); // Gói 55
         Route::post('/settings', [SettingsController::class, 'update']);
+        // Gói 52: phương thức thanh toán + đơn vị tính
+        Route::get('/payment-methods', [PaymentMethodController::class, 'index']);
+        Route::post('/payment-methods', [PaymentMethodController::class, 'store']);
+        Route::put('/payment-methods/{id}', [PaymentMethodController::class, 'update']);
+        Route::delete('/payment-methods/{id}', [PaymentMethodController::class, 'destroy']);
+        // Gói 55: tên thay thế món (alias)
+        Route::get('/product-aliases', [ProductAliasController::class, 'index']);
+        Route::post('/product-aliases', [ProductAliasController::class, 'store']);
+        Route::delete('/product-aliases/{id}', [ProductAliasController::class, 'destroy']);
+        Route::get('/units', [UnitController::class, 'index']);
+        Route::post('/units', [UnitController::class, 'store']);
+        Route::put('/units/{id}', [UnitController::class, 'update']);
+        Route::delete('/units/{id}', [UnitController::class, 'destroy']);
         // Gói 40: quản lý danh mục lỗi 3 Chuyên
         Route::post('/violation-types', [ViolationController::class, 'typesStore']);
         Route::put('/violation-types/{id}', [ViolationController::class, 'typesUpdate']);
@@ -327,6 +389,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('roles', RoleController::class)->only(['index', 'show'])->parameters(['roles' => 'id']);
         Route::apiResource('employees', EmployeeController::class)->only(['index', 'show'])->parameters(['employees' => 'id']);
         Route::get('/salary/{id}', [SalaryController::class, 'show']);
+        Route::get('/salary-summary', [SalaryController::class, 'summary']); // Gói 55: tổng hợp lương toàn NV
         Route::get('/salary/{id}/history', [SalaryController::class, 'history']);
         Route::get('/salary/{id}/days', [SalaryController::class, 'getDays']);
         Route::get('/employees/{id}/insurance', [SalaryController::class, 'getInsurance']);
@@ -415,6 +478,12 @@ Route::prefix('online')->group(function () {
     // Gói 7g: thực đơn hiển thị theo bảng menus (cột T) — Mini App dùng
     Route::get('/display-menus', [DisplayMenuController::class, 'index']);
     Route::get('/ship-config', [OnlineOrderController::class, 'shipConfig']);
+    Route::get('/geocode', [OnlineOrderController::class, 'geocode']); // Gói 50e: geocode qua backend
+    Route::get('/geocode/suggest', [OnlineOrderController::class, 'geocodeSuggest']); // Gói 50f: gợi ý địa chỉ
+    Route::get('/geocode/reverse', [OnlineOrderController::class, 'geocodeReverse']); // Gói 55 p3: GPS -> địa chỉ
+    // Gói 55 p11ac: proxy tỉnh/thành + xã/phường (Zalo WebView chặn domain lạ)
+    Route::get('/provinces', [OnlineOrderController::class, 'provinces']);
+    Route::get('/wards', [OnlineOrderController::class, 'wards']);
     // Gói 9: trang chủ Mini App kiểu GrabFood
     Route::get('/shop-info', [OnlineOrderController::class, 'shopInfo']);
     Route::get('/sale-products', [OnlineOrderController::class, 'saleProducts']);
@@ -432,6 +501,8 @@ Route::prefix('online')->group(function () {
     Route::get('/theme', [SettingsController::class, 'publicTheme']);
     // Gói 48: banner KM cho carousel Mini App (public)
     Route::get('/promo-banners', [PromotionController::class, 'banners']);
+    // Gói 52: PTTT public theo kênh (POS/Mini App)
+    Route::get('/payment-methods/active', [PaymentMethodController::class, 'index']);
     // Gói 49: sổ địa chỉ giao hàng (public, xác thực customer_id)
     Route::get('/addresses', [CustomerAddressController::class, 'index']);
     Route::post('/addresses', [CustomerAddressController::class, 'store']);

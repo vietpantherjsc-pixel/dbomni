@@ -4,10 +4,11 @@ import AdminLayout from '../../components/layout/AdminLayout';
 
 // Gói 8a (2026-10-05): Nhóm tùy chọn — kéo-thả sắp xếp nhóm & tùy chọn,
 // gán nhóm cho mặt hàng, định mức nguyên liệu tăng thêm cho từng tùy chọn.
-const BASE = 'http://localhost/api';
+const BASE = import.meta.env.VITE_API_BASE || '/api';
 
 export default function OptionGroups() {
   const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true); // Gói 54b: tránh nháy dòng "Chưa có nhóm" khi đang tải
   const [open, setOpen] = useState({});
   const [editing, setEditing] = useState(null);
   const [newOpt, setNewOpt] = useState({});
@@ -21,8 +22,13 @@ export default function OptionGroups() {
   const dragO = useRef(null);
 
   const load = async () => {
-    const r = await axios.get(`${BASE}/option-groups`);
-    if (r.data?.success) setGroups(r.data.data);
+    setLoading(true);
+    try {
+      const r = await axios.get(`${BASE}/option-groups`);
+      if (r.data?.success) setGroups(r.data.data);
+    } finally {
+      setLoading(false);
+    }
   };
   useEffect(() => { load().catch((e) => {
     if (e.response?.status === 401) return;
@@ -235,7 +241,8 @@ export default function OptionGroups() {
           )}
         </div>
       ))}
-      {groups.length === 0 && <div className="text-center text-gray-400 py-10">Chưa có nhóm nào. Chạy <code>php artisan import:option-groups</code> để nạp.</div>}
+      {loading && <div className="text-center text-gray-400 py-10">Đang tải...</div>}
+      {!loading && groups.length === 0 && <div className="text-center text-gray-400 py-10">Chưa có nhóm nào. Bấm <b>+ Thêm nhóm</b> ở góc phải để tạo nhóm mới.</div>}
 
       {assignGroup && <AssignModal group={assignGroup} onClose={() => { setAssignGroup(null); load(); }} />}
       {recipeOpt && <RecipeModal option={recipeOpt} onClose={() => setRecipeOpt(null)} />}

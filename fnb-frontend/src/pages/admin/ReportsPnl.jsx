@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 import {
     REPORT_CSS, kpi, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
     groupChart, donut, PERIOD_NAMES, COMPARE_NAMES,
@@ -13,7 +14,6 @@ import {
 // Chi phí gồm: vốn NL + Lương + Chi khác + Chiết khấu kênh bán.
 // =====================================================================
 
-const API = 'http://localhost/api';
 
 export default function ReportsPnl() {
     const [branches, setBranches] = useState([]);
@@ -156,7 +156,7 @@ export default function ReportsPnl() {
                             </div>
                             {kpi('Biên lợi nhuận', trimN(data.margin) + '%', '<span class="delta flat">—</span>')}
                         </div>
-                        <div className="sub">Thuế GTGT {meta.vat_rate}% · {fmtInt(rev.orders)} đơn trong kỳ.</div>
+                        <div className="sub">Thuế GTGT {meta.vat_rate}% · {fmtInt(rev.orders)} đơn trong kỳ.{Number(rev.other_income) > 0 && <> Trong đó thu khác (phiếu thu tay): <b>{fmtVND(rev.other_income)}</b>.</>}</div>
                     </div>
 
                     <div className="two">
@@ -228,7 +228,7 @@ export default function ReportsPnl() {
                     <div className="foot">
                         <h4>Ghi chú về số liệu</h4>
                         <ul>
-                            <li><b>Thu</b> = doanh thu đơn đã thanh toán (payment_status = paid, chưa hủy).</li>
+                            <li><b>Thu</b> = doanh thu đơn đã thanh toán (payment_status = paid, chưa hủy) + <b>thu khác</b> (phiếu thu tay trong Sổ thu-chi).</li>
                             <li><b>Chi</b> = vốn nguyên liệu (BOM × giá vốn BQ lô) + lương &amp; chi khác (phiếu chi trong ca) + <b>chiết khấu kênh</b> (doanh thu kênh × % cấu hình).</li>
                             <li>Chiết khấu tính trên <b>doanh thu gồm VAT</b> của kênh; nếu cấu hình “chưa gồm thuế” thì cộng thêm thuế suất đã nhập.</li>
                             <li>Map kênh → bảng giá: Tại quầy → <b>nha_hang</b>; Zalo Mini App → <b>online</b> (hoặc zalo); GrabFood → <b>grabfood</b>.</li>

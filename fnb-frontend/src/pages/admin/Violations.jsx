@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const CAT_META = {
     chuyen_can: { name: 'Chuyên Cần', badge: 'bg-blue-100 text-blue-700' },
     chuyen_mon: { name: 'Chuyên Môn', badge: 'bg-amber-100 text-amber-700' },

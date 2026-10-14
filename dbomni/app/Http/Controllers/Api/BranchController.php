@@ -23,11 +23,13 @@ class BranchController extends Controller
     {
         $validated = $request->validate([
             'name' => 'nullable|string|max:100',
+            'phone' => 'nullable|string|max:20', // Gói 55 p1: SĐT chi nhánh
             'address' => 'nullable|string|max:255',
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'cover_url' => 'nullable|string|max:500', // Gói 10f: cover riêng Mini App (null = dùng chung)
             'is_active' => 'nullable|boolean', // Gói 22: bật/tắt chi nhánh
+            'opening_hours' => 'nullable|array', // Gói 55 p2: giờ mở cửa JSON
         ]);
         $branch = Branch::findOrFail($id);
         $branch->update($validated);
@@ -44,6 +46,7 @@ class BranchController extends Controller
             'address' => 'required|string|max:255',
             'latitude' => 'required|numeric|between:-90,90',
             'longitude' => 'required|numeric|between:-180,180',
+            'opening_hours' => 'nullable|array', // Gói 55 p2: giờ mở cửa JSON
         ]);
         $branch = Branch::create($validated);
         return response()->json(['success' => true, 'message' => 'Đã tạo chi nhánh.', 'data' => $branch], 201);

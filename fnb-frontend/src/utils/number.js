@@ -1,3 +1,4 @@
+import { API } from '../utils/api';
 // Gói 8f (2026-10-05): Số thập phân tùy chỉnh cho từng loại số liệu.
 // Đại Vương cấu hình tại Thiết lập → Số thập phân.
 
@@ -44,7 +45,7 @@ export const fmtDiscount = (n) => fmt(n, 'discount');
 // Nạp từ server (gọi lúc app khởi động, chung với loadTheme)
 export async function loadNumberSettings(api) {
   try {
-    const res = await api.get('http://localhost/api/settings');
+    const res = await api.get(API + '/settings');
     const d = res.data || {};
     const next = {
       price: d.decimals_price ?? DEFAULTS.price,

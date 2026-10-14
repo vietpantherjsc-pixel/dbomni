@@ -17,12 +17,26 @@ class AdminDashboardController extends Controller
 {
     public function stats(Request $request): JsonResponse
     {
+        // Gói 55 p11ad: cache 5 phút theo chi nhánh + ngày (dashboard nhiều query nặng)
+        $branchKey = $request->query('branch_id') ?: 'all';
+        $cacheKey = 'dashboard:stats:' . $branchKey . ':' . now()->format('Y-m-d');
+        $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($request) {
+            return $this->buildStats($request);
+        });
+
+        return response()->json(['success' => true, 'data' => $data]);
+    }
+
+    private function buildStats(Request $request): array
+    {
         $today = now()->startOfDay();
         $branchId = $request->query('branch_id');
 
         // 1. Chỉ số tổng quan trong ngày
+        // Gói 55 p11ac: chỉ tính đơn đã thanh toán (khớp ReportController)
         $todayOrdersQuery = Order::where('created_at', '>=', $today)
-            ->where('status', '!=', 'cancelled');
+            ->where('status', '!=', 'cancelled')
+            ->where('payment_status', 'paid');
         if ($branchId) {
             $todayOrdersQuery->where('branch_id', $branchId);
         }
@@ -79,22 +93,19 @@ class AdminDashboardController extends Controller
         $lowStockAlerts = $stockData->filter(fn($m) => $m['is_low_stock'])
             ->sortBy('current_stock')->values();
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'overview' => [
-                    'today_revenue' => $todayRevenue,
-                    'today_orders_count' => $totalOrdersCount,
-                    'average_order_value' => $averageOrderValue,
-                    'cash_revenue' => $cashTotal,
-                    'transfer_revenue' => $transferTotal,
-                ],
-                'top_products' => $topProducts,
-                'low_stock_alerts' => $lowStockAlerts,
-                'all_materials' => $stockData->values(),
-                'sapo' => $this->sapoOverview($request, $branchId),
-            ]
-        ]);
+        return [
+            'overview' => [
+                'today_revenue' => $todayRevenue,
+                'today_orders_count' => $totalOrdersCount,
+                'average_order_value' => $averageOrderValue,
+                'cash_revenue' => $cashTotal,
+                'transfer_revenue' => $transferTotal,
+            ],
+            'top_products' => $topProducts,
+            'low_stock_alerts' => $lowStockAlerts,
+            'all_materials' => $stockData->values(),
+            'sapo' => $this->sapoOverview($request, $branchId),
+        ];
     }
 
     /**
@@ -116,7 +127,7 @@ class AdminDashboardController extends Controller
             $baseQuery->where('branch_id', $branchId);
         }
 
-        $validOrders = (clone $baseQuery)->where('status', '!=', 'cancelled')->get();
+        $validOrders = (clone $baseQuery)->where('status', '!=', 'cancelled')->where('payment_status', 'paid')->get(); // Gói 55 p11ac: khớp ReportController
         $cancelledTotal = (clone $baseQuery)->where('status', 'cancelled')->sum('total_amount');
 
         $grossSales = (float) $validOrders->sum('total_amount');

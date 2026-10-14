@@ -77,12 +77,7 @@ class LoyaltyService
         $customer->points += $earned;
 
         // Tự nâng hạng theo tổng tiền tích lũy
-        $newTier = MembershipTier::where('min_total_spent', '<=', $customer->total_spent)
-            ->orderByDesc('min_total_spent')
-            ->first();
-        if ($newTier && $newTier->id !== $customer->membership_tier_id) {
-            $customer->membership_tier_id = $newTier->id;
-        }
+        $this->recalculateTier($customer);
         $customer->save();
 
         if ($earned > 0) {
@@ -146,7 +141,11 @@ class LoyaltyService
             return;
         }
         $customer = Customer::lockForUpdate()->findOrFail($order->customer_id);
-        $customer->points = max(0, $customer->points - $order->points_earned);
+        // Gói SEC: cho phép số dư âm (đúng bản chất kế toán) — chống gian lận tích → tiêu → hủy
+        $customer->points = $customer->points - $order->points_earned;
+        // Gói 55 p11ad: trừ lại tổng chi tiêu đã cộng lúc tích điểm + hạ hạng nếu rớt ngưỡng
+        $customer->total_spent = max(0, (float) $customer->total_spent - (float) $order->total_amount);
+        $this->recalculateTier($customer);
         $customer->save();
 
         PointTransaction::create([
@@ -156,5 +155,18 @@ class LoyaltyService
             'type' => 'revoke',
             'note' => "Thu hồi điểm đã tích do hủy đơn {$order->code}",
         ]);
+    }
+
+    /**
+     * Xếp lại hạng thành viên theo tổng chi tiêu hiện tại (nâng HOẶC hạ).
+     */
+    private function recalculateTier(Customer $customer): void
+    {
+        $newTier = MembershipTier::where('min_total_spent', '<=', $customer->total_spent)
+            ->orderByDesc('min_total_spent')
+            ->first();
+        if ($newTier && $newTier->id !== $customer->membership_tier_id) {
+            $customer->membership_tier_id = $newTier->id;
+        }
     }
 }

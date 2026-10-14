@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền 
 import { printBill, printLabels } from '../../utils/print';
 import ImportExcelModal from './ImportExcelModal'; // Gói 23: import đơn từ Excel
 import { fmtDateTime as fmtDateTimeShared } from '../../utils/format';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 2 (2026-10-04): Trang Hóa đơn theo style Sapo.
@@ -78,7 +79,7 @@ const Orders = () => {
     const handleBulkCancel = async () => {
         if (!bulkReason.trim()) return alert('Nhập lý do hủy.');
         try {
-            const res = await axios.post('http://localhost/api/orders/bulk-action', {
+            const res = await axios.post(API + '/orders/bulk-action', {
                 ids: checkedIds, action: 'cancel', reason: bulkReason.trim(),
             });
             alert(res.data?.message || 'Đã hủy hàng loạt.');
@@ -91,7 +92,7 @@ const Orders = () => {
     const handleBulkDelete = async () => {
         if (!window.confirm(`XÓA VĨNH VIỄN ${checkedIds.length} hóa đơn đã chọn?\n\n- Đơn bị xóa khỏi hệ thống, KHÔNG khôi phục được.\n- KHÔNG hoàn kho, KHÔNG hoàn điểm.\n- Muốn hoàn kho/điểm thì dùng "Hủy hóa đơn".`)) return;
         try {
-            const res = await axios.post('http://localhost/api/orders/bulk-action', {
+            const res = await axios.post(API + '/orders/bulk-action', {
                 ids: checkedIds, action: 'delete',
             });
             alert(res.data?.message || 'Đã xóa hàng loạt.');
@@ -105,7 +106,7 @@ const Orders = () => {
         const target = checkedOrders[0];
         if (!window.confirm(`Gộp ${checkedIds.length} đơn vào đơn ${target.code}? Các đơn còn lại sẽ bị hủy (không hoàn kho).`)) return;
         try {
-            const res = await axios.post('http://localhost/api/orders/merge', {
+            const res = await axios.post(API + '/orders/merge', {
                 target_order_id: target.id,
                 order_ids: checkedIds,
             });
@@ -134,7 +135,7 @@ const Orders = () => {
             .map(([order_item_id, quantity]) => ({ order_item_id: Number(order_item_id), quantity: Number(quantity) }));
         if (items.length === 0) return alert('Chọn ít nhất 1 món để tách.');
         try {
-            const res = await axios.post(`http://localhost/api/orders/${splitOrder.id}/split`, { items });
+            const res = await axios.post(`${API}/orders/${splitOrder.id}/split`, { items });
             if (res.data?.success) {
                 alert(`${res.data.message}. Đơn mới: ${res.data.data.new_order.code}`);
                 setSplitOrder(null);
@@ -154,7 +155,7 @@ const Orders = () => {
             const params = new URLSearchParams({ tab, page, per_page: 15 });
             if (search) params.append('search', search);
             if (branchId !== '0') params.append('branch_id', branchId);
-            const res = await axios.get(`http://localhost/api/orders?${params}`);
+            const res = await axios.get(`${API}/orders?${params}`);
             if (res.data?.success) {
                 setOrders(res.data.data.data || []);
                 const { data: _d, ...pg } = res.data.data;
@@ -492,7 +493,7 @@ const Orders = () => {
                                     onClick={async () => {
                                         if (!confirm(`Xác nhận đã nhận tiền đơn ${selected.code}? Đơn sẽ trừ kho và vào KDS.`)) return;
                                         try {
-                                            const res = await axios.post(`http://localhost/api/orders/${selected.id}/confirm-payment`);
+                                            const res = await axios.post(`${API}/orders/${selected.id}/confirm-payment`);
                                             if (res.data?.success) { alert(res.data.message); setSelected(null); fetchOrders(); }
                                             else alert(res.data?.message || 'Lỗi');
                                         } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
@@ -531,9 +532,16 @@ const Orders = () => {
                         <div className="flex gap-3 px-5 py-4 border-t border-gray-100">
                             <button
                                 onClick={async () => {
+                                    // Gói 55 p11ac: chỉ cho xóa đơn nháp/chưa thu tiền; đơn đã paid phải dùng Hủy đơn
+                                    const isPaid = selected.payment_status === 'paid' || selected.status === 'completed';
+                                    if (isPaid) {
+                                        alert('Đơn đã thanh toán/hoàn thành không được Xóa. Hãy dùng "Hủy đơn" để hoàn kho và điểm đúng quy trình.');
+                                        return;
+                                    }
                                     if (!confirm(`Xóa hóa đơn ${selected.code}? Không khôi phục được.`)) return;
+                                    if (!confirm('Xác nhận lần 2: chắc chắn xóa vĩnh viễn hóa đơn này?')) return;
                                     try {
-                                        await axios.post('http://localhost/api/orders/bulk-action', { ids: [selected.id], action: 'delete' });
+                                        await axios.post(API + '/orders/bulk-action', { ids: [selected.id], action: 'delete' });
                                         setSelected(null); fetchOrders();
                                     } catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
                                 }}

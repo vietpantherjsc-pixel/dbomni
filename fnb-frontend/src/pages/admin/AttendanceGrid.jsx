@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate, fmtTime, startOfWeek } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const WD = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'CN'];
 const STATUS = {
     present: { label: 'Có mặt', cls: 'bg-green-100 text-green-800' },

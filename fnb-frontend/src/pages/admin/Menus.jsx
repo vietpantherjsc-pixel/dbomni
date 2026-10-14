@@ -6,7 +6,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 // - Kéo-thả đổi thứ tự thực đơn và món trong thực đơn
 // - Thêm/bớt món, tạo/sửa/xóa thực đơn
 // - Danh mục vẫn dùng để nhóm SP + báo cáo (trang riêng)
-const BASE = 'http://localhost/api';
+const BASE = import.meta.env.VITE_API_BASE || '/api';
 const fmt = (v) => `${Number(v || 0).toLocaleString('vi-VN')} đ`;
 
 export default function Menus() {

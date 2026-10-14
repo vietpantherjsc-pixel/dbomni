@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import { API } from '../utils/api';
 
 const Login = () => {
     // Điền sẵn thông tin tài khoản test để tiện phát triển
@@ -20,7 +21,7 @@ const Login = () => {
 
         try {
             // Gọi API Login của backend Laravel
-            const response = await axios.post('http://localhost/api/login', {
+            const response = await axios.post(API + '/login', {
                 email,
                 password
             });

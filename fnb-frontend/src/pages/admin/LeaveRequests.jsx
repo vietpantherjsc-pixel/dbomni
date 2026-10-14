@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const TYPE_LABEL = { annual: 'Nghỉ phép', sick: 'Nghỉ ốm', unpaid: 'Nghỉ không lương', maternity: 'Nghỉ thai sản', other: 'Nghỉ khác' };
 const ST_TABS = [
     ['', 'Tất cả'],

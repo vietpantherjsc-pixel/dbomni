@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate as fmtDateShared } from '../../utils/format';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 29 (2026-10-09): Trang Đối tác — dùng chung toàn chuỗi.
@@ -10,7 +11,6 @@ import { fmtDate as fmtDateShared } from '../../utils/format';
 //   (số tiền/đã trả/còn nợ) + form thanh toán trừ dần + lịch sử thanh toán.
 // =====================================================================
 
-const API = 'http://localhost/api';
 const TYPE_LABEL = { supplier: 'Nhà cung cấp', customer: 'Khách hàng', other: 'Khác' };
 const METHOD_LABEL = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
 const fmtMoney = (n) => new Intl.NumberFormat('vi-VN').format(n || 0) + 'đ';

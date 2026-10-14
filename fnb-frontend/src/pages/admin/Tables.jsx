@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
+import { API } from '../../utils/api';
 
 // Gói 3 (2026-10-04): Quản lý bàn (bản gọn) — thêm/xóa/đổi trạng thái bàn.
 // AuthContext đã gắn Bearer token vào axios.defaults nên dùng axios trực tiếp.
-const API = 'http://localhost/api';
 export default function Tables() {
     // Gói 24: chi nhánh theo BranchContext ('0' = Tất cả)
     const branchCtx = useBranch();

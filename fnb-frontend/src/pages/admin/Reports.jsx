@@ -4,6 +4,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 15 (2026-10-08): Trang Báo cáo cho Giám đốc — code từ demo v3 đã chốt.
@@ -11,7 +12,6 @@ import DateInput from '../../components/DateInput';
 // Biểu đồ vẽ bằng div/CSS thuần (copy từ demo), không thêm thư viện.
 // =====================================================================
 
-const API = 'http://localhost/api';
 
 const CSS = `
 .rpt{
@@ -251,7 +251,11 @@ export default function Reports() {
             if (res.data?.success) {
                 const d = res.data.data;
                 setData(d);
-                setProdList((prev) => (append ? [...prev, ...d.products.items] : d.products.items));
+                // Gói 55 p11ac: lọc dòng lỗi (1 món hỏng dữ liệu không được gãy cả bảng)
+                const safeItems = Array.isArray(d.products?.items)
+                    ? d.products.items.filter((t) => t && typeof t === 'object')
+                    : [];
+                setProdList((prev) => (append ? [...prev, ...safeItems] : safeItems));
                 setProdMeta({ total: d.products.total, has_more: d.products.has_more });
             }
         } catch (e) {

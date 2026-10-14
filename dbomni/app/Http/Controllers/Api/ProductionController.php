@@ -33,17 +33,25 @@ class ProductionController extends Controller
             'material_id' => 'required|exists:materials,id',
             'raw_material_id' => 'required|exists:materials,id|different:material_id',
             'quantity' => 'required|numeric|min:0.0001',
+            'batch_output_qty' => 'nullable|numeric|min:0.0001', // Gói 55 p11c: SL BTP mỗi mẻ
         ]);
 
         $material = Material::findOrFail($validated['material_id']);
-        if ($material->type !== 'semi_finished') {
-            return response()->json(['success' => false, 'message' => 'Đầu ra phải là bán thành phẩm.'], 422);
-        }
+        // Gói 55 p11o: bỏ gate type cũ — NL nào có định mức chế biến thì được coi là BTP
 
         $recipe = ProductionRecipe::updateOrCreate(
             ['material_id' => $validated['material_id'], 'raw_material_id' => $validated['raw_material_id']],
-            ['quantity' => $validated['quantity']]
+            [
+                'quantity' => $validated['quantity'],
+                'batch_output_qty' => $validated['batch_output_qty'] ?? null,
+            ]
         );
+
+        // Đồng bộ batch_output_qty cho tất cả dòng cùng BTP (định mức theo mẻ)
+        if (isset($validated['batch_output_qty'])) {
+            ProductionRecipe::where('material_id', $validated['material_id'])
+                ->update(['batch_output_qty' => $validated['batch_output_qty']]);
+        }
 
         return response()->json(['success' => true, 'data' => $recipe->load(['material', 'rawMaterial'])], 201);
     }
@@ -76,14 +84,26 @@ class ProductionController extends Controller
             'material_id' => 'required|exists:materials,id',
             'quantity' => 'required|numeric|min:0.01',
             'note' => 'nullable|string|max:255',
+            'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency
         ]);
+
+        // Gói 55 p11ac: nếu client_key đã tồn tại → trả bản ghi cũ, không trừ kho lại
+        if (!empty($validated['client_key'])) {
+            $existing = Production::where('client_key', $validated['client_key'])->first();
+            if ($existing) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Phiếu đã được tạo trước đó.',
+                    'data' => $existing->load(['material', 'items.material']),
+                    'duplicate' => true,
+                ]);
+            }
+        }
 
         try {
             $production = DB::transaction(function () use ($validated, $inventoryService) {
                 $material = Material::findOrFail($validated['material_id']);
-                if ($material->type !== 'semi_finished') {
-                    throw new Exception('Chỉ chế biến được bán thành phẩm.');
-                }
+                // Gói 55 p11o: bỏ gate type cũ — check định mức bên dưới đã đủ
 
                 $recipes = ProductionRecipe::where('material_id', $material->id)->get();
                 if ($recipes->isEmpty()) {
@@ -93,16 +113,20 @@ class ProductionController extends Controller
                 $qty = (float) $validated['quantity'];
 
                 // 1. Tính nguyên liệu thô cần trừ
+                // Gói 55 p11c: định mức tính theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
                 $needs = [];
                 foreach ($recipes as $r) {
-                    $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $qty;
+                    $batchOut = (float) ($r->batch_output_qty ?: 1);
+                    // Số mẻ = qty / batch_output_qty; NL cần = quantity_per_batch * số mẻ
+                    $batches = $qty / $batchOut;
+                    $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
                 }
 
                 // 2. Trừ kho FIFO (ném Exception nếu thiếu)
                 $inventoryService->deductMaterials($validated['branch_id'], $needs);
 
                 // 3. Nhập lô mới cho bán thành phẩm
-                $batch = $inventoryService->addStock($validated['branch_id'], $material->id, $qty);
+                $inventoryService->addStock($validated['branch_id'], $material->id, $qty);
 
                 // 4. Lưu phiếu
                 $production = Production::create([
@@ -111,6 +135,7 @@ class ProductionController extends Controller
                     'quantity' => $qty,
                     'user_id' => $request->user()->id,
                     'note' => $validated['note'] ?? null,
+                    'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                 ]);
                 foreach ($needs as $rawId => $usedQty) {
                     $production->items()->create([
@@ -128,6 +153,24 @@ class ProductionController extends Controller
                 'data' => $production,
             ], 201);
         } catch (Exception $e) {
+            // Gói 55 p11ac: race 2 request cùng client_key → unique violation → trả bản ghi đã tạo
+            if (!empty($validated['client_key']) && str_contains($e->getMessage(), 'client_key')) {
+                $existing = Production::where('client_key', $validated['client_key'])->first();
+                if ($existing) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Phiếu đã được tạo trước đó.',
+                        'data' => $existing->load(['material', 'items.material']),
+                        'duplicate' => true,
+                    ]);
+                }
+            }
+            // Gói 55 p11w: log lỗi hệ thống trước khi trả về, tránh che lỗi thật
+            \Log::error('ProductionController@produce failed', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'input' => $request->only(['branch_id', 'material_id', 'quantity']),
+            ]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
     }

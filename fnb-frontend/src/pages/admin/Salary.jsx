@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate, fmtTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
 const fmtH = (n) => (Math.round((n || 0) * 100) / 100).toString();
 const slug = (s) => (s || 'nv').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
@@ -92,6 +92,110 @@ function exportPayslipPNG(payroll) {
     a.download = 'bang-luong-' + slug(payroll.employee.full_name) + '-' + payroll.month + '.png';
     a.href = cv.toDataURL('image/png');
     a.click();
+}
+
+// Gói 55: Tab Tổng lương — tổng hợp lương toàn NV dạng list, 2 chế độ xem (tất cả CN / từng CN)
+function TotalSalaryTab({ month }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [viewMode, setViewMode] = useState('all'); // 'all' | branch_id
+    const [branches, setBranches] = useState([]);
+
+    const loadBranches = () => {
+        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch(() => {});
+    };
+
+    const load = async (branchId) => {
+        setLoading(true);
+        try {
+            const params = { month };
+            if (branchId && branchId !== 'all') params.branch_id = branchId;
+            const r = await axios.get(API + '/salary-summary', { params });
+            setData(r.data?.data || null);
+        } catch (e) { alert(e.response?.data?.message || 'Lỗi tải tổng lương'); }
+        finally { setLoading(false); }
+    };
+
+    useEffect(() => { loadBranches(); }, []);
+    useEffect(() => { load(viewMode); }, [month, viewMode]);
+
+    const fmtVnd = (n) => Number(n || 0).toLocaleString('vi-VN');
+
+    return (
+        <div>
+            <div className="flex gap-2 mb-4 flex-wrap items-center">
+                <button onClick={() => setViewMode('all')}
+                    className={'px-4 py-2 rounded-full text-[13px] font-medium border ' + (viewMode === 'all' ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300')}>
+                    Tất cả chi nhánh
+                </button>
+                {branches.map((b) => (
+                    <button key={b.id} onClick={() => setViewMode(String(b.id))}
+                        className={'px-4 py-2 rounded-full text-[13px] font-medium border ' + (viewMode === String(b.id) ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300')}>
+                        {b.name}
+                    </button>
+                ))}
+            </div>
+
+            {loading && <div className="text-gray-500 text-sm">Đang tính...</div>}
+
+            {data && (
+                <>
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                        <div className="bg-white border rounded-lg p-4">
+                            <div className="text-[12px] text-gray-500">Nhân viên</div>
+                            <div className="text-[22px] font-bold text-[#24305E]">{data.employee_count}</div>
+                        </div>
+                        <div className="bg-white border rounded-lg p-4">
+                            <div className="text-[12px] text-gray-500">Tổng giờ công</div>
+                            <div className="text-[22px] font-bold text-[#24305E]">{data.grand_hours}h</div>
+                        </div>
+                        <div className="bg-white border rounded-lg p-4">
+                            <div className="text-[12px] text-gray-500">Tổng lương</div>
+                            <div className="text-[22px] font-bold text-[#0d6efd]">{fmtVnd(data.grand_total)}đ</div>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto border border-gray-300 rounded-lg bg-white">
+                        <table className="w-full text-[13px] min-w-[640px] border-collapse">
+                            <thead>
+                                <tr className="bg-gray-50">
+                                    <th className="px-3 py-2 border text-left">Nhân viên</th>
+                                    <th className="px-3 py-2 border text-left">Chi nhánh</th>
+                                    <th className="px-3 py-2 border text-left">Chức vụ</th>
+                                    <th className="px-3 py-2 border text-right">Tổng giờ</th>
+                                    <th className="px-3 py-2 border text-right">Đơn giá/giờ</th>
+                                    <th className="px-3 py-2 border text-right">Tổng lương</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.rows.map((r) => (
+                                    <tr key={r.employee_id} className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 border font-medium">{r.full_name}</td>
+                                        <td className="px-3 py-2 border">{r.branch_name}</td>
+                                        <td className="px-3 py-2 border text-gray-500">{r.role_name}</td>
+                                        <td className="px-3 py-2 border text-right">{r.total_hours}h</td>
+                                        <td className="px-3 py-2 border text-right">{fmtVnd(r.hourly_rate)}đ</td>
+                                        <td className="px-3 py-2 border text-right font-bold text-[#0d6efd]">{fmtVnd(r.gross)}đ</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                            <tfoot>
+                                <tr className="bg-[#24305E] text-white font-bold">
+                                    <td className="px-3 py-2 border" colSpan={3}>TỔNG CỘNG ({data.employee_count} NV)</td>
+                                    <td className="px-3 py-2 border text-right">{data.grand_hours}h</td>
+                                    <td className="px-3 py-2 border"></td>
+                                    <td className="px-3 py-2 border text-right">{fmtVnd(data.grand_total)}đ</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                    <div className="text-[12px] text-gray-400 mt-2">
+                        * Tổng lương = tổng giờ × đơn giá giờ (chưa gồm phụ cấp, thưởng, BHXH chi tiết — xem từng NV ở tab Bảng lương)
+                    </div>
+                </>
+            )}
+        </div>
+    );
 }
 
 // Gói 26: Bảng lương theo giờ (đúng mẫu Excel của Đại Vương).
@@ -279,7 +383,7 @@ export default function Salary() {
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
-                    {[['sheet', 'Bảng lương'], ['days', 'Chi tiết ngày công'], ['other', 'Mức lương / Ứng / Thưởng / BHXH']].map(([k, l]) => (
+                    {[['sheet', 'Bảng lương'], ['days', 'Chi tiết ngày công'], ['other', 'Mức lương / Ứng / Thưởng / BHXH'], ['total', 'Tổng lương']].map(([k, l]) => (
                         <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
@@ -356,15 +460,19 @@ export default function Salary() {
                             <table className="w-full text-[13px] min-w-[560px]">
                                 <thead className="sticky top-0 bg-gray-50">
                                     <tr className="text-left text-gray-500">
-                                        <th className="px-3 py-2 font-medium">Ngày</th><th className="px-3 py-2 font-medium">Giờ vào</th>
+                                        <th className="px-3 py-2 font-medium">Ngày</th>
+                                        <th className="px-3 py-2 font-medium">Chi nhánh</th><th className="px-3 py-2 font-medium">Giờ vào</th>
                                         <th className="px-3 py-2 font-medium">Giờ ra</th><th className="px-3 py-2 font-medium">Tổng giờ</th>
                                         <th className="px-3 py-2 font-medium">Suất ăn</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {days.map((d, i) => (
-                                        <tr key={d.date} className="border-t border-gray-100">
+                                        <tr key={d.date + '|' + (d.branch_id || '')} className="border-t border-gray-100">
                                             <td className="px-3 py-1.5 whitespace-nowrap">{fmtDate(d.date)}</td>
+                                            <td className="px-3 py-1.5 whitespace-nowrap text-[12px]">
+                                                {d.branch_name ? <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full px-2 py-0.5 font-medium">{d.branch_name}</span> : <span className="text-gray-300">—</span>}
+                                            </td>
                                             {['check_in', 'check_out'].map((k) => (
                                                 <td key={k} className="px-2 py-1"><input disabled={!editable} value={d[k] || ''} placeholder="HH:MM"
                                                     onChange={(e) => { const nd = [...days]; nd[i][k] = e.target.value; setDays(nd); }} className={inp + ' !w-24'} /></td>
@@ -504,6 +612,11 @@ export default function Salary() {
                             {editable && <button onClick={saveViolations} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu</button>}
                         </div>
                     </div>
+                )}
+
+                {/* Gói 55: Tab Tổng lương */}
+                {tab === 'total' && (
+                    <TotalSalaryTab month={month} />
                 )}
             </div>
 

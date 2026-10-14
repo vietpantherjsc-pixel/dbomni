@@ -3,7 +3,7 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 
 // Gói 8a (2026-10-05): Quản lý kênh bán hàng (giá theo kênh) — thêm/bớt, bật/tắt, kéo-thả sắp xếp.
-const BASE = 'http://localhost/api';
+const BASE = import.meta.env.VITE_API_BASE || '/api';
 
 export default function PriceLists() {
   const [lists, setLists] = useState([]);

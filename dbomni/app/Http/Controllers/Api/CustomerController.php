@@ -77,6 +77,7 @@ class CustomerController extends Controller
         $customer = Customer::findOrFail($id);
         $validated = $request->validate([
             'name' => 'sometimes|string|max:150',
+            'phone' => 'sometimes|string|max:20|unique:customers,phone,' . $id, // Gói 55 p11ad: SĐT không trùng
             'birthday' => 'nullable|date',
             'note' => 'nullable|string|max:255',
             'membership_tier_id' => 'nullable|exists:membership_tiers,id',

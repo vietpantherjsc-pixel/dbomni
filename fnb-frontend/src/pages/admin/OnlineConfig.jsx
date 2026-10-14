@@ -1,14 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { API } from '../../utils/api';
 
 // Gói 6 (2026-10-05): Cấu hình bán online — phí ship + tọa độ chi nhánh (để Mini App tính khoảng cách).
 // Gói 10: bọc AdminLayout để có sidebar (trước đây bị mất).
 // Dùng axios như các trang admin khác (đã gắn sẵn token qua AuthContext).
 const api = async (path, opts = {}) => {
-  const r = await axios({ url: `http://localhost/api${path}`, ...opts });
+  const r = await axios({ url: `${API}${path}`, ...opts });
   if (!r.data?.success) throw new Error(r.data?.message || 'Lỗi');
   return r.data.data;
+};
+
+// Gói 50b: backend trả URL tuyệt đối — dùng trực tiếp, fallback ghép host khi còn relative
+const imgSrc = (u) => {
+  if (!u) return '';
+  if (/^https?:\/\//i.test(u)) return u;
+  return window.location.origin + (u.startsWith('/') ? u : '/' + u);
 };
 
 export default function OnlineConfig() {
@@ -25,7 +33,7 @@ export default function OnlineConfig() {
 
   const load = async () => {
     try {
-      const cfg = await axios.get('http://localhost/api/online/ship-config');
+      const cfg = await axios.get(API + '/online/ship-config');
       if (cfg.data?.success) setShip({ ship_base_fee: String(cfg.data.data.base_fee), ship_base_km: String(cfg.data.data.base_km), ship_per_km: String(cfg.data.data.per_km) });
     } catch (e) { /* bỏ qua */ }
     try {
@@ -35,7 +43,7 @@ export default function OnlineConfig() {
     }
     // Gói 9: nạp cover + điểm thưởng giới thiệu
     try {
-      const s = await axios.get('http://localhost/api/settings');
+      const s = await axios.get(API + '/settings');
       if (s.data) {
         setCover(s.data.shop_cover_url || '');
         setRefPoints(String(s.data.ref_bonus_points ?? '100'));
@@ -74,7 +82,7 @@ export default function OnlineConfig() {
       const fd = new FormData();
       fd.append('image', file);
       if (branchId) fd.append('branch_id', branchId);
-      const res = await axios.post('http://localhost/api/uploads/cover', fd, {
+      const res = await axios.post(API + '/uploads/cover', fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const url = res.data?.data?.url;
@@ -131,146 +139,72 @@ export default function OnlineConfig() {
     <AdminLayout>
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-xl font-bold mb-1">Zalo Mini App</h1>
-      <p className="text-sm text-gray-500 mb-6">Phí ship cho Zalo Mini App + tọa độ chi nhánh để tính khoảng cách.</p>
+      <p className="text-sm text-gray-500 mb-6">Ảnh cover trang chủ cho từng chi nhánh. Thông tin chi nhánh quản lý trong Thiết lập → Chi nhánh.</p>
 
-      {/* Gói 9: Cover trang chủ + điểm thưởng giới thiệu */}
-      {/* Gói 10f: thêm nút tải ảnh lên (jpg/png/webp <= 1MB, server tự crop 1200x500) */}
+      {/* Gói SEC: khôi phục cấu hình phí ship (Gói 52 đã xóa JSX) */}
       <div className="bg-white rounded-xl border p-5 mb-6">
-        <h2 className="font-bold mb-4">🖼️ Trang chủ Mini App</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <h2 className="font-bold mb-2">🚚 Phí giao hàng</h2>
+        <p className="text-xs text-gray-500 mb-3">Phí cơ bản cho quãng đường trong số km đầu, sau đó tính thêm theo mỗi km.</p>
+        <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
-            <label className="text-xs font-semibold text-gray-600">Ảnh cover chung (mặc định)</label>
-            <div className="flex gap-2">
-              <input className={inputCls} value={cover} onChange={(e) => setCover(e.target.value)} placeholder="https://.../cover.jpg" />
-              <label className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold cursor-pointer inline-flex items-center ${uploading === 'common' ? 'bg-gray-300 text-gray-500' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-                {uploading === 'common' ? 'Đang tải...' : '📤 Tải ảnh lên'}
-                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading === 'common'}
-                  onChange={(e) => { uploadCover(e.target.files[0], null); e.target.value = ''; }} />
-              </label>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">Chi nhánh nào chưa có cover riêng sẽ dùng ảnh này. File jpg/png/webp ≤ 1MB, tự crop 1200×500.</p>
+            <label className="block text-xs text-gray-500 mb-1">Phí cơ bản (đ)</label>
+            <input type="number" min="0" value={ship.ship_base_fee}
+              onChange={(e) => setShip({ ...ship, ship_base_fee: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-600">Điểm thưởng cho người giới thiệu</label>
-            <input className={inputCls} type="number" min="0" value={refPoints} onChange={(e) => setRefPoints(e.target.value)} />
-            <p className="text-xs text-gray-500 mt-1">Khi người được giới thiệu đặt đơn thành công và được xác nhận, người share link nhận số điểm này.</p>
+            <label className="block text-xs text-gray-500 mb-1">Số km đầu (km)</label>
+            <input type="number" min="0" step="0.5" value={ship.ship_base_km}
+              onChange={(e) => setShip({ ...ship, ship_base_km: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Thêm mỗi km (đ)</label>
+            <input type="number" min="0" value={ship.ship_per_km}
+              onChange={(e) => setShip({ ...ship, ship_per_km: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm" />
           </div>
         </div>
-        {cover && <img src={cover} alt="cover preview" className="mt-3 rounded-lg w-full max-h-40 object-cover" onError={(e) => { e.target.style.display = 'none'; }} />}
+        <button onClick={saveShip} disabled={saving} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+          {saving ? 'Đang lưu...' : 'Lưu phí ship'}
+        </button>
+      </div>
+
+      {/* Gói 52: gọn — chỉ tên chi nhánh + upload cover */}
+      <div className="bg-white rounded-xl border p-5 mb-6">
+        <h2 className="font-bold mb-2">🖼️ Ảnh cover chung</h2>
+        <p className="text-xs text-gray-500 mb-3">Chi nhánh nào chưa có cover riêng sẽ dùng ảnh này. File jpg/png/webp ≤ 1MB, tự crop 1200×500.</p>
+        <div className="flex gap-2 items-center">
+          <label className={`shrink-0 px-4 py-2 rounded-lg text-sm font-bold cursor-pointer inline-flex items-center ${uploading === 'common' ? 'bg-gray-300 text-gray-500' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+            {uploading === 'common' ? 'Đang tải...' : '📤 Tải ảnh lên'}
+            <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading === 'common'}
+              onChange={(e) => { uploadCover(e.target.files[0], null); e.target.value = ''; }} />
+          </label>
+        </div>
+        {cover && <img src={imgSrc(cover)} alt="cover preview" className="mt-3 rounded-lg w-full max-h-40 object-cover" onError={(e) => { e.target.style.display = 'none'; }} />}
         <button onClick={saveCover} disabled={savingCover} className="mt-4 px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
           {savingCover ? 'Đang lưu...' : 'Lưu'}
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border p-5 mb-6">
-        <h2 className="font-bold mb-4">🚚 Phí giao hàng</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="text-xs font-semibold text-gray-600">Phí dưới {ship.ship_base_km} km (đ)</label>
-            <input className={inputCls} type="number" value={ship.ship_base_fee} onChange={(e) => setShip({ ...ship, ship_base_fee: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-600">Số km tính phí gốc</label>
-            <input className={inputCls} type="number" step="0.5" value={ship.ship_base_km} onChange={(e) => setShip({ ...ship, ship_base_km: e.target.value })} />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-600">Mỗi km thêm (đ)</label>
-            <input className={inputCls} type="number" value={ship.ship_per_km} onChange={(e) => setShip({ ...ship, ship_per_km: e.target.value })} />
-          </div>
-        </div>
-        <p className="text-xs text-gray-500 mt-3">
-          Ví dụ hiện tại: dưới {ship.ship_base_km}km = {Number(ship.ship_base_fee).toLocaleString('vi-VN')}đ,
-          mỗi km xa hơn +{Number(ship.ship_per_km).toLocaleString('vi-VN')}đ.
-          Phí tự cộng vào món <b>"Phí dịch vụ"</b> trên đơn online.
-        </p>
-        <button onClick={saveShip} disabled={saving} className="mt-4 px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
-          {saving ? 'Đang lưu...' : 'Lưu cấu hình'}
-        </button>
-      </div>
-
       <div className="bg-white rounded-xl border p-5">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="font-bold">📍 Tọa độ chi nhánh</h2>
-          <button onClick={() => setShowAdd(!showAdd)} className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700">
-            {showAdd ? 'Đóng' : '+ Thêm chi nhánh'}
-          </button>
-        </div>
-        <p className="text-xs text-gray-500 mb-4">
-          Mini App dùng tọa độ này + địa chỉ khách để tính khoảng cách giao hàng.
-          Lấy tọa độ: mở Google Maps → bấm vào vị trí quán → copy 2 số (vĩ độ, kinh độ), ví dụ: 10.8231, 106.6297.
-        </p>
-        {showAdd && (
-          <div className="border-2 border-dashed border-green-300 rounded-lg p-4 mb-4 bg-green-50/50">
-            <div className="font-bold mb-3 text-sm">Chi nhánh mới</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Mã chi nhánh *</label>
-                <input className={inputCls} value={newB.code} onChange={(e) => setNewB({ ...newB, code: e.target.value })} placeholder="VD: CN-Q2" />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Tên chi nhánh *</label>
-                <input className={inputCls} value={newB.name} onChange={(e) => setNewB({ ...newB, name: e.target.value })} placeholder="VD: Chi nhánh Quận 2" />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-xs font-semibold text-gray-600">Địa chỉ *</label>
-                <input className={inputCls} value={newB.address} onChange={(e) => setNewB({ ...newB, address: e.target.value })} placeholder="Số nhà, đường, phường/quận..." />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Số điện thoại</label>
-                <input className={inputCls} value={newB.phone} onChange={(e) => setNewB({ ...newB, phone: e.target.value })} placeholder="Hotline chi nhánh" />
-              </div>
-              <div />
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Vĩ độ (latitude) *</label>
-                <input className={inputCls} type="number" step="0.00000001" value={newB.latitude} onChange={(e) => setNewB({ ...newB, latitude: e.target.value })} placeholder="10.8231" />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Kinh độ (longitude) *</label>
-                <input className={inputCls} type="number" step="0.00000001" value={newB.longitude} onChange={(e) => setNewB({ ...newB, longitude: e.target.value })} placeholder="106.6297" />
-              </div>
-            </div>
-            <button onClick={createBranch} className="mt-3 px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">
-              Tạo chi nhánh
-            </button>
-          </div>
-        )}
+        <h2 className="font-bold mb-4">🏪 Cover theo chi nhánh</h2>
         {branches.map((b) => (
           <div key={b.id} className="border rounded-lg p-4 mb-3">
             <div className="font-bold mb-3">{b.name}</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="md:col-span-2">
-                <label className="text-xs font-semibold text-gray-600">Địa chỉ</label>
-                <input className={inputCls} value={b.address || ''} onChange={(e) => setB(b.id, 'address', e.target.value)} placeholder="VD: 123 Đường Số 15, Quận..." />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Vĩ độ (latitude)</label>
-                <input className={inputCls} type="number" step="0.0000001" value={b.latitude || ''} onChange={(e) => setB(b.id, 'latitude', e.target.value)} placeholder="10.8231" />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600">Kinh độ (longitude)</label>
-                <input className={inputCls} type="number" step="0.0000001" value={b.longitude || ''} onChange={(e) => setB(b.id, 'longitude', e.target.value)} placeholder="106.6297" />
-              </div>
-              {/* Gói 10f: cover riêng từng chi nhánh (trống = dùng cover chung) */}
-              <div className="md:col-span-2">
-                <label className="text-xs font-semibold text-gray-600">Ảnh cover riêng cho Mini App</label>
-                <div className="flex items-center gap-3 mt-1">
-                  {b.cover_url
-                    ? <img src={b.cover_url} alt="cover" className="h-16 w-40 object-cover rounded-lg border" onError={(e) => { e.target.style.display = 'none'; }} />
-                    : <span className="text-xs text-gray-400 italic">Đang dùng cover chung</span>}
-                  <label className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer inline-flex items-center ${uploading === b.id ? 'bg-gray-300 text-gray-500' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-                    {uploading === b.id ? 'Đang tải...' : '📤 Tải ảnh lên'}
-                    <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading === b.id}
-                      onChange={(e) => { uploadCover(e.target.files[0], b.id); e.target.value = ''; }} />
-                  </label>
-                  {b.cover_url && (
-                    <button onClick={() => clearBranchCover(b)} className="text-xs text-red-600 hover:underline">Xóa (dùng cover chung)</button>
-                  )}
-                </div>
-              </div>
+            <div className="flex items-center gap-3">
+              {b.cover_url
+                ? <img src={imgSrc(b.cover_url)} alt="cover" className="h-16 w-40 object-cover rounded-lg border" onError={(e) => { e.target.style.display = 'none'; }} />
+                : <span className="text-xs text-gray-400 italic">Đang dùng cover chung</span>}
+              <label className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer inline-flex items-center ${uploading === b.id ? 'bg-gray-300 text-gray-500' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+                {uploading === b.id ? 'Đang tải...' : '📤 Tải ảnh lên'}
+                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading === b.id}
+                  onChange={(e) => { uploadCover(e.target.files[0], b.id); e.target.value = ''; }} />
+              </label>
+              {b.cover_url && (
+                <button onClick={() => clearBranchCover(b)} className="text-xs text-red-600 hover:underline">Xóa (dùng cover chung)</button>
+              )}
             </div>
-            <button onClick={() => saveBranch(b)} className="mt-3 px-4 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold hover:bg-slate-800">
-              Lưu chi nhánh
-            </button>
           </div>
         ))}
       </div>

@@ -3,6 +3,20 @@
 // khi bấm in -> hộp thoại Chrome hiện ra -> chọn đúng máy in K80 / máy in tem.
 
 import { fmtDateTime, fmtTime } from './format.js';
+import { API } from './api.js';
+
+// Gói SEC: đọc cấu hình mẫu in từ settings (cache để không fetch mỗi lần in)
+let _printCfg = null;
+async function getPrintCfg() {
+  if (_printCfg) return _printCfg;
+  try {
+    const res = await fetch(`${API}/settings`);
+    const data = await res.json();
+    _printCfg = data || {};
+  } catch { _printCfg = {}; }
+  return _printCfg;
+}
+const cfgOn = (cfg, key) => (cfg[key] ?? '1') !== '0';
 
 // Gói 36: "Giờ" trên bill — order.date từ POS ("HH:MM") hoặc created_at ISO → chuẩn hiển thị
 const fmtOrderTime = (v) => {
@@ -32,7 +46,8 @@ function openPrintWindow(html, title) {
 const fmt = (n) => Number(n || 0).toLocaleString('vi-VN');
 
 // order: { code, created_at/date, customer_name, order_type, items: [{quantity, name|product_name, optionsText|note, price|unit_price}], subtotal, discount, total, payment_method, cashier }
-export function printBill(order) {
+export async function printBill(order) {
+  const cfg = await getPrintCfg();
   const items = order.items || [];
   const typeLabel = { takeaway: 'MANG ĐI', delivery: 'GIAO HÀNG', dine_in: 'TẠI BÀN' }[order.order_type] || '';
   const itemRows = items.map((it) => {
@@ -64,7 +79,9 @@ export function printBill(order) {
     .total { font-size: 14px; font-weight: bold; }
   </style></head>
   <body>
-    <div class="center title">CAFE & TEA OMNI</div>
+    ${cfgOn(cfg, 'show_logo') ? `<div class="center title">CAFE & TEA OMNI</div>` : ''}
+    ${cfgOn(cfg, 'show_address') ? `<div class="center">Địa chỉ quán</div>` : ''}
+    ${cfgOn(cfg, 'show_hotline') ? `<div class="center">Hotline</div>` : ''}
     <div class="center">HÓA ĐƠN BÁN HÀNG ${typeLabel ? '(' + typeLabel + ')' : ''}</div>
     <div class="dashed"></div>
     <div class="row"><span>Mã đơn:</span><span><b>${escapeHtml(order.code || '')}</b></span></div>
@@ -79,7 +96,7 @@ export function printBill(order) {
     <div class="row total"><span>TỔNG CỘNG:</span><span>${fmt(order.total)} đ</span></div>
     <div class="row"><span>Thanh toán:</span><span>${order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}</span></div>
     <div class="dashed"></div>
-    <div class="center">Cảm ơn quý khách!<br/>Hẹn gặp lại</div>
+    ${cfgOn(cfg, 'show_thankyou') ? `<div class="center">${escapeHtml(cfg.thankyou_text || 'Cảm ơn quý khách! Hẹn gặp lại!')}</div>` : ''}
   </body></html>`;
 
   openPrintWindow(html, 'Bill ' + (order.code || ''));
@@ -91,7 +108,8 @@ function escapeHtml(s) {
 
 // In tem dán ly 50x30mm: 1 tem / 1 ly (theo số lượng từng món).
 // Nội dung: mã đơn + tên món + nhóm tùy chọn + ghi chú.
-export function printLabels(order) {
+export async function printLabels(order) {
+  const cfg = await getPrintCfg();
   const items = order.items || [];
   const labels = [];
   items.forEach((it) => {
@@ -101,9 +119,9 @@ export function printLabels(order) {
     for (let i = 0; i < qty; i++) {
       labels.push(`
         <div class="label">
-          <div class="code">${escapeHtml(order.code || '')}</div>
-          <div class="name">${escapeHtml(name)}</div>
-          ${opt ? `<div class="opt">${escapeHtml(opt)}</div>` : ''}
+          ${cfgOn(cfg, 'label_show_code') ? `<div class="code">${escapeHtml(order.code || '')}</div>` : ''}
+          ${cfgOn(cfg, 'label_show_name') ? `<div class="name">${escapeHtml(name)}</div>` : ''}
+          ${cfgOn(cfg, 'label_show_opts') && opt ? `<div class="opt">${escapeHtml(opt)}</div>` : ''}
         </div>`);
     }
   });

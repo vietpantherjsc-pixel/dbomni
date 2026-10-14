@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\MaterialCategory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 // Gói 22 (2026-10-09): CRUD loại danh mục nguyên liệu.
 class MaterialCategoryController extends Controller
@@ -48,16 +49,20 @@ class MaterialCategoryController extends Controller
             'ids' => 'required|array|min:1',
             'ids.*' => 'exists:material_categories,id',
         ]);
-        foreach ($validated['ids'] as $i => $id) {
-            MaterialCategory::where('id', $id)->update(['sort_order' => $i + 1]);
-        }
+        // Gói 55: bọc transaction
+        DB::transaction(function () use ($validated) {
+            foreach ($validated['ids'] as $i => $id) {
+                MaterialCategory::where('id', $id)->update(['sort_order' => $i + 1]);
+            }
+        });
         return response()->json(['success' => true, 'message' => 'Đã sắp xếp lại thứ tự.']);
     }
 
     public function destroy(int $id): JsonResponse
     {
         $cat = MaterialCategory::findOrFail($id);
-        if ($cat->materials()->exists()) {
+        // Gói 55: tính cả NL xóa mềm để tránh orphan khi restore
+        if ($cat->materials()->withTrashed()->exists()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Loại này đang có nguyên liệu, không thể xóa. Hãy chuyển nguyên liệu sang loại khác trước.',

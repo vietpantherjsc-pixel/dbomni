@@ -3,8 +3,8 @@ import axios from 'axios';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 
 // Gói 35: Thiết lập QR chấm công theo chi nhánh — xem QR, copy URL, tạo lại mã, tải PNG.
 export default function AttendanceQr() {

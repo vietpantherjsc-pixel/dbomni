@@ -35,19 +35,25 @@ class StockTransferController extends Controller
     // Tạo phiếu nháp (chưa trừ/cộng kho)
     public function store(Request $request): JsonResponse
     {
+        $actor = $request->user();
+        $isEmployee = $actor instanceof \App\Models\Employee;
         $v = $request->validate([
-            'from_branch_id' => 'required|exists:branches,id|different:to_branch_id',
+            'from_branch_id' => ($isEmployee ? 'nullable' : 'required') . '|exists:branches,id|different:to_branch_id',
             'to_branch_id' => 'required|exists:branches,id',
             'note' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1|max:200',
             'items.*.material_id' => 'required|exists:materials,id',
             'items.*.quantity' => 'required|numeric|min:0.001',
         ]);
-        $actor = $request->user();
-        $transfer = DB::transaction(function () use ($v, $actor) {
+        // Gói 55 p11aa: NV ép kho nguồn = chi nhánh của mình
+        $fromBranchId = $isEmployee ? (int) $actor->branch_id : (int) $v['from_branch_id'];
+        if ($fromBranchId === (int) $v['to_branch_id']) {
+            return response()->json(['success' => false, 'message' => 'Kho nguồn và kho đích phải khác nhau.'], 422);
+        }
+        $transfer = DB::transaction(function () use ($v, $actor, $fromBranchId) {
             $t = StockTransfer::create([
                 'code' => StockTransfer::nextCode(),
-                'from_branch_id' => $v['from_branch_id'],
+                'from_branch_id' => $fromBranchId,
                 'to_branch_id' => $v['to_branch_id'],
                 'status' => 'draft',
                 'requested_by' => $actor && $actor instanceof \App\Models\User ? $actor->id : null,
@@ -67,13 +73,14 @@ class StockTransferController extends Controller
     // Chốt: trừ kho nguồn (FIFO) + nhập kho đích (giữ nguyên giá vốn/HSD từng lô) trong 1 transaction
     public function confirm(int $id, Request $request, InventoryService $inv): JsonResponse
     {
-        $t = StockTransfer::with('items')->findOrFail($id);
-        if ($t->status !== 'draft') {
-            return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái nháp.'], 422);
-        }
         $actor = $request->user();
         try {
-            $totalCost = DB::transaction(function () use ($t, $actor, $inv) {
+            $totalCost = DB::transaction(function () use ($id, $actor, $inv) {
+                // Gói 55: lock row trong transaction trước khi check status (chống race condition)
+                $t = StockTransfer::with('items')->lockForUpdate()->findOrFail($id);
+                if ($t->status !== 'draft') {
+                    throw new \Exception('Phiếu không ở trạng thái nháp.');
+                }
                 $needs = [];
                 foreach ($t->items as $it) {
                     $needs[$it->material_id] = ($needs[$it->material_id] ?? 0) + (float) $it->quantity;
@@ -81,6 +88,7 @@ class StockTransferController extends Controller
                 // Trừ nguồn, lấy chi tiết từng lô (ném Exception nếu tồn không đủ → chặn cứng)
                 $deducted = $inv->deductMaterialsDetailed((int) $t->from_branch_id, $needs);
                 $total = 0;
+                $lotRows = []; // Gói 55: gom chi tiết lô để insert 1 lần (tránh last-wins)
                 // Gộp theo nguyên liệu để tránh nhân đôi khi phiếu có 2 dòng cùng NL
                 $consumed = [];
                 foreach ($t->items as $it) {
@@ -88,6 +96,7 @@ class StockTransferController extends Controller
                     if (!empty($consumed[$mid])) continue;
                     $consumed[$mid] = true;
                     $lines = $deducted[$mid] ?? [];
+                    $first = true;
                     foreach ($lines as $ln) {
                         $cost = (float) $ln['quantity'] * (float) $ln['unit_cost'];
                         $total += $cost;
@@ -95,20 +104,37 @@ class StockTransferController extends Controller
                         $toBatch = Batch::create([
                             'material_id' => $mid,
                             'branch_id' => $t->to_branch_id,
-                            'batch_code' => 'CK-' . $t->code,
+                            'batch_code' => $t->code, // Gói 55 p11w: $t->code đã có prefix CK-, không thêm nữa
                             'initial_quantity' => $ln['quantity'],
                             'current_quantity' => $ln['quantity'],
                             'unit_cost' => $ln['unit_cost'],
                             'expired_at' => $ln['expired_at'],
                             'status' => 'active',
                         ]);
-                        // Ghi truy vết vào dòng đầu tiên của nguyên liệu này
-                        $it->update([
-                            'unit_cost' => $ln['unit_cost'],
-                            'from_batch_id' => $ln['batch_id'],
+                        // Gói 55: lưu chi tiết từng lô vào bảng stock_transfer_item_lots
+                        $lotRows[] = [
+                            'stock_transfer_item_id' => $it->id,
+                            'batch_id' => $ln['batch_id'],
                             'to_batch_id' => $toBatch->id,
-                        ]);
+                            'quantity' => $ln['quantity'],
+                            'unit_cost' => $ln['unit_cost'],
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ];
+                        // Giữ tương thích: dòng đầu vẫn ghi tóm tắt vào item
+                        if ($first) {
+                            $it->update([
+                                'unit_cost' => $ln['unit_cost'],
+                                'from_batch_id' => $ln['batch_id'],
+                                'to_batch_id' => $toBatch->id,
+                            ]);
+                            $first = false;
+                        }
                     }
+                }
+                // Insert chi tiết lô 1 lần
+                if (!empty($lotRows)) {
+                    \App\Models\StockTransferItemLot::insert($lotRows);
                 }
                 $t->update([
                     'status' => 'confirmed',

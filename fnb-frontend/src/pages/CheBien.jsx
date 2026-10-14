@@ -184,8 +184,11 @@ export default function CheBien() {
   };
 
   const qtyNum = parseFloat(String(qty).replace(',', '.')) || 0;
+  // Gói 55 p11c: định mức theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
+  const batchOut = recipe?.batch_output_qty ? Number(recipe.batch_output_qty) : 1;
+  const batches = batchOut > 0 ? qtyNum / batchOut : 0;
   const rows = (recipe && recipe.recipes ? recipe.recipes : []).map((rc) => {
-    const need = Number(rc.quantity || 0) * qtyNum;
+    const need = Number(rc.quantity || 0) * batches;
     const stock = Number(rc.stock_qty || 0);
     return { ...rc, need, stock, short: need - stock > 1e-9 };
   });
@@ -318,7 +321,7 @@ export default function CheBien() {
                             <td>
                               <div>{r.raw_material ? r.raw_material.name : ''}</div>
                               <div className={'cb-stock' + (r.short ? ' bad' : '')}>
-                                Định mức: {fmtQty(r.quantity)}{r.raw_material && r.raw_material.unit ? ' ' + r.raw_material.unit : ''}/1 {selMat && selMat.unit ? selMat.unit : ''}
+                                Định mức: {fmtQty(r.quantity)}{r.raw_material && r.raw_material.unit ? ' ' + r.raw_material.unit : ''}/{batchOut > 1 ? `${fmtQty(batchOut)} ` : '1 '}{selMat && selMat.unit ? selMat.unit : ''}/mẻ
                               </div>
                             </td>
                             <td style={{ textAlign: 'right' }} className="cb-need">

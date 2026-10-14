@@ -122,7 +122,12 @@ export default function NhapKho() {
 
   const [suppliers, setSuppliers] = useState([]);
   const [materials, setMaterials] = useState([]);
+  const [units, setUnits] = useState([]); // Gói 55 p11z: đơn vị tính từ Thiết lập
+  const [categories, setCategories] = useState([]); // Gói 55 p11z: loại NL để nhóm popup
   const [loading, setLoading] = useState(false);
+  // Gói 55 p11z: popup chọn nhiều nguyên liệu
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickSearch, setPickSearch] = useState('');
 
   const todayIso = useMemo(() => isoToday(), []);
   // --- form phiếu ---
@@ -130,13 +135,6 @@ export default function NhapKho() {
   const [invoiceNo, setInvoiceNo] = useState('');
   const [receiptDate, setReceiptDate] = useState(todayIso);
   const [items, setItems] = useState([]);
-  // --- thêm dòng hàng ---
-  const [matQuery, setMatQuery] = useState('');
-  const [matOpen, setMatOpen] = useState(false);
-  const [pickMat, setPickMat] = useState(null);
-  const [qty, setQty] = useState('');
-  const [unitCost, setUnitCost] = useState('');
-  const [expDate, setExpDate] = useState('');
   // --- thuế / phí ---
   const [taxIncluded, setTaxIncluded] = useState(false);
   const [taxRate, setTaxRate] = useState(0);
@@ -177,8 +175,6 @@ export default function NhapKho() {
     setInvoiceNo('');
     setReceiptDate(isoToday());
     setItems([]);
-    setMatQuery(''); setMatOpen(false); setPickMat(null);
-    setQty(''); setUnitCost(''); setExpDate('');
     setDiscount(''); setShipping(''); setNote('');
     if (full) {
       setSupplierId(''); setPaymentType('paid');
@@ -189,12 +185,16 @@ export default function NhapKho() {
   const loadAll = async (tk) => {
     setLoading(true);
     try {
-      const [s, m] = await Promise.all([
+      const [s, m, u, c] = await Promise.all([
         axios.get(API + '/employee/suppliers', auth(tk)),
         axios.get(API + '/employee/materials', auth(tk)),
+        axios.get(API + '/employee/units', auth(tk)).catch(() => ({ data: { data: [] } })),
+        axios.get(API + '/employee/stocktake-meta', auth(tk)).catch(() => ({ data: { data: {} } })),
       ]);
       setSuppliers((s.data && s.data.data) || []);
       setMaterials((m.data && m.data.data) || []);
+      setUnits((u.data && (u.data.data || u.data)) || []);
+      setCategories(((c.data && c.data.data) || {}).categories || []);
     } catch (e) {
       if (expired(e)) return;
       toast(errMsg(e, 'Không tải được dữ liệu.'));
@@ -226,45 +226,42 @@ export default function NhapKho() {
     } finally { setLoginBusy(false); }
   };
 
-  // --- tìm nguyên liệu ---
-  const matResults = useMemo(() => {
-    const q = matQuery.trim().toLowerCase();
-    if (!q || pickMat) return [];
-    return materials.filter((m) => String(m.name || '').toLowerCase().includes(q)).slice(0, 8);
-  }, [matQuery, materials, pickMat]);
-
-  const pickMaterial = (m) => {
-    setPickMat(m);
-    setMatQuery(m.name);
-    setMatOpen(false);
-  };
-  const clearPick = () => {
-    setPickMat(null); setMatQuery('');
-  };
-
-  const addItem = () => {
-    if (!pickMat) { toast('Vui lòng chọn nguyên liệu.'); return; }
-    const q = qtyNum(qty);
-    if (!q || q <= 0) { toast('Vui lòng nhập số lượng lớn hơn 0.'); return; }
-    if (String(unitCost).trim() === '') { toast('Vui lòng nhập đơn giá.'); return; }
-    const pu = pickMat.purchase_unit || pickMat.unit || '';
-    setItems((prev) => [...prev, {
-      key: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-      materialId: pickMat.id,
-      name: pickMat.name,
-      purchaseUnit: pu,
-      unit: pickMat.unit || '',
-      conversionRate: Number(pickMat.conversion_rate) || 1,
-      qty: String(qty).trim(),
-      unitCost: String(unitCost).trim(),
-      expiredAt: expDate || '',
-    }]);
-    setPickMat(null); setMatQuery(''); setQty(''); setUnitCost(''); setExpDate('');
-    toast('Đã thêm vào phiếu.');
-  };
-
   const removeItem = (key) => {
     setItems((prev) => prev.filter((it) => it.key !== key));
+  };
+
+  // Gói 55 p11z: thêm nhiều nguyên liệu từ popup (mỗi dòng nhập SL/đơn giá sau)
+  const addMultipleMaterials = (pickedIds) => {
+    const existing = new Set(items.map((it) => it.materialId));
+    const added = [];
+    pickedIds.forEach((id) => {
+      if (existing.has(id)) return;
+      const m = materials.find((x) => x.id === id);
+      if (!m) return;
+      const pu = m.purchase_unit || m.unit || '';
+      added.push({
+        key: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        materialId: m.id,
+        name: m.name,
+        purchaseUnit: pu,
+        unit: m.unit || '',
+        conversionRate: Number(m.conversion_rate) || 1,
+        qty: '',
+        unitCost: '',
+        expiredAt: '',
+      });
+    });
+    if (added.length) {
+      setItems((prev) => [...prev, ...added]);
+      toast('Đã thêm ' + added.length + ' nguyên liệu.');
+    }
+    setShowPicker(false);
+    setPickSearch('');
+  };
+
+  // Cập nhật 1 trường của dòng trong phiếu
+  const setItemField = (key, field, value) => {
+    setItems((prev) => prev.map((it) => it.key === key ? { ...it, [field]: value } : it));
   };
 
   // --- tính tổng live ---
@@ -284,14 +281,16 @@ export default function NhapKho() {
   }, [subtotal, vatAmount, taxIncluded, discount, shipping]);
 
   const submit = async () => {
-    if (items.length === 0) { toast('Phiếu chưa có mặt hàng nào.'); return; }
+    // Gói 55 p11z: chỉ gửi dòng có SL > 0
+    const validItems = items.filter((it) => qtyNum(it.qty) > 0);
+    if (validItems.length === 0) { toast('Vui lòng nhập số lượng cho ít nhất 1 mặt hàng.'); return; }
     if (!receiptDate) { toast('Vui lòng chọn ngày nhập.'); return; }
     if (paymentType === 'debt' && !supplierId) { toast('Công nợ bắt buộc phải chọn nhà cung cấp.'); return; }
     const supName = supplierId
       ? (suppliers.find((s) => String(s.id) === String(supplierId)) || {}).name || ''
       : 'Mua lẻ';
     if (!window.confirm(
-      'Tạo phiếu nhập ' + items.length + ' mặt hàng, tổng ' + fmtVND(grand) + '?\n' +
+      'Tạo phiếu nhập ' + validItems.length + ' mặt hàng, tổng ' + fmtVND(grand) + '?\n' +
       'NCC: ' + supName + ' · ' + (paymentType === 'paid' ? 'Trả ngay' : 'Công nợ')
     )) return;
     setSaving(true);
@@ -306,9 +305,10 @@ export default function NhapKho() {
         shipping_fee: num(shipping),
         payment_type: paymentType,
         note: note.trim() || null,
-        items: items.map((it) => ({
+        items: validItems.map((it) => ({
           material_id: it.materialId,
           purchase_quantity: qtyNum(it.qty),
+          purchase_unit: it.purchaseUnit || null,
           unit_cost: num(it.unitCost),
           expired_at: it.expiredAt || null,
         })),
@@ -454,92 +454,87 @@ export default function NhapKho() {
 
           <section className="nk-card">
             <h3>Thêm mặt hàng</h3>
-            <label className="nk-label" style={{ marginTop: 0 }}>Tìm nguyên liệu</label>
-            <div className="nk-search">
-              <input
-                className="nk-field"
-                value={matQuery}
-                onChange={(e) => { setMatQuery(e.target.value); setMatOpen(true); }}
-                onFocus={() => setMatOpen(true)}
-                placeholder="Gõ tên nguyên liệu..."
-                autoComplete="off"
-              />
-              {matOpen && matResults.length > 0 && (
-                <div className="nk-drop">
-                  {matResults.map((m) => (
-                    <div className="nk-opt" key={m.id} onClick={() => pickMaterial(m)}>
-                      {m.name}
-                      <small>{m.purchase_unit || m.unit || ''}{m.category_name ? ' · ' + m.category_name : ''}</small>
-                    </div>
-                  ))}
-                </div>
-              )}
+            {/* Gói 55 p11z: popup chọn nhiều thay cho dropdown đơn */}
+            <button className="nk-addbtn" onClick={() => setShowPicker(true)}>
+              ＋ Chọn nguyên liệu ({items.length} đã chọn)
+            </button>
+            <div className="nk-warn" style={{ marginTop: 10 }}>
+              Chọn nhiều nguyên liệu 1 lần, sau đó nhập số lượng &amp; đơn giá từng dòng bên dưới.
             </div>
-            {pickMat && (
-              <div className="nk-pick">
-                <span>✓ {pickMat.name}{pickMat.purchase_unit ? ' (' + pickMat.purchase_unit + ')' : ''}</span>
-                <button onClick={clearPick} aria-label="Bỏ chọn">✕</button>
-              </div>
-            )}
-            <div className="nk-2col">
-              <div>
-                <label className="nk-label">Số lượng{pickMat && pickMat.purchase_unit ? ' (' + pickMat.purchase_unit + ')' : ''}</label>
-                <input
-                  className="nk-field"
-                  inputMode="decimal"
-                  value={qty}
-                  onChange={(e) => setQty(e.target.value.replace(/[^\d.,]/g, ''))}
-                  placeholder="0"
-                />
-              </div>
-              <div>
-                <label className="nk-label">Đơn giá (đ)</label>
-                <input
-                  className="nk-field"
-                  inputMode="numeric"
-                  value={unitCost}
-                  onChange={(e) => setUnitCost(e.target.value.replace(/[^\d]/g, ''))}
-                  placeholder="0"
-                />
-              </div>
-            </div>
-            <label className="nk-label">Hạn sử dụng (không bắt buộc)</label>
-            <DateInput value={expDate} onChange={setExpDate} className="nk-field" placeholder="dd/mm/yyyy" />
-            {pickMat && qtyNum(qty) > 0 && (
-              <div className="nk-warn" style={{ marginTop: 10 }}>
-                💰 Thành tiền: <b>{fmtVND(qtyNum(qty) * num(unitCost))}</b>
-                {pickMat.conversion_rate && Number(pickMat.conversion_rate) !== 1 && pickMat.unit ? (
-                  <span> · Quy đổi tồn kho: <b>{(qtyNum(qty) * Number(pickMat.conversion_rate)).toLocaleString('vi-VN')} {pickMat.unit}</b></span>
-                ) : null}
-              </div>
-            )}
-            <button className="nk-addbtn" onClick={addItem}>＋ Thêm vào phiếu</button>
           </section>
 
           <section className="nk-card">
             <h3>Hàng trong phiếu ({items.length})</h3>
             {items.length === 0 ? (
-              <div className="nk-empty">Chưa có mặt hàng nào.<br />Tìm nguyên liệu ở trên để thêm.</div>
+              <div className="nk-empty">Chưa có mặt hàng nào.<br />Bấm "Chọn nguyên liệu" ở trên để thêm.</div>
             ) : (
               items.map((it) => {
                 const line = qtyNum(it.qty) * num(it.unitCost);
                 const stockQty = qtyNum(it.qty) * (Number(it.conversionRate) || 1);
                 return (
                   <div className="nk-item" key={it.key}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 8 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="nk-iname">{it.name}</div>
                         <div className="nk-idetail">
-                          {it.qty} {it.purchaseUnit} × {fmtVND(num(it.unitCost))}
                           {it.unit && it.conversionRate && Number(it.conversionRate) !== 1 ? (
-                            <span> → {stockQty.toLocaleString('vi-VN')} {it.unit} tồn</span>
+                            <span>ĐV cơ sở: {it.unit}</span>
                           ) : null}
-                          {it.expiredAt ? <span> · HSD {fmtDMY(it.expiredAt)}</span> : null}
                         </div>
                       </div>
-                      <div className="nk-itotal">{fmtVND(line)}</div>
                       <button className="nk-del" onClick={() => removeItem(it.key)} aria-label="Xóa dòng">✕</button>
                     </div>
+                    {/* Gói 55 p11z: nhập trực tiếp từng dòng */}
+                    <div className="nk-2col">
+                      <div>
+                        <label className="nk-label" style={{ marginTop: 0 }}>SL nhập</label>
+                        <input
+                          className="nk-field"
+                          inputMode="decimal"
+                          value={it.qty}
+                          onChange={(e) => setItemField(it.key, 'qty', e.target.value.replace(/[^\d.,]/g, ''))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="nk-label">Đơn vị mua</label>
+                        <select
+                          className="nk-field"
+                          value={it.purchaseUnit}
+                          onChange={(e) => setItemField(it.key, 'purchaseUnit', e.target.value)}
+                        >
+                          <option value={it.unit}>{it.unit} (cơ sở)</option>
+                          {units.filter((u) => u.name !== it.unit).map((u) => (
+                            <option key={u.id} value={u.name}>{u.name}</option>
+                          ))}
+                          {it.purchaseUnit && it.purchaseUnit !== it.unit && !units.some((u) => u.name === it.purchaseUnit) && (
+                            <option value={it.purchaseUnit}>{it.purchaseUnit}</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="nk-2col">
+                      <div>
+                        <label className="nk-label">Đơn giá (đ)</label>
+                        <input
+                          className="nk-field"
+                          inputMode="numeric"
+                          value={it.unitCost}
+                          onChange={(e) => setItemField(it.key, 'unitCost', e.target.value.replace(/[^\d]/g, ''))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="nk-label">HSD</label>
+                        <DateInput value={it.expiredAt} onChange={(v) => setItemField(it.key, 'expiredAt', v)} className="nk-field" placeholder="dd/mm/yyyy" />
+                      </div>
+                    </div>
+                    {qtyNum(it.qty) > 0 && (
+                      <div className="nk-idetail" style={{ marginTop: 6 }}>
+                        💰 <b>{fmtVND(line)}</b>
+                        {stockQty > 0 && it.unit ? <span> · ≈ {stockQty.toLocaleString('vi-VN')} {it.unit} tồn</span> : null}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -637,7 +632,101 @@ export default function NhapKho() {
         </>
       )}
 
+      {/* Gói 55 p11z: popup chọn nhiều nguyên liệu */}
+      {showPicker && (
+        <MaterialMultiPicker
+          materials={materials}
+          categories={categories}
+          excludeIds={items.map((it) => it.materialId)}
+          search={pickSearch}
+          setSearch={setPickSearch}
+          onClose={() => { setShowPicker(false); setPickSearch(''); }}
+          onConfirm={addMultipleMaterials}
+        />
+      )}
+
       <div className={'nk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
+    </div>
+  );
+}
+
+// Gói 55 p11z: popup chọn nhiều nguyên liệu (copy pattern từ KiemKe.jsx)
+function MaterialMultiPicker({ materials, categories, excludeIds, search, setSearch, onClose, onConfirm }) {
+  const [picked, setPicked] = useState(new Set());
+
+  const groups = useMemo(() => {
+    const q = (search || '').trim().toLowerCase();
+    const available = (materials || []).filter((m) =>
+      !excludeIds.includes(m.id) &&
+      m.is_active !== false &&
+      (!q || String(m.name || '').toLowerCase().includes(q))
+    );
+    const sorted = (categories || []).slice()
+      .sort((a, b) => ((a.sort_order ?? 0) - (b.sort_order ?? 0)) || (a.id - b.id));
+    const result = [];
+    const byCat = {};
+    const uncat = [];
+    available.forEach((m) => {
+      const cid = m.material_category_id;
+      if (!cid) { uncat.push(m); return; }
+      if (!byCat[cid]) byCat[cid] = [];
+      byCat[cid].push(m);
+    });
+    sorted.forEach((c) => {
+      if (byCat[c.id]?.length) result.push({ name: c.name, items: byCat[c.id] });
+    });
+    if (uncat.length) result.push({ name: 'Chưa phân loại', items: uncat });
+    return result;
+  }, [materials, excludeIds, categories, search]);
+
+  const toggle = (id) => {
+    const next = new Set(picked);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setPicked(next);
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: '18px 18px 0 0', width: '100%', maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: 18 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ fontSize: 16, fontWeight: 800, color: '#24305E', marginBottom: 12 }}>Chọn nguyên liệu</h3>
+        <input
+          style={{ width: '100%', minHeight: 48, border: '1.5px solid #F5A623', borderRadius: 12, padding: '10px 12px', fontSize: 15, marginBottom: 12, boxSizing: 'border-box' }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Tìm nguyên liệu..."
+          autoFocus
+        />
+        <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>
+          {groups.length === 0 && <div style={{ textAlign: 'center', color: '#6b7280', padding: 18 }}>Không có nguyên liệu nào.</div>}
+          {groups.map((g) => (
+            <div key={g.name} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#666', textTransform: 'uppercase', marginBottom: 6 }}>
+                {g.name} ({g.items.length})
+              </div>
+              {g.items.map((m) => (
+                <button key={m.id} onClick={() => toggle(m.id)}
+                  style={{
+                    width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '11px 12px', marginBottom: 6, borderRadius: 10, border: '1px solid',
+                    borderColor: picked.has(m.id) ? '#24305E' : '#eee',
+                    background: picked.has(m.id) ? '#eef2ff' : '#fff',
+                    fontSize: 14, textAlign: 'left', fontFamily: 'inherit',
+                  }}>
+                  <span>{m.name} <span style={{ color: '#999', fontSize: 12 }}>({m.unit})</span></span>
+                  {picked.has(m.id) && <span style={{ color: '#24305E', fontWeight: 800 }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClose} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #ddd', background: '#fff', fontSize: 15, fontWeight: 700 }}>Hủy</button>
+          <button onClick={() => onConfirm([...picked])} disabled={picked.size === 0}
+            style={{ flex: 1, minHeight: 48, borderRadius: 12, border: 'none', background: '#16a34a', color: '#fff', fontSize: 15, fontWeight: 700, opacity: picked.size === 0 ? 0.45 : 1 }}>
+            Thêm ({picked.size})
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

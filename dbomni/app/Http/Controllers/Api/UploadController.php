@@ -48,7 +48,8 @@ class UploadController extends Controller
             $file->move($dir, $filename);
         }
 
-        $url = '/covers/' . $filename; // Gói 49k: đường dẫn tương đối — Mini App tự ghép host (tránh localhost)
+        // Gói 50b: URL tuyệt đối theo host thật của request (tránh localhost:3001 của frontend)
+        $url = $request->getSchemeAndHttpHost() . '/covers/' . $filename;
 
         if ($branchId) {
             Branch::where('id', $branchId)->update(['cover_url' => $url]);
@@ -73,8 +74,25 @@ class UploadController extends Controller
         $ext = $file->getClientOriginalExtension() ?: 'jpg';
         $filename = 'promo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
         $file->move($dir, $filename);
-        // Gói 49k: đường dẫn tương đối — Mini App tự ghép host (tránh localhost)
-        return response()->json(['success' => true, 'data' => ['url' => '/covers/' . $filename]]);
+        // Gói 50b: URL tuyệt đối theo host thật của request (tránh localhost:3001 của frontend)
+        return response()->json(['success' => true, 'data' => ['url' => $request->getSchemeAndHttpHost() . '/covers/' . $filename]]);
+    }
+
+    // Gói 55: upload ảnh đại diện sản phẩm (jpg/png/webp <= 1MB, lưu public/images/products)
+    public function productImage(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:1024',
+        ]);
+        $file = $validated['image'];
+        $dir = public_path('images/products');
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $ext = $file->getClientOriginalExtension() ?: 'jpg';
+        $filename = 'product_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $file->move($dir, $filename);
+        return response()->json(['success' => true, 'data' => ['url' => $request->getSchemeAndHttpHost() . '/images/products/' . $filename]]);
     }
 
     /**

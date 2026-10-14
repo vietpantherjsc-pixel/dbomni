@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
-import { fmtPrice } from '../../utils/number';
+import { fmtPrice, getDecimals } from '../../utils/number';
 import { useBranch } from '../../contexts/BranchContext'; // Gói 25: badge ẩn/hiện theo CN
 import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
 
-const BASE = 'http://localhost/api';
+const BASE = import.meta.env.VITE_API_BASE || '/api';
 const COLOR_PRESETS = ['#24305E', '#2F3E2E', '#00B14F', '#E8830C', '#C0392B', '#6C3FA3', '#D6336C', '#0EA5E9', '#78716C', '#1F2937'];
 
 // Gói 8a (2026-10-05): Form mặt hàng đầy đủ kiểu Sapo — tabs:
@@ -99,7 +99,7 @@ const BomLines = ({ lines, materials, onChange, materialFilter, addLabel }) => {
                         <option value="">— Chọn —</option>
                         {list.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                     </select>
-                    <input type="number" min="0" step="0.5" className="m-input" placeholder={`SL (${matUnit(l.material_id) || 'đv'})`}
+                    <input type="number" min="0" step={Math.pow(10, -getDecimals('quantity')) || 1} className="m-input" placeholder={`SL (${matUnit(l.material_id) || 'đv'})`}
                         value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)} />
                     <button type="button" className="m-btn m-btn-ghost m-btn-sm !px-0" onClick={() => onChange(lines.filter((_, j) => j !== i))}>✕</button>
                 </div>
@@ -240,7 +240,7 @@ const Products = () => {
     // Gói 9: tim yêu thích — bấm chuyển đỏ, đưa món vào "Dành cho bạn" trên Mini App
     const toggleFav = async (product) => {
         try {
-            const res = await axios.patch(`http://localhost/api/products/${product.id}/favorite`);
+            const res = await axios.patch(`${BASE}/products/${product.id}/favorite`);
             setProducts((ps) => ps.map((p) => p.id === product.id ? { ...p, is_favorite: res.data.is_favorite } : p));
         } catch (e) { alert('Không lưu được, thử lại.'); }
     };
@@ -345,11 +345,12 @@ const Products = () => {
                 category_id: p.category_id || '',
                 name: p.name || '',
                 slug: p.slug || '',
-                base_price: p.base_price ?? '',
+                // Gói 55: parse số để bỏ .00 thừa (VD "50000.00" → 50000)
+                base_price: p.base_price != null && p.base_price !== '' ? Number(p.base_price) : '',
                 description: p.description || '',
                 color: p.color || '',
                 image_url: p.image_url || '',
-                tax_rate: p.tax_rate ?? '',
+                tax_rate: p.tax_rate != null && p.tax_rate !== '' ? Number(p.tax_rate) : '',
                 is_active: Boolean(p.is_active),
                 sell_on_pos: Boolean(p.sell_on_pos),
                 sell_on_zalo: Boolean(p.sell_on_zalo),
@@ -733,7 +734,7 @@ const Products = () => {
                                     </div>
                                     <div>
                                         <label className="m-label">Giá bán cơ bản (VNĐ) *</label>
-                                        <input type="number" required min="0" value={formData.base_price} onChange={(e) => setFormData({...formData, base_price: e.target.value})} className="m-input" />
+                                        <input type="number" required min="0" step={Math.pow(10, -getDecimals('price')) || 1} value={formData.base_price} onChange={(e) => setFormData({...formData, base_price: e.target.value})} className="m-input" />
                                         {/* Gói 10c */}
                                         <label className="flex items-start text-sm mt-2 cursor-pointer" style={{ color: 'var(--m-ink)' }}>
                                             <input type="checkbox" checked={!!formData.price_on_demand} onChange={(e) => setFormData({...formData, price_on_demand: e.target.checked})} className="w-4 h-4 mr-2 mt-0.5 accent-[#24305E]" />
@@ -745,20 +746,34 @@ const Products = () => {
                                         <textarea value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className="m-input" rows={2} placeholder="Mô tả ngắn về món…" />
                                     </div>
                                     <div>
-                                        <label className="m-label">Màu sắc đại diện</label>
-                                        <div className="flex flex-wrap gap-2 items-center">
-                                            {COLOR_PRESETS.map((c) => (
-                                                <button key={c} type="button" onClick={() => setFormData({...formData, color: c})}
-                                                    className="w-8 h-8 rounded-full border-2"
-                                                    style={{ background: c, borderColor: formData.color === c ? 'var(--m-ink)' : 'var(--m-line)' }} />
-                                            ))}
-                                            <input type="color" value={formData.color || '#24305E'} onChange={(e) => setFormData({...formData, color: e.target.value.toUpperCase()})} className="w-8 h-8 p-0 border-0 cursor-pointer" title="Tự chọn" />
-                                            {formData.color && <button type="button" onClick={() => setFormData({...formData, color: ''})} className="text-xs underline" style={{color:'var(--m-ink-faint)'}}>Xóa</button>}
+                                        <label className="m-label">Ảnh đại diện</label>
+                                        <div className="flex gap-2 items-center">
+                                            <input type="text" value={formData.image_url} onChange={(e) => setFormData({...formData, image_url: e.target.value})} className="m-input flex-1" placeholder="https://…" />
+                                            <label className="m-btn m-btn-primary text-[13px] cursor-pointer whitespace-nowrap">
+                                                📤 Tải ảnh
+                                                <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                                                    onChange={async (e) => {
+                                                        const f = e.target.files?.[0];
+                                                        if (!f) return;
+                                                        if (f.size > 1024 * 1024) { alert('Ảnh tối đa 1MB'); return; }
+                                                        const fd = new FormData();
+                                                        fd.append('image', f);
+                                                        try {
+                                                            const r = await axios.post(BASE + '/uploads/product-image', fd, {
+                                                                headers: { 'Content-Type': 'multipart/form-data' },
+                                                            });
+                                                            const url = r.data?.data?.url;
+                                                            if (url) setFormData({ ...formData, image_url: url });
+                                                            else alert('Upload thất bại');
+                                                        } catch (err) { alert(err.response?.data?.message || 'Upload thất bại'); }
+                                                        e.target.value = '';
+                                                    }} />
+                                            </label>
                                         </div>
-                                    </div>
-                                    <div>
-                                        <label className="m-label">Ảnh đại diện (URL)</label>
-                                        <input type="text" value={formData.image_url} onChange={(e) => setFormData({...formData, image_url: e.target.value})} className="m-input" placeholder="https://…" />
+                                        {formData.image_url && (
+                                            <img src={formData.image_url} alt="" className="mt-2 w-20 h-20 object-cover rounded-lg border"
+                                                onError={(e) => { e.target.style.display = 'none'; }} />
+                                        )}
                                     </div>
                                 </div>
                                 <div className="space-y-3 mt-4">
@@ -792,7 +807,7 @@ const Products = () => {
                                                 onChange={(e) => setPriceRow(pl.id, { is_active: e.target.checked })}
                                                 className="w-4 h-4 accent-[#24305E]" />
                                             <span className="text-sm font-medium truncate" title={pl.name} style={{ color: row.is_active ? 'var(--m-ink)' : 'var(--m-ink-faint)' }}>{pl.name}</span>
-                                            <input type="number" min="0" step="500" placeholder="Giá (đ)" disabled={!row.is_active}
+                                            <input type="number" min="0" step={Math.pow(10, -getDecimals('price')) || 1} placeholder="Giá (đ)" disabled={!row.is_active}
                                                 value={row.price} onChange={(e) => setPriceRow(pl.id, { price: e.target.value })}
                                                 className="m-input" style={!row.is_active ? { opacity: 0.4 } : {}} />
                                         </div>
@@ -881,7 +896,7 @@ const Products = () => {
                                 </p>
                                 <div className="max-w-xs">
                                     <label className="m-label">Thuế suất riêng của món (%)</label>
-                                    <input type="number" min="0" max="100" step="0.5" value={formData.tax_rate}
+                                    <input type="number" min="0" max="100" step={Math.pow(10, -getDecimals('tax')) || 1} value={formData.tax_rate}
                                         onChange={(e) => setFormData({...formData, tax_rate: e.target.value})}
                                         className="m-input" placeholder="VD: 8 (để trống = mặc định)" />
                                 </div>

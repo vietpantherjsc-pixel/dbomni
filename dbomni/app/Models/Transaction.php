@@ -71,6 +71,7 @@ class Transaction extends Model
         $count = DB::table('transactions')
             ->where('type', $type)
             ->whereDate('created_at', now()->toDateString())
+            ->lockForUpdate()
             ->count();
         return sprintf('%s-%s-%04d', $prefix, $datePart, $count + 1);
     }

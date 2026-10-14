@@ -1,3 +1,4 @@
+import { API } from '../utils/api';
 // Gói 47: Font chữ giao diện — Đại Vương tự chọn trong Thiết lập.
 // Tất cả font trong danh sách đều đã verify có subset "vietnamese" qua Google Fonts.
 
@@ -43,7 +44,7 @@ export async function loadFont(api) {
     const stored = getStoredFont();
     applyFont(stored || DEFAULT_FONT);
     try {
-        const res = await api.get('http://localhost/api/settings');
+        const res = await api.get(API + '/settings');
         const family = res.data && res.data.font_family;
         if (family && family !== stored) applyFont(family);
     } catch (e) { /* giữ font local */ }

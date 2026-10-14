@@ -69,18 +69,41 @@ class PromotionController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $promo = Promotion::findOrFail($id);
+        $oldBanner = $promo->banner_url;
         $validated = $request->validate(array_map(
             fn($r) => str_replace('required|', 'sometimes|', $r),
             $this->rules()
         ));
         $promo->update($validated);
+        // Gói 50: xóa ảnh banner cũ khi thay bằng ảnh mới (tránh đầy bộ nhớ)
+        if (array_key_exists('banner_url', $validated) && $oldBanner && $oldBanner !== $validated['banner_url']) {
+            $this->deleteCoverFile($oldBanner);
+        }
         return response()->json(['success' => true, 'data' => $promo->load('giftProduct')]);
     }
 
     public function destroy(int $id): JsonResponse
     {
-        Promotion::findOrFail($id)->delete();
-        return response()->json(['success' => true, 'message' => 'Đã xóa khuyến mại']);
+        $promo = Promotion::findOrFail($id);
+        // Gói 50: xóa ảnh banner khi xóa CT
+        if ($promo->banner_url) {
+            $this->deleteCoverFile($promo->banner_url);
+        }
+        $promo->delete();
+        return response()->json(['success' => true]);
+    }
+
+    // Gói 50: xóa file ảnh trong public/covers (chỉ xóa file thật, chống path traversal)
+    private function deleteCoverFile(?string $url): void
+    {
+        if (!$url) return;
+        $path = parse_url($url, PHP_URL_PATH) ?: $url;
+        $filename = basename($path);
+        if (!$filename || !preg_match('/^[a-zA-Z0-9_\-\.]+$/', $filename)) return;
+        $full = public_path('covers/' . $filename);
+        if (is_file($full)) {
+            @unlink($full);
+        }
     }
 
     // Danh sách KM đủ điều kiện cho 1 đơn hàng (POS gọi để hiển thị/gợi ý)
@@ -112,7 +135,7 @@ class PromotionController extends Controller
 
     // Gói 48: banner KM cho carousel trong Zalo Mini App (public).
     // Chỉ lấy CT đang bật, có ảnh banner, còn hiệu lực.
-    public function banners(): JsonResponse
+    public function banners(Request $request): JsonResponse
     {
         $now = now();
         $items = \App\Models\Promotion::where('is_active', true)
@@ -126,6 +149,13 @@ class PromotionController extends Controller
             })
             ->orderByDesc('id')
             ->get(['id', 'name', 'banner_url']);
+        // Gói 50b: chuẩn hóa thành URL tuyệt đối theo host thật (sửa dữ liệu cũ relative/localhost)
+        $host = $request->getSchemeAndHttpHost();
+        foreach ($items as $item) {
+            if ($item->banner_url && !preg_match('#^https?://#i', $item->banner_url)) {
+                $item->banner_url = $host . '/' . ltrim($item->banner_url, '/');
+            }
+        }
         return response()->json(['success' => true, 'data' => $items]);
     }
 }

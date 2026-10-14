@@ -92,6 +92,7 @@ button, input, select, textarea { font-family: inherit; }
 .zm-seg { display: flex; background: #f0f0f0; border-radius: 14px; padding: 4px; gap: 4px; margin-bottom: 14px; }
 .zm-seg button { flex: 1; border: none; background: none; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 700; color: #666; cursor: pointer; }
 .zm-seg button.on { background: #fff; color: var(--zm-primary); box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+.zm-seg button:disabled { opacity: .45; cursor: not-allowed; }
 
 .zm-pay-opt { display: flex; gap: 12px; align-items: center; border: 1.5px solid #e0e0e0; border-radius: 14px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
 .zm-pay-opt.on { border-color: var(--zm-primary); background: color-mix(in srgb, var(--zm-primary) 8%, #fff); }
@@ -138,6 +139,60 @@ button, input, select, textarea { font-family: inherit; }
 .zm-cover-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 72px; background: linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 60%, #000)); }
 .zm-branch-pill { position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,.96); border: none; border-radius: 20px; padding: 9px 15px; font-size: 13px; font-weight: 700; color: #1a1a1a; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zm-branch-name { font-size: 20px; font-weight: 800; padding: 14px 16px 0; margin: 0; }
+
+/* Gói 55 p1: card thông tin chi nhánh theo style ảnh mẫu */
+.zm-branch-card { background: #fff; margin: -32px 16px 0; border-radius: 16px; padding: 16px; box-shadow: 0 2px 12px rgba(0,0,0,.07); position: relative; z-index: 1; }
+.zm-branch-card-name { font-size: 19px; font-weight: 800; color: #1a1a2e; margin-bottom: 8px; }
+.zm-branch-card-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; color: #333; padding: 4px 0; line-height: 1.5; }
+.zm-open { color: #16a34a; font-weight: 600; }
+.zm-closed { color: #dc2626; font-weight: 600; }
+.zm-hours { color: #999; font-weight: 400; }
+
+/* Gói 55 p3: card gọn thông tin nhận hàng */
+.zm-deliv-card { background: #fff; border-radius: 14px; margin: 12px 0; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.06); cursor: pointer; }
+.zm-deliv-top { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #f0f0f0; }
+.zm-deliv-ic { width: 38px; height: 38px; border-radius: 50%; background: #e8f0fe; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.zm-deliv-t { font-size: 15px; font-weight: 700; flex: 1; color: #1a1a2e; }
+.zm-deliv-chg { font-size: 13px; color: #f5a623; font-weight: 600; background: #fef6e8; padding: 6px 12px; border-radius: 8px; }
+.zm-deliv-mid { display: flex; align-items: center; gap: 10px; padding-top: 12px; }
+.zm-deliv-uic { width: 38px; height: 38px; border-radius: 10px; background: #f5f5f5; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #999; }
+.zm-deliv-nm { font-size: 14.5px; font-weight: 700; color: #1a1a2e; }
+.zm-deliv-nm .zm-miss { color: #e11d48; font-weight: 500; }
+.zm-deliv-ad { font-size: 13px; color: #888; margin-top: 2px; }
+.zm-deliv-arr { color: #bbb; font-size: 20px; }
+
+/* Gói 55 p3: popup bottom sheet */
+.zm-pop-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; display: flex; align-items: flex-end; }
+.zm-pop-sheet { background: #fff; border-radius: 20px 20px 0 0; padding: 20px 16px 24px; width: 100%; max-width: 480px; margin: 0 auto; max-height: 88vh; overflow-y: auto; }
+.zm-pop-sheet h3 { font-size: 18px; font-weight: 800; margin-bottom: 16px; color: #1a1a2e; }
+.zm-loc-btn { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid #2b7de9; color: #2b7de9; background: #fff; border-radius: 20px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 4px; }
+.zm-loc-btn:disabled { opacity: .6; }
+.zm-loc-hint { font-size: 12px; color: #999; margin-top: 8px; line-height: 1.6; }
+.zm-pop-save { width: 100%; margin-top: 16px; }
+
+/* Gói 55 p2: sticky header khi lướt xuống — icon đơn sắc, hạn chế màu */
+.zm-sticky { position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.1); max-width: 480px; margin: 0 auto; }
+.zm-sticky-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; }
+.zm-sticky-name { font-size: 15px; font-weight: 800; color: #1a1a2e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+.zm-sticky-group { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--zm-primary); background: none; border: none; cursor: pointer; padding: 6px 4px; }
+.zm-sticky-nav { display: flex; align-items: center; gap: 8px; padding: 0 14px 10px; }
+.zm-menu-wrap { position: relative; flex: 1; }
+.zm-menu-select { width: 100%; display: flex; align-items: center; justify-content: space-between; border: 1.5px solid #e5e7eb; border-radius: 20px; padding: 9px 14px; font-size: 13px; font-weight: 600; color: #374151; background: #fff; cursor: pointer; }
+.zm-menu-drop { position: absolute; top: calc(100% + 6px); left: 0; right: 0; background: #fff; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.14); overflow: hidden; z-index: 60; max-height: 280px; overflow-y: auto; }
+.zm-menu-drop button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 12px 14px; font-size: 13.5px; color: #1a1a2e; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
+.zm-menu-drop button:last-child { border-bottom: none; }
+.zm-menu-drop button:active { background: #f9fafb; }
+.zm-search-ic { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid #e5e7eb; background: #fff; display: flex; align-items: center; justify-content: center; color: #374151; cursor: pointer; flex-shrink: 0; }
+.zm-sticky-search { padding: 0 14px 10px; }
+.zm-sticky-search input { width: 100%; border: 1.5px solid #e5e7eb; border-radius: 12px; padding: 10px 14px; font-size: 14px; outline: none; }
+.zm-sticky-search input:focus { border-color: var(--zm-primary); }
+
+/* Gói 55 p1: nút segmented giống bố cục Giao tận nơi/Đặt tới lấy */
+.zm-seg { display: flex; background: #eef1f6; border-radius: 12px; padding: 4px; margin: 12px 16px 4px; gap: 4px; }
+.zm-seg.in-card { margin: 12px 0 0; }
+.zm-seg-btn { flex: 1; border: none; border-radius: 9px; padding: 12px 8px; font-size: 14px; font-weight: 700; cursor: pointer; background: transparent; color: #6b7280; }
+.zm-seg-btn.active { background: #fff; color: #16a34a; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+.zm-seg-btn:active { transform: scale(.97); }
 
 .zm-actions { display: flex; gap: 12px; padding: 12px 16px 4px; }
 .zm-action-btn { flex: 1; display: flex; align-items: center; gap: 10px; background: #fff; border: 1.5px solid #eee; border-radius: 16px; padding: 12px; cursor: pointer; text-align: left; }

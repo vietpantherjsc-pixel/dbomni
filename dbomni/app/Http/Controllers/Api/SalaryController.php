@@ -45,23 +45,54 @@ class SalaryController extends Controller
             ->orderBy('date')->get()
             ->keyBy(fn ($h) => $h->date->format('Y-m-d'));
 
-        // Chi tiết từng ngày
-        $days = SalaryDay::where('employee_id', $id)
+        // Chi tiết từng ngày (Gói 55: 1 ngày có thể nhiều dòng theo CN → gộp để tính tổng)
+        $days = SalaryDay::with('branch:id,name')->where('employee_id', $id)
             ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
-            ->orderBy('date')->get()->keyBy(fn ($d) => $d->date->format('Y-m-d'));
+            ->orderBy('date')->orderBy('branch_id')
+            ->get()->groupBy(fn ($d) => $d->date->format('Y-m-d'));
         $dayRows = [];
         for ($d = 1; $d <= $daysInMonth; $d++) {
             $key = sprintf('%s-%02d', $month, $d);
-            $row = $days->get($key);
+            $rows = $days->get($key);
             $hol = $holidays->get($key);
+            if (!$rows || $rows->isEmpty()) {
+                $dayRows[] = [
+                    'key' => $key,
+                    'date' => $d . '/' . $start->format('m/Y'),
+                    'check_in' => null, 'check_out' => null, 'hours' => null,
+                    'hours_source' => null, 'meal_count' => 0,
+                    'branches' => [],
+                    'is_holiday' => (bool) $hol,
+                    'holiday_name' => $hol?->name,
+                    'multiplier' => $hol ? (float) $hol->multiplier : null,
+                ];
+                continue;
+            }
+            // Gộp nhiều CN: cộng giờ, gộp suất ăn, giữ chi tiết từng CN
+            $totalH = 0; $hasHours = false; $mealC = 0; $branches = [];
+            $firstIn = null; $lastOut = null; $src = null;
+            foreach ($rows as $r) {
+                if ($r->hours !== null) { $totalH += (float) $r->hours; $hasHours = true; }
+                $mealC += (int) ($r->meal_count ?? 0);
+                $branches[] = [
+                    'branch_id' => $r->branch_id,
+                    'branch_name' => $r->branch?->name,
+                    'check_in' => $r->check_in, 'check_out' => $r->check_out,
+                    'hours' => $r->hours !== null ? (float) $r->hours : null,
+                    'hours_source' => $r->hours_source,
+                ];
+                if ($r->check_in && (!$firstIn || $r->check_in < $firstIn)) $firstIn = $r->check_in;
+                if ($r->check_out && (!$lastOut || $r->check_out > $lastOut)) $lastOut = $r->check_out;
+                if (!$src) $src = $r->hours_source;
+            }
             $dayRows[] = [
                 'key' => $key,
                 'date' => $d . '/' . $start->format('m/Y'),
-                'check_in' => $row?->check_in,
-                'check_out' => $row?->check_out,
-                'hours' => $row && $row->hours !== null ? (float) $row->hours : null,
-                'hours_source' => $row?->hours_source, // attendance|manual|leave (null = tay cũ)
-                'meal_count' => (int) ($row?->meal_count ?? 0),
+                'check_in' => $firstIn, 'check_out' => $lastOut,
+                'hours' => $hasHours ? round($totalH, 2) : null,
+                'hours_source' => $src,
+                'meal_count' => $mealC,
+                'branches' => $branches, // chi tiết từng CN
                 'is_holiday' => (bool) $hol,
                 'holiday_name' => $hol?->name,
                 'multiplier' => $hol ? (float) $hol->multiplier : null,
@@ -319,21 +350,38 @@ class SalaryController extends Controller
         $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
         $start = Carbon::createFromFormat('Y-m-d', $month . '-01');
         $end = $start->copy()->endOfMonth();
-        $days = SalaryDay::where('employee_id', $id)
+        // Gói 55: load kèm chi nhánh, 1 ngày có thể nhiều dòng (mỗi CN 1 dòng)
+        $days = SalaryDay::with('branch:id,name')
+            ->where('employee_id', $id)
             ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
-            ->get()->keyBy(fn ($d) => $d->date->format('Y-m-d'));
+            ->orderBy('date')->orderBy('branch_id')
+            ->get()->groupBy(fn ($d) => $d->date->format('Y-m-d'));
         $out = [];
         for ($d = 1; $d <= $start->daysInMonth; $d++) {
             $key = sprintf('%s-%02d', $month, $d);
-            $r = $days->get($key);
-            $out[] = [
-                'date' => $key,
-                'check_in' => $r?->check_in, 'check_out' => $r?->check_out,
-                'hours' => $r && $r->hours !== null ? (float) $r->hours : null,
-                'hours_source' => $r?->hours_source, // attendance|manual|leave (null = tay cũ)
-                'meal_count' => (int) ($r?->meal_count ?? 0),
-                'meal_manual' => (bool) ($r?->meal_manual ?? false),
-            ];
+            $rows = $days->get($key);
+            if (!$rows || $rows->isEmpty()) {
+                $out[] = [
+                    'date' => $key,
+                    'check_in' => null, 'check_out' => null,
+                    'hours' => null, 'hours_source' => null,
+                    'meal_count' => 0, 'meal_manual' => false,
+                    'branch_id' => null, 'branch_name' => null,
+                ];
+            } else {
+                foreach ($rows as $r) {
+                    $out[] = [
+                        'date' => $key,
+                        'check_in' => $r->check_in, 'check_out' => $r->check_out,
+                        'hours' => $r->hours !== null ? (float) $r->hours : null,
+                        'hours_source' => $r->hours_source,
+                        'meal_count' => (int) ($r->meal_count ?? 0),
+                        'meal_manual' => (bool) ($r->meal_manual ?? false),
+                        'branch_id' => $r->branch_id,
+                        'branch_name' => $r->branch?->name,
+                    ];
+                }
+            }
         }
         // Gói 30d: trả kèm cấu hình suất ăn để frontend tự tính live
         return response()->json(['success' => true, 'data' => $out, 'meta' => [
@@ -342,13 +390,14 @@ class SalaryController extends Controller
         ]]);
     }
 
-    // POST /api/salary/{employee}/days  { month, days: [{date, check_in, check_out, hours, meal_count}] }
+    // POST /api/salary/{employee}/days  { month, days: [{date, branch_id, check_in, check_out, hours, meal_count}] }
     public function saveDays(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
         $validated = $request->validate([
             'days' => 'required|array',
             'days.*.date' => 'required|date',
+            'days.*.branch_id' => 'nullable|exists:branches,id',
             'days.*.check_in' => 'nullable|string|max:5',
             'days.*.check_out' => 'nullable|string|max:5',
             'days.*.hours' => 'nullable|numeric|min:0|max:24',
@@ -357,10 +406,12 @@ class SalaryController extends Controller
         ]);
         // Gói 30d: ngưỡng giờ tự tính suất ăn
         $mealThreshold = (float) Setting::get('meal_min_hours', 14.5);
-        DB::transaction(function () use ($id, $validated, $mealThreshold) {
+        DB::transaction(function () use ($id, $emp, $validated, $mealThreshold) {
             foreach ($validated['days'] as $d) {
                 $ci = !empty($d['check_in']) ? substr($d['check_in'], 0, 5) : null;
                 $co = !empty($d['check_out']) ? substr($d['check_out'], 0, 5) : null;
+                // Gói 55: chi nhánh của dòng (mặc định CN chính của NV)
+                $brId = !empty($d['branch_id']) ? (int) $d['branch_id'] : $emp->branch_id;
                 // Giữ null (ô trống) thay vì ép về 0 — quên chấm công thì để trống
                 $hours = ($d['hours'] === null || $d['hours'] === '') ? null : (float) $d['hours'];
                 // Tự tính giờ từ giờ vào/ra nếu không nhập tay
@@ -376,7 +427,7 @@ class SalaryController extends Controller
                 $mealManual = !empty($d['meal_manual']);
                 $mealCount = $mealManual ? (int) ($d['meal_count'] ?? 0)
                     : (($hours !== null && $hours >= $mealThreshold) ? 1 : 0);
-                $ex = SalaryDay::where('employee_id', $id)->where('date', $d['date'])->first();
+                $ex = SalaryDay::where('employee_id', $id)->where('date', $d['date'])->where('branch_id', $brId)->first();
                 // Chỉ lưu ngày có dữ liệu; ngày trắng thì xóa
                 if (!$ci && !$co && $hours === null && !$mealCount) {
                     if ($ex) $ex->delete();
@@ -391,7 +442,7 @@ class SalaryController extends Controller
                     || (int) $ex->meal_count !== $mealCount
                     || (bool) $ex->meal_manual !== $mealManual;
                 SalaryDay::updateOrCreate(
-                    ['employee_id' => $id, 'date' => $d['date']],
+                    ['employee_id' => $id, 'date' => $d['date'], 'branch_id' => $brId],
                     ['check_in' => $ci, 'check_out' => $co,
                      'hours' => $hours, 'meal_count' => $mealCount, 'meal_manual' => $mealManual,
                      'hours_source' => $dirty ? 'manual' : $ex->hours_source]
@@ -430,12 +481,7 @@ class SalaryController extends Controller
         $employees = $empQ->orderBy('full_name')->get(['id', 'full_name', 'branch_id']);
         $empIds = $employees->pluck('id');
 
-        // Chấm công trong tháng → gom theo NV|ngày
-        $atts = Attendance::whereBetween('date', [$from, $to])
-            ->whereIn('employee_id', $empIds)
-            ->when(!empty($v['branch_id']), fn ($q) => $q->where('branch_id', $v['branch_id']))
-            ->get()
-            ->groupBy(fn ($a) => $a->employee_id . '|' . $a->date->toDateString());
+        // (Gói 55: $attsByBranch và $existingByBranch được định nghĩa bên dưới)
 
         // Ngày nghỉ được duyệt → map NV|ngày
         $leaveMap = [];
@@ -452,11 +498,6 @@ class SalaryController extends Controller
                 }
             });
 
-        // Dòng lương hiện có trong tháng (để tránh ghi đè nhập tay)
-        $existing = SalaryDay::whereIn('employee_id', $empIds)
-            ->whereBetween('date', [$from, $to])->get()
-            ->groupBy(fn ($s) => $s->employee_id . '|' . $s->date->toDateString());
-
         $mealThreshold = (float) Setting::get('meal_min_hours', 14.5);
 
         $summary = [
@@ -468,67 +509,96 @@ class SalaryController extends Controller
         ];
         $missing = []; // chi tiết ngày thiếu chấm để quản lý nhập tay
 
+        // Gói 55: gom chấm công theo NV|ngày|chi nhánh (tách riêng từng CN)
+        $attsByBranch = Attendance::whereBetween('date', [$from, $to])
+            ->whereIn('employee_id', $empIds)
+            ->when(!empty($v['branch_id']), fn ($q) => $q->where('branch_id', $v['branch_id']))
+            ->get()
+            ->groupBy(fn ($a) => $a->employee_id . '|' . $a->date->toDateString() . '|' . $a->branch_id);
+
+        // Dòng lương hiện có (theo NV|ngày|CN mới)
+        $existingByBranch = SalaryDay::whereIn('employee_id', $empIds)
+            ->whereBetween('date', [$from, $to])->get()
+            ->groupBy(fn ($s) => $s->employee_id . '|' . $s->date->toDateString() . '|' . ($s->branch_id ?? ''));
+
         DB::transaction(function () use (
-            $employees, $daysInMonth, $month, $atts, $leaveMap, $existing,
+            $employees, $daysInMonth, $month, $attsByBranch, $leaveMap, $existingByBranch,
             $mealThreshold, &$summary, &$missing
         ) {
             foreach ($employees as $emp) {
                 for ($d = 1; $d <= $daysInMonth; $d++) {
                     $dateStr = sprintf('%s-%02d', $month, $d);
-                    $key = $emp->id . '|' . $dateStr;
-                    $ex = $existing->get($key)?->first();
+                    $leaveKey = $emp->id . '|' . $dateStr;
 
-                    // Không ghi đè ô nhập tay: 'manual', hoặc null + đã có dữ liệu (dữ liệu tay cũ)
-                    $isManual = $ex && ($ex->hours_source === 'manual'
-                        || ($ex->hours_source === null
-                            && ($ex->hours > 0 || $ex->check_in || $ex->check_out)));
-                    if ($isManual) { $summary['skipped_manual']++; continue; }
-
-                    // Nghỉ được duyệt → 0 giờ
-                    if (isset($leaveMap[$key])) {
-                        SalaryDay::updateOrCreate(
-                            ['employee_id' => $emp->id, 'date' => $dateStr],
-                            ['check_in' => null, 'check_out' => null, 'hours' => 0,
-                             'hours_source' => 'leave',
-                             'meal_count' => $ex && $ex->meal_manual ? (int) $ex->meal_count : 0,
-                             'meal_manual' => (bool) ($ex->meal_manual ?? false)]
-                        );
-                        $summary['leave']++;
+                    // Nghỉ được duyệt → 0 giờ (1 dòng cho CN chính)
+                    if (isset($leaveMap[$leaveKey])) {
+                        $exKey = $emp->id . '|' . $dateStr . '|' . $emp->branch_id;
+                        $ex = $existingByBranch->get($exKey)?->first();
+                        $isManual = $ex && ($ex->hours_source === 'manual'
+                            || ($ex->hours_source === null
+                                && ($ex->hours > 0 || $ex->check_in || $ex->check_out)));
+                        if (!$isManual) {
+                            SalaryDay::updateOrCreate(
+                                ['employee_id' => $emp->id, 'date' => $dateStr, 'branch_id' => $emp->branch_id],
+                                ['check_in' => null, 'check_out' => null, 'hours' => 0,
+                                 'hours_source' => 'leave',
+                                 'meal_count' => $ex && $ex->meal_manual ? (int) $ex->meal_count : 0,
+                                 'meal_manual' => (bool) ($ex->meal_manual ?? false)]
+                            );
+                            $summary['leave']++;
+                        } else {
+                            $summary['skipped_manual']++;
+                        }
                         continue;
                     }
 
-                    $dayAtts = $atts->get($key);
-                    if (!$dayAtts || $dayAtts->isEmpty()) continue; // không chấm công → bỏ qua
+                    // Duyệt từng chi nhánh có chấm công trong ngày
+                    $hasAtt = false;
+                    foreach ($attsByBranch as $groupKey => $dayAtts) {
+                        [$eId, $dt, $brId] = explode('|', $groupKey);
+                        if ((int) $eId !== (int) $emp->id || $dt !== $dateStr) continue;
+                        $hasAtt = true;
+                        $brId = $brId !== '' ? (int) $brId : $emp->branch_id;
 
-                    // Vào sớm nhất + ra muộn nhất trong ngày
-                    $in = $dayAtts->whereNotNull('check_in')
-                        ->sortBy(fn ($a) => $a->check_in->timestamp)->first()?->check_in;
-                    $out = $dayAtts->whereNotNull('check_out')
-                        ->sortByDesc(fn ($a) => $a->check_out->timestamp)->first()?->check_out;
-                    $inStr = $in ? Carbon::parse($in)->format('H:i') : null;
-                    $outStr = $out ? Carbon::parse($out)->format('H:i') : null;
+                        $exKey = $emp->id . '|' . $dateStr . '|' . $brId;
+                        $ex = $existingByBranch->get($exKey)?->first();
 
-                    if ($in && $out) {
-                        // Giờ thực tế, làm tròn 2 chữ số; vượt ca vẫn x1
-                        $hours = round(Carbon::parse($in)->diffInMinutes($out) / 60, 2);
-                        $summary['imported']++;
-                    } else {
-                        $hours = null; // thiếu 1 đầu → để trống
-                        $summary['incomplete']++;
-                        $missing[] = ['employee' => $emp->full_name, 'date' => $dateStr];
+                        // Không ghi đè ô nhập tay
+                        $isManual = $ex && ($ex->hours_source === 'manual'
+                            || ($ex->hours_source === null
+                                && ($ex->hours > 0 || $ex->check_in || $ex->check_out)));
+                        if ($isManual) { $summary['skipped_manual']++; continue; }
+
+                        // Vào sớm nhất + ra muộn nhất TRONG chi nhánh này
+                        $in = $dayAtts->whereNotNull('check_in')
+                            ->sortBy(fn ($a) => $a->check_in->timestamp)->first()?->check_in;
+                        $out = $dayAtts->whereNotNull('check_out')
+                            ->sortByDesc(fn ($a) => $a->check_out->timestamp)->first()?->check_out;
+                        $inStr = $in ? Carbon::parse($in)->format('H:i') : null;
+                        $outStr = $out ? Carbon::parse($out)->format('H:i') : null;
+
+                        if ($in && $out) {
+                            $hours = round(Carbon::parse($in)->diffInMinutes($out) / 60, 2);
+                            $summary['imported']++;
+                        } else {
+                            $hours = null;
+                            $summary['incomplete']++;
+                            $missing[] = ['employee' => $emp->full_name, 'date' => $dateStr, 'branch_id' => $brId];
+                        }
+
+                        $mealManual = (bool) ($ex->meal_manual ?? false);
+                        $mealCount = $mealManual
+                            ? (int) ($ex->meal_count ?? 0)
+                            : (($hours !== null && $hours >= $mealThreshold) ? 1 : 0);
+
+                        SalaryDay::updateOrCreate(
+                            ['employee_id' => $emp->id, 'date' => $dateStr, 'branch_id' => $brId],
+                            ['check_in' => $inStr, 'check_out' => $outStr, 'hours' => $hours,
+                             'hours_source' => 'attendance',
+                             'meal_count' => $mealCount, 'meal_manual' => $mealManual]
+                        );
                     }
-
-                    $mealManual = (bool) ($ex->meal_manual ?? false);
-                    $mealCount = $mealManual
-                        ? (int) ($ex->meal_count ?? 0)
-                        : (($hours !== null && $hours >= $mealThreshold) ? 1 : 0);
-
-                    SalaryDay::updateOrCreate(
-                        ['employee_id' => $emp->id, 'date' => $dateStr],
-                        ['check_in' => $inStr, 'check_out' => $outStr, 'hours' => $hours,
-                         'hours_source' => 'attendance',
-                         'meal_count' => $mealCount, 'meal_manual' => $mealManual]
-                    );
+                    // Không có chấm công ngày này → bỏ qua (giữ nguyên)
                 }
             }
         });
@@ -705,6 +775,11 @@ class SalaryController extends Controller
             'resp_max_violations' => (int) Setting::get('resp_max_violations', 4),
             'meal_price' => (float) Setting::get('meal_price', Setting::get('meal_allowance_amount', 25000)),
             'meal_min_hours' => (float) Setting::get('meal_min_hours', 14.5),
+            // Gói 54: BHXH chuyển từ Thiết lập sang Cấu hình Lương
+            'bhxh_emp_bhxh' => (float) Setting::get('bhxh_emp_bhxh', 8),
+            'bhxh_emp_bhyt' => (float) Setting::get('bhxh_emp_bhyt', 1.5),
+            'bhxh_emp_bhtn' => (float) Setting::get('bhxh_emp_bhtn', 1),
+            'bhxh_employer_rate' => (float) Setting::get('bhxh_employer_rate', 21.5),
         ]]);
     }
 
@@ -717,6 +792,10 @@ class SalaryController extends Controller
             'resp_max_violations' => 'required|integer|min:0|max:100',
             'meal_price' => 'required|numeric|min:0|max:10000000',
             'meal_min_hours' => 'required|numeric|min:0|max:24',
+            'bhxh_emp_bhxh' => 'required|numeric|min:0|max:100',
+            'bhxh_emp_bhyt' => 'required|numeric|min:0|max:100',
+            'bhxh_emp_bhtn' => 'required|numeric|min:0|max:100',
+            'bhxh_employer_rate' => 'required|numeric|min:0|max:100',
         ]);
         foreach ($validated as $k => $v) Setting::set($k, $v);
         return response()->json(['success' => true, 'data' => $validated]);
@@ -798,5 +877,71 @@ class SalaryController extends Controller
     {
         SalaryDeduction::findOrFail($id)->delete();
         return response()->json(['success' => true]);
+    }
+
+    // Gói 55: GET /api/salary-summary?month=YYYY-MM&branch_id=?
+    // Tổng hợp lương toàn NV dạng list (tên, chi nhánh, tổng giờ, tổng lương, thực nhận)
+    public function summary(Request $request): JsonResponse
+    {
+        $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
+        if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+            return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
+        }
+        $branchId = $request->query('branch_id');
+
+        $start = Carbon::createFromFormat('Y-m-d', $month . '-01')->startOfDay();
+        $end = $start->copy()->endOfMonth();
+
+        $empQ = Employee::with(['role:id,name', 'branch:id,name'])
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->whereNull('start_date')->orWhere('start_date', '<=', $end->toDateString()));
+        if ($branchId) $empQ->where('branch_id', $branchId);
+        $employees = $empQ->orderBy('full_name')->get();
+
+        // Tổng giờ từ salary_days
+        $hoursMap = SalaryDay::whereBetween('date', [$start->toDateString(), $end->toDateString()])
+            ->whereIn('employee_id', $employees->pluck('id'))
+            ->selectRaw('employee_id, SUM(hours) as total_hours, SUM(meal_count) as total_meals')
+            ->groupBy('employee_id')
+            ->get()->keyBy('employee_id');
+
+        // Lương cơ bản: dùng hourly_rate hiện tại của NV
+        $rows = [];
+        $grandTotal = 0;
+        $grandHours = 0;
+        foreach ($employees as $emp) {
+            $h = $hoursMap->get($emp->id);
+            $totalHours = (float) ($h->total_hours ?? 0);
+            $hourlyRate = (float) ($emp->hourly_rate ?? 0);
+            // Nếu không có hourly_rate trực tiếp, lấy từ wage level mới nhất
+            if (!$hourlyRate) {
+                $lv = WageLevel::where('employee_id', $emp->id)
+                    ->where('start_date', '<=', $end->toDateString())
+                    ->orderBy('start_date', 'desc')->first();
+                $hourlyRate = $lv ? (float) $lv->hourly_rate : 0;
+            }
+            $gross = round($totalHours * $hourlyRate);
+            $rows[] = [
+                'employee_id' => $emp->id,
+                'full_name' => $emp->full_name,
+                'branch_id' => $emp->branch_id,
+                'branch_name' => $emp->branch?->name ?? '',
+                'role_name' => $emp->role?->name ?? '',
+                'total_hours' => round($totalHours, 2),
+                'hourly_rate' => $hourlyRate,
+                'gross' => $gross,
+            ];
+            $grandTotal += $gross;
+            $grandHours += $totalHours;
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'month' => $month,
+            'month_label' => 'THÁNG ' . $start->format('m/Y'),
+            'rows' => $rows,
+            'grand_total' => $grandTotal,
+            'grand_hours' => round($grandHours, 2),
+            'employee_count' => count($rows),
+        ]]);
     }
 }

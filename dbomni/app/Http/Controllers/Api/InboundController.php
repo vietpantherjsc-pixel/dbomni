@@ -24,9 +24,22 @@ class InboundController extends Controller
         $material = Material::findOrFail($item['material_id']);
 
         // Quy đổi về đơn vị cơ sở
-        $rate = (float) ($material->conversion_rate ?: 1);
+        // Gói 55: ưu tiên lookup bảng material_units theo đơn vị nhập, fallback cột legacy
+        $inputUnit = $item['purchase_unit'] ?? null;
+        $rate = 1;
+        $purchaseUnit = $material->unit;
+        if ($inputUnit && $inputUnit !== $material->unit) {
+            $mu = $material->units()->where('unit_name', $inputUnit)->first();
+            if ($mu) {
+                $rate = (float) $mu->conversion_rate;
+                $purchaseUnit = $mu->unit_name;
+            } else {
+                // Fallback legacy
+                $rate = (float) ($material->conversion_rate ?: 1);
+                $purchaseUnit = $material->purchase_unit ?: $material->unit;
+            }
+        }
         $baseQuantity = (float) $item['purchase_quantity'] * $rate;
-        $purchaseUnit = $material->purchase_unit ?: $material->unit;
 
         $batchCode = $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8)));
 
@@ -56,7 +69,9 @@ class InboundController extends Controller
      */
     private function createAutoExpense(int $branchId, float $amount, int $relatedId, string $note): void
     {
-        $exists = Transaction::where('related_type', 'inbound')
+        // Gói 55 p11ac: dùng related_type='batch' riêng cho luồng nhập nhanh (batch_id),
+        // tránh đụng với luồng phiếu nhập (related_type='inbound_receipt', related_id=receipt_id)
+        $exists = Transaction::where('related_type', 'batch')
             ->where('related_id', $relatedId)
             ->exists();
         if ($exists) {
@@ -77,6 +92,8 @@ class InboundController extends Controller
             'status' => 'paid',
             'note' => $note,
             'created_by' => auth()->id(),
+            'related_type' => 'batch',
+            'related_id' => $relatedId,
         ]);
     }
 

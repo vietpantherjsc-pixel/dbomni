@@ -50,6 +50,12 @@ class OrderController extends Controller
             $query->where('branch_id', $request->query('branch_id'));
         }
 
+        // Gói 53: lọc theo status (hỗ trợ "pending,processing" cho badge KDS/chuông POS)
+        if ($request->filled('status')) {
+            $statuses = array_map('trim', explode(',', $request->query('status')));
+            $query->whereIn('status', $statuses);
+        }
+
         $orders = $query->paginate($request->query('per_page', 20));
 
         return response()->json(['success' => true, 'data' => $orders]);
@@ -66,6 +72,7 @@ class OrderController extends Controller
     public function store(Request $request, InventoryService $inventoryService, PromotionService $promotionService, LoyaltyService $loyaltyService): JsonResponse
     {
         $validated = $request->validate([
+            'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency key
             'branch_id' => 'required|exists:branches,id',
             'order_type' => 'nullable|in:takeaway,delivery,dine_in',
             'table_id' => 'nullable|exists:tables,id',
@@ -92,25 +99,67 @@ class OrderController extends Controller
         ]);
 
         try {
-            $userId = $request->user()->id;
+            $actor = $request->user();
+            $userId = $actor->id;
+            // Gói 55 p11ac: kiểm tra quyền chiết khấu — chỉ role có orders.discount mới được giảm giá
+            $canDiscount = true;
+            if ($actor instanceof \App\Models\Employee) {
+                $role = $actor->role;
+                $canDiscount = $role && $role->hasPermission('orders.discount');
+            }
+            if (!$canDiscount) {
+                if ((float) ($validated['discount_amount'] ?? 0) > 0 || (float) ($validated['discount_percent'] ?? 0) > 0) {
+                    return response()->json(['success' => false, 'message' => 'Bạn không có quyền chiết khấu.'], 403);
+                }
+                foreach ($validated['items'] as $it) {
+                    if ((float) ($it['discount_amount'] ?? 0) > 0) {
+                        return response()->json(['success' => false, 'message' => 'Bạn không có quyền giảm giá món.'], 403);
+                    }
+                }
+            }
+            // Gói 55 p11ad: NV chỉ được tạo đơn cho chi nhánh mình được phân công
+            if ($actor instanceof \App\Models\Employee) {
+                $allowedBranches = $actor->allBranchIds();
+                if (!in_array((int) $validated['branch_id'], $allowedBranches, true)) {
+                    return response()->json(['success' => false, 'message' => 'Bạn không được phân công tại chi nhánh này.'], 403);
+                }
+            }
             // Gói 3b: đơn lưu tạm (held) thì CHƯA trừ kho, chỉ trừ khi bấm Thanh toán (finalize).
             $isHold = !empty($validated['save_as_hold']);
-            $order = DB::transaction(function () use ($validated, $inventoryService, $promotionService, $loyaltyService, $userId, $isHold) {
+            // Gói 55 p11ac: idempotency — client_key đã tồn tại thì trả đơn cũ
+            if (!empty($validated['client_key'])) {
+                $existing = Order::with('items')->where('client_key', $validated['client_key'])->first();
+                if ($existing) {
+                    return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
+                }
+            }
+            // Gói 55 p11ad: nhận về id các dòng nhật ký xuất kho để gắn order_id sau khi tạo đơn
+            $movementIds = null;
+            $order = DB::transaction(function () use ($validated, $inventoryService, $promotionService, $loyaltyService, $userId, $isHold, &$movementIds) {
                 $subtotal = 0;
                 $orderItemsData = [];
                 $promoItems = []; // Gói 5: dữ liệu cho PromotionService
 
                 // 1. Tính giá món
                 foreach ($validated['items'] as $item) {
-                    $product = Product::findOrFail($item['product_id']);
+                    $product = Product::with('prices.priceList')->findOrFail($item['product_id']);
                     $option = !empty($item['product_option_id'])
                         ? ProductOption::findOrFail($item['product_option_id'])
                         : null;
 
+                    // Gói 55 p11ac: đối chiếu giá client với giá server (chống gian lận giá)
+                    // Món price_on_demand được nhập giá tay; còn lại phải khớp giá kênh POS (hoặc base_price)
+                    $expectedPrice = $product->priceFor('pos') + ($option ? (float) $option->additional_price : 0);
+                    if (isset($item['unit_price']) && empty($product->price_on_demand)) {
+                        if (abs((float) $item['unit_price'] - $expectedPrice) > 1) {
+                            throw new \Exception("Giá món '{$product->name}' không khớp (gửi: {$item['unit_price']}, đúng: {$expectedPrice}).");
+                        }
+                    }
+
                     // Gói 3e: cho phép giá bán tùy chỉnh từ popup (mặc định = giá menu + tùy chọn)
                     $unitPrice = isset($item['unit_price'])
                         ? (float) $item['unit_price']
-                        : ($product->base_price + ($option ? $option->additional_price : 0));
+                        : $expectedPrice;
                     $lineGross = $unitPrice * $item['quantity'];
                     // Gói 3e: giảm giá từng món (không vượt quá thành tiền dòng)
                     $itemDiscount = min((float) ($item['discount_amount'] ?? 0), $lineGross);
@@ -133,6 +182,8 @@ class OrderController extends Controller
                         'total_price' => $itemTotal,
                         'discount_amount' => $itemDiscount,
                         'note' => $item['note'] ?? null,
+                        // Gói 55 p11ac: giá vốn tính từ BOM × giá lô FIFO đã trừ
+                        'unit_cost' => $this->calcItemUnitCost($product->id, $item['option_ids'] ?? [], $materialCosts),
                     ];
                     $promoItems[] = [
                         'product_id' => $product->id,
@@ -163,6 +214,11 @@ class OrderController extends Controller
 
                     if ($voucher->expires_at && now()->isAfter($voucher->expires_at)) {
                         throw new Exception('Mã khuyến mãi đã hết hạn.');
+                    }
+
+                    // Gói 55 p11ac: kiểm tra thời gian bắt đầu hiệu lực
+                    if ($voucher->starts_at && now()->isBefore($voucher->starts_at)) {
+                        throw new Exception('Mã khuyến mãi chưa đến thời gian áp dụng.');
                     }
 
                     if ($subtotal < $voucher->min_order_amount) {
@@ -259,6 +315,7 @@ class OrderController extends Controller
 
                 // 3. Trừ kho trực tiếp khi bán (BOM + FIFO). Ném Exception nếu thiếu hàng.
                 // Đơn held: bỏ qua bước này.
+                $materialCosts = [];
                 if (!$isHold) {
                     $deductLines = array_map(fn($i) => [
                         'product_id' => $i['product_id'],
@@ -274,7 +331,18 @@ class OrderController extends Controller
                             'quantity' => $giftLine['quantity'],
                         ];
                     }
-                    $inventoryService->deductStock($validated['branch_id'], $deductLines);
+                    // Gói 55 p11ac: trả về giá vốn BQ từng NL để lưu vào order_items
+                    // Gói 55 p11ad: $movementIds (by-ref) nhận về id các dòng log để gắn order_id sau
+                    $materialCosts = $inventoryService->deductStock($validated['branch_id'], $deductLines, ['type' => 'order'], $movementIds);
+                    // Cập nhật giá vốn cho dòng quà tặng (được tạo trước khi trừ kho)
+                    if ($giftLine) {
+                        foreach ($orderItemsData as &$od) {
+                            if (($od['product_id'] ?? null) === $giftLine['product_id'] && ($od['note'] ?? '') === $giftLine['note']) {
+                                $od['unit_cost'] = $this->calcItemUnitCost($giftLine['product_id'], [], $materialCosts);
+                            }
+                        }
+                        unset($od);
+                    }
                 }
 
                 // 4. Liên kết ca làm việc đang mở (nếu có)
@@ -293,6 +361,7 @@ class OrderController extends Controller
                     'shift_id' => $activeShift ? $activeShift->id : null,
                     'order_number' => 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
                     'code' => 'HD-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
+                    'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                     'customer_id' => $customer ? $customer->id : null, // Gói 5
                     'customer_name' => $customer ? $customer->name : ($validated['customer_name'] ?? 'Khách lẻ'),
                     'customer_phone' => $customer ? $customer->phone : ($validated['customer_phone'] ?? null),
@@ -313,6 +382,10 @@ class OrderController extends Controller
                 // 5b. Gói 3b: đơn gắn bàn -> đánh dấu bàn có khách (cả đơn lưu và đơn đã thanh toán)
                 if ($tableId) {
                     \App\Models\Table::where('id', $tableId)->update(['status' => 'occupied']);
+                }
+                // Gói 55 p11ad: gắn order_id cho nhật ký xuất kho vừa ghi
+                if (!empty($movementIds)) {
+                    \App\Models\StockMovement::whereIn('id', $movementIds)->update(['reference_id' => $order->id]);
                 }
 
                 // 6. Ghi nhận chi tiết từng món trong đơn
@@ -355,12 +428,33 @@ class OrderController extends Controller
     public function updateStatus(Request $request, string $id)
     {
         $request->validate([
-            'status' => 'required|in:pending,processing,ready,completed,cancelled'
+            'status' => 'required|in:pending,processing,ready,completed'
         ]);
 
         // Tìm đơn theo code hoặc id kèm theo danh sách món (items)
         $order = Order::with('items')->where('code', $id)->orWhere('id', $id)->firstOrFail();
-        $order->status = $request->status;
+
+        // Gói 55 p11ac: state machine — chặn chuyển đổi không hợp lệ
+        // - 'cancelled' phải đi qua cancel() (hoàn kho/điểm), không cho set trực tiếp
+        // - 'held' là trạng thái đặc biệt, không set qua updateStatus
+        $allowed = [
+            'pending' => ['processing'],
+            'processing' => ['ready'],
+            'ready' => ['completed'],
+            'held' => [], // đơn lưu: chỉ finalize hoặc cancel
+            'completed' => [],
+            'cancelled' => [],
+        ];
+        $from = $order->status;
+        $to = $request->status;
+        if (!in_array($to, $allowed[$from] ?? [])) {
+            return response()->json([
+                'success' => false,
+                'message' => "Không thể chuyển từ '{$from}' sang '{$to}'.",
+            ], 422);
+        }
+
+        $order->status = $to;
         // Gói 12a: ghi mốc hoàn thành để Mini App giới hạn tra cứu 24h
         if ($request->status === 'completed' && !$order->completed_at) {
             $order->completed_at = now();
@@ -449,6 +543,13 @@ class OrderController extends Controller
         // Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận)
         $loyaltyService->revokeEarn($order);
 
+        // Gói 55 p11ac: hoàn lượt dùng voucher khi hủy đơn
+        if (!empty($order->voucher_code)) {
+            \App\Models\Voucher::where('code', $order->voucher_code)
+                ->where('used_count', '>', 0)
+                ->decrement('used_count');
+        }
+
         // Gói 3b: nếu là đơn lưu gắn bàn -> trả bàn về trống khi không còn đơn lưu nào khác
         $this->releaseTableIfFree($order);
 
@@ -488,6 +589,9 @@ class OrderController extends Controller
                         $this->performCancel($id, $reason, true, $inventoryService, $loyaltyService);
                         $done++;
                     } else {
+                        // Gói 55 p11ac: chỉ xóa đơn nháp (held) hoặc chưa thanh toán — đơn đã paid phải dùng Hủy đơn
+                        $isDraft = $order->status === 'held' || $order->payment_status === 'pending';
+                        if (!$isDraft) { $skipped++; continue; }
                         $order->items()->delete();
                         $order->delete();
                         $done++;
@@ -498,7 +602,7 @@ class OrderController extends Controller
 
             $msg = $action === 'cancel'
                 ? "Đã hủy {$result['done']} hóa đơn" . ($result['skipped'] ? " (bỏ qua {$result['skipped']} đơn đã hủy trước đó)" : '') . '.'
-                : "Đã xóa vĩnh viễn {$result['done']} hóa đơn.";
+                : "Đã xóa vĩnh viễn {$result['done']} hóa đơn." . ($result['skipped'] ? " (bỏ qua {$result['skipped']} đơn đã thanh toán — dùng Hủy đơn)" : '');
             return response()->json(['success' => true, 'message' => $msg, 'data' => $result]);
         } catch (Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
@@ -674,6 +778,9 @@ class OrderController extends Controller
                             ])->toArray()
                         );
                     }
+                    // Gói 55 p11ac: đơn nguồn là đơn lưu (chưa trừ kho) nhưng đơn đích đã thanh toán (đã trừ)
+                    // -> trừ kho cho các món từ nguồn, tránh tồn kho cao hơn thực tế
+                    $needDeductSrc = !$src->stock_deducted && $target->stock_deducted;
 
                     // Chuyển từng món sang đơn đích.
                     // Gói 3e: chỉ gộp dòng khi cùng món + tùy chọn + đơn giá + ghi chú
@@ -707,11 +814,35 @@ class OrderController extends Controller
                     // (đơn nguồn bị cancelled nhưng tiền món đã gộp sang đơn đích).
                     $loyaltyService->refundRedeem($src);
 
+                    // Gói 55 p11ac: thu hồi điểm đã TÍCH của đơn nguồn (chống tích 2 lần khi gộp)
+                    $loyaltyService->revokeEarn($src);
+
                     $src->status = 'cancelled';
                     $src->payment_status = 'refunded';
                     $src->cancel_reason = 'Gộp vào đơn ' . $target->code;
                     $src->cancelled_at = now();
                     $src->save();
+
+                    // Gói 55 p11ac: trừ kho cho món từ đơn nguồn (held) gộp vào đơn đích (paid)
+                    if ($needDeductSrc) {
+                        $deductLines = $src->items->map(fn($item) => [
+                            'product_id' => $item->product_id,
+                            'product_option_id' => $item->product_option_id,
+                            'option_ids' => $item->options ? array_keys((array) $item->options) : [],
+                            'quantity' => $item->quantity,
+                        ])->toArray();
+                        $matCosts = $inventoryService->deductStock($target->branch_id, $deductLines, ['type' => 'order', 'id' => $target->id, 'note' => 'Gộp đơn ' . $src->code]);
+                        // Gói 55 p11ac: cập nhật giá vốn cho các dòng vừa gộp
+                        foreach ($target->items()->whereIn('id', $target->items->pluck('id'))->get() as $tItem) {
+                            $tItem->update([
+                                'unit_cost' => $this->calcItemUnitCost(
+                                    $tItem->product_id,
+                                    $tItem->options ? array_keys((array) $tItem->options) : [],
+                                    $matCosts
+                                ),
+                            ]);
+                        }
+                    }
 
                     // Gói 3b: giải phóng bàn của đơn nguồn nếu không còn đơn lưu nào khác
                     $this->releaseTableIfFree($src);
@@ -774,15 +905,27 @@ class OrderController extends Controller
 
                 // Trừ kho tại thời điểm thanh toán (đơn held chưa từng trừ)
                 // Gói 13: trừ cả topping/size (option_ids từ options [id => name])
-                $inventoryService->deductStock(
+                // Gói 55 p11ac: lưu giá vốn vào order_items
+                // Gói 55 p11ad: log xuất kho kèm order_id
+                $matCosts = $inventoryService->deductStock(
                     $order->branch_id,
                     $order->items->map(fn($item) => [
                         'product_id' => $item->product_id,
                         'product_option_id' => $item->product_option_id,
                         'option_ids' => $item->options ? array_keys((array) $item->options) : [],
                         'quantity' => $item->quantity,
-                    ])->toArray()
+                    ])->toArray(),
+                    ['type' => 'order', 'id' => $order->id, 'note' => 'Thanh toán đơn lưu']
                 );
+                foreach ($order->items as $item) {
+                    $item->update([
+                        'unit_cost' => $this->calcItemUnitCost(
+                            $item->product_id,
+                            $item->options ? array_keys((array) $item->options) : [],
+                            $matCosts
+                        ),
+                    ]);
+                }
 
                 $order->payment_method = $validated['payment_method'] ?? $order->payment_method;
                 $order->payment_status = 'paid';
@@ -897,5 +1040,32 @@ class OrderController extends Controller
             'success' => true,
             'data' => $order,
         ], 200);
+    }
+
+    /**
+     * Gói 55 p11ac: tính giá vốn 1 đơn vị món = Σ (định mức NL × giá vốn BQ lô đã trừ).
+     * Dùng cho báo cáo COGS — giá vốn được "chốt" tại thời điểm bán, không thay đổi ngược.
+     */
+    private function calcItemUnitCost(int $productId, array $optionIds, array $materialCosts): float
+    {
+        if (empty($materialCosts)) {
+            return 0;
+        }
+        $cost = 0;
+        // Định mức cơ bản của món
+        $recipes = \App\Models\Recipe::where('product_id', $productId)->get();
+        foreach ($recipes as $r) {
+            $matCost = $materialCosts[$r->material_id] ?? 0;
+            $cost += (float) $r->quantity * $matCost;
+        }
+        // Định mức của các tùy chọn (nếu có)
+        if (!empty($optionIds)) {
+            $optRecipes = \App\Models\Recipe::whereIn('product_option_id', $optionIds)->get();
+            foreach ($optRecipes as $r) {
+                $matCost = $materialCosts[$r->material_id] ?? 0;
+                $cost += (float) $r->quantity * $matCost;
+            }
+        }
+        return round($cost, 2);
     }
 }

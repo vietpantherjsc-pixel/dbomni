@@ -70,14 +70,16 @@ class GroupOrderController extends Controller
             ]);
 
             $item = DB::transaction(function () use ($group, $v) {
-                $product = Product::findOrFail($v['product_id']);
+                $product = Product::with('prices.priceList')->findOrFail($v['product_id']);
                 if ($product->is_service_fee || !$product->is_active) {
                     throw new Exception('Món không khả dụng.');
                 }
                 $groupOpts = !empty($v['option_ids'])
                     ? ProductOption::whereIn('id', $v['option_ids'])->get()
                     : collect();
-                $unitPrice = (float) $product->base_price
+                // Gói 55 p11ac: dùng online_price (giá kênh Zalo) thay vì base_price cho đồng nhất với đơn thường
+                // Gói 55 p11ad: GIÁ GỐC, không áp KM ở cấp dòng — KM chỉ áp 1 lần khi trưởng nhóm checkout
+                $unitPrice = (float) $product->online_price
                     + $groupOpts->sum(fn($o) => (float) $o->additional_price);
 
                 $optionIds = $groupOpts->pluck('id')->sort()->values()->all();
@@ -183,6 +185,8 @@ class GroupOrderController extends Controller
         ]);
 
         // Dựng items cho đơn online: tên người đặt nối vào ghi chú từng dòng
+        // Gói 55 p11ad: KM chỉ áp 1 lần tại checkout — items dựng lại GIÁ GỐC từ DB
+        // (không mang unit_price/discount từ client), tránh áp KM 2 lần.
         $items = $group->items()->get()->map(function ($gi) {
             return [
                 'product_id' => $gi->product_id,

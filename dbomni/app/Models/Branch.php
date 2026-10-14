@@ -12,6 +12,10 @@ class Branch extends Model
 {
     protected $guarded = [];
 
+    protected $casts = [
+        'opening_hours' => 'array', // Gói 55 p2: giờ mở cửa JSON
+    ];
+
     public function batches(): HasMany
     {
         return $this->hasMany(Batch::class);

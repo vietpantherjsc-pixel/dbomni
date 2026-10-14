@@ -31,7 +31,8 @@ class OnlineOrderController extends Controller
     // Danh sách chi nhánh (kèm địa chỉ + tọa độ để tính ship)
     public function branches(): JsonResponse
     {
-        $branches = Branch::select('id', 'name', 'address', 'latitude', 'longitude')->get();
+        // Gói 55 p1: thêm phone; p2: thêm opening_hours để Mini App hiện trạng thái mở cửa
+        $branches = Branch::select('id', 'name', 'address', 'phone', 'opening_hours', 'latitude', 'longitude')->get();
         return response()->json(['success' => true, 'data' => $branches]);
     }
 
@@ -63,6 +64,10 @@ class OnlineOrderController extends Controller
         if ($request->branch_id) {
             $branchCover = Branch::where('id', $request->branch_id)->value('cover_url');
             if ($branchCover) $cover = $branchCover;
+        }
+        // Gói 50b: chuẩn hóa thành URL tuyệt đối theo host thật (sửa dữ liệu cũ relative/localhost)
+        if ($cover && !preg_match('#^https?://#i', $cover)) {
+            $cover = $request->getSchemeAndHttpHost() . '/' . ltrim($cover, '/');
         }
         return response()->json(['success' => true, 'data' => [
             'cover_url' => $cover,
@@ -168,6 +173,158 @@ class OnlineOrderController extends Controller
         ]]);
     }
 
+    // Gói 50e: geocode qua backend (Zalo WebView chặn domain lạ, backend gọi OSM với User-Agent chuẩn)
+    public function geocode(Request $request): JsonResponse
+    {
+        $q = trim((string) $request->query('q', ''));
+        if (mb_strlen($q) < 5) {
+            return response()->json(['success' => false, 'message' => 'Địa chỉ quá ngắn'], 422);
+        }
+        try {
+            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query([
+                'format' => 'json', 'limit' => 1, 'countrycodes' => 'vn', 'q' => $q,
+            ]);
+            $ctx = stream_context_create(['http' => [
+                'timeout' => 8,
+                'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
+            ]]);
+            $raw = @file_get_contents($url, false, $ctx);
+            if ($raw === false) throw new \RuntimeException('Không kết nối được bản đồ');
+            $data = json_decode($raw, true);
+            if (empty($data[0]['lat']) || empty($data[0]['lon'])) {
+                throw new \RuntimeException('Không tìm thấy địa chỉ');
+            }
+            return response()->json(['success' => true, 'data' => [
+                'lat' => (float) $data[0]['lat'],
+                'lng' => (float) $data[0]['lon'],
+                'label' => $data[0]['display_name'] ?? '',
+            ]]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    // Gói 55 p11ac: proxy danh sách tỉnh/thành (Zalo WebView chặn domain lạ)
+    public function provinces(): JsonResponse
+    {
+        try {
+            $ctx = stream_context_create(['http' => ['timeout' => 8]]);
+            $raw = @file_get_contents('https://provinces.open-api.vn/api/v2/p/', false, $ctx);
+            if ($raw === false) throw new \RuntimeException('Không kết nối được');
+            return response()->json(['success' => true, 'data' => json_decode($raw, true) ?: []]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => []], 502);
+        }
+    }
+
+    // Gói 55 p11ac: proxy xã/phường theo mã tỉnh
+    public function wards(Request $request): JsonResponse
+    {
+        $code = (int) $request->query('province', 0);
+        if ($code <= 0) return response()->json(['success' => false, 'message' => 'Thiếu mã tỉnh', 'data' => []], 422);
+        try {
+            $ctx = stream_context_create(['http' => ['timeout' => 8]]);
+            $raw = @file_get_contents("https://provinces.open-api.vn/api/v2/p/{$code}?depth=2", false, $ctx);
+            if ($raw === false) throw new \RuntimeException('Không kết nối được');
+            $data = json_decode($raw, true);
+            return response()->json(['success' => true, 'data' => $data['wards'] ?? []]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => []], 502);
+        }
+    }
+
+    // Gói 50f: gợi ý địa chỉ khi user gõ (trả tối đa 5 kết quả để chọn nhanh)
+    public function geocodeSuggest(Request $request): JsonResponse
+    {
+        $q = trim((string) $request->query('q', ''));
+        if (mb_strlen($q) < 5) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+        // Gói 55 p3: ưu tiên kết quả gần vị trí user (nếu có lat/lon)
+        $lat = (float) $request->query('lat', 0);
+        $lon = (float) $request->query('lon', 0);
+        try {
+            $params = [
+                'format' => 'json', 'limit' => 5, 'countrycodes' => 'vn',
+                'addressdetails' => 1, 'q' => $q,
+            ];
+            if ($lat && $lon) {
+                // Viewbox ~2km quanh vị trí user để ưu tiên địa chỉ gần
+                $d = 0.02;
+                $params['viewbox'] = ($lon - $d) . ',' . ($lat + $d) . ',' . ($lon + $d) . ',' . ($lat - $d);
+                $params['bounded'] = 0; // 0 = ưu tiên trong viewbox nhưng vẫn trả ngoài nếu không có
+            }
+            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query($params);
+            $ctx = stream_context_create(['http' => [
+                'timeout' => 8,
+                'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
+            ]]);
+            $raw = @file_get_contents($url, false, $ctx);
+            if ($raw === false) throw new \RuntimeException('Không kết nối được bản đồ');
+            $data = json_decode($raw, true) ?: [];
+            $out = [];
+            foreach (array_slice($data, 0, 5) as $r) {
+                if (empty($r['lat']) || empty($r['lon'])) continue;
+                $a = $r['address'] ?? [];
+                // Gói 55 p3: label theo cấu trúc "Số nhà, Tên đường, Phường/Xã, Tỉnh/Thành"
+                $parts = [];
+                $streetLine = trim(($a['house_number'] ?? '') . ' ' . ($a['road'] ?? ''));
+                if ($streetLine !== '') $parts[] = $streetLine;
+                $ward = $a['suburb'] ?? $a['village'] ?? $a['hamlet'] ?? '';
+                if ($ward !== '') $parts[] = $ward;
+                $city = $a['city'] ?? $a['town'] ?? $a['county'] ?? $a['state'] ?? '';
+                if ($city !== '') $parts[] = $city;
+                $label = implode(', ', $parts) ?: ($r['display_name'] ?? '');
+                $out[] = [
+                    'lat' => (float) $r['lat'],
+                    'lng' => (float) $r['lon'],
+                    'label' => $label,
+                    // Tên gọn: số nhà + đường (nếu có)
+                    'short' => $streetLine ?: mb_substr($label, 0, 60),
+                ];
+            }
+            return response()->json(['success' => true, 'data' => $out]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+    }
+
+    // Gói 55 p3: reverse geocode — từ GPS (lat/lon) ra địa chỉ để điền vào form
+    public function geocodeReverse(Request $request): JsonResponse
+    {
+        $lat = (float) $request->query('lat', 0);
+        $lon = (float) $request->query('lon', 0);
+        if (!$lat || !$lon) {
+            return response()->json(['success' => false, 'message' => 'Thiếu tọa độ'], 422);
+        }
+        try {
+            $url = 'https://nominatim.openstreetmap.org/reverse?' . http_build_query([
+                'format' => 'json', 'lat' => $lat, 'lon' => $lon,
+                'addressdetails' => 1, 'accept-language' => 'vi',
+            ]);
+            $ctx = stream_context_create(['http' => [
+                'timeout' => 8,
+                'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
+            ]]);
+            $raw = @file_get_contents($url, false, $ctx);
+            if ($raw === false) throw new \RuntimeException('Không kết nối được bản đồ');
+            $r = json_decode($raw, true) ?: [];
+            $addr = $r['address'] ?? [];
+            return response()->json(['success' => true, 'data' => [
+                'lat' => $lat,
+                'lng' => $lon,
+                'label' => $r['display_name'] ?? '',
+                'road' => $addr['road'] ?? '',
+                'house_number' => $addr['house_number'] ?? '',
+                'suburb' => $addr['suburb'] ?? $addr['village'] ?? '',
+                'city' => $addr['city'] ?? $addr['town'] ?? $addr['county'] ?? '',
+                'state' => $addr['state'] ?? '',
+            ]]);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
     // Tính phí ship theo khoảng cách (server tính lại, không tin client)
     public function shippingFee(Request $request): JsonResponse
     {
@@ -187,6 +344,35 @@ class OnlineOrderController extends Controller
             return $baseFee;
         }
         return $baseFee + ceil($km - $baseKm) * $perKm;
+    }
+
+    // Gói 55 p11ac: server tự tính khoảng cách (không tin distance_km client gửi)
+    // Trả về null nếu không geocode được -> phí ship để quán xác nhận
+    private function serverDistanceKm(string $address, $branch): ?float
+    {
+        if (empty($branch->latitude) || empty($branch->longitude)) return null;
+        try {
+            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query([
+                'format' => 'json', 'limit' => 1, 'countrycodes' => 'vn', 'q' => $address,
+            ]);
+            $ctx = stream_context_create(['http' => [
+                'timeout' => 8,
+                'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
+            ]]);
+            $raw = @file_get_contents($url, false, $ctx);
+            if ($raw === false) return null;
+            $data = json_decode($raw, true);
+            if (empty($data[0]['lat']) || empty($data[0]['lon'])) return null;
+            $lat1 = deg2rad((float) $branch->latitude);
+            $lon1 = deg2rad((float) $branch->longitude);
+            $lat2 = deg2rad((float) $data[0]['lat']);
+            $lon2 = deg2rad((float) $data[0]['lon']);
+            $dLat = $lat2 - $lat1; $dLon = $lon2 - $lon1;
+            $a = sin($dLat / 2) ** 2 + cos($lat1) * cos($lat2) * sin($dLon / 2) ** 2;
+            return round(2 * 6371 * asin(sqrt($a)), 1);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     // KM đủ điều kiện cho kênh online
@@ -258,13 +444,14 @@ class OnlineOrderController extends Controller
         LoyaltyService $loyaltyService
     ): JsonResponse {
         $validated = $request->validate([
+            'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency key
             'branch_id' => 'required|exists:branches,id',
             'order_type' => 'required|in:takeaway,delivery',
             'customer_name' => 'required|string|max:100',
             'customer_phone' => 'required|string|max:20',
             'zalo_user_id' => 'nullable|string|max:100',
             'delivery_address' => 'required_if:order_type,delivery|nullable|string|max:255',
-            'distance_km' => 'required_if:order_type,delivery|nullable|numeric|min:0|max:100',
+            'distance_km' => 'nullable|numeric|min:0|max:100', // Gói 55 p11ac: chỉ để tham khảo, server tự tính lại
             'scheduled_at' => 'nullable|date|after:now',
             'payment_method' => 'required|in:transfer,pay_at_store',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
@@ -291,6 +478,13 @@ class OnlineOrderController extends Controller
         ]);
 
         try {
+            // Gói 55 p11ac: idempotency — client_key đã tồn tại thì trả đơn cũ
+            if (!empty($validated['client_key'])) {
+                $existing = Order::with('items')->where('client_key', $validated['client_key'])->first();
+                if ($existing) {
+                    return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
+                }
+            }
             $order = DB::transaction(function () use ($validated, $promotionService, $loyaltyService) {
                 $subtotal = 0;
                 $orderItemsData = [];
@@ -354,11 +548,20 @@ class OnlineOrderController extends Controller
                     ]);
                 }
 
-                // 3. Phí ship (đơn giao hàng) — server tự tính.
+                // 3. Phí ship (đơn giao hàng) — server tự tính, KHÔNG tin client.
                 // Gói 10c: chưa cộng dòng "Phí dịch vụ" vội — đợi trừ KM phí ship (bước 5b).
+                // Gói 55 p11ac: server geocode địa chỉ để tính km; không tính được -> phí 0, quán xác nhận sau.
                 $shippingFee = 0;
+                $distanceKm = null;
+                $shipNote = null;
                 if ($validated['order_type'] === 'delivery') {
-                    $shippingFee = $this->calcShipFee((float) $validated['distance_km']);
+                    $branch = Branch::find($validated['branch_id']);
+                    $distanceKm = $this->serverDistanceKm($validated['delivery_address'] ?? '', $branch);
+                    if ($distanceKm !== null) {
+                        $shippingFee = $this->calcShipFee($distanceKm);
+                    } else {
+                        $shipNote = 'Quán xác nhận phí ship';
+                    }
                 }
 
                 $discountAmount = 0;
@@ -374,6 +577,10 @@ class OnlineOrderController extends Controller
                     }
                     if ($voucher->expires_at && now()->isAfter($voucher->expires_at)) {
                         throw new Exception('Voucher đã hết hạn.');
+                    }
+                    // Gói 55 p11ac: kiểm tra thời gian bắt đầu hiệu lực
+                    if ($voucher->starts_at && now()->isBefore($voucher->starts_at)) {
+                        throw new Exception('Voucher chưa đến thời gian áp dụng.');
                     }
                     if ($subtotal < $voucher->min_order_amount) {
                         throw new Exception('Chưa đạt giá trị tối thiểu của voucher.');
@@ -459,7 +666,7 @@ class OnlineOrderController extends Controller
                         'subtotal' => $shippingFee,
                         'total_price' => $shippingFee,
                         'discount_amount' => 0,
-                        'note' => 'Phí giao hàng (' . $validated['distance_km'] . 'km)'
+                        'note' => 'Phí giao hàng' . ($distanceKm !== null ? " ({$distanceKm}km)" : ' (quán xác nhận)')
                             . ($shippingDiscount > 0 ? ' — đã giảm ' . number_format($shippingDiscount, 0) . 'đ từ KM' : ''),
                     ];
                 }
@@ -472,13 +679,15 @@ class OnlineOrderController extends Controller
                     'online_channel' => 'zalo',
                     'order_number' => 'ONL-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
                     'code' => 'ZL-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
+                    'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                     'customer_id' => $customer->id,
                     'customer_name' => $validated['customer_name'],
                     'customer_phone' => $validated['customer_phone'],
                     'referred_by' => $validated['referred_by'] ?? $customer->referred_by,
                     'zalo_user_id' => $validated['zalo_user_id'] ?? null,
                     'delivery_address' => $validated['delivery_address'] ?? null,
-                    'distance_km' => $validated['distance_km'] ?? null,
+                    'distance_km' => $distanceKm, // Gói 55 p11ac: server tự tính
+                    'delivery_note' => trim(($validated['delivery_note'] ?? '') . ($shipNote ? ($validated['delivery_note'] ? ' | ' : '') . $shipNote : '')),
                     'shipping_fee' => $shippingFee,
                     'shipping_discount' => $shippingDiscount, // Gói 10c
                     'shipping_promotion_id' => $shippingPromotion?->id, // Gói 10c
@@ -593,6 +802,13 @@ class OnlineOrderController extends Controller
                 // Gói 13: hoàn điểm đã đổi qua LoyaltyService (ghi sổ PointTransaction)
                 // thay vì cộng thủ công. Đơn chưa xác nhận nên chưa tích điểm -> không cần revokeEarn.
                 $loyaltyService->refundRedeem($order);
+
+                // Gói 55 p11ac: hoàn lượt dùng voucher khi KH hủy đơn online
+                if (!empty($order->voucher_code)) {
+                    \App\Models\Voucher::where('code', $order->voucher_code)
+                        ->where('used_count', '>', 0)
+                        ->decrement('used_count');
+                }
                 return $order;
             });
             return response()->json(['success' => true, 'message' => 'Đã hủy đơn hàng.']);
@@ -614,31 +830,33 @@ class OnlineOrderController extends Controller
                 'phone' => 'required|string|max:20',
             ]);
 
-            $order = Order::where('code', $code)->firstOrFail();
+            // Gói SEC: lock + check token TRONG transaction (chống quét QR 2 lần)
+            DB::transaction(function () use ($code, $validated, $loyaltyService) {
+                $order = Order::where('code', $code)->lockForUpdate()->firstOrFail();
 
-            if (!$order->claim_token || !hash_equals($order->claim_token, $validated['claim_token'])) {
-                throw new Exception('Mã QR không hợp lệ.');
-            }
-            if ($order->claim_expires_at && $order->claim_expires_at->isPast()) {
-                throw new Exception('Mã QR đã hết hạn. Nhờ thu ngân tạo mã mới.');
-            }
-            if (in_array($order->status, ['completed', 'cancelled'])) {
-                throw new Exception('Đơn đã hoàn thành/hủy, không gán được.');
-            }
+                if (!$order->claim_token || !hash_equals($order->claim_token, $validated['claim_token'])) {
+                    throw new Exception('Mã QR không hợp lệ hoặc đã được sử dụng.');
+                }
+                if ($order->claim_expires_at && $order->claim_expires_at->isPast()) {
+                    throw new Exception('Mã QR đã hết hạn. Nhờ thu ngân tạo mã mới.');
+                }
+                if (in_array($order->status, ['completed', 'cancelled'])) {
+                    throw new Exception('Đơn đã hoàn thành/hủy, không gán được.');
+                }
 
-            $customer = Customer::where('member_code', $validated['member_code'])
-                ->where('phone', $validated['phone'])
-                ->first();
-            if (!$customer) {
-                throw new Exception('Không tìm thấy thành viên. Hãy đăng nhập Tài khoản trước.');
-            }
-            if ($order->customer_id && (int) $order->customer_id !== (int) $customer->id) {
-                throw new Exception('Đơn đã được gán cho thành viên khác.');
-            }
+                $customer = Customer::where('member_code', $validated['member_code'])
+                    ->where('phone', $validated['phone'])
+                    ->first();
+                if (!$customer) {
+                    throw new Exception('Không tìm thấy thành viên. Hãy đăng nhập Tài khoản trước.');
+                }
+                if ($order->customer_id && (int) $order->customer_id !== (int) $customer->id) {
+                    throw new Exception('Đơn đã được gán cho thành viên khác.');
+                }
 
-            DB::transaction(function () use ($order, $customer, $loyaltyService) {
                 $order->customer_id = $customer->id;
                 // Đơn đã thanh toán mà chưa tích điểm → tích bù ngay
+                // Gói SEC: token đã null sau lần claim đầu nên không thể claim 2 lần
                 if ($order->payment_status === 'paid' && !$order->points_earned) {
                     $order->points_earned = $loyaltyService->earnForOrder(
                         $customer, $order, (float) $order->total_amount
@@ -648,6 +866,9 @@ class OnlineOrderController extends Controller
                 $order->claim_expires_at = null;
                 $order->save();
             });
+
+            $order = Order::where('code', $code)->first();
+            $customer = $order->customer;
 
             $customer->load('tier');
 
@@ -687,15 +908,21 @@ class OnlineOrderController extends Controller
 
                 // Trừ kho (món "Phí dịch vụ" không có BOM nên tự bỏ qua)
                 // Gói 8a: trừ định mức cơ bản + định mức từng tùy chọn đã chọn
-                $inventoryService->deductStock(
+                // Gói 55 p11ac: lưu giá vốn vào order_items
+                // Gói 55 p11ad: log xuất kho kèm order_id
+                $matCosts = $inventoryService->deductStock(
                     $order->branch_id,
                     $order->items->map(fn($item) => [
                         'product_id' => $item->product_id,
                         'product_option_id' => $item->product_option_id,
                         'option_ids' => $item->options ? array_keys((array) $item->options) : [],
                         'quantity' => $item->quantity,
-                    ])->toArray()
+                    ])->toArray(),
+                    ['type' => 'order', 'id' => $order->id, 'note' => 'Xác nhận thanh toán online']
                 );
+                foreach ($order->items as $item) {
+                    $item->update(['unit_cost' => $this->calcItemUnitCost($item, $matCosts)]);
+                }
 
                 $order->payment_status = 'paid';
                 $order->status = 'processing'; // Gói 11: xác nhận xong vào thẳng "Đang Pha Chế" (KDS đã thu tiền)
@@ -750,5 +977,28 @@ class OnlineOrderController extends Controller
             $code = 'TV' . strtoupper(Str::random(6));
         } while (Customer::where('member_code', $code)->exists());
         return $code;
+    }
+
+    /**
+     * Gói 55 p11ac: tính giá vốn 1 đơn vị món = Σ (định mức NL × giá vốn BQ lô đã trừ).
+     */
+    private function calcItemUnitCost($item, array $materialCosts): float
+    {
+        if (empty($materialCosts) || empty($item->product_id)) {
+            return 0;
+        }
+        $cost = 0;
+        $recipes = \App\Models\Recipe::where('product_id', $item->product_id)->get();
+        foreach ($recipes as $r) {
+            $cost += (float) $r->quantity * ($materialCosts[$r->material_id] ?? 0);
+        }
+        $optionIds = $item->options ? array_keys((array) $item->options) : [];
+        if (!empty($optionIds)) {
+            $optRecipes = \App\Models\Recipe::whereIn('product_option_id', $optionIds)->get();
+            foreach ($optRecipes as $r) {
+                $cost += (float) $r->quantity * ($materialCosts[$r->material_id] ?? 0);
+            }
+        }
+        return round($cost, 2);
     }
 }

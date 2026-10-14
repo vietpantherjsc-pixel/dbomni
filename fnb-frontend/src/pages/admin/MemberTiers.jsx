@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 
 // =====================================================================
 // Gói 5 (2026-10-05): Thẻ thành viên — hạng + tỉ lệ tích điểm từng hạng,

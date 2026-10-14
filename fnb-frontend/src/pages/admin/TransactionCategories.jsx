@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 29 (2026-10-09): Trang Danh mục thu chi.
@@ -8,7 +9,6 @@ import AdminLayout from '../../components/layout/AdminLayout';
 // - Thêm/sửa/xóa; khóa xóa với danh mục hệ thống hoặc đang có phiếu.
 // =====================================================================
 
-const API = 'http://localhost/api';
 const TYPE_LABEL = { income: 'Thu', expense: 'Chi' };
 
 const emptyForm = () => ({ name: '', type: 'expense' });

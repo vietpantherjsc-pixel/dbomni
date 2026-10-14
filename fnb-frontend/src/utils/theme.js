@@ -1,3 +1,4 @@
+import { API } from '../utils/api';
 // Gói 7p (2026-10-05): Màu chủ đạo giao diện do Đại Vương tự pick.
 // Áp màu vào CSS variables của design system (matcha.css -> theme xanh dương).
 
@@ -46,7 +47,7 @@ export async function loadTheme(api) {
     if (stored) applyThemeColor(stored);
     else applyThemeColor(DEFAULT_PRIMARY);
     try {
-        const res = await api.get('http://localhost/api/settings/theme');
+        const res = await api.get(API + '/settings/theme');
         const primary = res.data && res.data.primary;
         if (primary && primary.toUpperCase() !== (stored || '').toUpperCase()) {
             applyThemeColor(primary);

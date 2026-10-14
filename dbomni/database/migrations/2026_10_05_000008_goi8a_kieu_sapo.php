@@ -88,12 +88,7 @@ return new class extends Migration {
                     'created_at' => now(), 'updated_at' => now(),
                 ]);
             }
-            if (!DB::table('settings')->where('key', 'price_includes_tax')->exists()) {
-                DB::table('settings')->insert([
-                    'key' => 'price_includes_tax', 'value' => '1',
-                    'created_at' => now(), 'updated_at' => now(),
-                ]);
-            }
+            // Gói 55 p11ac: bỏ seed price_includes_tax — key chết, không nơi nào đọc
         }
     }
 

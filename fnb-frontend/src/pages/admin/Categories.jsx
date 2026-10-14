@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { API } from '../../utils/api';
 
 const Categories = () => {
     const [categories, setCategories] = useState([]);
@@ -21,7 +22,7 @@ const Categories = () => {
 
     const fetchCategories = async () => {
         try {
-            const response = await axios.get('http://localhost/api/categories');
+            const response = await axios.get(API + '/categories');
             setCategories(response.data);
         } catch (error) {
             console.error("Lỗi khi tải danh mục:", error);
@@ -58,14 +59,25 @@ const Categories = () => {
         setFormData({ name: '', slug: '', sort_order: 0, is_active: true });
     };
 
+    // Gói 55: xóa danh mục (món trong danh mục sẽ thành "chưa phân loại")
+    const handleDelete = async (cat) => {
+        if (!confirm(`Xóa danh mục "${cat.name}"?\nCác món trong danh mục sẽ chuyển thành "Chưa phân loại".`)) return;
+        try {
+            await axios.delete(`${API}/categories/${cat.id}`);
+            fetchCategories();
+        } catch (error) {
+            alert("Có lỗi xảy ra: " + (error.response?.data?.message || "Vui lòng thử lại"));
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
             if (editingId) {
-                await axios.put(`http://localhost/api/categories/${editingId}`, formData);
+                await axios.put(`${API}/categories/${editingId}`, formData);
             } else {
-                await axios.post('http://localhost/api/categories', formData);
+                await axios.post(API + '/categories', formData);
             }
             closeModal();
             fetchCategories();
@@ -122,6 +134,7 @@ const Categories = () => {
                                     </td>
                                     <td className="text-right whitespace-nowrap">
                                         <button className="text-xs font-semibold hover:underline" style={{ color: 'var(--m-primary)' }} onClick={(e) => { e.stopPropagation(); openEdit(cat); }}>Sửa</button>
+                                        <button className="text-xs font-semibold hover:underline ml-3" style={{ color: 'var(--m-danger)' }} onClick={(e) => { e.stopPropagation(); handleDelete(cat); }}>Xóa</button>
                                     </td>
                                 </tr>
                             ))
@@ -164,6 +177,15 @@ const Categories = () => {
                             </div>
                         </div>
                         <div className="m-modal-foot">
+                                {editingId && (
+                                    <button type="button" onClick={() => {
+                                        closeModal();
+                                        const cat = categories.find((c) => c.id === editingId);
+                                        if (cat) handleDelete(cat);
+                                    }} className="m-btn" style={{ color: 'var(--m-danger)', borderColor: 'var(--m-danger)', marginRight: 'auto' }}>
+                                        Xóa danh mục
+                                    </button>
+                                )}
                                 <button type="button" onClick={closeModal} className="m-btn m-btn-ghost">Hủy</button>
                                 <button type="submit" disabled={isSubmitting} className="m-btn m-btn-primary" style={isSubmitting ? { opacity: 0.5 } : {}}>
                                     {isSubmitting ? 'Đang lưu...' : (editingId ? 'Cập nhật' : 'Lưu danh mục')}

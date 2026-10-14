@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const EMPTY = { full_name: '', dob: '', start_date: '', phone: '', email: '', education: '', qualification: '', username: '', password: '', pin_code: '', role_id: '', branch_id: '', branch_ids: [], is_active: true, apply_responsibility: true };
 
 // Gói 26: Danh sách nhân viên (10 trường + PIN 6 số + chức vụ + chi nhánh).

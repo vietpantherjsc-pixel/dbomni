@@ -14,7 +14,7 @@ class SettingsController extends Controller
     public function index(): JsonResponse
     {
         return response()->json([
-            'price_includes_tax' => Setting::get('price_includes_tax', '1'),
+            // Gói 55 p11ac: bỏ price_includes_tax — key chết, không nơi nào đọc
             'default_tax_rate' => Setting::get('default_tax_rate', '8'),
             'theme_primary' => Setting::get('theme_primary', '#24305E'),
             // Gói 8f: số thập phân
@@ -37,6 +37,33 @@ class SettingsController extends Controller
             'shift_reg_deadline_time' => Setting::get('shift_reg_deadline_time', '20:00'),
             // Gói 37e: địa chỉ máy chủ cho QR chấm công (IP LAN, VD http://192.168.1.50:3000)
             'qr_base_url' => Setting::get('qr_base_url', ''),
+            // Gói 55 p11ab: quy tắc sinh mã (prefix + số chữ số)
+            'code_prefix_member' => Setting::get('code_prefix_member', 'TV'),
+            'code_digits_member' => Setting::get('code_digits_member', '6'),
+            'code_prefix_invoice' => Setting::get('code_prefix_invoice', 'HD'),
+            'code_digits_invoice' => Setting::get('code_digits_invoice', '6'),
+            'code_prefix_material' => Setting::get('code_prefix_material', 'NL'),
+            'code_digits_material' => Setting::get('code_digits_material', '4'),
+            'code_prefix_product' => Setting::get('code_prefix_product', 'SP'),
+            'code_digits_product' => Setting::get('code_digits_product', '4'),
+            'code_prefix_inbound' => Setting::get('code_prefix_inbound', 'PN'),
+            'code_digits_inbound' => Setting::get('code_digits_inbound', '4'),
+            'code_prefix_outbound' => Setting::get('code_prefix_outbound', 'XK'),
+            'code_digits_outbound' => Setting::get('code_digits_outbound', '4'),
+            'code_prefix_transfer' => Setting::get('code_prefix_transfer', 'CK'),
+            'code_digits_transfer' => Setting::get('code_digits_transfer', '4'),
+            'code_prefix_stocktake' => Setting::get('code_prefix_stocktake', 'KK'),
+            'code_digits_stocktake' => Setting::get('code_digits_stocktake', '4'),
+            // Gói SEC: 9 key mẫu in (Gói 52)
+            'show_logo' => Setting::get('show_logo', '1'),
+            'show_address' => Setting::get('show_address', '1'),
+            'show_hotline' => Setting::get('show_hotline', '1'),
+            'show_qr' => Setting::get('show_qr', '1'),
+            'show_thankyou' => Setting::get('show_thankyou', '1'),
+            'label_show_code' => Setting::get('label_show_code', '1'),
+            'label_show_name' => Setting::get('label_show_name', '1'),
+            'label_show_opts' => Setting::get('label_show_opts', '1'),
+            'thankyou_text' => Setting::get('thankyou_text', 'Cảm ơn quý khách! Hẹn gặp lại!'),
         ]);
     }
 

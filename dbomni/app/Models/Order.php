@@ -21,6 +21,7 @@ class Order extends Model
         'shift_id',
         'order_number',
         'code',
+        'client_key', // Gói 55 p11ac: idempotency key chống tạo trùng đơn
         'customer_id', // Gói 5
         'customer_name',
         'customer_phone',
@@ -49,6 +50,15 @@ class Order extends Model
         'completed_at', // Gói 12a
         'claim_token', // Gói 11: token QR tích điểm
         'claim_expires_at', // Gói 11: hạn token QR tích điểm
+        'need_vat_invoice', // Gói 48: yêu cầu xuất VAT
+        'vat_tax_code', // Gói 48: MST
+        'vat_company_name', // Gói 48: tên công ty
+        'vat_company_address', // Gói 48: địa chỉ công ty
+        'vat_email', // Gói 48: email nhận hóa đơn
+        'delivery_note', // Gói 48: ghi chú giao hàng
+        'province', // Gói 48: tỉnh/thành
+        'ward', // Gói 48: phường/xã
+        'referred_by', // Gói 9: mã giới thiệu affiliate
     ];
 
     protected $casts = [

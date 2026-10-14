@@ -10,6 +10,7 @@ use App\Models\OrderItem;
 use App\Models\Recipe;
 use App\Models\Setting;
 use App\Models\ShiftExpense;
+use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -31,8 +32,9 @@ use Illuminate\Support\Facades\Schema;
 //   'grab' -> GrabFood; còn lại -> Tại quầy.
 // - Chi phí gồm 2 phần: (1) vốn nguyên liệu ước tính từ BOM (recipes × SL bán
 //   × giá vốn bình quân các lô active); (2) chi phí ca từ shift_expenses
-//   (reason chứa "lương" -> Lương, còn lại -> Chi khác). Không có lương/mặt
-//   bằng riêng trong DB nên chưa tách được như demo.
+//   (reason chứa "lương" -> Lương, còn lại -> Chi khác).
+//   Gói 55 p11ad: kỳ = trọn tháng DL → dòng "Lương" lấy từ bảng chấm công
+//   (salary_days × đơn giá giờ), chính xác hơn dò chuỗi; kỳ khác vẫn dùng shift_expenses.
 // - Hao hụt: "Xuất theo BOM" từ định mức; "Thực tế" = lượng NHẬP trong kỳ
 //   (batches.created_at trong kỳ) theo giả định tồn đầu ≈ tồn cuối — chỉ là
 //   ước tính, sẽ chính xác khi có lịch sử kiểm kho (Gói 16).
@@ -239,21 +241,39 @@ class ReportController extends Controller
         $items = collect();
         $vat = 0.0;
         if ($orderCount > 0) {
+            // Gói 55 p11ac: lấy CK cấp đơn để phân bổ về từng dòng
+            $orderDiscounts = $this->baseOrders($branchId, $from, $to)
+                ->select('id', 'subtotal_amount', 'discount_amount', 'promotion_discount')
+                ->get()
+                ->keyBy('id')
+                ->map(fn ($o) => [
+                    'subtotal' => (float) ($o->subtotal_amount ?: 0),
+                    'discount' => (float) ($o->discount_amount ?: 0) + (float) ($o->promotion_discount ?: 0),
+                ]);
             $items = DB::table('order_items')
                 ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
                 ->whereIn('order_items.order_id', $orderIds)
                 ->select(
+                    'order_items.order_id',
                     'order_items.product_id',
                     'order_items.product_option_id',
                     'order_items.product_name',
                     'order_items.quantity',
+                    'order_items.unit_cost', // Gói 55 p11ac: giá vốn đã chốt lúc trừ kho
                     DB::raw('COALESCE(order_items.total_price, order_items.subtotal, order_items.unit_price * order_items.quantity, 0) AS line_total'),
                     DB::raw('COALESCE(products.tax_rate, ' . $vatRate . ') AS tax_rate')
                 )
                 ->get();
             foreach ($items as $it) {
+                // Phân bổ CK cấp đơn theo tỷ lệ dòng
+                $od = $orderDiscounts[$it->order_id] ?? ['subtotal' => 0, 'discount' => 0];
+                $allocDiscount = 0;
+                if ($od['subtotal'] > 0 && $od['discount'] > 0) {
+                    $allocDiscount = $od['discount'] * ((float) $it->line_total / $od['subtotal']);
+                }
+                $it->net_line_total = (float) $it->line_total - $allocDiscount;
                 $r = ((float) $it->tax_rate) / 100;
-                $vat += ((float) $it->line_total) * $r / (1 + $r);
+                $vat += $it->net_line_total * $r / (1 + $r);
             }
         }
 
@@ -323,10 +343,12 @@ class ReportController extends Controller
             if (!isset($agg[$pid])) {
                 $agg[$pid] = ['name' => $it->product_name ?? ('Món #' . $pid), 'quantity' => 0, 'revenue' => 0.0, 'vat' => 0.0];
             }
+            // Gói 55 p11ac: dùng net_line_total (đã trừ CK cấp đơn phân bổ)
+            $netTotal = (float) ($it->net_line_total ?? $it->line_total);
             $agg[$pid]['quantity'] += (float) $it->quantity;
-            $agg[$pid]['revenue'] += (float) $it->line_total;
+            $agg[$pid]['revenue'] += $netTotal;
             $r = ((float) $it->tax_rate) / 100;
-            $agg[$pid]['vat'] += ((float) $it->line_total) * $r / (1 + $r);
+            $agg[$pid]['vat'] += $netTotal * $r / (1 + $r);
         }
         uasort($agg, fn($a, $b) => $b['revenue'] <=> $a['revenue']);
         return $agg;
@@ -440,26 +462,45 @@ class ReportController extends Controller
     // ================= Tab 2: Thu – Chi – Lợi nhuận =================
 
     /**
-     * Chi phí của 1 kỳ: vốn nguyên liệu (BOM × giá vốn BQ lô active) +
+     * Chi phí của 1 kỳ: vốn nguyên liệu (BOM × giá vốn đã chốt lúc trừ kho) +
      * chi phí ca (shift_expenses: reason chứa "lương" -> Lương).
+     * Gói 55 p11ac: GHI CHÚ — dòng "Nguyên liệu" là giá vốn ước tính theo BOM,
+     * CHƯA gồm tiền nhập hàng thực tế đã chi (xem Sổ thu-chi). Không cộng 2 số này lại.
      */
     private function costs(array $p): array
     {
         $bom = $this->bomCost($p);
         $exp = $this->shiftExpenses($p);
         return [
-            ['name' => 'Nguyên liệu', 'value' => $bom, 'color' => '#F5A623'],
+            ['name' => 'Nguyên liệu', 'value' => $bom, 'color' => '#F5A623',
+             'note' => 'Giá vốn ước tính theo định mức, chưa gồm tiền nhập hàng thực tế đã chi'],
             ['name' => 'Lương', 'value' => $exp['salary'], 'color' => '#24305E'],
             ['name' => 'Chi khác', 'value' => $exp['other'], 'color' => '#7C8DB0'],
         ];
     }
 
-    /** Vốn nguyên liệu ước tính: recipes × SL bán × giá vốn BQ (lô active). */
+    /**
+     * Gói 55 p11ac: giá vốn = Σ (order_items.unit_cost × quantity) — giá đã "chốt" lúc trừ kho.
+     * Fallback về ước tính BOM cho đơn cũ (chưa có unit_cost).
+     */
     private function bomCost(array $p): float
     {
         if ($p['items']->isEmpty()) {
             return 0.0;
         }
+        // Ưu tiên dùng unit_cost đã lưu lúc trừ kho
+        $lockedCost = 0.0;
+        $hasLocked = false;
+        foreach ($p['items'] as $it) {
+            if ($it->unit_cost !== null) {
+                $hasLocked = true;
+                $lockedCost += (float) $it->unit_cost * (float) $it->quantity;
+            }
+        }
+        if ($hasLocked) {
+            return $lockedCost;
+        }
+        // Fallback: ước tính BOM cho đơn cũ
         $recipes = Recipe::query()->select('product_id', 'product_option_id', 'material_id', 'quantity')->get();
         if ($recipes->isEmpty()) {
             return 0.0;
@@ -516,7 +557,57 @@ class ReportController extends Controller
                 $other += (float) $r->amount;
             }
         }
+        // Gói 55 p11ad: kỳ = trọn 1 tháng DL → lấy lương từ bảng chấm công (chính xác hơn dò chuỗi)
+        $payroll = $this->payrollSalaryForMonth($p);
+        if ($payroll !== null) {
+            $salary = $payroll;
+        }
         return ['salary' => $salary, 'other' => $other];
+    }
+
+    /**
+     * Gói 55 p11ad: tổng lương gross của 1 tháng = SUM(giờ công × đơn giá giờ).
+     * Trả về null nếu kỳ báo cáo không phải trọn 1 tháng DL → dùng fallback dò chuỗi cũ.
+     */
+    private function payrollSalaryForMonth(array $p): ?float
+    {
+        $from = $p['from'] ?? null;
+        $to = $p['to'] ?? null;
+        if (!$from instanceof Carbon || !$to instanceof Carbon) return null;
+        if ((int) $from->format('d') !== 1 || $from->format('H:i') !== '00:00') return null;
+        $monthEnd = $from->copy()->endOfMonth();
+        $toDate = $to->format('Y-m-d');
+        $isFullMonth = $toDate === $monthEnd->format('Y-m-d')
+            || $toDate === $monthEnd->copy()->addDay()->format('Y-m-d');
+        if (!$isFullMonth) return null;
+
+        $start = $from->format('Y-m-d');
+        $end = $monthEnd->format('Y-m-d');
+        $branchId = (int) ($p['branch_id'] ?? 0);
+
+        $hoursMap = DB::table('salary_days')
+            ->whereBetween('date', [$start, $end])
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+            ->selectRaw('employee_id, SUM(hours) as total_hours')
+            ->groupBy('employee_id')
+            ->get()->keyBy('employee_id');
+        if ($hoursMap->isEmpty()) return null; // chưa có dữ liệu chấm công → fallback
+
+        $employees = \App\Models\Employee::whereIn('id', $hoursMap->keys()->all())->get()->keyBy('id');
+        $total = 0.0;
+        foreach ($hoursMap as $empId => $h) {
+            $emp = $employees->get($empId);
+            if (!$emp) continue;
+            $rate = (float) ($emp->hourly_rate ?? 0);
+            if (!$rate) {
+                $lv = \App\Models\WageLevel::where('employee_id', $empId)
+                    ->where('start_date', '<=', $end)
+                    ->orderBy('start_date', 'desc')->first();
+                $rate = $lv ? (float) $lv->hourly_rate : 0;
+            }
+            $total += (float) $h->total_hours * $rate;
+        }
+        return round($total);
     }
 
     /** Cột kép Thu/Chi/Lợi nhuận theo từng bucket của kỳ. */
@@ -981,6 +1072,20 @@ class ReportController extends Controller
         $revDisplayed = $disp($cur['gross'], $cur['vat']);
         $refDisplayed = $disp($ref['gross'], $ref['vat']);
 
+        // Gói 55 p11ac: "Thu khác" (phiếu thu tay trong Sổ thu-chi) cộng vào tổng thu PNL
+        $otherIncomeOf = function (Carbon $f, Carbon $t) use ($branchId): float {
+            return (float) Transaction::query()
+                ->where('type', 'income')
+                ->where('status', 'paid')
+                ->whereBetween('paid_at', [$f->toDateTimeString(), $t->toDateTimeString()])
+                ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+                ->sum('amount');
+        };
+        $otherIncome = $otherIncomeOf($from, $to);
+        $refOtherIncome = $otherIncomeOf($cFrom, $cTo);
+        $revDisplayed += $otherIncome;
+        $refDisplayed += $refOtherIncome;
+
         $costs = $this->costs($cur);
         $commissions = $this->commissions($cur);
         $commTotal = array_sum(array_column($commissions, 'cost'));
@@ -1015,6 +1120,7 @@ class ReportController extends Controller
                     'displayed' => $this->r2($revDisplayed),
                     'gross' => $this->r2($cur['gross']),
                     'vat' => $this->r2($cur['vat']),
+                    'other_income' => $this->r2($otherIncome),
                     'orders' => $cur['orders'],
                     'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
                     'delta_orders' => $this->pct($cur['orders'], $ref['orders']),

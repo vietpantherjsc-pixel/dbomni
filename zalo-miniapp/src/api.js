@@ -19,6 +19,22 @@ export const api = {
   branches: () => req('/branches'),
   menu: (branchId) => req(`/display-menus?unique=1${branchId ? `&branch_id=${branchId}` : ''}`), // Gói 7g: theo Thực đơn; unique=1: món trùng chỉ hiện 1 lần ở thực đơn trên cùng. Gói 25: lọc món/thực đơn bị ẩn ở CN
   shipConfig: () => req('/ship-config'),
+  // Gói 50e: geocode qua backend (tránh Zalo chặn domain OSM)
+  geocode: (q) => req(`/geocode?q=${encodeURIComponent(q)}`),
+  geocodeReverse: (lat, lon) => req(`/geocode/reverse?lat=${lat}&lon=${lon}`), // Gói 55 p3
+  // Gói 55 p11ac: tỉnh/thành + xã/phường qua backend (Zalo WebView chặn domain lạ)
+  provinces: () => req('/provinces'),
+  wards: (provinceCode) => req(`/wards?province=${provinceCode}`),
+  // Gói 55 p11ac: PTTT cho Mini App (map type -> value backend chấp nhận)
+  payMethods: () => req('/payment-methods/active?channel=zalo&active=1').then((list) =>
+    (list || []).map((m) => ({
+      value: m.type === 'cash' ? 'pay_at_store' : m.type,
+      label: m.name,
+      desc: m.type === 'transfer' ? 'Quán xác nhận đã nhận tiền rồi mới làm món' : 'Trả tiền khi nhận món',
+    }))
+  ),
+  // Gói 50f: gợi ý địa chỉ khi gõ
+  geocodeSuggest: (q, lat, lon) => req(`/geocode/suggest?q=${encodeURIComponent(q)}${lat ? `&lat=${lat}&lon=${lon}` : ''}`),
   // Gói 9: trang chủ kiểu GrabFood
   // Gói 10f: shopInfo theo chi nhánh -> cover riêng (chưa có thì cover chung)
   shopInfo: (branchId) => req(`/shop-info${branchId ? `?branch_id=${branchId}` : ''}`),
@@ -62,17 +78,22 @@ export const setProfile = (p) => localStorage.setItem('zm_profile', JSON.stringi
 // Gói 49i: giá bán — ưu tiên giá kênh online, fallback về giá gốc
 export const priceOf = (p) => Number(p?.online_price ?? p?.base_price ?? 0);
 
-// Gói 49k: ghép URL ảnh — backend trả đường dẫn tương đối, Mini App ghép với host API.
-// Đồng thời sửa URL localhost cũ (dữ liệu trước đây) thành host thật.
+// Gói 50b: backend đã trả URL tuyệt đối đúng host — dùng trực tiếp.
+// Giữ fallback cho dữ liệu cũ (relative hoặc localhost).
 export const imgUrl = (u) => {
   if (!u) return '';
+  if (/^https?:\/\//i.test(u)) {
+    // Sửa URL localhost cũ (dữ liệu trước 50b) — chỉ khi API là tuyệt đối mới biết host thật
+    try {
+      const apiUrl = new URL(API, window.location.href);
+      if (/^https?:\/\/localhost(:\d+)?/i.test(u) && !/^https?:\/\/localhost(:\d+)?/i.test(apiUrl.origin)) {
+        return u.replace(/^https?:\/\/localhost(:\d+)?/i, apiUrl.origin);
+      }
+    } catch { /* giữ nguyên */ }
+    return u;
+  }
   try {
-    const apiOrigin = new URL(API, window.location.href).origin;
-    if (/^https?:\/\/localhost(:\d+)?/i.test(u)) {
-      return u.replace(/^https?:\/\/localhost(:\d+)?/i, apiOrigin);
-    }
-    if (/^https?:\/\//i.test(u)) return u;
-    return apiOrigin + (u.startsWith('/') ? u : '/' + u);
+    return new URL(API, window.location.href).origin + (u.startsWith('/') ? u : '/' + u);
   } catch { return u; }
 };
 

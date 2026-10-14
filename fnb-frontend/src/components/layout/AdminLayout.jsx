@@ -7,6 +7,7 @@ import { loadTheme } from '../../utils/theme';
 import { loadFont } from '../../utils/font';
 import { loadNumberSettings } from '../../utils/number';
 import axios from 'axios';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 7d (2026-10-05): Redesign theo phong cách B (Matcha).
@@ -64,7 +65,7 @@ const mainMenu = [
         { label: 'Báo cáo kho', path: '/admin/reports/inventory' },
         { label: 'Báo cáo thu chi / PNL', path: '/admin/reports/pnl' },
     ] },
-    { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt', children: ['Hóa đơn bán hàng', 'Hóa đơn điện tử'] },
+    { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt' },
     { path: '/admin/products', label: 'Mặt hàng', icon: 'tag', children: [
         { label: 'Danh sách mặt hàng', path: '/admin/products' },
         { label: 'Quản lý hiển thị', path: '/admin/products/visibility' }, // Gói 25: ẩn/hiện món theo CN
@@ -75,20 +76,27 @@ const mainMenu = [
         { label: 'Danh sách thực đơn', path: '/admin/menus' },
         { label: 'Quản lý hiển thị', path: '/admin/menus/visibility' }, // Gói 25: ẩn/hiện thực đơn theo CN
     ] },
-    { path: '/admin/bookings', label: 'Đặt lịch', icon: 'calendar' },
     { path: '/admin/tables', label: 'Bàn', icon: 'table' },
     { path: '/admin/staff', label: 'Nhân viên', icon: 'users', perm: 'staff.view', children: [ // Gói 26
         { label: 'Danh sách nhân viên', path: '/admin/staff' },
         { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles' },
         { label: 'Bảng lương', path: '/admin/staff/salary' },
-        { label: 'Lương lễ, Tết & phạt', path: '/admin/staff/holiday-policy' },
+        { label: 'Cấu hình Lương', path: '/admin/staff/holiday-policy' },
     ] },
     { path: '/admin/customers', label: 'Khách hàng', icon: 'user', children: [
         { label: 'Danh sách khách hàng', path: '/admin/customers' },
         { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
     ] },
     { path: '/admin/promotions', label: 'Khuyến mại', icon: 'percent' },
-    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box' },
+    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: [ // Gói 55 p11: tách submenu
+        { label: 'Danh sách tồn kho', path: '/admin/inventory' },
+        { label: 'Nhập kho', path: '/admin/inventory/inbound' },
+        // Gói 55 p11aa: hiện lại Xuất kho — đã có API phiếu xuất riêng
+        { label: 'Xuất kho', path: '/admin/inventory/outbound' },
+        { label: 'Chuyển kho', path: '/admin/inventory/transfer' },
+        { label: 'Kiểm kê kho', path: '/admin/inventory/stocktake' },
+        { label: 'Nhà cung cấp', path: '/admin/suppliers' }, // Gói 55 p11ab
+    ] },
     { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: [ // Gói 29
         { label: 'Danh sách thu chi', path: '/admin/transactions' },
         { label: 'Danh mục thu chi', path: '/admin/transaction-categories' },
@@ -136,7 +144,7 @@ const AdminLayout = ({ children }) => {
     const [branchOpen, setBranchOpen] = useState(false);
 
     useEffect(() => {
-        axios.get('http://localhost/api/branches')
+        axios.get(API + '/branches')
             .then((r) => { if (r.data?.success) setBranches(r.data.data || []); })
             .catch(() => {});
     }, []);

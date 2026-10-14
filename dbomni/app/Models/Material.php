@@ -23,4 +23,10 @@ class Material extends Model
     {
         return $this->belongsTo(MaterialCategory::class, 'material_category_id');
     }
+
+    // Gói 55 p11m: các đơn vị quy đổi
+    public function units(): HasMany
+    {
+        return $this->hasMany(MaterialUnit::class);
+    }
 }

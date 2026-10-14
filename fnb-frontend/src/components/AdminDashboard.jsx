@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import DateInput from '../components/DateInput';
 
-const API_BASE = 'http://localhost/api';
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 export default function AdminDashboard({ onBackToApp }) {
   const [data, setData] = useState(null);

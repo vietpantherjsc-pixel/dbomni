@@ -3,95 +3,15 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import TimeInput from '../../components/TimeInput'; // Gói 55 p2: ô nhập giờ 24h (không dùng input type=time)
 import { applyThemeColor, getStoredTheme, DEFAULT_PRIMARY, THEME_PRESETS } from '../../utils/theme';
 import { applyFont, getStoredFont, DEFAULT_FONT, FONT_PRESETS } from '../../utils/font';
 import { DECIMAL_LABELS } from '../../utils/number';
-
-// Gói 26 (2026-10-09): Cấu hình phụ cấp ăn, tỷ lệ BHXH, ngày lễ.
-const PayrollConfig = () => {
-    const [cfg, setCfg] = useState({ meal_allowance_min_hours: '8', meal_allowance_amount: '25000', bhxh_emp_bhxh: '8', bhxh_emp_bhyt: '1.5', bhxh_emp_bhtn: '1', bhxh_employer_rate: '21.5' });
-    const [holidays, setHolidays] = useState([]);
-    const [hForm, setHForm] = useState({ date: '', name: '', multiplier: '2' });
-    const [msg, setMsg] = useState('');
-
-    const fetchAll = async () => {
-        try {
-            const [s, h] = await Promise.all([axios.get('http://localhost/api/settings'), axios.get('http://localhost/api/holidays')]);
-            const data = s.data?.data || s.data || {};
-            const get = (k, d) => data[k] ?? data?.settings?.[k] ?? d;
-            setCfg({
-                meal_allowance_min_hours: String(get('meal_allowance_min_hours', '8')),
-                meal_allowance_amount: String(get('meal_allowance_amount', '25000')),
-                bhxh_emp_bhxh: String(get('bhxh_emp_bhxh', '8')),
-                bhxh_emp_bhyt: String(get('bhxh_emp_bhyt', '1.5')),
-                bhxh_emp_bhtn: String(get('bhxh_emp_bhtn', '1')),
-                bhxh_employer_rate: String(get('bhxh_employer_rate', '21.5')),
-            });
-            setHolidays(h.data?.data || []);
-        } catch (e) { /* bỏ qua */ }
-    };
-    useEffect(() => { fetchAll(); }, []);
-
-    const save = async () => {
-        try {
-            await axios.post('http://localhost/api/settings', { settings: cfg });
-            setMsg('Đã lưu cấu hình.');
-        } catch (e) { setMsg('Lưu thất bại.'); }
-    };
-    const addHoliday = async () => {
-        if (!hForm.date || !hForm.name.trim()) return alert('Nhập ngày và tên ngày lễ');
-        try {
-            await axios.post('http://localhost/api/holidays', { date: hForm.date, name: hForm.name.trim(), multiplier: Number(hForm.multiplier) || 2 });
-            setHForm({ date: '', name: '', multiplier: '2' }); fetchAll();
-        } catch (e) { alert(e.response?.data?.message || 'Thêm thất bại'); }
-    };
-
-    const F = [
-        ['meal_allowance_min_hours', 'Số giờ tối thiểu/ngày để hưởng phụ cấp ăn'],
-        ['meal_allowance_amount', 'Mức phụ cấp ăn/suất (đ)'],
-        ['bhxh_emp_bhxh', 'BHXH NLĐ đóng (%)'],
-        ['bhxh_emp_bhyt', 'BHYT NLĐ đóng (%)'],
-        ['bhxh_emp_bhtn', 'BHTN NLĐ đóng (%)'],
-        ['bhxh_employer_rate', 'DN đóng (%)'],
-    ];
-    return (
-        <div>
-            <div className="grid sm:grid-cols-2 gap-4 max-w-xl mb-4">
-                {F.map(([k, label]) => (
-                    <div key={k}><label className="m-label">{label}</label>
-                        <input type="number" step="any" value={cfg[k]} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })} className="m-input !w-40" /></div>
-                ))}
-            </div>
-            <button onClick={save} className="m-btn m-btn-primary">Lưu cấu hình</button>
-            {msg && <span className="text-sm ml-3" style={{ color: 'var(--m-success)' }}>{msg}</span>}
-
-            <h3 className="font-bold text-[14px] mt-6 mb-2">Ngày lễ & hệ số nhân lương</h3>
-            <div className="overflow-x-auto border border-gray-100 rounded-lg mb-3">
-                <table className="w-full text-[13px] min-w-[480px]">
-                    <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
-                        <th className="px-4 py-2.5 font-medium">Ngày</th><th className="px-3 py-2.5 font-medium">Tên</th>
-                        <th className="px-3 py-2.5 font-medium text-center">Hệ số</th><th className="px-4 py-2.5"></th>
-                    </tr></thead>
-                    <tbody>
-                        {holidays.map((h) => (
-                            <tr key={h.id} className="border-b border-gray-50">
-                                <td className="px-4 py-2.5">{fmtDate(h.date)}</td><td className="px-3 py-2.5">{h.name}</td>
-                                <td className="px-3 py-2.5 text-center">×{h.multiplier}</td>
-                                <td className="px-4 py-2.5 text-right"><button onClick={async () => { if (window.confirm('Xóa ngày lễ này?')) { await axios.delete('http://localhost/api/holidays/' + h.id); fetchAll(); } }} className="text-red-500 text-[12px]">Xóa</button></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-            <div className="flex flex-wrap gap-2 items-end">
-                <div><label className="m-label">Ngày</label><DateInput value={hForm.date} onChange={(v) => setHForm({ ...hForm, date: v })} className="m-input" /></div>
-                <div><label className="m-label">Tên ngày lễ</label><input value={hForm.name} onChange={(e) => setHForm({ ...hForm, name: e.target.value })} placeholder="VD: Tết Dương lịch" className="m-input !w-48" /></div>
-                <div><label className="m-label">Hệ số</label><input type="number" step="0.5" min="1" value={hForm.multiplier} onChange={(e) => setHForm({ ...hForm, multiplier: e.target.value })} className="m-input !w-24" /></div>
-                <button onClick={addHoliday} className="m-btn m-btn-primary">+ Thêm</button>
-            </div>
-        </div>
-    );
-};
+import PaymentMethodManager from './PaymentMethodManager'; // Gói 52
+import ProductAliasManager from './ProductAliasManager'; // Gói 55
+import UnitManager from './UnitManager'; // Gói 52
+import PrintTemplateSettings from './PrintTemplateSettings'; // Gói 52
+import { API } from '../../utils/api';
 
 // Gói 22 (2026-10-09): Quản lý chi nhánh ngay trong Thiết lập.
 const BranchManager = () => {
@@ -99,10 +19,16 @@ const BranchManager = () => {
     const [form, setForm] = useState({ code: '', name: '', phone: '', address: '', latitude: '', longitude: '' });
     const [editingId, setEditingId] = useState(null);
     const [msg, setMsg] = useState('');
+    // Gói 55 p2: giờ mở cửa
+    const [ohMode, setOhMode] = useState('all'); // 'all' | 'daily'
+    const [ohAll, setOhAll] = useState({ open: '06:30', close: '22:00' });
+    const [ohDays, setOhDays] = useState({}); // {0:{open,close,off}, 1:..., ...}
+
+    const DAYS = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
 
     const fetchList = async () => {
         try {
-            const res = await axios.get('http://localhost/api/branches');
+            const res = await axios.get(API + '/branches');
             if (res.data?.success) setList(res.data.data || []);
         } catch (e) { /* bỏ qua */ }
     };
@@ -111,6 +37,9 @@ const BranchManager = () => {
     const resetForm = () => {
         setEditingId(null);
         setForm({ code: '', name: '', phone: '', address: '', latitude: '', longitude: '' });
+        setOhMode('all');
+        setOhAll({ open: '06:30', close: '22:00' });
+        setOhDays({});
     };
 
     const startEdit = (b) => {
@@ -119,25 +48,39 @@ const BranchManager = () => {
             code: b.code || '', name: b.name || '', phone: b.phone || '',
             address: b.address || '', latitude: b.latitude ?? '', longitude: b.longitude ?? '',
         });
+        // Gói 55 p2: nạp giờ mở cửa
+        const oh = b.opening_hours || {};
+        if (oh.mode === 'daily' && oh.days) {
+            setOhMode('daily');
+            setOhDays(oh.days);
+        } else {
+            setOhMode('all');
+            setOhAll({ open: oh.open || '06:30', close: oh.close || '22:00' });
+        }
         setMsg('');
     };
 
     const save = async () => {
         if (!form.code.trim() || !form.name.trim()) return alert('Nhập mã và tên chi nhánh');
         try {
+            // Gói 55 p2: đóng gói giờ mở cửa
+            const opening_hours = ohMode === 'daily'
+                ? { mode: 'daily', days: ohDays }
+                : { mode: 'all', open: ohAll.open, close: ohAll.close };
             const payload = {
                 code: form.code.trim(), name: form.name.trim(),
                 phone: form.phone.trim() || null, address: form.address.trim() || null,
                 latitude: form.latitude === '' ? null : Number(form.latitude),
                 longitude: form.longitude === '' ? null : Number(form.longitude),
+                opening_hours,
             };
             if (editingId) {
-                await axios.patch('http://localhost/api/branches/' + editingId, payload);
+                await axios.patch(API + '/branches/' + editingId, payload);
                 setMsg('Đã cập nhật chi nhánh.');
             } else {
                 if (!payload.address) return alert('Nhập địa chỉ chi nhánh');
                 if (payload.latitude == null || payload.longitude == null) return alert('Nhập vĩ độ / kinh độ để tính phí ship');
-                await axios.post('http://localhost/api/branches', payload);
+                await axios.post(API + '/branches', payload);
                 setMsg('Đã thêm chi nhánh.');
             }
             resetForm(); fetchList();
@@ -146,7 +89,7 @@ const BranchManager = () => {
 
     const toggleActive = async (b) => {
         try {
-            await axios.patch('http://localhost/api/branches/' + b.id, { is_active: !b.is_active });
+            await axios.patch(API + '/branches/' + b.id, { is_active: !b.is_active });
             fetchList();
         } catch (e) { alert('Đổi trạng thái thất bại'); }
     };
@@ -219,6 +162,51 @@ const BranchManager = () => {
                         onChange={(e) => setForm({ ...form, longitude: e.target.value })}
                         placeholder="VD: 106.660172" className={inp} /></div>
             </div>
+            {/* Gói 55 p2: giờ mở cửa */}
+            <div className="mt-5 max-w-3xl">
+                <label className="m-label">🕐 Giờ mở cửa</label>
+                <div className="flex gap-2 mt-2 mb-3">
+                    <button type="button" onClick={() => setOhMode('all')}
+                        className={'px-4 py-2 rounded-lg text-[13px] font-semibold border ' + (ohMode === 'all' ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-200')}>
+                        Áp dụng cả tuần
+                    </button>
+                    <button type="button" onClick={() => setOhMode('daily')}
+                        className={'px-4 py-2 rounded-lg text-[13px] font-semibold border ' + (ohMode === 'daily' ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-200')}>
+                        Thiết lập từng ngày
+                    </button>
+                </div>
+                {ohMode === 'all' ? (
+                    <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-medium">Cả tuần:</span>
+                        <TimeInput value={ohAll.open} onChange={(v) => setOhAll({ ...ohAll, open: v })} className={inp + ' !w-32'} />
+                        <span className="text-gray-400">–</span>
+                        <TimeInput value={ohAll.close} onChange={(v) => setOhAll({ ...ohAll, close: v })} className={inp + ' !w-32'} />
+                    </div>
+                ) : (
+                    <div className="border border-gray-100 rounded-lg overflow-hidden">
+                        {DAYS.map((d, i) => {
+                            const cfg = ohDays[i] || { open: '06:30', close: '22:00', off: false };
+                            return (
+                                <div key={i} className="flex items-center gap-2 px-3 py-2 border-b border-gray-50 last:border-0">
+                                    <span className="text-[13px] font-medium w-16">{d}</span>
+                                    <TimeInput value={cfg.open} disabled={cfg.off}
+                                        onChange={(v) => setOhDays({ ...ohDays, [i]: { ...cfg, open: v } })}
+                                        className={inp + ' !w-28 !py-1.5'} />
+                                    <span className="text-gray-400">–</span>
+                                    <TimeInput value={cfg.close} disabled={cfg.off}
+                                        onChange={(v) => setOhDays({ ...ohDays, [i]: { ...cfg, close: v } })}
+                                        className={inp + ' !w-28 !py-1.5'} />
+                                    <label className="flex items-center gap-1.5 text-[12px] text-gray-500 ml-auto cursor-pointer">
+                                        <input type="checkbox" checked={!!cfg.off}
+                                            onChange={(e) => setOhDays({ ...ohDays, [i]: { ...cfg, off: e.target.checked } })} />
+                                        Nghỉ
+                                    </label>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
             <div className="flex items-center gap-3 mt-5">
                 <button onClick={save} className="m-btn m-btn-primary">
                     {editingId ? 'Cập nhật' : 'Thêm chi nhánh'}
@@ -235,7 +223,6 @@ const Settings = () => {
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState('');
     // Gói 8a: thuế & giá
-    const [priceIncludesTax, setPriceIncludesTax] = useState(true);
     const [defaultTaxRate, setDefaultTaxRate] = useState('8');
     const [savingTax, setSavingTax] = useState(false);
     const [taxMsg, setTaxMsg] = useState('');
@@ -251,22 +238,43 @@ const Settings = () => {
     const [savingSlide, setSavingSlide] = useState(false);
     const [slideMsg, setSlideMsg] = useState('');
     const [fontMsg, setFontMsg] = useState('');
+    // Gói 55 p11ab: quy tắc sinh mã
+    const CODE_TYPES = [
+        { key: 'member', label: 'Mã thành viên', withDate: false },
+        { key: 'invoice', label: 'Mã hóa đơn', withDate: false },
+        { key: 'material', label: 'Mã nguyên liệu', withDate: false },
+        { key: 'product', label: 'Mã mặt hàng', withDate: false },
+        { key: 'inbound', label: 'Mã phiếu nhập', withDate: true },
+        { key: 'outbound', label: 'Mã phiếu xuất', withDate: true },
+        { key: 'transfer', label: 'Mã phiếu chuyển', withDate: true },
+        { key: 'stocktake', label: 'Mã phiếu kiểm kê', withDate: false },
+    ];
+    const CODE_DEFAULTS = {
+        member: ['TV', 6], invoice: ['HD', 6], material: ['NL', 4], product: ['SP', 4],
+        inbound: ['PN', 4], outbound: ['XK', 4], transfer: ['CK', 4], stocktake: ['KK', 4],
+    };
+    const [codeRules, setCodeRules] = useState(() => {
+        const o = {};
+        Object.entries(CODE_DEFAULTS).forEach(([k, [p, d]]) => { o[k] = { prefix: p, digits: d }; });
+        return o;
+    });
+    const [savingCode, setSavingCode] = useState(false);
+    const [codeMsg, setCodeMsg] = useState('');
 
     useEffect(() => {
         setPrimary(getStoredTheme() || DEFAULT_PRIMARY);
         setFont(getStoredFont() || DEFAULT_FONT); // Gói 47
         (async () => {
             try {
-                const res = await axios.get('http://localhost/api/settings/theme');
+                const res = await axios.get(API + '/settings/theme');
                 if (res.data && res.data.primary) setPrimary(res.data.primary.toUpperCase());
             } catch (e) { /* giữ màu local */ }
         })();
         // Gói 8a: nạp cấu hình thuế
         (async () => {
             try {
-                const res = await axios.get('http://localhost/api/settings');
+                const res = await axios.get(API + '/settings');
                 if (res.data) {
-                    setPriceIncludesTax(res.data.price_includes_tax !== '0');
                     setDefaultTaxRate(String(res.data.default_tax_rate ?? '8'));
                     // Gói 8f: số thập phân
                     setDecimals({
@@ -279,6 +287,19 @@ const Settings = () => {
                     if (res.data.font_family) setFont(res.data.font_family);
                     // Gói 49c: thời gian trượt banner
                     if (res.data.promo_slide_interval) setSlideInt(String(res.data.promo_slide_interval));
+                    // Gói 55 p11ab: quy tắc sinh mã
+                    setCodeRules((prev) => {
+                        const next = { ...prev };
+                        Object.keys(CODE_DEFAULTS).forEach((k) => {
+                            const p = res.data['code_prefix_' + k];
+                            const d = res.data['code_digits_' + k];
+                            next[k] = {
+                                prefix: p !== undefined && p !== '' ? String(p) : CODE_DEFAULTS[k][0],
+                                digits: d !== undefined && d !== '' ? Math.max(1, Math.min(10, Number(d) || CODE_DEFAULTS[k][1])) : CODE_DEFAULTS[k][1],
+                            };
+                        });
+                        return next;
+                    });
                 }
             } catch (e) { /* giữ mặc định */ }
         })();
@@ -295,7 +316,7 @@ const Settings = () => {
         setSaving(true);
         setMsg('');
         try {
-            await axios.post('http://localhost/api/settings', { settings: { theme_primary: primary } });
+            await axios.post(API + '/settings', { settings: { theme_primary: primary } });
             applyThemeColor(primary);
             setMsg('Đã lưu màu chủ đạo. Áp dụng cho cả web admin, POS và Mini App.');
         } catch (e) {
@@ -315,7 +336,7 @@ const Settings = () => {
         setSavingFont(true);
         setFontMsg('');
         try {
-            await axios.post('http://localhost/api/settings', { settings: { font_family: font } });
+            await axios.post(API + '/settings', { settings: { font_family: font } });
             applyFont(font);
             setFontMsg('Đã lưu font chữ. Áp dụng cho web admin.');
         } catch (e) {
@@ -433,7 +454,7 @@ const Settings = () => {
                         <button onClick={async () => {
                             setSavingSlide(true); setSlideMsg('');
                             try {
-                                await axios.post('http://localhost/api/settings', { settings: { promo_slide_interval: slideInt } });
+                                await axios.post(API + '/settings', { settings: { promo_slide_interval: slideInt } });
                                 setSlideMsg('Đã lưu.');
                             } catch (e) { setSlideMsg('Lưu thất bại.'); }
                             finally { setSavingSlide(false); }
@@ -451,15 +472,6 @@ const Settings = () => {
                         Cấu hình chung về thuế GTGT. Món nào có thuế suất riêng thì đặt tại form Mặt hàng (tab Thuế).
                     </p>
                     <div className="space-y-4 max-w-md">
-                        <label className="flex items-start gap-3 cursor-pointer">
-                            <input type="checkbox" checked={priceIncludesTax}
-                                onChange={(e) => setPriceIncludesTax(e.target.checked)}
-                                className="w-4 h-4 mt-1 accent-[#24305E]" />
-                            <span>
-                                <span className="block text-sm font-semibold" style={{ color: 'var(--m-ink)' }}>Giá bán đã bao gồm thuế</span>
-                                <span className="block text-xs" style={{ color: 'var(--m-ink-faint)' }}>Bật = giá niêm yết đã gồm VAT · Tắt = VAT tính cộng thêm khi thanh toán</span>
-                            </span>
-                        </label>
                         <div>
                             <label className="m-label">Thuế suất mặc định (%)</label>
                             <input type="number" min="0" max="100" step="0.5" value={defaultTaxRate}
@@ -472,9 +484,8 @@ const Settings = () => {
                             onClick={async () => {
                                 setSavingTax(true); setTaxMsg('');
                                 try {
-                                    await axios.post('http://localhost/api/settings', {
+                                    await axios.post(API + '/settings', {
                                         settings: {
-                                            price_includes_tax: priceIncludesTax ? '1' : '0',
                                             default_tax_rate: String(Number(defaultTaxRate) || 0),
                                         },
                                     });
@@ -515,7 +526,7 @@ const Settings = () => {
                             onClick={async () => {
                                 setSavingDec(true); setDecMsg('');
                                 try {
-                                    await axios.post('http://localhost/api/settings', {
+                                    await axios.post(API + '/settings', {
                                         settings: {
                                             decimals_price: String(decimals.price),
                                             decimals_quantity: String(decimals.quantity),
@@ -535,13 +546,73 @@ const Settings = () => {
                     </div>
                 </div>
 
-                {/* Gói 26: Phụ cấp ăn & tỷ lệ BHXH */}
+                {/* Gói 55 p11ab: Quy tắc sinh mã */}
                 <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Phụ cấp ăn & BHXH</h2>
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Quy tắc sinh mã</h2>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
-                        Mức phụ cấp tiền ăn/suất, tỷ lệ BHXH (NLĐ + DN) và danh sách ngày lễ với hệ số nhân lương.
+                        Cấu hình tiền tố và số chữ số cho từng loại mã. Áp dụng cho mã mới sinh ra sau khi lưu.
                     </p>
-                    <PayrollConfig />
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-[13px] min-w-[560px]">
+                            <thead>
+                                <tr className="text-left text-gray-500 border-b border-gray-100">
+                                    <th className="py-2 pr-3 font-medium">Loại mã</th>
+                                    <th className="py-2 pr-3 font-medium" style={{ width: 130 }}>Tiền tố</th>
+                                    <th className="py-2 pr-3 font-medium" style={{ width: 110 }}>Số chữ số</th>
+                                    <th className="py-2 font-medium">Xem trước</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {CODE_TYPES.map((t) => {
+                                    const r = codeRules[t.key] || { prefix: '', digits: 4 };
+                                    const datePart = t.withDate ? new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' : '';
+                                    const preview = r.prefix + '-' + datePart + '1'.padStart(Math.max(1, r.digits), '0');
+                                    return (
+                                        <tr key={t.key} className="border-b border-gray-50">
+                                            <td className="py-2 pr-3 font-medium">{t.label}</td>
+                                            <td className="py-2 pr-3">
+                                                <input value={r.prefix}
+                                                    onChange={(e) => setCodeRules((p) => ({ ...p, [t.key]: { ...p[t.key], prefix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) } }))}
+                                                    className="m-input !py-1.5" placeholder="VD: XK" />
+                                            </td>
+                                            <td className="py-2 pr-3">
+                                                <input type="number" min="1" max="10"
+                                                    value={r.digits}
+                                                    onChange={(e) => {
+                                                        const v = Math.max(1, Math.min(10, Number(e.target.value) || 1));
+                                                        setCodeRules((p) => ({ ...p, [t.key]: { ...p[t.key], digits: v } }));
+                                                    }}
+                                                    className="m-input !py-1.5" />
+                                            </td>
+                                            <td className="py-2">
+                                                <code className="px-2 py-1 rounded text-[12px] font-semibold" style={{ background: 'var(--m-bg-soft)', color: 'var(--m-primary)' }}>{preview}</code>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="flex items-center gap-3 mt-5">
+                        <button
+                            onClick={async () => {
+                                setSavingCode(true); setCodeMsg('');
+                                try {
+                                    const settings = {};
+                                    Object.keys(CODE_DEFAULTS).forEach((k) => {
+                                        settings['code_prefix_' + k] = codeRules[k].prefix;
+                                        settings['code_digits_' + k] = String(codeRules[k].digits);
+                                    });
+                                    await axios.post(API + '/settings', { settings });
+                                    setCodeMsg('Đã lưu quy tắc sinh mã. Áp dụng cho mã mới.');
+                                } catch (e) { setCodeMsg('Lưu thất bại, thử lại.'); }
+                                finally { setSavingCode(false); }
+                            }}
+                            disabled={savingCode} className="m-btn m-btn-primary" style={savingCode ? { opacity: 0.5 } : {}}>
+                            {savingCode ? 'Đang lưu...' : 'Lưu quy tắc sinh mã'}
+                        </button>
+                        {codeMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{codeMsg}</span>}
+                    </div>
                 </div>
 
                 {/* Gói 22: Quản lý chi nhánh */}
@@ -551,6 +622,42 @@ const Settings = () => {
                         Thêm/sửa/bật-tắt chi nhánh. Tọa độ dùng để tính phí ship cho đơn Zalo Mini App.
                     </p>
                     <BranchManager />
+                </div>
+
+                {/* Gói 52: Phương thức thanh toán */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Phương thức thanh toán</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Thêm/sửa/xóa phương thức. Bấm chip POS/Zalo để bật/tắt theo kênh bán.
+                    </p>
+                    <PaymentMethodManager />
+                </div>
+
+                {/* Gói 55: Tên thay thế món (alias) */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Tên thay thế món</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Map tên món cũ (từ file Excel/app khác) về món hiện tại để import đúng.
+                    </p>
+                    <ProductAliasManager />
+                </div>
+
+                {/* Gói 52: Đơn vị tính */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Đơn vị tính</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Dùng chung toàn hệ thống — chọn trong các chức năng nhập liệu.
+                    </p>
+                    <UnitManager />
+                </div>
+
+                {/* Gói 52: Mẫu in */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Mẫu in Bill & Tem</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Bật/tắt từng dòng và sửa nội dung. Bill khổ K80, tem 50×30.
+                    </p>
+                    <PrintTemplateSettings />
                 </div>
             </div>
         </AdminLayout>

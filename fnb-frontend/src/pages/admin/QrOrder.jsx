@@ -3,6 +3,7 @@ import axios from 'axios';
 import { useSearchParams } from 'react-router-dom';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { API } from '../../utils/api';
 
 // Gói 28 (2026-10-09): QR Order theo chi nhánh + banner tải về.
 // Demo: QR encode link local {baseUrl}/?branch={id}; baseUrl cấu hình được, lưu localStorage.
@@ -161,7 +162,7 @@ const QrOrder = () => {
     useEffect(() => {
         const fetchBranches = async () => {
             try {
-                const res = await axios.get('http://localhost/api/branches');
+                const res = await axios.get(API + '/branches');
                 const list = res.data?.data || [];
                 setBranches(list);
                 if (list.length && !createBranchId) setCreateBranchId(String(list[0].id));

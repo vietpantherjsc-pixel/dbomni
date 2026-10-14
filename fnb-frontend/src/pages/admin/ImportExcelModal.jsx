@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import axios from 'axios';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 23 (2026-10-09): Import đơn hàng từ Excel — wizard 4 bước.
@@ -8,7 +9,6 @@ import axios from 'axios';
 //   -> B4 kết quả + tải CSV dòng lỗi.
 // =====================================================================
 
-const API = 'http://localhost/api';
 
 const SYS_FIELDS = [
     { v: '', t: '— Bỏ qua cột này —' },

@@ -36,7 +36,7 @@ import { fmtTime, fmtDate } from '../utils/format';
 //   lưu đơn (held), nạp đơn lưu vào giỏ, tách/gộp ở trang Hóa đơn, in bill/tem.
 // =====================================================================
 
-const API_BASE = 'http://localhost/api';
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 const authHeaders = () => ({
   'Accept': 'application/json',
@@ -108,12 +108,84 @@ export default function PosScreen({ onBackToApp }) {
 
   // ---- Thanh toán ----
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  // Gói 55 p11ac: PTTT động từ cấu hình (thay vì hardcode cash/transfer)
+  const [payMethods, setPayMethods] = useState([]);
+  useEffect(() => {
+    fetch(`${API_BASE}/online/payment-methods/active?channel=pos&active=1`)
+      .then((r) => r.json())
+      .then((d) => {
+        const list = d?.data || [];
+        if (list.length) {
+          setPayMethods(list);
+          if (!list.some((m) => m.type === paymentMethod)) setPaymentMethod(list[0].type);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [receivedCash, setReceivedCash] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastOrderCompleted, setLastOrderCompleted] = useState(null);
   // Gói 11: QR tích điểm — khách quét để gán TV vào đơn
   const [qrClaim, setQrClaim] = useState(null); // {id, code, token, expires_at, member}
   const [qrLoading, setQrLoading] = useState(false);
+
+  // Gói 53: chuông báo + badge KDS — poll 10s
+  const [kdsCount, setKdsCount] = useState(0);
+  const [notifs, setNotifs] = useState([]); // [{id, code, order_type, total, created_at}]
+  const [showNotif, setShowNotif] = useState(false);
+  const seenIdsRef = useRef(new Set());
+  const notifBoxRef = useRef(null);
+
+  // Gói 53: kêu "ting" bằng Web Audio (không cần file mp3)
+  const playTing = () => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.25, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      o.start(); o.stop(ctx.currentTime + 0.6);
+    } catch { /* bỏ qua */ }
+  };
+
+  // Gói 53: poll đơn KDS mỗi 10s — badge số đơn + phát hiện đơn mới
+  useEffect(() => {
+    if (!effBranchId) return;
+    let alive = true;
+    const pollCount = { current: 0 };
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/orders?branch_id=${effBranchId}&status=pending,processing&per_page=50`, { headers: authHeaders() });
+        const data = await res.json();
+        const list = data.data?.data || data.data || [];
+        if (!alive) return;
+        setKdsCount(list.length);
+        const fresh = [];
+        list.forEach((o) => {
+          if (!seenIdsRef.current.has(o.id)) {
+            seenIdsRef.current.add(o.id);
+            fresh.push(o);
+          }
+        });
+        // Bỏ qua lần poll đầu (khởi tạo seen), chỉ báo đơn thực sự mới từ lần 2
+        if (pollCount.current > 0 && fresh.length > 0) {
+          setNotifs((prev) => [...fresh.map((o) => ({ id: o.id, code: o.code, order_type: o.order_type, total: o.total, created_at: o.created_at })), ...prev].slice(0, 20));
+          playTing();
+        }
+        pollCount.current += 1;
+      } catch { /* bỏ qua */ }
+    };
+    poll();
+    const t = setInterval(poll, 10000);
+    // Đóng dropdown khi bấm ra ngoài
+    const onClick = (e) => { if (notifBoxRef.current && !notifBoxRef.current.contains(e.target)) setShowNotif(false); };
+    document.addEventListener('mousedown', onClick);
+    return () => { alive = false; clearInterval(t); document.removeEventListener('mousedown', onClick); };
+  }, [effBranchId]);
 
   // ---- Gói 3: loại đơn, bàn, chiết khấu ----
   const [orderType, setOrderType] = useState('takeaway');
@@ -605,6 +677,8 @@ export default function PosScreen({ onBackToApp }) {
     setIsProcessing(true);
     try {
       const orderPayload = {
+        // Gói 55 p11ac: idempotency key chống tạo trùng đơn khi retry
+        client_key: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
         branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
@@ -663,6 +737,8 @@ export default function PosScreen({ onBackToApp }) {
     }
     try {
       const orderPayload = {
+        // Gói 55 p11ac: idempotency key chống tạo trùng đơn khi retry
+        client_key: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
         branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
@@ -846,13 +922,19 @@ export default function PosScreen({ onBackToApp }) {
         </button>
 
         {/* Gói 18: nút chuyển nhanh sang KDS (bếp), không cần thoát ra admin */}
+        {/* Gói 53: badge số đơn đang xử lý */}
         <button
           onClick={() => navigate('/kds')}
           title="Sang màn hình Bếp (KDS)"
-          className="flex items-center gap-1.5 bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/40 text-orange-300 px-3 py-2 rounded-lg text-xs font-semibold"
+          className="relative flex items-center gap-1.5 bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/40 text-orange-300 px-3 py-2 rounded-lg text-xs font-semibold"
         >
           <ChefHat size={14} />
           <span className="hidden sm:inline">KDS</span>
+          {kdsCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center">
+              {kdsCount > 99 ? '99+' : kdsCount}
+            </span>
+          )}
         </button>
 
         {shift ? (
@@ -869,7 +951,45 @@ export default function PosScreen({ onBackToApp }) {
         )}
 
         <button className="p-2 hover:bg-white/10 rounded-lg text-slate-400"><LayoutGrid size={18} /></button>
-        <button className="p-2 hover:bg-white/10 rounded-lg text-slate-400"><Bell size={18} /></button>
+        {/* Gói 53: chuông báo đơn mới — bấm xổ danh sách */}
+        <div className="relative" ref={notifBoxRef}>
+          <button
+            onClick={() => setShowNotif((v) => !v)}
+            title="Thông báo đơn mới"
+            className="relative p-2 hover:bg-white/10 rounded-lg text-slate-400"
+          >
+            <Bell size={18} />
+            {notifs.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold min-w-5 h-5 px-1 rounded-full flex items-center justify-center">
+                {notifs.length > 99 ? '99+' : notifs.length}
+              </span>
+            )}
+          </button>
+          {showNotif && (
+            <div className="absolute right-0 top-full mt-2 w-72 max-h-80 overflow-y-auto bg-[#1a2332] border border-white/10 rounded-xl shadow-2xl z-50">
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10">
+                <span className="text-xs font-bold text-slate-200">Đơn mới về</span>
+                {notifs.length > 0 && (
+                  <button onClick={() => setNotifs([])} className="text-[11px] text-slate-400 hover:text-slate-200">Xóa hết</button>
+                )}
+              </div>
+              {notifs.length === 0 ? (
+                <p className="px-4 py-6 text-center text-xs text-slate-500">Chưa có đơn mới</p>
+              ) : (
+                notifs.map((n) => (
+                  <div key={n.id} className="px-4 py-2.5 border-b border-white/5 last:border-0">
+                    <p className="text-xs font-semibold text-slate-100">🆕 {n.code}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {n.order_type === 'dine_in' ? 'Tại bàn' : n.order_type === 'delivery' ? 'Giao hàng' : 'Mang đi'}
+                      {' · '}{(n.total || 0).toLocaleString('vi-VN')}đ
+                      {n.created_at && ` · ${fmtTime(n.created_at)}`}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
         <button onClick={onBackToApp} className="px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-semibold text-slate-200">Thoát</button>
       </div>
 
@@ -1119,15 +1239,14 @@ export default function PosScreen({ onBackToApp }) {
               <span className="text-emerald-400 text-xl font-extrabold">{totalAmount.toLocaleString('vi-VN')} đ</span>
             </div>
 
+            {/* Gói 55 p11ac: PTTT động từ cấu hình */}
             <div className="grid grid-cols-2 gap-2 pt-1">
-              <button onClick={() => setPaymentMethod('cash')}
-                className={`py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 border ${paymentMethod === 'cash' ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white/5 text-slate-300 border-white/10'}`}>
-                <DollarSign size={14} /> Tiền mặt
-              </button>
-              <button onClick={() => setPaymentMethod('transfer')}
-                className={`py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 border ${paymentMethod === 'transfer' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white/5 text-slate-300 border-white/10'}`}>
-                <CreditCard size={14} /> Chuyển khoản
-              </button>
+              {(payMethods.length ? payMethods : [{ type: 'cash', name: 'Tiền mặt' }, { type: 'transfer', name: 'Chuyển khoản' }]).map((m) => (
+                <button key={m.type} onClick={() => setPaymentMethod(m.type)}
+                  className={`py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 border ${paymentMethod === m.type ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white/5 text-slate-300 border-white/10'}`}>
+                  {m.type === 'cash' ? <DollarSign size={14} /> : <CreditCard size={14} />} {m.name}
+                </button>
+              ))}
             </div>
 
             {paymentMethod === 'cash' && (

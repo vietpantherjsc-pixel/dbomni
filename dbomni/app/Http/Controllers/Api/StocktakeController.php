@@ -116,20 +116,32 @@ class StocktakeController extends Controller
         return response()->json(['success' => true, 'message' => 'Đã lưu số liệu kiểm đếm']);
     }
 
-    // Chốt phiếu (Gói 19): ghi nhận chênh lệch vào lịch sử, KHÔNG tự động điều chỉnh kho.
+    // Chốt phiếu (Gói 19): ghi nhận chênh lệch vào lịch sử.
+    // Gói 55 p11k: thêm tùy chọn with_balance=true để cân bằng kho theo số thực đếm.
     // Nhận ngày-giờ kiểm từ client (mặc định = hiện tại).
     public function confirm(int $id, Request $request): JsonResponse
     {
         $validated = $request->validate([
             'checked_at' => 'nullable|date',
+            'with_balance' => 'nullable|boolean',
         ]);
 
         try {
             $result = DB::transaction(function () use ($id, $validated) {
-                $stocktake = Stocktake::with('items.material.category')->lockForUpdate()->findOrFail($id);
+                // Gói 55: withTrashed để không 500 khi NL bị xóa mềm sau khi tạo phiếu
+                $stocktake = Stocktake::with([
+                    'items' => fn ($q) => $q->lockForUpdate(),
+                    'items.material' => fn ($q) => $q->withTrashed(),
+                    'items.material.category',
+                ])->lockForUpdate()->findOrFail($id);
 
                 if ($stocktake->status !== 'draft') {
                     throw new Exception('Phiếu đã được chốt trước đó.');
+                }
+
+                // Gói 55 p11ac: chặn chốt phiếu trống
+                if ($stocktake->items->isEmpty()) {
+                    throw new Exception('Phiếu trống, không thể chốt.');
                 }
 
                 $uncounted = $stocktake->items->whereNull('counted_qty');
@@ -140,14 +152,15 @@ class StocktakeController extends Controller
                 $rows = [];
                 foreach ($stocktake->items as $item) {
                     $diff = (float) $item->counted_qty - (float) $item->system_qty;
+                    $mat = $item->material; // Gói 55: null guard cho NL đã xóa mềm
                     $rows[] = [
                         'material_id' => $item->material_id,
-                        'name' => $item->material->name,
-                        'unit' => $item->material->unit,
-                        'type' => $item->material->type,
+                        'name' => $mat?->name ?? '(đã xóa)',
+                        'unit' => $mat?->unit ?? '',
+                        'type' => $mat?->type ?? null,
                         // Gói 22: snapshot loại NL tại lúc chốt (nhóm ảnh xuất theo loại)
-                        'category_id' => $item->material->material_category_id,
-                        'category_name' => $item->material->category?->name,
+                        'category_id' => $mat?->material_category_id,
+                        'category_name' => $mat?->category?->name,
                         'system_qty' => (float) $item->system_qty,
                         'counted_qty' => (float) $item->counted_qty,
                         'diff' => $diff,
@@ -157,6 +170,44 @@ class StocktakeController extends Controller
                 $stocktake->status = 'confirmed';
                 $stocktake->checked_at = $validated['checked_at'] ?? now();
                 $stocktake->save();
+
+                // Gói 55 p11k: cân bằng kho theo số thực đếm (điều chỉnh Batch về counted_qty)
+                if (!empty($validated['with_balance'])) {
+                    foreach ($stocktake->items as $item) {
+                        $target = (float) $item->counted_qty;
+                        $batches = Batch::where('branch_id', $stocktake->branch_id)
+                            ->where('material_id', $item->material_id)
+                            ->where('status', 'active')
+                            ->orderByRaw('expired_at IS NULL, expired_at ASC, id ASC')
+                            ->lockForUpdate()
+                            ->get();
+                        $total = (float) $batches->sum('current_quantity');
+                        $diffQty = $target - $total;
+                        if ($diffQty > 0) {
+                            // Thiếu: tạo lô điều chỉnh tăng
+                            Batch::create([
+                                'branch_id' => $stocktake->branch_id,
+                                'material_id' => $item->material_id,
+                                'batch_code' => 'DC-ST' . $stocktake->id . '-' . $item->material_id,
+                                'initial_quantity' => $diffQty,
+                                'current_quantity' => $diffQty,
+                                'unit_cost' => 0,
+                                'status' => 'active',
+                            ]);
+                        } elseif ($diffQty < 0) {
+                            // Thừa: trừ dần từ lô hết hạn trước (FIFO)
+                            $need = abs($diffQty);
+                            foreach ($batches as $b) {
+                                if ($need <= 0) break;
+                                $take = min((float) $b->current_quantity, $need);
+                                $b->current_quantity = (float) $b->current_quantity - $take;
+                                if ($b->current_quantity <= 0) $b->status = 'exhausted';
+                                $b->save();
+                                $need -= $take;
+                            }
+                        }
+                    }
+                }
 
                 return [
                     'stocktake' => $stocktake->fresh()->load(['user', 'branch']),

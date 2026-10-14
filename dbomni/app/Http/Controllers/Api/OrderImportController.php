@@ -7,7 +7,9 @@ use App\Models\Category;
 use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\PaymentMethod;
 use App\Models\Product;
+use App\Models\ProductAlias;
 use App\Models\User;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
@@ -291,6 +293,12 @@ class OrderImportController extends Controller
                 $fee = (float) ($first['fee'] ?? 0);
                 $orderDate = $this->parseDate($first['order_date_raw'] ?? null);
 
+                // Gói 55: tự tạo PTTT nếu chưa có trong hệ thống
+                $payText = trim((string) ($first['payment'] ?? ''));
+                if ($payText !== '') {
+                    $this->ensurePaymentMethod($payText);
+                }
+
                 $order = Order::create([
                     'user_id' => $cashierUser?->id ?? $authUserId,
                     'branch_id' => $branchId,
@@ -318,6 +326,9 @@ class OrderImportController extends Controller
                 foreach ($lines as $ln) {
                     $product = $this->resolveProduct($ln['item_name'], $createProducts, $legacyCat);
                     $lineTotal = ((float) $ln['qty']) * ((float) $ln['price']);
+                    $optTexts = self::splitOptions($ln['option'] ?? '');
+                    // Gói 55: tự gán tùy chọn vào nhóm phù hợp dựa theo tên món
+                    $matchedOptIds = $product ? $this->matchOptionsToGroups($product, $optTexts) : [];
                     OrderItem::create([
                         'order_id' => $order->id,
                         'product_id' => $product?->id,
@@ -328,7 +339,8 @@ class OrderImportController extends Controller
                         'subtotal' => $lineTotal,
                         'total_price' => $lineTotal,
                         'discount_amount' => 0,
-                        'options' => self::splitOptions($ln['option'] ?? ''),
+                        'options' => $optTexts,
+                        'option_ids' => $matchedOptIds,
                         'note' => null,
                         'created_at' => $order->created_at,
                         'updated_at' => $order->created_at,
@@ -346,7 +358,8 @@ class OrderImportController extends Controller
                                 'product_option_id' => null,
                                 'option_ids' => [],
                                 'quantity' => $it->quantity,
-                            ])->toArray()
+                            ])->toArray(),
+                            ['type' => 'order', 'id' => $order->id, 'note' => 'Import đơn lịch sử']
                         );
                         $order->update(['stock_deducted' => true]);
                     } catch (\Throwable $e) {
@@ -483,9 +496,10 @@ class OrderImportController extends Controller
             $warn('Mã đơn đã tồn tại — sẽ bỏ qua khi import');
         }
 
-        // Món chưa có trong hệ thống
-        $key = mb_strtolower($v['item_name']);
-        if (!isset($productMap[$key])) {
+        // Món chưa có trong hệ thống (thử tách hậu tố kênh trước khi báo)
+        $key = mb_strtolower(trim($v['item_name']));
+        $baseKey = mb_strtolower($this->stripChannelSuffix($v['item_name']));
+        if (!isset($productMap[$key]) && !isset($productMap[$baseKey])) {
             if ($createProducts) {
                 $warn('Món chưa có — sẽ tự tạo mới vào danh mục "Món import"');
             } else {
@@ -568,6 +582,24 @@ class OrderImportController extends Controller
             return $this->productCache[$key];
         }
         $p = Product::whereRaw('LOWER(TRIM(name)) = ?', [$key])->first();
+        // Gói 55: kiểm tra tên thay thế (alias) — tên cũ từ app khác/file import
+        if (!$p) {
+            $alias = ProductAlias::whereRaw('LOWER(TRIM(alias_name)) = ?', [$key])->first();
+            if ($alias) $p = $alias->product;
+        }
+        // Gói 55: tách hậu tố kênh ("- CH", "- KM Giờ Vàng") để map về món gốc
+        if (!$p) {
+            $baseName = $this->stripChannelSuffix($name);
+            if ($baseName !== trim($name)) {
+                $baseKey = mb_strtolower($baseName);
+                if (array_key_exists($baseKey, $this->productCache)) {
+                    $p = $this->productCache[$baseKey];
+                } else {
+                    $p = Product::whereRaw('LOWER(TRIM(name)) = ?', [$baseKey])->first();
+                    $this->productCache[$baseKey] = $p;
+                }
+            }
+        }
         if (!$p && $create) {
             $slug = Str::slug($name) . '-import';
             $i = 1;
@@ -586,6 +618,48 @@ class OrderImportController extends Controller
         }
         $this->productCache[$key] = $p;
         return $p;
+    }
+
+    // Gói 55: tách hậu tố kênh khỏi tên món ("Cà phê sữa - CH" → "Cà phê sữa")
+    private function stripChannelSuffix(string $name): string
+    {
+        $name = trim($name);
+        // Hậu tố: "- CH", "-CH", "- KM Giờ Vàng" (không phân biệt hoa thường, có/không dấu cách)
+        $patterns = [
+            '/\s*-\s*CH\s*$/iu',
+            '/\s*-\s*KM\s*Giờ\s*Vàng\s*$/iu',
+        ];
+        foreach ($patterns as $pt) {
+            $name = preg_replace($pt, '', $name);
+        }
+        return trim($name);
+    }
+
+    // Gói 55: tự gán tùy chọn vào nhóm phù hợp dựa theo tên món
+    // Trả về mảng option_ids đã khớp (so tên không phân biệt hoa thường)
+    private function matchOptionsToGroups(Product $product, array $optTexts): array
+    {
+        if (empty($optTexts)) return [];
+        $groups = $product->optionGroups()->with('options')->get();
+        if ($groups->isEmpty()) return [];
+        // Map tên tùy chọn (lowercase) → id
+        $nameToId = [];
+        foreach ($groups as $g) {
+            foreach ($g->options as $opt) {
+                $k = mb_strtolower(trim($opt->name));
+                if ($k !== '' && !isset($nameToId[$k])) {
+                    $nameToId[$k] = $opt->id;
+                }
+            }
+        }
+        $matched = [];
+        foreach ($optTexts as $t) {
+            $k = mb_strtolower(trim($t));
+            if (isset($nameToId[$k])) {
+                $matched[] = $nameToId[$k];
+            }
+        }
+        return array_values(array_unique($matched));
     }
 
     private function isCancelledStatus(string $s): bool
@@ -613,5 +687,29 @@ class OrderImportController extends Controller
             return 'delivery';
         }
         return 'takeaway';
+    }
+
+    // Gói 55: đảm bảo PTTT tồn tại trong hệ thống — chưa có thì tự tạo mới
+    private function ensurePaymentMethod(string $name): void
+    {
+        $name = trim($name);
+        if ($name === '') return;
+        $exists = PaymentMethod::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->exists();
+        if ($exists) return;
+        // Đoán loại từ tên
+        $t = mb_strtolower($name);
+        $type = 'other';
+        if (str_contains($t, 'tiền mặt') || $t === 'cash') $type = 'cash';
+        elseif (str_contains($t, 'chuyển khoản') || str_contains($t, 'chuyen khoan') || $t === 'transfer') $type = 'transfer';
+        elseif (str_contains($t, 'thẻ') || str_contains($t, 'the ') || str_contains($t, 'card')) $type = str_contains($t, 'tín dụng') ? 'credit_card' : 'debit_card';
+        elseif (str_contains($t, 'ví') || str_contains($t, 'momo') || str_contains($t, 'zalopay') || str_contains($t, 'vnpay')) $type = 'ewallet';
+        $maxOrder = (int) PaymentMethod::max('sort_order');
+        PaymentMethod::create([
+            'name' => $name,
+            'type' => $type,
+            'channels' => ['pos', 'zalo'],
+            'is_active' => true,
+            'sort_order' => $maxOrder + 1,
+        ]);
     }
 }

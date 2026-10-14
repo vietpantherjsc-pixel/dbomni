@@ -42,13 +42,16 @@ export default function TrackOrder() {
     return () => clearInterval(t);
   }, []);
 
+  const [cancelling, setCancelling] = useState(false);
   const cancel = async () => {
     if (!confirm('Chắc chắn hủy đơn này?')) return;
+    setCancelling(true);
     try {
       await api.cancelOrder(order.code);
       alert('Đã hủy đơn.');
       lookup(order.code);
     } catch (e) { alert(e.message); }
+    finally { setCancelling(false); }
   };
 
   const stepIdx = order ? ORDER.indexOf(order.status) : -1;
@@ -119,7 +122,7 @@ export default function TrackOrder() {
 
           {order.status === 'pending' && order.payment_status === 'pending' && (
             <div style={{ padding: '8px 16px' }}>
-              <button className="zm-btn-outline" onClick={cancel}>Hủy đơn</button>
+              <button className="zm-btn-outline" onClick={cancel} disabled={cancelling}>{cancelling ? 'Đang hủy...' : 'Hủy đơn'}</button>
             </div>
           )}
         </>

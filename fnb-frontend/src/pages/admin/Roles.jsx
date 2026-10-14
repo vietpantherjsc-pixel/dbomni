@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const ACTION_LABELS = { view: 'Xem', create: 'Thêm', edit: 'Sửa', delete: 'Xóa' };
 
 // Gói 26: Chức vụ & ma trận phân quyền chi tiết.

@@ -4,6 +4,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate as fmtDateShared } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
 // =====================================================================
 // Gói 27 (2026-10-09): Trang Thu-Chi hoàn thiện.
@@ -13,7 +14,6 @@ import DateInput from '../../components/DateInput';
 //   ghi chú, không cho xóa.
 // =====================================================================
 
-const API = 'http://localhost/api';
 const TABS = [
     { key: 'expense', label: 'Phiếu chi' },
     { key: 'income', label: 'Phiếu thu' },

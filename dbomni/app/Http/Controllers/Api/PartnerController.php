@@ -25,7 +25,8 @@ class PartnerController extends Controller
             ->when($request->filled('search'), function ($qq) use ($request) {
                 $s = '%' . $request->search . '%';
                 $qq->where(fn($w) => $w->where('name', 'like', $s)
-                    ->orWhere('code', 'like', $s)->orWhere('phone', 'like', $s));
+                    ->orWhere('code', 'like', $s)->orWhere('phone', 'like', $s)
+                    ->orWhere('tax_code', 'like', $s)); // Gói 55 p11ab: tìm theo MST
             })
             ->orderBy('name');
 

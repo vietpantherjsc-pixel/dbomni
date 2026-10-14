@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import SearchIcon from '../components/SearchIcon'; // Gói 55 p11x
 
 // Trang nhân viên kiểm kê kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
 // Token riêng: localStorage['kiemke_token'] / ['kiemke_emp']
@@ -126,6 +127,16 @@ export default function KiemKe() {
   const [search, setSearch] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
   const [summary, setSummary] = useState(null); // {total, diff}
+  // Gói 55 p11t: chọn chi nhánh + lọc loại NL
+  const [branches, setBranches] = useState([]);
+  const [selBranch, setSelBranch] = useState('');
+  const [categories, setCategories] = useState([]);
+  const [selCats, setSelCats] = useState(new Set());
+  const [showNewSheet, setShowNewSheet] = useState(false);
+  // Gói 55 p11w: thêm/xóa nguyên liệu trong phiếu
+  const [allMaterials, setAllMaterials] = useState([]);
+  const [showAddPicker, setShowAddPicker] = useState(false);
+  const [addSearch, setAddSearch] = useState('');
 
   const toast = (m) => {
     setToastMsg(m); setToastOn(true);
@@ -184,6 +195,17 @@ export default function KiemKe() {
   useEffect(() => {
     if (token) {
       loadSheets(token);
+      // Gói 55 p11t: nạp chi nhánh + loại NL
+      axios.get(API + '/employee/stocktake-meta', auth(token)).then((r) => {
+        const d = r.data?.data || {};
+        setBranches(d.branches || []);
+        setSelBranch(String(d.current_branch_id || ''));
+        setCategories(d.categories || []);
+      }).catch(() => {});
+      // Gói 55 p11w: nạp tất cả nguyên liệu để thêm vào phiếu
+      axios.get(API + '/employee/materials', auth(token)).then((r) => {
+        if (r.data?.success) setAllMaterials(r.data.data || []);
+      }).catch(() => {});
       // khôi phục thông tin NV nếu thiếu
       if (!emp) {
         axios.get(API + '/employee/me', auth(token))
@@ -226,7 +248,12 @@ export default function KiemKe() {
   const startToday = async () => {
     setBusy(true);
     try {
-      const r = await axios.post(API + '/employee/stocktakes', { type: 'daily' }, auth(token));
+      // Gói 55 p11t: gửi chi nhánh + loại NL đã chọn
+      const r = await axios.post(API + '/employee/stocktakes', {
+        type: 'daily',
+        branch_id: selBranch ? Number(selBranch) : undefined,
+        category_ids: selCats.size > 0 ? [...selCats] : undefined,
+      }, auth(token));
       const d = (r.data && r.data.data) || {};
       toast(r.data && r.data.resumed ? 'Tiếp tục phiếu nháp hôm nay 📝' : 'Đã tạo phiếu kiểm kê mới 📋');
       await openSheet(d.id, token);
@@ -234,6 +261,47 @@ export default function KiemKe() {
       if (expired(e)) return;
       toast(errMsg(e, 'Không tạo được phiếu.'));
     } finally { setBusy(false); }
+  };
+
+  // Gói 55 p11w: xóa dòng khỏi phiếu
+  const removeItem = async (itemId) => {
+    // Gói 55 p11ac: chặn xóa dòng cuối — phiếu phải có ít nhất 1 nguyên liệu
+    if (items.length <= 1) { alert('Phiếu phải có ít nhất 1 nguyên liệu. Muốn bỏ hết thì dùng nút "Hủy phiếu".'); return; }
+    if (!window.confirm('Xóa nguyên liệu này khỏi phiếu?')) return;
+    try {
+      await axios.delete(API + '/employee/stocktakes/' + sheetId + '/items/' + itemId, auth(token));
+      setItems(items.filter((it) => it.id !== itemId));
+      const c = { ...counts };
+      delete c[String(itemId)];
+      setCounts(c);
+      toast('Đã xóa khỏi phiếu.');
+    } catch (e) { toast(errMsg(e, 'Xóa thất bại.')); }
+  };
+
+  // Gói 55 p11w: hủy phiếu nháp
+  const cancelDraft = async () => {
+    if (!window.confirm('Hủy phiếu kiểm kê này? Dữ liệu đã nhập sẽ mất.')) return;
+    try {
+      await axios.delete(API + '/employee/stocktakes/' + sheetId, auth(token));
+      toast('Đã hủy phiếu.');
+      setScreen('home'); setSheetId(null); setItems([]); setCounts({});
+      loadSheets(token);
+    } catch (e) { toast(errMsg(e, 'Hủy thất bại.')); }
+  };
+
+  // Gói 55 p11w: thêm nguyên liệu vào phiếu
+  const addMaterials = async (materialIds) => {
+    if (!materialIds.length) return;
+    try {
+      const r = await axios.post(API + '/employee/stocktakes/' + sheetId + '/items',
+        { material_ids: materialIds }, auth(token));
+      if (r.data?.success) {
+        const d = r.data.data || {};
+        setItems(d.items || items);
+        setShowAddPicker(false); setAddSearch('');
+        toast(r.data.message);
+      }
+    } catch (e) { toast(errMsg(e, 'Thêm thất bại.')); }
   };
 
   const saveDraft = async () => {
@@ -281,17 +349,19 @@ export default function KiemKe() {
   };
 
   // nhóm theo loại nguyên liệu + lọc tìm kiếm
+  // Gói 55 p11x: ô tìm kiếm giờ mở popup thêm NL, không lọc danh sách nữa
   const groups = useMemo(() => {
-    const q = search.trim().toLowerCase();
     const g = [];
     const idx = {};
     items.forEach((it) => {
-      const name = ((it.material || {}).name || '').toLowerCase();
-      if (q && !name.includes(q)) return;
-      const cat = ((it.material || {}).category || {}).name || 'Khác';
-      if (!(cat in idx)) { idx[cat] = g.length; g.push({ name: cat, items: [] }); }
+      const catObj = (it.material || {}).category || {};
+      const cat = catObj.name || 'Khác';
+      const sort = catObj.sort_order ?? 999; // Gói 55 p11g: thứ tự từ admin
+      if (!(cat in idx)) { idx[cat] = g.length; g.push({ name: cat, sort, items: [] }); }
       g[idx[cat]].items.push(it);
     });
+    // Sắp xếp nhóm theo thứ tự admin cấu hình
+    g.sort((a, b) => (a.sort - b.sort) || a.name.localeCompare(b.name));
     return g;
   }, [items, search]);
 
@@ -363,6 +433,45 @@ export default function KiemKe() {
       {screen === 'home' && (
         <React.Fragment>
           <section className="kk-card">
+            {/* Gói 55 p11t: chọn chi nhánh kiểm kê */}
+            {branches.length > 1 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>Chi nhánh kiểm kê</div>
+                <select value={selBranch} onChange={(e) => setSelBranch(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', fontSize: 14, border: '1px solid #ddd', borderRadius: 10 }}>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            )}
+            {/* Gói 55 p11t: tích chọn loại nguyên liệu */}
+            {categories.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>
+                  Loại nguyên liệu {selCats.size > 0 ? `(${selCats.size} đã chọn)` : '(tất cả)'}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {categories.map((c) => {
+                    const on = selCats.has(c.id);
+                    return (
+                      <button key={c.id}
+                        onClick={() => {
+                          const next = new Set(selCats);
+                          if (on) next.delete(c.id); else next.add(c.id);
+                          setSelCats(next);
+                        }}
+                        style={{
+                          padding: '8px 14px', fontSize: 13, borderRadius: 20, border: '1px solid',
+                          borderColor: on ? '#24305E' : '#ddd',
+                          background: on ? '#24305E' : '#fff',
+                          color: on ? '#fff' : '#333',
+                        }}>
+                        {on ? '✓ ' : ''}{c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <button className="kk-bigbtn" onClick={startToday} disabled={busy}>
               {busy ? 'Đang xử lý...' : '📋 Kiểm kê hôm nay'}
             </button>
@@ -411,14 +520,35 @@ export default function KiemKe() {
 
       {screen === 'count' && (
         <React.Fragment>
+          {/* Gói 55 p11w: nút quay lại + hủy nháp */}
+          <div style={{ display: 'flex', gap: 8, padding: '12px 16px 0' }}>
+            <button onClick={() => { setScreen('home'); loadSheets(token); }}
+              style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: 10, background: '#fff', fontSize: 14 }}>
+              ‹ Quay lại
+            </button>
+            <button onClick={cancelDraft}
+              style={{ flex: 1, padding: '10px', border: '1px solid #dc3545', borderRadius: 10, background: '#fff', color: '#dc3545', fontSize: 14 }}>
+              Hủy phiếu
+            </button>
+          </div>
+          {/* Gói 55 p11x: ô tìm kiếm mở popup thêm NL khi chạm — không còn nút riêng */}
           <div className="kk-searchbar">
-            <input
-              className="kk-field"
-              style={{ marginTop: 0 }}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="🔍 Tìm nguyên liệu..."
-            />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1 }}>
+                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
+                  <SearchIcon size={16} />
+                </span>
+                <input
+                  className="kk-field"
+                  style={{ marginTop: 0, width: '100%', paddingLeft: 36 }}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onFocus={(e) => { e.target.blur(); setShowAddPicker(true); }}
+                  placeholder="Tìm & thêm nguyên liệu..."
+                  readOnly
+                />
+              </div>
+            </div>
             <div className="kk-sd" style={{ marginTop: 6 }}>
               Đã nhập {countedCount}/{items.length} dòng
             </div>
@@ -455,6 +585,10 @@ export default function KiemKe() {
                         placeholder="0"
                         aria-label={'Số đếm ' + ((it.material || {}).name || '')}
                       />
+                      {/* Gói 55 p11w: nút xóa dòng */}
+                      <button onClick={() => removeItem(it.id)}
+                        style={{ marginLeft: 8, color: '#dc3545', fontSize: 20, background: 'none', border: 'none', cursor: 'pointer' }}
+                        title="Xóa khỏi phiếu">×</button>
                     </div>
                   );
                 })}
@@ -464,8 +598,23 @@ export default function KiemKe() {
 
           <div className="kk-foot">
             <button className="kk-orange" onClick={saveDraft} disabled={busy}>💾 Lưu nháp</button>
-            <button className="kk-green" onClick={() => setShowConfirm(true)} disabled={busy}>✓ Chốt kiểm kê</button>
+            <button className="kk-green" onClick={() => setShowConfirm(true)} disabled={busy || countedCount !== items.length}>
+              ✓ Chốt kiểm kê{countedCount !== items.length ? ` (${countedCount}/${items.length})` : ''}
+            </button>
           </div>
+
+          {/* Gói 55 p11w: popup thêm nguyên liệu */}
+          {showAddPicker && (
+            <AddMaterialPicker
+              allMaterials={allMaterials}
+              existingIds={items.map((it) => it.material_id)}
+              categories={categories}
+              onClose={() => { setShowAddPicker(false); setAddSearch(''); }}
+              onAdd={addMaterials}
+              search={addSearch}
+              setSearch={setAddSearch}
+            />
+          )}
 
           {showConfirm && (
             <div className="kk-modal-ov" onClick={() => setShowConfirm(false)}>
@@ -500,6 +649,92 @@ export default function KiemKe() {
       )}
 
       <div className={'kk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
+    </div>
+  );
+}
+
+// Gói 55 p11w: popup chọn nguyên liệu để thêm vào phiếu
+function AddMaterialPicker({ allMaterials, existingIds, categories, onClose, onAdd, search, setSearch }) {
+  const [picked, setPicked] = useState(new Set());
+
+  const groups = useMemo(() => {
+    const q = (search || '').trim().toLowerCase();
+    const available = (allMaterials || []).filter((m) =>
+      !existingIds.includes(m.id) &&
+      m.is_active !== false &&
+      (!q || m.name.toLowerCase().includes(q))
+    );
+    const sorted = (categories || []).slice()
+      .sort((a, b) => ((a.sort_order ?? 0) - (b.sort_order ?? 0)) || (a.id - b.id));
+    const result = [];
+    const byCat = {};
+    const uncat = [];
+    available.forEach((m) => {
+      const cid = m.material_category_id;
+      if (!cid) { uncat.push(m); return; }
+      if (!byCat[cid]) byCat[cid] = [];
+      byCat[cid].push(m);
+    });
+    sorted.forEach((c) => {
+      if (byCat[c.id]?.length) result.push({ name: c.name, items: byCat[c.id] });
+    });
+    if (uncat.length) result.push({ name: 'Chưa phân loại', items: uncat });
+    return result;
+  }, [allMaterials, existingIds, categories, search]);
+
+  const toggle = (id) => {
+    const next = new Set(picked);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setPicked(next);
+  };
+
+  return (
+    <div className="kk-modal-ov" onClick={onClose}>
+      <div className="kk-modal" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+        <h3>Thêm nguyên liệu</h3>
+        <div style={{ position: 'relative', marginBottom: 12 }}>
+          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
+            <SearchIcon size={16} />
+          </span>
+          <input
+            className="kk-field"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tìm nguyên liệu chưa có trong phiếu..."
+            autoFocus
+            style={{ paddingLeft: 36 }}
+          />
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>
+          {groups.length === 0 && <div className="kk-empty">Không có nguyên liệu nào để thêm.</div>}
+          {groups.map((g) => (
+            <div key={g.name} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#666', textTransform: 'uppercase', marginBottom: 6 }}>
+                {g.name} ({g.items.length})
+              </div>
+              {g.items.map((m) => (
+                <button key={m.id} onClick={() => toggle(m.id)}
+                  style={{
+                    width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '10px 12px', marginBottom: 6, borderRadius: 10, border: '1px solid',
+                    borderColor: picked.has(m.id) ? '#24305E' : '#eee',
+                    background: picked.has(m.id) ? '#eef2ff' : '#fff',
+                    fontSize: 14, textAlign: 'left',
+                  }}>
+                  <span>{m.name} <span style={{ color: '#999', fontSize: 12 }}>({m.unit})</span></span>
+                  {picked.has(m.id) && <span style={{ color: '#24305E', fontWeight: 800 }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="kk-modal-btns">
+          <button className="kk-outline" onClick={onClose}>Hủy</button>
+          <button className="kk-green" onClick={() => onAdd([...picked])} disabled={picked.size === 0}>
+            Thêm ({picked.size})
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

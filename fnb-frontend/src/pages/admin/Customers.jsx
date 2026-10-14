@@ -4,8 +4,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate, fmtDateTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 
 // =====================================================================
 // Gói 5 (2026-10-05): Khách hàng — tìm theo SĐT/tên/mã TV, thêm mới,

@@ -4,9 +4,9 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import DateTimeInput from '../../components/DateTimeInput';
 import TimeInput from '../../components/TimeInput';
 import { fmtDate, fmtDateTime } from '../../utils/format';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
-// Gói 49l: ghép URL ảnh với host backend (Vite chạy port khác, URL tương đối sẽ sai)
+// Gói 50b: backend trả URL tuyệt đối đúng host — dùng trực tiếp, fallback ghép host khi còn relative
 const imgSrc = (u) => {
   if (!u) return '';
   if (/^https?:\/\//i.test(u)) return u;
@@ -430,6 +430,10 @@ export default function Promotions() {
                     <div>
                         <h1 className="text-xl font-bold" style={{ color: 'var(--m-ink)' }}>Khuyến mại</h1>
                         <p className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>Tự động áp dụng khi đơn hàng đủ điều kiện.</p>
+                        <p className="text-xs mt-1" style={{ color: 'var(--m-ink-faint)' }}>
+                            📌 Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>,
+                            không giới hạn theo từng khách hàng. Hủy đơn sẽ hoàn lại lượt dùng.
+                        </p>
                     </div>
                     <button onClick={startCreate} className="m-btn m-btn-primary">+ Khuyến mại</button>
                 </div>

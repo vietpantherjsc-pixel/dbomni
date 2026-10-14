@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 import {
     REPORT_CSS, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
     PERIOD_NAMES,
@@ -13,7 +14,6 @@ import {
 // 3 block: Xuất–Nhập nguyên liệu / Hao hụt nguyên liệu / Hạn tồn kho.
 // =====================================================================
 
-const API = 'http://localhost/api';
 
 const EXP_STATUS = {
     expired: { label: 'Đã hết hạn', cls: 'r' },

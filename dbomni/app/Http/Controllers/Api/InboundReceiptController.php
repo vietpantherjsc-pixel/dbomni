@@ -67,7 +67,21 @@ class InboundReceiptController extends Controller
                 ]);
                 foreach ($v['items'] as $item) {
                     $material = Material::findOrFail($item['material_id']);
-                    $rate = (float) ($material->conversion_rate ?: 1);
+                    // Gói 55 p11ac: lookup material_units theo purchase_unit từng dòng (giống InboundController::createBatch)
+                    $inputUnit = $item['purchase_unit'] ?? null;
+                    $rate = 1;
+                    $purchaseUnit = $material->unit;
+                    if ($inputUnit && $inputUnit !== $material->unit) {
+                        $mu = $material->units()->where('unit_name', $inputUnit)->first();
+                        if ($mu) {
+                            $rate = (float) $mu->conversion_rate;
+                            $purchaseUnit = $mu->unit_name;
+                        } else {
+                            // Fallback legacy
+                            $rate = (float) ($material->conversion_rate ?: 1);
+                            $purchaseUnit = $material->purchase_unit ?: $material->unit;
+                        }
+                    }
                     $baseQty = (float) $item['purchase_quantity'] * $rate;
                     $lineTotal = (float) $item['purchase_quantity'] * (float) ($item['unit_cost'] ?? 0);
                     $batch = Batch::create([
@@ -85,7 +99,7 @@ class InboundReceiptController extends Controller
                         'material_id' => $material->id,
                         'batch_id' => $batch->id,
                         'purchase_quantity' => $item['purchase_quantity'],
-                        'purchase_unit' => $material->purchase_unit ?: $material->unit,
+                        'purchase_unit' => $purchaseUnit,
                         'conversion_rate' => $rate,
                         'unit_cost' => $item['unit_cost'] ?? 0,
                         'line_total' => $lineTotal,
@@ -224,6 +238,7 @@ class InboundReceiptController extends Controller
             'items.*.id' => 'nullable|exists:inbound_receipt_items,id',
             'items.*.material_id' => 'required|exists:materials,id',
             'items.*.purchase_quantity' => 'required|numeric|min:0.001',
+            'items.*.purchase_unit' => 'nullable|string|max:30', // Gói 55 p11ac: đơn vị mua từng dòng
             'items.*.unit_cost' => 'nullable|numeric|min:0',
             'items.*.expired_at' => 'nullable|date',
             'items.*.batch_code' => 'nullable|string|max:50',

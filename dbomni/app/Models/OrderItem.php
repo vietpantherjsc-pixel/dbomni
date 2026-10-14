@@ -24,7 +24,9 @@ class OrderItem extends Model
         'total_price',
         'discount_amount',
         'options', // Gói 7c: [{name, price}]
+        'option_ids', // Gói 55: IDs tùy chọn đã khớp với nhóm (từ import)
         'note',
+        'unit_cost', // Gói 55 p11ac: giá vốn đã chốt lúc trừ kho (FIFO)
     ];
 
     protected $casts = [
@@ -34,6 +36,7 @@ class OrderItem extends Model
         'total_price' => 'decimal:2',
         'discount_amount' => 'decimal:2',
         'options' => 'array',
+        'option_ids' => 'array',
     ];
 
     // Một chi tiết thuộc về một đơn hàng

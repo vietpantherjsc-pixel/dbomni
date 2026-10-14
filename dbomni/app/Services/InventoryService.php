@@ -113,7 +113,7 @@ class InventoryService
                     }
                     $deduct = min((float) $batch->current_quantity, $remaining);
                     $batch->current_quantity -= $deduct;
-                    if ((float) $batch->current_quantity == 0) {
+                    if ((float) $batch->current_quantity < 0.001) { // Gói 55 p11w: epsilon thay vì == 0
                         $batch->status = 'exhausted';
                     }
                     $batch->save();
@@ -160,7 +160,7 @@ class InventoryService
                 }
                 $deduct = min((float) $batch->current_quantity, $remaining);
                 $batch->current_quantity -= $deduct;
-                if ((float) $batch->current_quantity == 0) {
+                if ((float) $batch->current_quantity < 0.001) { // Gói 55 p11w: epsilon thay vì == 0
                     $batch->status = 'exhausted';
                 }
                 $batch->save();
@@ -180,12 +180,18 @@ class InventoryService
      * Trừ kho theo FIFO cho 1 chi nhánh. Ném Exception khi không đủ tồn kho.
      *
      * @param array $lines [['product_id' => int, 'product_option_id' => int|null, 'quantity' => int]]
+     * @return array [material_id => weighted_avg_unit_cost] — giá vốn BQ theo lượng đã trừ (Gói 55 p11ac)
+     * Gói 55 p11ad: ghi nhật ký xuất kho chi tiết từng lô vào stock_movements.
+     * @param array $ref ['type' => 'order', 'id' => 123] — tham chiếu (id có thể null, caller cập nhật sau)
+     * @param array|null &$movementIds (by-ref) nhận về id các dòng log để caller gắn reference_id sau
      */
-    public function deductStock(int $branchId, array $lines): void
+    public function deductStock(int $branchId, array $lines, array $ref = [], ?array &$movementIds = null): array
     {
         $needs = $this->calculateNeeds($lines);
 
-        DB::transaction(function () use ($branchId, $needs) {
+        return DB::transaction(function () use ($branchId, $needs, $ref, &$movementIds) {
+            $costs = []; // material_id => ['total_cost' => x, 'total_qty' => y]
+            $movementIds = [];
             foreach ($needs as $materialId => $qtyNeeded) {
                 // Khóa dòng để tránh tranh chấp khi nhiều đơn bấm cùng lúc
                 $batches = Batch::where('branch_id', $branchId)
@@ -208,13 +214,33 @@ class InventoryService
                     }
                     $deduct = min((float) $batch->current_quantity, $remaining);
                     $batch->current_quantity -= $deduct;
-                    if ((float) $batch->current_quantity == 0) {
+                    if ((float) $batch->current_quantity < 0.001) { // Gói 55 p11w: epsilon thay vì == 0
                         $batch->status = 'exhausted';
                     }
                     $batch->save();
+                    // Gói 55 p11ac: cộng dồn giá vốn theo lượng trừ
+                    $costs[$materialId]['total_cost'] = ($costs[$materialId]['total_cost'] ?? 0) + $deduct * (float) $batch->unit_cost;
+                    $costs[$materialId]['total_qty'] = ($costs[$materialId]['total_qty'] ?? 0) + $deduct;
+                    // Gói 55 p11ad: nhật ký xuất kho từng lô
+                    $movementIds[] = \App\Models\StockMovement::create([
+                        'branch_id' => $branchId,
+                        'material_id' => $materialId,
+                        'batch_id' => $batch->id,
+                        'quantity' => $deduct,
+                        'unit_cost' => (float) $batch->unit_cost,
+                        'reference_type' => $ref['type'] ?? null,
+                        'reference_id' => $ref['id'] ?? null,
+                        'note' => $ref['note'] ?? null,
+                    ])->id;
                     $remaining -= $deduct;
                 }
             }
+            // Trả về giá vốn bình quân gia quyền từng nguyên liệu
+            $avg = [];
+            foreach ($costs as $mid => $c) {
+                $avg[$mid] = $c['total_qty'] > 0 ? $c['total_cost'] / $c['total_qty'] : 0;
+            }
+            return $avg;
         });
     }
 

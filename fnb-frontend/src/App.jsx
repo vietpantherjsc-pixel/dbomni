@@ -22,6 +22,7 @@ import Tables from './pages/admin/Tables';
 import Transactions from './pages/admin/Transactions'; // Gói 27: thu chi
 import TransactionCategories from './pages/admin/TransactionCategories'; // Gói 29: danh mục thu chi
 import Partners from './pages/admin/Partners'; // Gói 29: đối tác công nợ
+import Suppliers from './pages/admin/Suppliers'; // Gói 55 p11ab: nhà cung cấp (submenu kho)
 import PosScreen from './components/PosScreen';
 import KdsScreen from './KdsScreen';
 import Settings from './pages/admin/Settings';
@@ -40,6 +41,8 @@ import Loi3Chuyen from './pages/Loi3Chuyen'; // Trang NV tự báo lỗi 3 Chuy�
 import KiemKe from './pages/KiemKe'; // Gói 43: trang kiểm kê NV (public)
 import CheBien from './pages/CheBien'; // Gói 43: trang chế biến NV (public)
 import NhapKho from './pages/NhapKho'; // Gói 43: trang nhập hàng NV (public)
+import XuatKho from './pages/XuatKho'; // Gói 55 p11z: trang xuất kho NV (public)
+import ChuyenKho from './pages/ChuyenKho'; // Gói 55 p11z: trang chuyển kho NV (public)
 import XinNghi from './pages/XinNghi'; // Gói 46: trang NV xin nghỉ theo ca (public)
 import WorkShifts from './pages/admin/WorkShifts'; // Gói 35: ca làm việc
 import AttendanceGrid from './pages/admin/AttendanceGrid'; // Gói 35: bảng chấm công tuần
@@ -92,6 +95,8 @@ const App = () => {
                     <Route path="/kiem-ke" element={<KiemKe />} />
                     <Route path="/che-bien" element={<CheBien />} />
                     <Route path="/nhap-kho" element={<NhapKho />} />
+                    <Route path="/xuat-kho" element={<XuatKho />} /> {/* Gói 55 p11z */}
+                    <Route path="/chuyen-kho" element={<ChuyenKho />} /> {/* Gói 55 p11z */}
                     <Route path="/xin-nghi" element={<XinNghi />} /> {/* Gói 46 */}
 
                     {/* Các Route Bảo mật */}
@@ -186,8 +191,17 @@ const App = () => {
                     <Route path="/admin/promotions" element={<PrivateRoute><Promotions /></PrivateRoute>} />
 
                     {/* Gói 4 (2026-10-04): trang Kho hàng thật */}
+                    {/* Gói 55 p11: submenu kho — /admin/inventory/:section */}
                     <Route
                         path="/admin/inventory"
+                        element={
+                            <PrivateRoute>
+                                <Inventory />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/inventory/:section"
                         element={
                             <PrivateRoute>
                                 <Inventory />
@@ -262,7 +276,6 @@ const App = () => {
                     <Route path="/admin/attendance/qr" element={<PrivateRoute><AttendanceQr /></PrivateRoute>} />
                     {/* Gói 2 (2026-10-04): các mục menu Sapo chưa phát triển -> trang ComingSoon */}
                     {[
-                        ['/admin/bookings', 'Đặt lịch'],
                         ['/admin/integrations', 'Đối tác tích hợp'],
                     ].map(([path, title]) => (
                         <Route
@@ -296,6 +309,14 @@ const App = () => {
                         element={
                             <PrivateRoute>
                                 <Partners />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/suppliers"
+                        element={
+                            <PrivateRoute>
+                                <Suppliers />
                             </PrivateRoute>
                         }
                     />

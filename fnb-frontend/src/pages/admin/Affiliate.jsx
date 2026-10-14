@@ -3,8 +3,8 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateInput from '../../components/DateInput';
 import { fmtDateTime } from '../../utils/format';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const vnd = (n) => Number(n || 0).toLocaleString('vi-VN') + 'đ';
 const thisMonth = () => {
     const d = new Date();

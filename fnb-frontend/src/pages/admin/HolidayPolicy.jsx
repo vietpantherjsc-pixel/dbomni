@@ -4,8 +4,8 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import { API } from '../../utils/api';
 
-const API = 'http://localhost/api';
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
 const VIOL_CATS = [
     ['chuyen_can', 'Chuyên Cần'],
@@ -15,9 +15,10 @@ const VIOL_CATS = [
 const violCatName = (c, fallback) => (VIOL_CATS.find(([k]) => k === c)?.[1]) || fallback || c;
 
 // Gói 30: Chính sách lương lễ/tết + lương trách nhiệm theo vi phạm (chung toàn chuỗi).
+// Gói 54: đổi tên thành "Cấu hình Lương", thêm mục BHXH (chuyển từ Thiết lập sang).
 export default function HolidayPolicy() {
     const { can } = useAuth();
-    const [pol, setPol] = useState({ resp_base_per_hour: 2000, resp_deduction_per_violation: 500, resp_max_violations: 4, meal_price: 30000, meal_min_hours: 14.5 });
+    const [pol, setPol] = useState({ resp_base_per_hour: 2000, resp_deduction_per_violation: 500, resp_max_violations: 4, meal_price: 30000, meal_min_hours: 14.5, bhxh_emp_bhxh: 8, bhxh_emp_bhyt: 1.5, bhxh_emp_bhtn: 1, bhxh_employer_rate: 21.5 });
     const [holidays, setHolidays] = useState([]);
     const [form, setForm] = useState({ date: '', name: '', multiplier: 2 });
     const [editing, setEditing] = useState(null);
@@ -50,6 +51,10 @@ export default function HolidayPolicy() {
                 resp_max_violations: Number(pol.resp_max_violations) || 0,
                 meal_price: Number(pol.meal_price) || 0,
                 meal_min_hours: Number(pol.meal_min_hours) || 0,
+                bhxh_emp_bhxh: Number(pol.bhxh_emp_bhxh) || 0,
+                bhxh_emp_bhyt: Number(pol.bhxh_emp_bhyt) || 0,
+                bhxh_emp_bhtn: Number(pol.bhxh_emp_bhtn) || 0,
+                bhxh_employer_rate: Number(pol.bhxh_employer_rate) || 0,
             });
             alert('Đã lưu chính sách.');
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
@@ -94,7 +99,7 @@ export default function HolidayPolicy() {
     return (
         <AdminLayout>
             <div className="p-5">
-                <h1 className="text-xl font-bold mb-4">Lương lễ, Tết &amp; phạt vi phạm</h1>
+                <h1 className="text-xl font-bold mb-4">Cấu hình Lương</h1>
                 <div className="grid lg:grid-cols-2 gap-4 items-start">
                     <div className="m-card p-4">
                         <h3 className="font-bold mb-1">Chính sách lương trách nhiệm</h3>
@@ -125,6 +130,22 @@ export default function HolidayPolicy() {
                         <p className="text-[12.5px] text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mt-3">
                             VD: {fmt(pol.meal_price)}đ/suất — ngày làm {pol.meal_min_hours}h trở lên tự cộng 1 suất vào phụ cấp tiền ăn.
                         </p>
+                        {editable && <button onClick={savePol} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu chính sách</button>}
+                    </div>
+                    {/* Gói 54: BHXH — chuyển từ Thiết lập sang đây */}
+                    <div className="m-card p-4">
+                        <h3 className="font-bold mb-1">Bảo hiểm xã hội (BHXH)</h3>
+                        <p className="text-[12px] text-gray-500 mb-3">Tỷ lệ đóng của người lao động và doanh nghiệp. Áp dụng khi tính bảng lương.</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[12px] text-gray-500">BHXH NLĐ đóng (%)
+                                <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_emp_bhxh} onChange={(e) => setPol({ ...pol, bhxh_emp_bhxh: e.target.value })} className={inp + ' mt-1'} /></label>
+                            <label className="text-[12px] text-gray-500">BHYT NLĐ đóng (%)
+                                <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_emp_bhyt} onChange={(e) => setPol({ ...pol, bhxh_emp_bhyt: e.target.value })} className={inp + ' mt-1'} /></label>
+                            <label className="text-[12px] text-gray-500">BHTN NLĐ đóng (%)
+                                <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_emp_bhtn} onChange={(e) => setPol({ ...pol, bhxh_emp_bhtn: e.target.value })} className={inp + ' mt-1'} /></label>
+                            <label className="text-[12px] text-gray-500">DN đóng (%)
+                                <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_employer_rate} onChange={(e) => setPol({ ...pol, bhxh_employer_rate: e.target.value })} className={inp + ' mt-1'} /></label>
+                        </div>
                         {editable && <button onClick={savePol} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu chính sách</button>}
                     </div>
                     <div className="m-card p-4">
