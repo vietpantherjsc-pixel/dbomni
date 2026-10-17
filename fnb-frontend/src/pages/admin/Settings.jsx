@@ -14,6 +14,7 @@ import PrintTemplateSettings from './PrintTemplateSettings'; // Gói 52
 import AccountManager from './AccountManager'; // Gói 56: quản lý quỹ
 import PrepaidExpenseManager from './PrepaidExpenseManager'; // Gói 56: chi phí trả trước
 import StaffHubQr from './StaffHubQr'; // Gói 59: QR trang hub nhân viên
+import DeliverySettings from './DeliverySettings'; // Gói 60: cấu hình giao hàng
 import { API } from '../../utils/api';
 
 // Gói 22 (2026-10-09): Quản lý chi nhánh ngay trong Thiết lập.
@@ -812,6 +813,15 @@ const Settings = () => {
                         Mã QR mở trang hub nhân viên (/nhan-vien). In và dán tại quầy để nhân viên quét.
                     </p>
                     <StaffHubQr />
+                </div>
+
+                {/* Gói 60: Giao hàng AhaMove / Lalamove */}
+                <div className="m-card p-6 mt-4">
+                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Giao hàng</h2>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        AhaMove (chính) / Lalamove (dự phòng). API key cấu hình trong file .env của backend.
+                    </p>
+                    <DeliverySettings />
                 </div>
             </div>
         </AdminLayout>

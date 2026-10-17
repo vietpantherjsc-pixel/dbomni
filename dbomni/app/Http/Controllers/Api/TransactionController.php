@@ -13,8 +13,10 @@ use Illuminate\Support\Facades\DB;
 // Gói 27 (2026-10-09): Thu-Chi hoàn thiện.
 // - CRUD phiếu thu/chi + lọc + tổng kết kỳ.
 // - Phiếu tự sinh (related_type != null, VD: từ nhập kho): chỉ cho sửa ghi chú, không cho sửa số tiền, không cho xóa.
+// Gói 60: dùng ValidatesEmployeeBranch để NV nhiều CN chọn CN thao tác.
 class TransactionController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     /** Danh sách danh mục thu/chi (kèm cờ is_system). */
     public function categories(): JsonResponse
     {
@@ -112,10 +114,12 @@ class TransactionController extends Controller
         $status = $isDebt ? 'pending' : ($v['status'] ?? 'paid');
 
         // Gói 59: NV tạo → chờ quản lý duyệt; admin tạo → duyệt ngay.
-        // NV mobile: ép chi nhánh theo tài khoản, không nhận từ client.
+        // Gói 60: NV được chọn CN trong danh sách phân công.
         $actor = $request->user();
         $isEmployee = $actor instanceof \App\Models\Employee;
-        $branchId = $isEmployee ? (int) $actor->branch_id : ($v['branch_id'] ?? null);
+        $branchId = $isEmployee
+            ? $this->resolveEmployeeBranch($actor, $v['branch_id'] ?? null)
+            : ($v['branch_id'] ?? null);
 
         $tx = DB::transaction(function () use ($v, $status, $branchId, $isEmployee) {
             return Transaction::create([

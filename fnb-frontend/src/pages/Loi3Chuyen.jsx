@@ -83,6 +83,7 @@ function badgeCls(category) {
 }
 
 export default function Loi3Chuyen() {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const [token, setToken] = useState(() => localStorage.getItem('viol_token') || '');
   const [emp, setEmp] = useState(() => {
     try { return JSON.parse(localStorage.getItem('viol_emp') || 'null'); } catch (e) { return null; }
@@ -227,7 +228,9 @@ export default function Loi3Chuyen() {
       <div className="l3c-wrap">
         <style>{CSS}</style>
         <div className="l3c-login">
-          <div className="l3c-hd" style={{ borderRadius: 18 }}>
+          <div className="l3c-hd" style={{ borderRadius: 18, position: 'relative' }}>
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
             <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>
             <div className="l3c-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -277,6 +280,7 @@ export default function Loi3Chuyen() {
             <div className="l3c-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="l3c-sub">{(emp && emp.branch_name) || ''}</div>
           </div>
+          <button className="l3c-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
           <button className="l3c-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>

@@ -84,6 +84,7 @@ function errMsg(err, fallback) {
 }
 
 export default function CheBien() {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const [token, setToken] = useState(() => localStorage.getItem('chebien_token') || '');
   const [emp, setEmp] = useState(() => {
     try { return JSON.parse(localStorage.getItem('chebien_emp') || 'null'); } catch (e) { return null; }
@@ -221,7 +222,9 @@ export default function CheBien() {
       <div className="cb-wrap">
         <style>{CSS}</style>
         <div className="cb-login">
-          <div className="cb-hd" style={{ borderRadius: 18 }}>
+          <div className="cb-hd" style={{ borderRadius: 18, position: 'relative' }}>
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
             <div className="cb-title">🍳 Chế biến</div>
             <div className="cb-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -271,6 +274,7 @@ export default function CheBien() {
             <div className="cb-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="cb-sub">{(emp && emp.branch_name) || ''}</div>
           </div>
+          <button className="cb-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
           <button className="cb-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="cb-title">🍳 Chế biến</div>

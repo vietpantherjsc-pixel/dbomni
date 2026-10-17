@@ -9,8 +9,22 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
 // Gói 26: Đăng nhập nhân viên (username/password) + xác thực PIN 6 số cho POS/KDS.
+// Gói 60 (2026-10-15): trả về danh sách chi nhánh được phân công (CN chính + branch_employee).
 class EmployeeAuthController extends Controller
 {
+    // Danh sách chi nhánh NV được phép thao tác (CN chính + các CN phân công thêm)
+    private function assignedBranches(Employee $emp): array
+    {
+        $emp->loadMissing('branches:id,name');
+        $branches = $emp->branches->map(fn ($b) => ['id' => (int) $b->id, 'name' => $b->name])->values()->all();
+        $ids = array_column($branches, 'id');
+        if ($emp->branch_id && !in_array((int) $emp->branch_id, $ids, true)) {
+            $emp->loadMissing('branch:id,name');
+            array_unshift($branches, ['id' => (int) $emp->branch_id, 'name' => $emp->branch?->name]);
+        }
+        return $branches;
+    }
+
     // Đăng nhập trang admin bằng tài khoản nhân viên
     public function login(Request $request): JsonResponse
     {
@@ -19,7 +33,7 @@ class EmployeeAuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $emp = Employee::with(['role:id,name,permissions', 'branch:id,name'])
+        $emp = Employee::with(['role:id,name,permissions', 'branch:id,name', 'branches:id,name'])
             ->where('username', $request->string('username'))
             ->first();
 
@@ -43,6 +57,7 @@ class EmployeeAuthController extends Controller
                 'permissions' => $emp->role?->permissions ?? [],
                 'branch_id' => $emp->branch_id,
                 'branch_name' => $emp->branch?->name,
+                'branches' => $this->assignedBranches($emp), // Gói 60
             ],
         ]);
     }
@@ -61,7 +76,7 @@ class EmployeeAuthController extends Controller
         $emp = null;
         if (!empty($v['phone']) || !empty($v['username'])) {
             // Có định danh: tìm nhanh theo SĐT/username rồi check PIN
-            $q = Employee::with(['role:id,name', 'branch:id,name'])->where('is_active', true);
+            $q = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])->where('is_active', true);
             if (!empty($v['phone'])) {
                 $q->where('phone', $v['phone']);
             } else {
@@ -74,7 +89,7 @@ class EmployeeAuthController extends Controller
         } else {
             // POS đăng nhập nhanh chỉ bằng PIN: duyệt NV đang hoạt động rồi Hash::check
             // (route đã throttle:10,1 nên không dò được; số NV quán cà phê nhỏ nên đủ nhanh)
-            $candidates = Employee::with(['role:id,name', 'branch:id,name'])->where('is_active', true)->get();
+            $candidates = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])->where('is_active', true)->get();
             foreach ($candidates as $candidate) {
                 if (Hash::check($v['pin_code'], (string) $candidate->pin_code)) {
                     $emp = $candidate;
@@ -95,6 +110,7 @@ class EmployeeAuthController extends Controller
                 'role' => $emp->role?->name,
                 'branch_id' => $emp->branch_id,
                 'branch_name' => $emp->branch?->name,
+                'branches' => $this->assignedBranches($emp), // Gói 60
             ],
         ]);
     }
@@ -112,7 +128,7 @@ class EmployeeAuthController extends Controller
             return response()->json(['success' => false, 'message' => 'Mã QR không hợp lệ.'], 422);
         }
         // Gói 38: PIN lưu hash — tìm NV đang hoạt động rồi Hash::check (không where theo pin_code)
-        $emp = Employee::with(['branch:id,name'])->where('is_active', true)->get()
+        $emp = Employee::with(['branch:id,name', 'branches:id,name'])->where('is_active', true)->get()
             ->first(fn ($e) => $e->pin_code && Hash::check($v['pin_code'], $e->pin_code));
         if (!$emp) {
             return response()->json(['success' => false, 'message' => 'Mã PIN không đúng.'], 401);
@@ -128,7 +144,7 @@ class EmployeeAuthController extends Controller
             'pin_code' => 'required|string|size:6',
         ]);
         // Gói 38: PIN lưu hash — tìm NV theo SĐT trước, rồi Hash::check (không where theo pin_code)
-        $emp = Employee::with(['branch:id,name'])
+        $emp = Employee::with(['branch:id,name', 'branches:id,name'])
             ->where('phone', $v['phone'])
             ->where('is_active', true)->first();
         if (!$emp || !$emp->pin_code || !Hash::check($v['pin_code'], $emp->pin_code)) {
@@ -153,6 +169,7 @@ class EmployeeAuthController extends Controller
                 'phone' => $u->phone,
                 'branch_id' => $u->branch_id,
                 'branch_name' => $u->branch?->name,
+                'branches' => $this->assignedBranches($u), // Gói 60
             ],
         ]);
     }
@@ -172,6 +189,7 @@ class EmployeeAuthController extends Controller
                 'phone' => $emp->phone,
                 'branch_id' => $emp->branch_id,
                 'branch_name' => $emp->branch?->name,
+                'branches' => $this->assignedBranches($emp), // Gói 60
             ],
         ]);
     }

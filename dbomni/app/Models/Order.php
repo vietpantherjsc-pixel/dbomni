@@ -50,7 +50,6 @@ class Order extends Model
         'cancelled_by', // Gói 55 p11ag: người hủy (tên NV/admin hoặc customer:SĐT)
         'cancelled_by_type', // Gói 55 p11ag: user|employee|customer
         'completed_at', // Gói 12a
-        'ready_at', // Gói 56: mốc bếp bấm sẵn sàng (tính thời gian pha chế TB)
         'claim_token', // Gói 11: token QR tích điểm
         'claim_expires_at', // Gói 11: hạn token QR tích điểm
         'need_vat_invoice', // Gói 48: yêu cầu xuất VAT
@@ -64,7 +63,17 @@ class Order extends Model
         'referred_by', // Gói 9: mã giới thiệu affiliate
         'commission_rate', // Gói 56: % phí sàn snapshot lúc tạo/chốt đơn
         'commission_amount', // Gói 56: tiền phí sàn snapshot
+        // Gói 61b: gộp 2 dòng ready_at trùng (Gói 56) thành 1
         'ready_at', // Gói 56: lúc bếp bấm sẵn sàng — tính thời gian pha chế
+        // Gói 60: tích hợp giao hàng AhaMove/Lalamove
+        'delivery_provider', 'delivery_order_id', 'delivery_tracking_url',
+        'delivery_status', 'delivery_package', 'delivery_fee',
+        'delivery_fee_charged', 'delivery_quoted_fee', 'delivery_cod_amount',
+        'delivery_cod_fee', 'delivery_failover_from', 'delivery_failover_at',
+        'delivery_driver_name', 'delivery_driver_phone', 'delivery_driver_plate',
+        'delivery_searching_since',
+        // Gói 61b: tọa độ điểm giao + cờ hàng trả về
+        'delivery_dropoff_lat', 'delivery_dropoff_lng', 'delivery_returned',
     ];
 
     protected $casts = [
@@ -77,11 +86,22 @@ class Order extends Model
         'total_amount' => 'decimal:2',
         'cancelled_at' => 'datetime',
         'completed_at' => 'datetime', // Gói 12a: mốc hoàn thành để giới hạn tra cứu Mini App 24h
-        'ready_at' => 'datetime', // Gói 56: mốc bếp sẵn sàng
-        'ready_at' => 'datetime', // Gói 56: lúc bếp bấm sẵn sàng
+        'ready_at' => 'datetime', // Gói 56: lúc bếp bấm sẵn sàng — tính thời gian pha chế
         'claim_expires_at' => 'datetime', // Gói 13: fix crash QR claim (isPast() trên string)
         'scheduled_at' => 'datetime',
         'stock_deducted' => 'boolean',
+        // Gói 60: giao hàng
+        'delivery_fee' => 'decimal:2',
+        'delivery_fee_charged' => 'decimal:2',
+        'delivery_quoted_fee' => 'decimal:2',
+        'delivery_cod_amount' => 'decimal:2',
+        'delivery_cod_fee' => 'decimal:2',
+        'delivery_failover_at' => 'datetime',
+        'delivery_searching_since' => 'datetime',
+        // Gói 61b
+        'delivery_dropoff_lat' => 'decimal:8',
+        'delivery_dropoff_lng' => 'decimal:8',
+        'delivery_returned' => 'boolean',
     ];
 
     // Một đơn hàng có nhiều chi tiết mặt hàng

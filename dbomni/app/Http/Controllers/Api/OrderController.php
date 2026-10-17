@@ -58,6 +58,18 @@ class OrderController extends Controller
             $query->whereIn('status', $statuses);
         }
 
+        // Gói 60: lọc theo hãng giao và trạng thái giao (checklist #27)
+        if ($request->filled('delivery_provider')) {
+            $query->where('delivery_provider', $request->query('delivery_provider'));
+        }
+        if ($request->filled('delivery_status')) {
+            $statuses = array_map('trim', explode(',', $request->query('delivery_status')));
+            $query->whereIn('delivery_status', $statuses);
+        }
+        if ($request->boolean('delivery_failover')) {
+            $query->whereNotNull('delivery_failover_from');
+        }
+
         $orders = $query->paginate($request->query('per_page', 20));
 
         return response()->json(['success' => true, 'data' => $orders]);
@@ -564,6 +576,12 @@ class OrderController extends Controller
         }
         $order->save();
 
+        // Gói 60: đơn giao hàng được xác nhận (pending → processing) → tạo đơn hãng.
+        // Tạo thất bại không chặn luồng: đơn nằm chờ, Admin bấm "thử tạo lại" (checklist #11).
+        if ($from === 'pending' && $to === 'processing' && $order->order_type === 'delivery') {
+            $this->createDeliveryOrder($order);
+        }
+
         // Gói 3c: đơn hoàn thành -> giải phóng bàn nếu không còn đơn hoạt động nào khác
         if ($request->status === 'completed') {
             $this->releaseTableIfFree($order);
@@ -574,6 +592,30 @@ class OrderController extends Controller
             'message' => 'Cập nhật trạng thái thành công',
             'data' => $order
         ]);
+    }
+
+    /**
+     * Gói 60: tạo đơn hãng giao hàng cho đơn đã xác nhận.
+     * Idempotent: đơn đã có delivery_order_id thì bỏ qua (tránh tạo trùng khi bấm 2 lần).
+     */
+    private function createDeliveryOrder(\App\Models\Order $order): void
+    {
+        if ($order->delivery_order_id) return; // đã có đơn hãng
+        try {
+            $service = app(\App\Services\Delivery\DeliveryService::class);
+            if (!$service->isConfigured()) return; // chưa cấu hình hãng: giữ luồng cũ
+            // COD = tổng khách trả khi nhận hàng (0 nếu đã trả trước)
+            $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
+            $order->delivery_cod_amount = $cod;
+            // Phí ship đã khóa lúc chốt đơn = phần khách chịu
+            $order->delivery_quoted_fee = $order->delivery_fee_charged ?? $order->shipping_fee;
+            $order->save();
+            $service->createForOrder($order->fresh(), []);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[Delivery] createDeliveryOrder failed', [
+                'order' => $order->code, 'msg' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -676,7 +718,46 @@ class OrderController extends Controller
         // Gói 3b: nếu là đơn lưu gắn bàn -> trả bàn về trống khi không còn đơn lưu nào khác
         $this->releaseTableIfFree($order);
 
+        // Gói 60: hủy đơn hãng tương ứng nếu tài xế chưa lấy hàng (checklist #10).
+        // Trạng thái hai phía khớp nhau; phí hủy (nếu hãng tính) ghi nhận vào đơn.
+        $this->cancelDeliveryOrder($order, $reason);
+
         return $order;
+    }
+
+    /**
+     * Gói 60: hủy đơn phía hãng khi đơn nội bộ bị hủy.
+     * Chỉ hủy khi tài xế chưa lấy hàng (searching/driver_assigned).
+     */
+    private function cancelDeliveryOrder(\App\Models\Order $order, string $reason): void
+    {
+        if (empty($order->delivery_order_id) || empty($order->delivery_provider)) return;
+        $beforePickup = in_array($order->delivery_status, [
+            \App\Services\Delivery\DeliveryService::ST_SEARCHING,
+            \App\Services\Delivery\DeliveryService::ST_ASSIGNED,
+        ], true);
+        if (!$beforePickup) return;
+        try {
+            $service = app(\App\Services\Delivery\DeliveryService::class);
+            $provider = $service->provider($order->delivery_provider);
+            if (!$provider) return;
+            $result = $provider->cancelOrder($order->delivery_order_id, $reason);
+            \App\Models\DeliveryLog::create([
+                'order_id' => $order->id, 'provider' => $order->delivery_provider,
+                'provider_order_id' => $order->delivery_order_id,
+                'event' => 'cancel',
+                'payload' => ['success' => $result['success'], 'cancel_fee' => $result['cancel_fee'] ?? 0],
+            ]);
+            $order->delivery_status = \App\Services\Delivery\DeliveryService::ST_CANCELLED;
+            if (!empty($result['cancel_fee'])) {
+                $order->note = trim(($order->note ? $order->note . ' | ' : '') . 'Phí hủy giao hàng: ' . number_format($result['cancel_fee'], 0) . 'đ');
+            }
+            $order->save();
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('[Delivery] cancelDeliveryOrder failed', [
+                'order' => $order->code, 'msg' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

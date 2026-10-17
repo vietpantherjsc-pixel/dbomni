@@ -38,6 +38,8 @@ use App\Http\Controllers\Api\TableController;
 use App\Http\Controllers\Api\TransactionController; // Gói 27: thu chi
 use App\Http\Controllers\Api\AccountController; // Gói 57: quỹ/tài khoản
 use App\Http\Controllers\Api\PrepaidExpenseController; // Gói 57: chi phí trả trước
+use App\Http\Controllers\Api\DeliveryController; // Gói 60: giao hàng
+use App\Http\Controllers\Api\DeliveryWebhookController; // Gói 60: webhook giao hàng
 use App\Http\Controllers\Api\PartnerController; // Gói 29: đối tác công nợ
 use App\Http\Controllers\Api\UploadController; // Gói 10f
 use App\Http\Controllers\Api\RoleController; // Gói 26: chức vụ & phân quyền
@@ -192,6 +194,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/import-excel', [OrderImportController::class, 'upload']);
     Route::post('/orders/import-excel/validate', [OrderImportController::class, 'validateRows']);
     Route::post('/orders/import-excel/confirm', [OrderImportController::class, 'confirm']);
+    // Gói 60: giao hàng — thử tạo lại đơn hãng, xem log, báo cáo failover
+    Route::post('/orders/{order}/delivery/retry', [DeliveryController::class, 'retry']);
+    Route::get('/orders/{order}/delivery/logs', [DeliveryController::class, 'logs']);
+    Route::get('/delivery/failover-report', [DeliveryController::class, 'failoverReport']);
+    Route::get('/delivery/config', [DeliveryController::class, 'config']);
 
     // Bàn phục vụ (Gói 3) — Gói 55 p11ae: ghi cần branches.manage (POS chỉ đọc)
     Route::get('/tables', [TableController::class, 'index']);
@@ -568,4 +575,12 @@ Route::prefix('online')->middleware('throttle:60,1')->group(function () {
     Route::post('/orders', [OnlineOrderController::class, 'store']);
     Route::get('/orders/{code}', [OnlineOrderController::class, 'track']);
     Route::post('/orders/{code}/cancel', [OnlineOrderController::class, 'cancel'])->middleware('throttle:10,1'); // Gói SEC2: chống brute-force mã đơn
+    // Gói 60: báo giá giao hàng live cho checkout Mini App
+    Route::post('/delivery/quote', [DeliveryController::class, 'quote'])->middleware('throttle:30,1');
+    Route::get('/delivery/config', [DeliveryController::class, 'config']);
 });
+
+// Gói 60: webhook giao hàng từ hãng (public, verify chữ ký trong adapter)
+Route::post('/webhooks/delivery/{provider}', [DeliveryWebhookController::class, 'handle'])
+    ->where('provider', 'ahamove|lalamove')
+    ->middleware('throttle:120,1');

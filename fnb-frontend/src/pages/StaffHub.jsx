@@ -27,6 +27,8 @@ const CSS = `
 .sh-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
 .sh-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
 .sh-logout:active{transform:scale(.95);}
+.sh-branchsel{margin-top:4px;max-width:100%;background:#fff;border:none;color:${NAVY};font-size:13px;font-weight:700;padding:8px 28px 8px 12px;border-radius:10px;min-height:38px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2324305E' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;cursor:pointer;}
+.sh-branchsel option{color:#1a1d26;background:#fff;font-weight:400;}
 .sh-login{padding:40px 24px;}
 .sh-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .sh-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
@@ -74,7 +76,7 @@ function fmtVND(n) {
 }
 
 // ---- Form phiếu thu/chi rút gọn (dùng trong hub) ----
-function TxnForm({ token, hubT, emp, kind, onBack, onExpired }) {
+function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
   const isIncome = kind === 'income';
   const [cats, setCats] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -117,6 +119,7 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired }) {
         account_id: accountId ? Number(accountId) : null,
         occurred_at: date || null,
         note: note.trim() || null,
+        branch_id: branchId || null, // Gói 60: CN đang thao tác
       }, auth(token, hubT));
       const d = r.data && r.data.data ? r.data.data : {};
       setDone({ code: d.code || '', amount: amt });
@@ -232,7 +235,39 @@ export default function StaffHub() {
   };
   const onExpired = () => { logout(); };
   const back = () => setScreen('hub');
-  const embed = { token, emp, hubT, onBack: back, onExpired };
+  // Gói 60: chi nhánh đang thao tác (NV nhiều CN được đổi)
+  const empBranches = (emp && emp.branches) || [];
+  const [branchId, setBranchId] = useState(() => {
+    try {
+      const saved = parseInt(localStorage.getItem('staff_branch_id') || '0', 10);
+      if (saved > 0 && empBranches.some((b) => (b.id || b) === saved) !== false) return saved;
+    } catch (e) { /* ignore */ }
+    return 0;
+  });
+  // Đồng bộ branchId khi emp thay đổi (đăng nhập mới)
+  useEffect(() => {
+    if (!emp) return;
+    const list = (emp.branches) || [];
+    const ids = list.map((b) => b.id || b);
+    const saved = parseInt(localStorage.getItem('staff_branch_id') || '0', 10);
+    if (saved > 0 && ids.includes(saved)) {
+      setBranchId(saved);
+    } else {
+      const primary = parseInt(emp.branch_id, 10) || ids[0] || 0;
+      setBranchId(primary);
+      try { localStorage.setItem('staff_branch_id', String(primary)); } catch (e) { /* ignore */ }
+    }
+  }, [emp && emp.id]);
+  const changeBranch = (id) => {
+    const nid = parseInt(id, 10) || 0;
+    setBranchId(nid);
+    try { localStorage.setItem('staff_branch_id', String(nid)); } catch (e) { /* ignore */ }
+  };
+  const branchName = (() => {
+    const b = empBranches.find((x) => (x.id || x) === branchId);
+    return (b && b.name) || (emp && emp.branch_name) || '';
+  })();
+  const embed = { token, emp, hubT, onBack: back, onExpired, branchId };
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
 
@@ -258,7 +293,7 @@ export default function StaffHub() {
   ];
 
   const openBtn = (b) => {
-    if (b.href) { window.location.href = b.href; return; }
+    if (b.href) { window.location.href = b.href + (hubT ? (b.href.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(hubT) : ''); return; }
     setScreen(b.key);
   };
 
@@ -292,8 +327,8 @@ export default function StaffHub() {
   if (screen === 'nhap') return <NhapKho embed={embed} />;
   if (screen === 'xuat') return <XuatKho embed={embed} />;
   if (screen === 'chuyen') return <ChuyenKho embed={embed} />;
-  if (screen === 'thu') return <TxnForm token={token} hubT={hubT} emp={emp} kind="income" onBack={back} onExpired={onExpired} />;
-  if (screen === 'chi') return <TxnForm token={token} hubT={hubT} emp={emp} kind="expense" onBack={back} onExpired={onExpired} />;
+  if (screen === 'thu') return <TxnForm token={token} hubT={hubT} emp={emp} kind="income" onBack={back} onExpired={onExpired} branchId={branchId} />;
+  if (screen === 'chi') return <TxnForm token={token} hubT={hubT} emp={emp} kind="expense" onBack={back} onExpired={onExpired} branchId={branchId} />;
 
   // ---- Trang hub ----
   return (
@@ -304,7 +339,16 @@ export default function StaffHub() {
           <div className="sh-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="sh-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="sh-sub">{(emp && emp.branch_name) || ''}</div>
+            {empBranches.length > 1 ? (
+              <select className="sh-branchsel" value={branchId} onChange={(e) => changeBranch(e.target.value)}
+                aria-label="Chi nhánh thao tác">
+                {empBranches.map((b) => (
+                  <option key={b.id || b} value={b.id || b}>{b.name || b}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="sh-sub">{branchName}</div>
+            )}
           </div>
           <button className="sh-logout" onClick={logout}>Đăng xuất</button>
         </div>

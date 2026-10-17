@@ -19,6 +19,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Gói 59c-fix (2026-10-15): đăng ký alias middleware trực tiếp qua Router
+        // (dự phòng khi bootstrap/app.php không có hiệu lực trên một số môi trường).
+        $router = $this->app['router'];
+        $router->aliasMiddleware('permission', \App\Http\Middleware\CheckPermission::class);
+        $router->aliasMiddleware('staff_hub_token', \App\Http\Middleware\StaffHubToken::class);
     }
 }

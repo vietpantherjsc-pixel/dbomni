@@ -67,6 +67,7 @@ function qtyNum(s) {
 }
 
 export default function XuatKho({ embed } = {}) {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const hubT = (embed && embed.hubT) || '';
   const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('xuatkho_token') || '');
   const [emp, setEmp] = useState(() => {
@@ -77,6 +78,19 @@ export default function XuatKho({ embed } = {}) {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
+  // Gói 60: đồng bộ emp khi hub đổi chi nhánh
+  useEffect(() => {
+    if (embed && embed.emp) setEmp(embed.emp);
+  }, [embed && embed.emp, embed && embed.branchId]);
+  const curBranchName = (() => {
+    const bid = embed && embed.branchId;
+    const list = (emp && emp.branches) || [];
+    if (bid) {
+      const b = list.find((x) => (x.id || x) === bid);
+      if (b && b.name) return b.name;
+    }
+    return (emp && emp.branch_name) || '';
+  })();
 
   const [materials, setMaterials] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -195,6 +209,7 @@ export default function XuatKho({ embed } = {}) {
     try {
       // PENDING: cần backend POST /employee/outbound-receipts
       const r = await axios.post(API + '/employee/outbound-receipts', {
+        branch_id: (embed && embed.branchId) || null, // Gói 60: CN đang thao tác
         reason,
         note: note.trim() || null,
         items: validItems.map((it) => ({
@@ -241,7 +256,7 @@ export default function XuatKho({ embed } = {}) {
             <div className="xk-avatar">{avatarLetter}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="xk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-              <div className="xk-sub">{(emp && emp.branch_name) || ''}</div>
+              <div className="xk-sub">{curBranchName}</div>
             </div>
             <button className="xk-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
@@ -266,7 +281,7 @@ export default function XuatKho({ embed } = {}) {
           <div className="xk-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="xk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="xk-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="xk-sub">{curBranchName}</div>
           </div>
           <button className="xk-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>

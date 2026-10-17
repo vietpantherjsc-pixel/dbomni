@@ -105,6 +105,7 @@ function statusLabel(st) {
 }
 
 export default function KiemKe() {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const [token, setToken] = useState(() => localStorage.getItem('kiemke_token') || '');
   const [emp, setEmp] = useState(() => {
     try { return JSON.parse(localStorage.getItem('kiemke_emp') || 'null'); } catch (e) { return null; }
@@ -375,7 +376,9 @@ export default function KiemKe() {
       <div className="kk-wrap">
         <style>{CSS}</style>
         <div className="kk-login">
-          <div className="kk-hd" style={{ borderRadius: 18 }}>
+          <div className="kk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
             <div className="kk-title">📦 Kiểm kê kho</div>
             <div className="kk-sub">Đăng nhập để tiếp tục</div>
           </div>

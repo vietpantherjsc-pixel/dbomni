@@ -57,6 +57,21 @@ const Orders = () => {
     const [expandDisc, setExpandDisc] = useState(false); // Gói 49: xổ chi tiết giảm giá
     const [showImport, setShowImport] = useState(false); // Gói 23
 
+    // Gói 60: lọc theo hãng giao / trạng thái giao / đơn failover
+    const [deliveryProvider, setDeliveryProvider] = useState('');
+    const [deliveryStatus, setDeliveryStatus] = useState('');
+    const [deliveryFailover, setDeliveryFailover] = useState(false);
+
+    const DELIVERY_STATUS_LABELS = {
+        searching_driver: 'Đang tìm tài xế',
+        driver_assigned: 'Đã có tài xế',
+        picked_up: 'Đã lấy hàng',
+        delivering: 'Đang giao',
+        delivered: 'Giao thành công',
+        failed: 'Giao thất bại',
+        cancelled: 'Đã hủy giao',
+    };
+
     // Gói 3: tách/gộp đơn
     const [checked, setChecked] = useState({}); // {orderId: true}
     const [splitOrder, setSplitOrder] = useState(null); // đơn đang tách
@@ -155,6 +170,10 @@ const Orders = () => {
             const params = new URLSearchParams({ tab, page, per_page: 15 });
             if (search) params.append('search', search);
             if (branchId !== '0') params.append('branch_id', branchId);
+            // Gói 60: filter giao hàng
+            if (deliveryProvider) params.append('delivery_provider', deliveryProvider);
+            if (deliveryStatus) params.append('delivery_status', deliveryStatus);
+            if (deliveryFailover) params.append('delivery_failover', '1');
             const res = await axios.get(`${API}/orders?${params}`);
             if (res.data?.success) {
                 setOrders(res.data.data.data || []);
@@ -166,7 +185,7 @@ const Orders = () => {
         } finally {
             setLoading(false);
         }
-    }, [tab, page, search, branchId]);
+    }, [tab, page, search, branchId, deliveryProvider, deliveryStatus, deliveryFailover]);
 
     useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
@@ -246,13 +265,32 @@ const Orders = () => {
                     </div>
 
                     {/* Bộ lọc */}
-                    <div className="flex gap-2.5 p-4">
+                    <div className="flex gap-2.5 p-4 flex-wrap">
+                        {/* Gói 60: lọc theo hãng giao / trạng thái giao (checklist #27) */}
                         <select
-                            disabled
-                            className="text-[13px] border border-gray-300 rounded px-3 py-2 bg-gray-50 text-gray-400 cursor-not-allowed"
+                            value={deliveryProvider}
+                            onChange={(e) => { setDeliveryProvider(e.target.value); setPage(1); }}
+                            className="text-[13px] border border-gray-300 rounded px-3 py-2 bg-white"
                         >
-                            <option>Lọc hóa đơn</option>
+                            <option value="">Hãng giao: tất cả</option>
+                            <option value="ahamove">AhaMove</option>
+                            <option value="lalamove">Lalamove</option>
                         </select>
+                        <select
+                            value={deliveryStatus}
+                            onChange={(e) => { setDeliveryStatus(e.target.value); setPage(1); }}
+                            className="text-[13px] border border-gray-300 rounded px-3 py-2 bg-white"
+                        >
+                            <option value="">Trạng thái giao: tất cả</option>
+                            {Object.entries(DELIVERY_STATUS_LABELS).map(([k, v]) => (
+                                <option key={k} value={k}>{v}</option>
+                            ))}
+                        </select>
+                        <label className="text-[13px] flex items-center gap-1.5 px-2 text-gray-600">
+                            <input type="checkbox" checked={deliveryFailover}
+                                onChange={(e) => { setDeliveryFailover(e.target.checked); setPage(1); }} />
+                            Đã failover
+                        </label>
                         <div className="flex-1 relative">
                             <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                                 <path d="M21 21l-4.35-4.35M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0z" />
@@ -420,6 +458,40 @@ const Orders = () => {
                             </h3>
                         </div>
                         <div className="px-5 py-4 text-[13px]">
+                            {/* Gói 60: thông tin giao hàng */}
+                            {selected.delivery_provider && (
+                                <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                                    <div className="font-bold text-gray-800 mb-1.5">
+                                        🛵 {selected.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+                                        {selected.delivery_failover_from && (
+                                            <span className="ml-2 text-[11px] font-medium bg-amber-100 text-amber-700 border border-amber-300 rounded-full px-2 py-0.5">
+                                                Failover từ {selected.delivery_failover_from === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1 text-[12px] text-gray-600">
+                                        <div className="flex justify-between"><span>Trạng thái</span><b>{DELIVERY_STATUS_LABELS[selected.delivery_status] || selected.delivery_status}</b></div>
+                                        {selected.delivery_order_id && <div className="flex justify-between"><span>Mã hãng</span><span className="font-mono">{selected.delivery_order_id}</span></div>}
+                                        {selected.delivery_driver_name && <div className="flex justify-between"><span>Tài xế</span><span>{selected.delivery_driver_name}{selected.delivery_driver_phone ? ` · ${selected.delivery_driver_phone}` : ''}</span></div>}
+                                        {selected.delivery_tracking_url && <div><a href={selected.delivery_tracking_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">📍 Theo dõi tài xế</a></div>}
+                                    </div>
+                                    {!selected.delivery_order_id && (
+                                        <button
+                                            onClick={async () => {
+                                                if (!window.confirm('Thử tạo lại đơn hãng cho đơn này?')) return;
+                                                try {
+                                                    const res = await axios.post(`${API}/orders/${selected.id}/delivery/retry`);
+                                                    alert(res.data?.success ? 'Đã tạo đơn hãng.' : (res.data?.error || 'Thất bại'));
+                                                    fetchOrders(); setSelected(null);
+                                                } catch (e) { alert(e.response?.data?.error || e.response?.data?.message || 'Thất bại'); }
+                                            }}
+                                            className="mt-2 text-[12px] bg-blue-600 text-white rounded px-3 py-1.5 font-medium"
+                                        >
+                                            🔄 Thử tạo lại đơn hãng
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             <div className="font-bold text-gray-800 mb-2">Thông tin thanh toán</div>
                             <div className="space-y-2 pb-3 border-b border-gray-100">
                                 <div className="flex justify-between items-center cursor-pointer" onClick={() => setExpandItems(!expandItems)}>

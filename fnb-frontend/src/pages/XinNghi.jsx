@@ -51,6 +51,7 @@ const ST_CLS = { pending: 'xn-b-pending', approved: 'xn-b-approved', rejected: '
 const fmtD = (iso) => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '';
 
 export default function XinNghi() {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
     const [token, setToken] = useState(() => localStorage.getItem('xinnghi_token') || '');
     const [emp, setEmp] = useState(() => { try { return JSON.parse(localStorage.getItem('xinnghi_emp') || 'null'); } catch (e) { return null; } });
     const [phone, setPhone] = useState('');
@@ -113,6 +114,8 @@ export default function XinNghi() {
             <style>{CSS}</style>
             {!token ? (
                 <div className="xn-login">
+                    <button onClick={goHub} aria-label="Quay lại hub"
+                      style={{ background: '#eef0f6', border: 'none', color: NAVY, fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 12 }}>‹ Về Cổng nhân viên</button>
                     <h2 style={{ color: NAVY, fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Xin nghỉ theo ca</h2>
                     <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 20 }}>Đăng nhập bằng SĐT + PIN để gửi yêu cầu nghỉ cho ca đã đăng ký.</p>
                     <label className="xn-label">Số điện thoại</label>
@@ -131,6 +134,7 @@ export default function XinNghi() {
                                 <div className="xn-name">{emp?.full_name || 'Nhân viên'}</div>
                                 <div className="xn-sub">Xin nghỉ theo ca</div>
                             </div>
+                            <button className="xn-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
                             <button className="xn-logout" onClick={logout}>Đăng xuất</button>
                         </div>
                     </div>

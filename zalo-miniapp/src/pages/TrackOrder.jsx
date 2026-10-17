@@ -12,6 +12,16 @@ const STEPS = [
 ];
 const ORDER = ['pending', 'processing', 'ready', 'completed'];
 
+// Gói 60: timeline giao hàng (từ webhook hãng, poll 5s)
+const DELIVERY_STEPS = [
+  { key: 'searching_driver', label: 'Đang tìm tài xế' },
+  { key: 'driver_assigned', label: 'Tài xế đang tới lấy' },
+  { key: 'picked_up', label: 'Đã lấy hàng' },
+  { key: 'delivering', label: 'Đang giao tới bạn' },
+  { key: 'delivered', label: 'Giao thành công' },
+];
+const DELIVERY_ORDER = DELIVERY_STEPS.map((s) => s.key);
+
 export default function TrackOrder() {
   const [params] = useSearchParams();
   const nav = useNavigate();
@@ -95,6 +105,49 @@ export default function TrackOrder() {
                   <div className="lbl">{s.label}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Gói 60: trạng thái giao hàng live */}
+          {order.delivery?.status && !['failed', 'cancelled'].includes(order.delivery.status) && (
+            <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                🛵 Giao hàng · {order.delivery.provider_label || ''}
+                {order.delivery.failover_from && (
+                  <span style={{ marginLeft: 6, fontSize: 11, background: '#fff7e6', color: '#b45309', border: '1px solid #fcd34d', borderRadius: 10, padding: '2px 8px' }}>
+                    Đã chuyển hãng
+                  </span>
+                )}
+              </div>
+              <div className="zm-timeline" style={{ margin: 0 }}>
+                {DELIVERY_STEPS.map((s, i) => {
+                  const cur = DELIVERY_ORDER.indexOf(order.delivery.status);
+                  return (
+                    <div key={s.key} className={`zm-step ${i <= cur ? 'done' : ''}`}>
+                      <div className="dot2">{i <= cur ? '✓' : i + 1}</div>
+                      <div className="lbl">{s.label}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              {order.delivery.driver_name && (
+                <div style={{ fontSize: 13, color: '#555', marginTop: 8 }}>
+                  👤 Tài xế: <b>{order.delivery.driver_name}</b>
+                  {order.delivery.driver_phone && <> · <a href={`tel:${order.delivery.driver_phone}`}>{order.delivery.driver_phone}</a></>}
+                  {order.delivery.driver_plate && <> · 🚗 {order.delivery.driver_plate}</>}
+                </div>
+              )}
+              {order.delivery.tracking_url && (
+                <a href={order.delivery.tracking_url} target="_blank" rel="noreferrer"
+                  style={{ display: 'inline-block', marginTop: 8, fontSize: 13, color: '#24305E', fontWeight: 700 }}>
+                  📍 Theo dõi vị trí tài xế →
+                </a>
+              )}
+            </div>
+          )}
+          {order.delivery?.status === 'failed' && (
+            <div style={{ margin: '8px 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 12, fontSize: 13, color: '#991b1b' }}>
+              ⚠️ Hiện chưa tìm được tài xế. Quán sẽ liên hệ với bạn ngay để chọn: chờ thêm / nhận tại quán / hủy hoàn tiền.
             </div>
           )}
 

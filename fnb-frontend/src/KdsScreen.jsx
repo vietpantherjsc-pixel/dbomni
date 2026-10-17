@@ -155,6 +155,16 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
         <div className="text-xs text-slate-400 mt-3 space-y-1">
           {ord.customer_name && <p>👤 {ord.customer_name} ({ord.customer_phone})</p>}
           {ord.delivery_address && <p>📍 {ord.delivery_address}</p>}
+          {/* Gói 60: thông tin tài xế giao hàng */}
+          {ord.delivery_provider && (
+            <p>🛵 {ord.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+              {ord.delivery_failover_from && <span className="text-amber-400"> (failover)</span>}
+              {ord.delivery_driver_name && <> · 👤 {ord.delivery_driver_name} ({ord.delivery_driver_phone})</>}
+            </p>
+          )}
+          {ord.delivery_tracking_url && (
+            <p><a href={ord.delivery_tracking_url} target="_blank" rel="noreferrer" className="text-sky-400 underline">📍 Theo dõi tài xế</a></p>
+          )}
           {ord.note && <p className="italic">📝 "{ord.note}"</p>}
           {typeLabel && <p>Loại: {typeLabel}</p>}
         </div>

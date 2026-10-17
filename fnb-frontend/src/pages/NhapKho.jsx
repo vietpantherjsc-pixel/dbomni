@@ -113,12 +113,27 @@ function errMsg(err, fallback) {
 }
 
 export default function NhapKho({ embed } = {}) {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const hubT = (embed && embed.hubT) || '';
   const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('nhapkho_token') || '');
   const [emp, setEmp] = useState(() => {
     if (embed && embed.emp) return embed.emp;
     try { return JSON.parse(localStorage.getItem('nhapkho_emp') || 'null'); } catch (e) { return null; }
   });
+  // Gói 60: đồng bộ emp khi hub đổi chi nhánh (embed.emp/branchId thay đổi)
+  useEffect(() => {
+    if (embed && embed.emp) setEmp(embed.emp);
+  }, [embed && embed.emp, embed && embed.branchId]);
+  // Tên CN đang thao tác: ưu tiên branchId từ hub, fallback về emp.branch_name
+  const curBranchName = (() => {
+    const bid = embed && embed.branchId;
+    const list = (emp && emp.branches) || [];
+    if (bid) {
+      const b = list.find((x) => (x.id || x) === bid);
+      if (b && b.name) return b.name;
+    }
+    return (emp && emp.branch_name) || '';
+  })();
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
@@ -301,6 +316,7 @@ export default function NhapKho({ embed } = {}) {
     setSaving(true);
     try {
       const r = await axios.post(API + '/employee/inbound-receipts', {
+        branch_id: (embed && embed.branchId) || null, // Gói 60: CN đang thao tác
         partner_id: supplierId ? Number(supplierId) : null,
         invoice_no: invoiceNo.trim() || null,
         receipt_date: receiptDate,
@@ -341,7 +357,9 @@ export default function NhapKho({ embed } = {}) {
       <div className="nk-wrap">
         <style>{CSS}</style>
         <div className="nk-login">
-          <div className="nk-hd" style={{ borderRadius: 18 }}>
+          <div className="nk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
             <div className="nk-title">📦 Nhập hàng</div>
             <div className="nk-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -390,7 +408,7 @@ export default function NhapKho({ embed } = {}) {
             <div className="nk-avatar">{avatarLetter}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="nk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-              <div className="nk-sub">{(emp && emp.branch_name) || ''}</div>
+              <div className="nk-sub">{curBranchName}</div>
             </div>
             <button className="nk-logout" onClick={embed && embed.onBack ? embed.onBack : logout} aria-label={embed && embed.onBack ? 'Quay lại' : 'Đăng xuất'}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
@@ -434,7 +452,7 @@ export default function NhapKho({ embed } = {}) {
           <div className="nk-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="nk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="nk-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="nk-sub">{curBranchName}</div>
           </div>
           <button className="nk-logout" onClick={embed && embed.onBack ? embed.onBack : logout} aria-label={embed && embed.onBack ? 'Quay lại' : 'Đăng xuất'}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>

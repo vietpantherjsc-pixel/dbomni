@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 // Gói 43: chuyển kho nguyên liệu giữa các chi nhánh (kèm điều chỉnh giá vốn FIFO).
 class StockTransferController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     public function index(Request $request): JsonResponse
     {
         $q = StockTransfer::with(['fromBranch', 'toBranch', 'items.material'])
@@ -45,8 +46,10 @@ class StockTransferController extends Controller
             'items.*.material_id' => 'required|exists:materials,id',
             'items.*.quantity' => 'required|numeric|min:0.001',
         ]);
-        // Gói 55 p11aa: NV ép kho nguồn = chi nhánh của mình
-        $fromBranchId = $isEmployee ? (int) $actor->branch_id : (int) $v['from_branch_id'];
+        // Gói 60: NV được chọn kho nguồn trong danh sách CN phân công
+        $fromBranchId = $isEmployee
+            ? $this->resolveEmployeeBranch($actor, $v['from_branch_id'] ?? null)
+            : (int) $v['from_branch_id'];
         if ($fromBranchId === (int) $v['to_branch_id']) {
             return response()->json(['success' => false, 'message' => 'Kho nguồn và kho đích phải khác nhau.'], 422);
         }

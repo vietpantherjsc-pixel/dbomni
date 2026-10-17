@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 // Gói 55 p11z: phiếu XUẤT KHO — tạo nháp, chốt trừ kho theo FIFO.
 class OutboundController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     /**
      * Danh sách phiếu xuất theo chi nhánh (phân trang).
      */
@@ -62,8 +63,10 @@ class OutboundController extends Controller
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.note' => 'nullable|string|max:500',
         ]);
-        // Gói 55 p11aa: NV mobile ép chi nhánh theo token
-        $branchId = $isEmployee ? (int) $actor->branch_id : (int) $v['branch_id'];
+        // Gói 60: NV được chọn CN trong danh sách phân công
+        $branchId = $isEmployee
+            ? $this->resolveEmployeeBranch($actor, $v['branch_id'] ?? null)
+            : (int) $v['branch_id'];
         $employeeId = $isEmployee ? (int) $actor->id : ($v['employee_id'] ?? null);
 
         $receipt = DB::transaction(function () use ($v, $request, $branchId, $employeeId) {

@@ -15,8 +15,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 // Gói 43: phiếu nhập hàng theo hóa đơn NCC (thuế/CK/phí VC, trả ngay/công nợ).
+// Gói 60: dùng ValidatesEmployeeBranch để NV nhiều CN chọn CN thao tác.
 class InboundReceiptController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
     public function index(Request $request): JsonResponse
     {
         $q = InboundReceipt::with(['branch', 'partner'])
@@ -40,8 +43,10 @@ class InboundReceiptController extends Controller
         $actor = $request->user();
         $isEmployee = $actor instanceof \App\Models\Employee;
         $v = $this->validateReceipt($request, false, !$isEmployee);
-        // NV mobile: ép chi nhánh theo token, không nhận từ client
-        $branchId = $isEmployee ? (int) $actor->branch_id : (int) $v['branch_id'];
+        // Gói 60: NV được chọn CN trong danh sách phân công (không nhận bừa từ client)
+        $branchId = $isEmployee
+            ? $this->resolveEmployeeBranch($actor, $request->input('branch_id'))
+            : (int) $v['branch_id'];
 
         // Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất (cùng NL + NCC).
         // Chỉ cảnh báo, không chặn. Tính trước transaction (read-only).

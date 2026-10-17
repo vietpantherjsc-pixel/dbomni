@@ -106,6 +106,7 @@ function countdownText(deadlineDate) {
 }
 
 export default function DangKyCa() {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const [token, setToken] = useState(() => localStorage.getItem('emp_token') || '');
   const [emp, setEmp] = useState(() => {
     try { return JSON.parse(localStorage.getItem('emp_info') || 'null'); } catch (e) { return null; }
@@ -301,7 +302,9 @@ export default function DangKyCa() {
       <div className="dk-wrap">
         <style>{CSS}</style>
         <div className="dk-login">
-          <div className="dk-hd" style={{ borderRadius: 18 }}>
+          <div className="dk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
             <div className="dk-title">Đăng ký ca làm việc</div>
             <div className="dk-branch">Đăng nhập để tiếp tục</div>
           </div>
@@ -368,6 +371,7 @@ export default function DangKyCa() {
             <div className="dk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="dk-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
           </div>
+          <button className="dk-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
           <button className="dk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="dk-title">Đăng ký ca làm việc</div>

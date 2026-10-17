@@ -63,6 +63,7 @@ function qtyNum(s) {
 }
 
 export default function ChuyenKho({ embed } = {}) {
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const hubT = (embed && embed.hubT) || '';
   const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('chuyenkho_token') || '');
   const [emp, setEmp] = useState(() => {
@@ -73,6 +74,19 @@ export default function ChuyenKho({ embed } = {}) {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
+  // Gói 60: đồng bộ emp khi hub đổi chi nhánh
+  useEffect(() => {
+    if (embed && embed.emp) setEmp(embed.emp);
+  }, [embed && embed.emp, embed && embed.branchId]);
+  const curBranchName = (() => {
+    const bid = embed && embed.branchId;
+    const list = (emp && emp.branches) || [];
+    if (bid) {
+      const b = list.find((x) => (x.id || x) === bid);
+      if (b && b.name) return b.name;
+    }
+    return (emp && emp.branch_name) || '';
+  })();
 
   const [materials, setMaterials] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -249,7 +263,7 @@ export default function ChuyenKho({ embed } = {}) {
             <div className="ck-avatar">{avatarLetter}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-              <div className="ck-sub">{(emp && emp.branch_name) || ''}</div>
+              <div className="ck-sub">{curBranchName}</div>
             </div>
             <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
@@ -274,7 +288,7 @@ export default function ChuyenKho({ embed } = {}) {
           <div className="ck-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="ck-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="ck-sub">{curBranchName}</div>
           </div>
           <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>

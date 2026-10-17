@@ -469,6 +469,13 @@ class OnlineOrderController extends Controller
             'delivery_note' => 'nullable|string|max:500',
             'province' => 'nullable|string|max:100',
             'ward' => 'nullable|string|max:100',
+            // Gói 60: gói giao hàng khách chọn từ báo giá live + phí đã khóa
+            'delivery_package' => 'nullable|in:nhanh,sieu_toc',
+            'delivery_quoted_fee' => 'nullable|numeric|min:0',
+            'delivery_provider' => 'nullable|in:ahamove,lalamove',
+            // Gói 61b: tọa độ điểm giao (từ GPS/gợi ý địa chỉ ở checkout)
+            'delivery_dropoff_lat' => 'nullable|numeric|between:-90,90',
+            'delivery_dropoff_lng' => 'nullable|numeric|between:-180,180',
             'items' => 'required|array|min:1|max:50',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.product_option_id' => 'nullable|exists:product_options,id',
@@ -551,17 +558,60 @@ class OnlineOrderController extends Controller
 
                 // 3. Phí ship (đơn giao hàng) — server tự tính, KHÔNG tin client.
                 // Gói 10c: chưa cộng dòng "Phí dịch vụ" vội — đợi trừ KM phí ship (bước 5b).
-                // Gói 55 p11ac: server geocode địa chỉ để tính km; không tính được -> phí 0, quán xác nhận sau.
+                // Gói 61b: khi đã cấu hình hãng giao hàng, BẮT BUỘC phải có báo giá hãng:
+                // - client phải gửi delivery_quoted_fee (từ API quote lúc checkout);
+                // - server gọi lại quote để đối chiếu, lệch quá 5.000đ → báo lỗi bắt báo giá lại,
+                //   KHÔNG tự ý thay bằng phí khác (checklist #6).
+                // - quote thất bại → chặn đơn, không rơi về phí 0đ (checklist #5).
                 $shippingFee = 0;
                 $distanceKm = null;
                 $shipNote = null;
+                $deliveryQuote = null;
                 if ($validated['order_type'] === 'delivery') {
                     $branch = Branch::find($validated['branch_id']);
-                    $distanceKm = $this->serverDistanceKm($validated['delivery_address'] ?? '', $branch);
-                    if ($distanceKm !== null) {
-                        $shippingFee = $this->calcShipFee($distanceKm);
+                    $deliveryService = app(\App\Services\Delivery\DeliveryService::class);
+                    if ($deliveryService->isConfigured()) {
+                        if (empty($validated['delivery_quoted_fee'])) {
+                            throw new Exception('Chưa có báo giá phí ship. Vui lòng quay lại kiểm tra phí ship trước khi đặt đơn.');
+                        }
+                        $fresh = $deliveryService->quote([
+                            'pickup_lat' => (float) $branch->latitude,
+                            'pickup_lng' => (float) $branch->longitude,
+                            'pickup_address' => $branch->address ?? $branch->name,
+                            'dropoff_address' => $validated['delivery_address'] ?? '',
+                            'dropoff_lat' => isset($validated['delivery_dropoff_lat']) ? (float) $validated['delivery_dropoff_lat'] : null,
+                            'dropoff_lng' => isset($validated['delivery_dropoff_lng']) ? (float) $validated['delivery_dropoff_lng'] : null,
+                            'cod_amount' => 0,
+                        ]);
+                        if (!$fresh['success']) {
+                            throw new Exception('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
+                        }
+                        $quotedFee = (int) $validated['delivery_quoted_fee'];
+                        $matched = false;
+                        $quotedDistance = null;
+                        foreach ($fresh['providers'] as $p) {
+                            foreach ($p['packages'] as $pkg) {
+                                if (abs($pkg['fee'] - $quotedFee) <= 5000) {
+                                    $matched = true;
+                                    $quotedDistance = $p['distance_km'];
+                                    break 2;
+                                }
+                            }
+                        }
+                        if (!$matched) {
+                            throw new Exception('Phí ship đã thay đổi so với lúc báo giá. Vui lòng kiểm tra lại phí ship trước khi đặt đơn.');
+                        }
+                        $shippingFee = $quotedFee;
+                        $distanceKm = $quotedDistance;
+                        $deliveryQuote = $fresh;
                     } else {
-                        $shipNote = 'Quán xác nhận phí ship';
+                        // Fallback luồng cũ: geocode + bảng phí nội bộ
+                        $distanceKm = $this->serverDistanceKm($validated['delivery_address'] ?? '', $branch);
+                        if ($distanceKm !== null) {
+                            $shippingFee = $this->calcShipFee($distanceKm);
+                        } else {
+                            $shipNote = 'Quán xác nhận phí ship';
+                        }
                     }
                 }
 
@@ -768,6 +818,15 @@ class OnlineOrderController extends Controller
                     'delivery_note' => $validated['delivery_note'] ?? null,
                     'province' => $validated['province'] ?? null,
                     'ward' => $validated['ward'] ?? null,
+                    // Gói 60: gói giao hàng khách chọn + phí đã khóa lúc chốt đơn
+                    // Gói 61b: lưu hãng của gói khách chọn (không để createForOrder tự đoán)
+                    'delivery_package' => $validated['delivery_package'] ?? 'nhanh',
+                    'delivery_provider' => $validated['delivery_provider'] ?? null,
+                    'delivery_quoted_fee' => $validated['delivery_quoted_fee'] ?? $shippingFee,
+                    'delivery_fee_charged' => $shippingFee,
+                    // Gói 61b: tọa độ điểm giao để hãng báo giá/tạo đơn chính xác
+                    'delivery_dropoff_lat' => $validated['delivery_dropoff_lat'] ?? null,
+                    'delivery_dropoff_lng' => $validated['delivery_dropoff_lng'] ?? null,
                 ]);
 
                 foreach ($orderItemsData as $itemData) {
@@ -854,6 +913,20 @@ class OnlineOrderController extends Controller
             'shipping_fee' => (float) $order->shipping_fee,
             'scheduled_at' => $order->scheduled_at,
             'created_at' => $order->created_at,
+            // Gói 60: thông tin giao hàng cho trang theo dõi đơn (poll 5s)
+            'delivery' => $order->order_type === 'delivery' ? [
+                'provider' => $order->delivery_provider,
+                'provider_label' => $order->delivery_provider === 'ahamove' ? 'AhaMove'
+                    : ($order->delivery_provider === 'lalamove' ? 'Lalamove' : null),
+                'status' => $order->delivery_status,
+                'status_label' => \App\Services\Delivery\DeliveryService::labels()[$order->delivery_status] ?? null,
+                'package' => $order->delivery_package,
+                'tracking_url' => $order->delivery_tracking_url,
+                'driver_name' => $order->delivery_driver_name,
+                'driver_phone' => $order->delivery_driver_phone,
+                'driver_plate' => $order->delivery_driver_plate,
+                'failover_from' => $order->delivery_failover_from,
+            ] : null,
             'items' => $order->items->map(fn($i) => [
                 'name' => $i->product_name,
                 'quantity' => $i->quantity,

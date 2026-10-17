@@ -61,6 +61,9 @@ export const api = {
   createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   trackOrder: (code) => req(`/orders/${encodeURIComponent(code)}`),
   cancelOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST', body: JSON.stringify({ phone }) }),
+  // Gói 60: báo giá giao hàng live từ AhaMove/Lalamove qua backend
+  deliveryQuote: (payload) => req('/delivery/quote', { method: 'POST', body: JSON.stringify(payload) }),
+  deliveryConfig: () => req('/delivery/config'),
 };
 
 export const fmt = (n) => Number(n || 0).toLocaleString('vi-VN');

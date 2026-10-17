@@ -22,7 +22,8 @@ function DateField({ value, onChange }) {
   };
   return (
     <input value={value} onChange={(e) => onChange(mask(e.target.value))}
-      placeholder="dd/mm/yyyy" inputMode="numeric" maxLength={10} />
+      placeholder="dd/mm/yyyy" inputMode="numeric" maxLength={10}
+      style={{ width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' }} />
   );
 }
 function TimeField({ value, onChange }) {
@@ -33,7 +34,8 @@ function TimeField({ value, onChange }) {
   };
   return (
     <input value={value} onChange={(e) => onChange(mask(e.target.value))}
-      placeholder="HH:MM" inputMode="numeric" maxLength={5} />
+      placeholder="HH:MM" inputMode="numeric" maxLength={5}
+      style={{ width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' }} />
   );
 }
 const toApiDate = (v) => {
@@ -106,6 +108,16 @@ export default function Checkout() {
   const [suggests, setSuggests] = useState([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [pickedCoord, setPickedCoord] = useState(null); // {lat, lng} khi user chọn gợi ý
+  // Gói 60: báo giá giao hàng live từ hãng (AhaMove/Lalamove qua backend)
+  const [quote, setQuote] = useState(null); // {packages:[{code,name,fee,customer_pays,shop_support,provider...}], ...}
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
+  const [deliveryPkg, setDeliveryPkg] = useState('nhanh'); // gói khách chọn
+  const [deliveryReady, setDeliveryReady] = useState(false); // backend đã cấu hình hãng giao hàng
+  const quoteTimer = useRef(null);
+  useEffect(() => {
+    api.deliveryConfig().then((c) => setDeliveryReady(!!c?.ready)).catch(() => {});
+  }, []);
   // Gói 55 p10: kiểm tra trạng thái mở cửa — đóng cửa thì chỉ nhận hẹn giờ
   const st = openStatus(branch);
   const isClosed = st && !st.open;
@@ -256,6 +268,46 @@ export default function Checkout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [street, ward, province, type]);
 
+  // Gói 60: gọi báo giá live khi có địa chỉ giao đầy đủ (debounce 1s).
+  // Quá 8s chưa có kết quả → dùng phí nội bộ cũ (không chặn đặt đơn quá lâu).
+  useEffect(() => {
+    if (type !== 'delivery') { setQuote(null); setQuoteError(''); return; }
+    if (!branch?.id || !street.trim() || !ward || !province) { setQuote(null); setQuoteError(''); return; }
+    clearTimeout(quoteTimer.current);
+    quoteTimer.current = setTimeout(async () => {
+      setQuoteLoading(true); setQuoteError('');
+      const addr = fullAddress();
+      const timeoutMs = 8000;
+      try {
+        const data = await Promise.race([
+          api.deliveryQuote({
+            branch_id: branch.id,
+            dropoff_address: addr,
+            dropoff_lat: pickedCoord?.lat || null,
+            dropoff_lng: pickedCoord?.lng || null,
+            subtotal,
+            cod_amount: payment === 'pay_at_store' ? subtotal : 0,
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+        ]);
+        setQuote(data);
+        // Mặc định gói Nhanh (rẻ nhất) theo quyết định đã chốt
+        const hasNhanh = (data.packages || []).some((p) => p.code === 'nhanh');
+        setDeliveryPkg(hasNhanh ? 'nhanh' : (data.packages[0]?.code || 'nhanh'));
+      } catch (e) {
+        // Hãng không báo được giá → fallback phí nội bộ cũ; nếu cũng không có thì báo lỗi
+        setQuote(null);
+        setQuoteError(e.message === 'timeout'
+          ? 'Đang tính phí ship — vui lòng đợi giây lát.'
+          : (e.message || 'Chưa giao được tới địa chỉ này.'));
+      } finally {
+        setQuoteLoading(false);
+      }
+    }, 1000);
+    return () => clearTimeout(quoteTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [street, ward, province, type, branch?.id, subtotal, payment]);
+
   useEffect(() => {
     if (!phone || phone.length < 9) return;
     const fee = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
@@ -282,7 +334,14 @@ export default function Checkout() {
     return () => clearTimeout(t);
   }, [phone, subtotal, km, shipCfg, type]);
 
-  const shipFee = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
+  // Gói 60: phí ship ưu tiên từ báo giá live của hãng (đã trừ phần quán hỗ trợ);
+  // chưa có báo giá thì dùng cách tính nội bộ cũ.
+  const quotePkg = quote?.packages?.find((p) => p.code === deliveryPkg) || quote?.packages?.[0];
+  const shipFee = type === 'delivery'
+    ? (quotePkg ? quotePkg.customer_pays : (km != null && shipCfg ? calcShipFee(km, shipCfg) : 0))
+    : 0;
+  const shipShopSupport = quotePkg ? quotePkg.shop_support : 0;
+  const shipQuotedFee = quotePkg ? quotePkg.fee : null;
   const promo = promos.find((p) => String(p.id) === String(promoId));
   const isShipPromo = !!(promo && (promo.is_shipping || promo.type === 'shipping') && type === 'delivery');
   const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
@@ -328,6 +387,16 @@ export default function Checkout() {
   };
 
   const place = async () => {
+    // Gói 60: chặn đặt đơn khi đang tính phí ship từ hãng (checklist #2)
+    if (type === 'delivery' && quoteLoading) {
+      alert('Đang tính phí ship, vui lòng đợi giây lát rồi bấm lại.');
+      return;
+    }
+    // Gói 60: đã cấu hình hãng mà báo giá lỗi và không có phí dự phòng → chặn (checklist #5)
+    if (type === 'delivery' && deliveryReady && !quotePkg && km == null) {
+      alert('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
+      return;
+    }
     let scheduledAt = null;
     if (type === 'scheduled') {
       const d = toApiDate(schedDate);
@@ -352,6 +421,13 @@ export default function Checkout() {
         ward: type === 'delivery' ? wardName() : null,
         distance_km: type === 'delivery' ? km : null,
         delivery_note: type === 'delivery' && deliveryNote.trim() ? deliveryNote.trim() : null,
+        // Gói 60: gói giao hàng khách chọn + phí đã khóa lúc chốt đơn (checklist #6)
+        delivery_package: type === 'delivery' ? deliveryPkg : null,
+        delivery_quoted_fee: type === 'delivery' && shipQuotedFee != null ? shipQuotedFee : null,
+        delivery_provider: type === 'delivery' ? quotePkg?.provider || null : null,
+        // Gói 61b: tọa độ điểm giao để hãng báo giá/tạo đơn chính xác
+        delivery_dropoff_lat: type === 'delivery' ? pickedCoord?.lat || null : null,
+        delivery_dropoff_lng: type === 'delivery' ? pickedCoord?.lng || null : null,
         scheduled_at: scheduledAt,
         payment_method: payment,
         voucher_code: voucher.trim() || null,
@@ -587,6 +663,41 @@ export default function Checkout() {
       <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
     </div>
   )}
+  {/* Gói 60: chọn gói giao hàng từ báo giá live của hãng */}
+  {type === 'delivery' && quoteLoading && (
+    <div className="zm-note">🛵 Đang tính phí ship từ hãng giao hàng...</div>
+  )}
+  {type === 'delivery' && !quoteLoading && quote?.packages?.length > 0 && (
+    <div className="zm-field">
+      <label>Chọn gói giao hàng</label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {quote.packages.map((p) => (
+          <button
+            key={p.code + p.provider}
+            type="button"
+            onClick={() => setDeliveryPkg(p.code)}
+            style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '10px 12px', borderRadius: 10, fontSize: 13, textAlign: 'left',
+              border: deliveryPkg === p.code ? '2px solid #24305E' : '1px solid #e0e0e0',
+              background: deliveryPkg === p.code ? '#eef2ff' : '#fff',
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? '🛵 Nhanh' : '⚡ Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
+              <div style={{ color: '#666', fontSize: 12 }}>{p.eta_text}{p.shop_support > 0 ? ` · Quán hỗ trợ ${fmt(p.shop_support)}đ` : ''}</div>
+            </div>
+            <div style={{ fontWeight: 700, color: '#24305E' }}>{fmt(p.customer_pays)}đ</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )}
+  {type === 'delivery' && !quoteLoading && quoteError && !quote?.packages?.length && km == null && (
+    <div className="zm-alert" style={{ background: '#fef2f2', borderColor: '#fecaca' }}>
+      ⚠️ {quoteError}
+    </div>
+  )}
   <div className="zm-field">
     <label>Ghi chú giao hàng</label>
     <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
@@ -749,9 +860,12 @@ export default function Checkout() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>💰 Chi tiết thanh toán</div>
             {type === 'delivery' && (
               <div className="zm-total-row">
-                <span>Phí vận chuyển{km != null ? ` (~${km}km)` : ''}</span>
-                <span>{km != null ? `${fmt(shipFee)}đ` : 'Quán xác nhận'}</span>
+                <span>Phí vận chuyển{quotePkg ? ` (${quotePkg.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} · ${quotePkg.provider_label})` : km != null ? ` (~${km}km)` : ''}</span>
+                <span>{quotePkg || km != null ? `${fmt(shipFee)}đ` : 'Quán xác nhận'}</span>
               </div>
+            )}
+            {type === 'delivery' && shipShopSupport > 0 && (
+              <div className="zm-total-row disc"><span>🏪 Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>
             )}
             {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
             {promoDisc > 0 && <div className="zm-total-row disc"><span>🎉 {promo?.name}</span><span>−{fmt(promoDisc)}đ</span></div>}
