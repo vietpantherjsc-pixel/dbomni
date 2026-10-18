@@ -70,6 +70,7 @@ class InboundReceiptController extends Controller
                     'grand_total' => $totals['grand_total'],
                     'payment_type' => $v['payment_type'] ?? 'paid',
                     // Gói 59: NV tạo → nháp chờ quản lý duyệt; admin tạo → xác nhận ngay
+                    // K-R1 (2026-10-17): draft KHÔNG động đến kho/tiền — chỉ khi duyệt mới tạo Batch + phiếu chi
                     'status' => $isEmployee ? 'draft' : 'confirmed',
                     'note' => $v['note'] ?? null,
                     'created_by_user_id' => !$isEmployee && $actor instanceof \App\Models\User ? $actor->id : null,
@@ -98,30 +99,38 @@ class InboundReceiptController extends Controller
                     // (trừ kho tính theo baseQty), nên chia cho rate.
                     // Giá theo đơn vị mua giữ nguyên ở receipt item.
                     $batchUnitCost = $rate > 0 ? (float) ($item['unit_cost'] ?? 0) / $rate : (float) ($item['unit_cost'] ?? 0);
-                    $batch = Batch::create([
-                        'material_id' => $material->id,
-                        'branch_id' => $branchId,
-                        'receipt_id' => $receipt->id,
-                        'batch_code' => $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8))),
-                        'initial_quantity' => $baseQty,
-                        'current_quantity' => $baseQty,
-                        'unit_cost' => $batchUnitCost,
-                        'expired_at' => $item['expired_at'] ?? null,
-                        'status' => 'active',
-                    ]);
+                    // K-R1: chỉ tạo Batch khi đã confirmed (admin tạo hoặc đã duyệt);
+                    // draft của NV chỉ lưu dòng hàng, chưa có batch_id
+                    $batch = null;
+                    if (!$isEmployee) {
+                        $batch = Batch::create([
+                            'material_id' => $material->id,
+                            'branch_id' => $branchId,
+                            'receipt_id' => $receipt->id,
+                            'batch_code' => $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8))),
+                            'initial_quantity' => $baseQty,
+                            'current_quantity' => $baseQty,
+                            'unit_cost' => $batchUnitCost,
+                            'expired_at' => $item['expired_at'] ?? null,
+                            'status' => 'active',
+                        ]);
+                    }
                     $receipt->items()->create([
                         'material_id' => $material->id,
-                        'batch_id' => $batch->id,
+                        'batch_id' => $batch?->id,
                         'purchase_quantity' => $item['purchase_quantity'],
                         'purchase_unit' => $purchaseUnit,
                         'conversion_rate' => $rate,
                         'unit_cost' => $item['unit_cost'] ?? 0,
                         'line_total' => $lineTotal,
                         'expired_at' => $item['expired_at'] ?? null,
-                        'batch_code' => $batch->batch_code,
+                        'batch_code' => $batch?->batch_code ?? $item['batch_code'] ?? null,
                     ]);
                 }
-                $this->createExpense($receipt);
+                // K-R1: chỉ sinh phiếu chi khi đã confirmed
+                if (!$isEmployee) {
+                    $this->createExpense($receipt);
+                }
                 return $receipt;
             });
         } catch (\Exception $e) {
@@ -192,9 +201,11 @@ class InboundReceiptController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
-        if ($receipt->status !== 'confirmed') {
+        // K-R1: cho phép sửa cả phiếu draft (chưa có batch, chưa sinh phiếu chi)
+        if (!in_array($receipt->status, ['confirmed', 'draft'], true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã hủy, không sửa được.'], 422);
         }
+        $isDraft = $receipt->status === 'draft';
         $txn = Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->first();
         if ($txn && $txn->payments()->exists()) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã phát sinh thanh toán, chỉ sửa được ghi chú.'], 422);
@@ -202,18 +213,30 @@ class InboundReceiptController extends Controller
         $v = $this->validateReceipt($request, true);
 
         try {
-            DB::transaction(function () use ($v, $receipt, $txn, $request) {
+            DB::transaction(function () use ($v, $receipt, $txn, $request, $isDraft) {
                 // Cập nhật header
                 $up = [];
                 foreach (['partner_id', 'invoice_no', 'receipt_date', 'tax_included', 'tax_rate', 'discount_amount', 'shipping_fee', 'note'] as $f) {
                     if (array_key_exists($f, $v)) $up[$f] = $v[$f];
                 }
                 // Cập nhật dòng hàng: chỉ cho sửa khi batch chưa xuất dùng
+                // K-R1: phiếu draft chưa có batch → sửa trực tiếp dòng hàng
                 if (isset($v['items'])) {
                     foreach ($v['items'] as $ri) {
                         if (empty($ri['id'])) continue;
                         $line = $receipt->items->firstWhere('id', $ri['id']);
-                        if (!$line || !$line->batch) continue;
+                        if (!$line) continue;
+                        if ($isDraft || !$line->batch) {
+                            // Draft: chưa có batch, sửa thẳng dòng hàng
+                            $line->update([
+                                'purchase_quantity' => $ri['purchase_quantity'] ?? $line->purchase_quantity,
+                                'unit_cost' => $ri['unit_cost'] ?? $line->unit_cost,
+                                'line_total' => (float) ($ri['purchase_quantity'] ?? $line->purchase_quantity)
+                                    * (float) ($ri['unit_cost'] ?? $line->unit_cost),
+                                'expired_at' => $ri['expired_at'] ?? $line->expired_at,
+                            ]);
+                            continue;
+                        }
                         $batch = $line->batch;
                         $touched = (float) $batch->current_quantity != (float) $batch->initial_quantity;
                         $newQty = (float) ($ri['purchase_quantity'] ?? $line->purchase_quantity);
@@ -270,8 +293,9 @@ class InboundReceiptController extends Controller
     public function cancel(int $id): JsonResponse
     {
         $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
-        if ($receipt->status !== 'confirmed') {
-            return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái đã nhập.'], 422);
+        // K-R1: cho phép hủy cả phiếu draft (chưa động kho/tiền)
+        if (!in_array($receipt->status, ['confirmed', 'draft'], true)) {
+            return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái đã nhập hoặc nháp.'], 422);
         }
         foreach ($receipt->items as $line) {
             if ($line->batch && (float) $line->batch->current_quantity != (float) $line->batch->initial_quantity) {
@@ -286,6 +310,51 @@ class InboundReceiptController extends Controller
             $receipt->update(['status' => 'cancelled']);
         });
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu nhập.']);
+    }
+
+    /**
+     * K-R1: Quản lý duyệt phiếu nhập nháp của NV.
+     * Khi duyệt: tạo Batch (cộng kho) + sinh phiếu chi. Dùng lockForUpdate chống duyệt 2 lần.
+     */
+    public function approve(int $id): JsonResponse
+    {
+        try {
+            $receipt = DB::transaction(function () use ($id) {
+                $receipt = InboundReceipt::with('items.material')->lockForUpdate()->findOrFail($id);
+                if ($receipt->status !== 'draft') {
+                    throw new \Exception('Chỉ duyệt được phiếu đang ở trạng thái nháp.');
+                }
+                foreach ($receipt->items as $line) {
+                    if ($line->batch_id) continue; // đã có batch (phòng race)
+                    $material = $line->material ?? Material::findOrFail($line->material_id);
+                    $rate = (float) ($line->conversion_rate ?: 1);
+                    $baseQty = (float) $line->purchase_quantity * $rate;
+                    $batchUnitCost = $rate > 0 ? (float) $line->unit_cost / $rate : (float) $line->unit_cost;
+                    $batch = Batch::create([
+                        'material_id' => $material->id,
+                        'branch_id' => $receipt->branch_id,
+                        'receipt_id' => $receipt->id,
+                        'batch_code' => $line->batch_code ?? ('BATCH-' . strtoupper(Str::random(8))),
+                        'initial_quantity' => $baseQty,
+                        'current_quantity' => $baseQty,
+                        'unit_cost' => $batchUnitCost,
+                        'expired_at' => $line->expired_at,
+                        'status' => 'active',
+                    ]);
+                    $line->update(['batch_id' => $batch->id, 'batch_code' => $batch->batch_code]);
+                }
+                $receipt->update(['status' => 'confirmed']);
+                $this->createExpense($receipt);
+                return $receipt;
+            });
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã duyệt phiếu nhập ' . $receipt->code . '.',
+            'data' => $receipt->load(['items.material', 'partner']),
+        ]);
     }
 
     private function validateReceipt(Request $request, bool $isUpdate = false, bool $requireBranch = true): array

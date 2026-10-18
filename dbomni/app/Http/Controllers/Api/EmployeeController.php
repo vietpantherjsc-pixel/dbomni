@@ -131,6 +131,10 @@ class EmployeeController extends Controller
         $branchIds = $validated['branch_ids'] ?? null; // null = không đụng pivot
         unset($validated['branch_ids']);
         $emp->update($validated);
+        // CC-R1: khi tắt NV → revoke toàn bộ token để token cũ không dùng được nữa
+        if (array_key_exists('is_active', $validated) && !$validated['is_active']) {
+            $emp->tokens()->delete();
+        }
         if (is_array($branchIds)) {
             $emp->branches()->sync($this->normalizeBranchIds($emp->branch_id, $branchIds));
         } elseif ($emp->wasChanged('branch_id')) {

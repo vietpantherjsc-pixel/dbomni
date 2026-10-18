@@ -6,7 +6,8 @@ import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 
-const TYPE_LABEL = { annual: 'Nghỉ phép', sick: 'Nghỉ ốm', unpaid: 'Nghỉ không lương', maternity: 'Nghỉ thai sản', other: 'Nghỉ khác' };
+// NV-R1: thống nhất code loại nghỉ với backend (nghi/doica/khac)
+const TYPE_LABEL = { nghi: 'Nghỉ phép', doica: 'Đổi ca', khac: 'Nghỉ khác' };
 const ST_TABS = [
     ['', 'Tất cả'],
     ['pending', 'Chờ duyệt'],

@@ -1138,6 +1138,26 @@ class OnlineOrderController extends Controller
                 return $order->load(['items.product', 'customer']);
             });
 
+            // HD-R2: đơn online delivery xác nhận qua confirmPayment (bypass updateStatus)
+            // → tạo đơn hãng ngay tại đây (luồng chính Mini App, Gói 61 phụ thuộc).
+            // Tạo thất bại không chặn luồng: đơn nằm chờ, Admin bấm "thử tạo lại".
+            if ($order->order_type === 'delivery' && !$order->delivery_order_id) {
+                try {
+                    $service = app(\App\Services\Delivery\DeliveryService::class);
+                    if ($service->isConfigured()) {
+                        $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
+                        $order->delivery_cod_amount = $cod;
+                        $order->delivery_quoted_fee = $order->delivery_fee_charged ?? $order->shipping_fee;
+                        $order->save();
+                        $service->createForOrder($order->fresh(), []);
+                    }
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('[Delivery] confirmPayment createForOrder failed', [
+                        'order' => $order->code, 'msg' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Đã xác nhận đơn. Đơn đã vào KDS.',

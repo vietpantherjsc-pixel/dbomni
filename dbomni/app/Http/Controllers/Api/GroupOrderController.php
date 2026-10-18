@@ -182,6 +182,10 @@ class GroupOrderController extends Controller
             'points_redeem' => 'nullable|integer|min:0',
             'note' => 'nullable|string|max:255',
             'referred_by' => 'nullable|string|max:20',
+            // HD-R1: báo giá hãng giao hàng cho đơn nhóm
+            'delivery_package' => 'nullable|in:nhanh,sieu_toc',
+            'delivery_quoted_fee' => 'nullable|numeric|min:0',
+            'delivery_provider' => 'nullable|in:ahamove,lalamove',
         ]);
 
         // Dựng items cho đơn online: tên người đặt nối vào ghi chú từng dòng

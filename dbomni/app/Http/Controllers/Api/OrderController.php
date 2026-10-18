@@ -803,6 +803,16 @@ class OrderController extends Controller
                         // Gói 55 p11ac: chỉ xóa đơn nháp (held) hoặc chưa thanh toán — đơn đã paid phải dùng Hủy đơn
                         $isDraft = $order->status === 'held' || $order->payment_status === 'pending';
                         if (!$isDraft) { $skipped++; continue; }
+                        // HD-R3: xóa đơn cũng phải hoàn điểm/voucher như khi hủy
+                        // (đơn held có thể đã đổi điểm/dùng voucher)
+                        $loyaltyService->refundRedeem($order);
+                        $loyaltyService->revokeEarn($order, $order->payment_status === 'paid');
+                        if (!empty($order->voucher_code)) {
+                            \App\Models\Voucher::where('code', $order->voucher_code)
+                                ->where('used_count', '>', 0)
+                                ->decrement('used_count');
+                            VoucherUsage::where('order_id', $order->id)->delete();
+                        }
                         $order->items()->delete();
                         $order->delete();
                         $done++;

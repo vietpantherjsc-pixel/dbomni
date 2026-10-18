@@ -166,6 +166,23 @@ export default function NhapKho({ embed } = {}) {
   const [success, setSuccess] = useState(null); // {code, grand, payLabel, supplierName}
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
+  // K-R1: tab "Phiếu của tôi" — NV theo dõi phiếu nháp chờ duyệt
+  const [tab, setTab] = useState('new'); // 'new' | 'mine'
+  const [myReceipts, setMyReceipts] = useState([]);
+  const [myLoading, setMyLoading] = useState(false);
+
+  const fetchMyReceipts = async () => {
+    setMyLoading(true);
+    try {
+      const r = await axios.get(API + '/employee/inbound-receipts', { headers: authHeader() });
+      setMyReceipts(r.data?.data?.data || r.data?.data || []);
+    } catch { /* bỏ qua */ }
+    setMyLoading(false);
+  };
+  useEffect(() => {
+    if (tab === 'mine' && token) fetchMyReceipts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const toast = (m) => {
     setToastMsg(m); setToastOn(true);
@@ -463,6 +480,47 @@ export default function NhapKho({ embed } = {}) {
         <div className="nk-card"><div className="nk-empty">Đang tải dữ liệu...</div></div>
       ) : (
         <>
+          {/* K-R1: tab chuyển giữa tạo phiếu và phiếu của tôi */}
+          <div className="nk-card" style={{ display: 'flex', gap: 8, padding: 10 }}>
+            <button className={'nk-seg' + (tab === 'new' ? ' on' : '')} onClick={() => setTab('new')} style={{ flex: 1 }}>
+              ＋ Tạo phiếu
+            </button>
+            <button className={'nk-seg' + (tab === 'mine' ? ' on' : '')} onClick={() => setTab('mine')} style={{ flex: 1 }}>
+              📋 Phiếu của tôi
+            </button>
+          </div>
+          {tab === 'mine' ? (
+            <section className="nk-card">
+              <h3>Phiếu nhập của tôi</h3>
+              <div style={{ fontSize: 12.5, color: '#6b7280', marginBottom: 10 }}>
+                Phiếu <b>nháp</b> chờ quản lý duyệt — chưa cộng kho, chưa sinh phiếu chi.
+              </div>
+              {myLoading ? (
+                <div className="nk-empty">Đang tải...</div>
+              ) : myReceipts.length === 0 ? (
+                <div className="nk-empty">Chưa có phiếu nào.</div>
+              ) : (
+                myReceipts.map((r) => (
+                  <div key={r.id} className="nk-item">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div className="nk-iname">{r.code}</div>
+                      <span style={{
+                        fontSize: 11.5, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+                        background: r.status === 'draft' ? '#fef3c7' : r.status === 'confirmed' ? '#dcfce7' : '#f3f4f6',
+                        color: r.status === 'draft' ? '#92400e' : r.status === 'confirmed' ? '#15803d' : '#6b7280',
+                      }}>
+                        {r.status === 'draft' ? 'Nháp — chờ duyệt' : r.status === 'confirmed' ? 'Đã duyệt' : 'Đã hủy'}
+                      </span>
+                    </div>
+                    <div className="nk-idetail">
+                      {r.receipt_date} · {r.partner?.name || 'Mua lẻ'} · <b>{fmtVND(r.grand_total)}đ</b>
+                    </div>
+                  </div>
+                ))
+              )}
+            </section>
+          ) : (
+          <>
           <section className="nk-card">
             <h3>Thông tin phiếu</h3>
             <label className="nk-label" style={{ marginTop: 0 }}>Nhà cung cấp</label>
@@ -666,6 +724,8 @@ export default function NhapKho({ embed } = {}) {
               {saving ? 'Đang tạo phiếu...' : '✓ Tạo phiếu nhập'}
             </button>
           </section>
+          </>
+          )}
         </>
       )}
 

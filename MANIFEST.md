@@ -1,117 +1,73 @@
-# MANIFEST — Gói 61: Tích hợp giao hàng AhaMove / Lalamove
+# MANIFEST — Gói fix 9 lỗi đỏ audit 5 phân hệ
 
-> Spec: `your_files/spec-giao-hang-ahamove-lalamove/spec-giao-hang-ahamove-lalamove.md`
+> Audit: `dbomni-pm/audit-5-phan-he.md` (2026-10-17)
 > Ngày đóng gói: 2026-10-17. Người code: MAIN (chat DBOMNI - MAIN).
-> **Trạng thái: ĐÃ QUA TESTER DUYỆT** (bản 61b, fix 3 lỗi đỏ + 8 mục vàng).
+> **Trạng thái: CHƯA QUA TESTER** — gửi PM chuyển TESTER kiểm thử.
+
+## Gói này gồm
+
+**Fix 9 lỗi đỏ** (theo lệnh Đại Vương "tiến hành sửa lại"):
+
+1. **K-R1** (Kho): Phiếu nhập draft của NV không còn cộng kho/sinh phiếu chi ngay.
+   Thêm `POST /inbound-receipts/{id}/approve` (quản lý duyệt → mới cộng kho + sinh phiếu chi).
+   Nới `update()`/`cancel()` cho phép draft. Frontend: nút Duyệt/Hủy ở tab Nhập kho,
+   màn "Phiếu của tôi" trong NhapKho.jsx + endpoint `GET /employee/inbound-receipts`.
+
+2. **NV-R1** (Nhân viên): Thống nhất code loại nghỉ phép `nghi/doica/khac`
+   (frontend LeaveRequests.jsx trước đây dùng `annual/sick/...` không khớp backend).
+
+3. **CC-R1** (Chấm công): Middleware `employee.active` chặn NV đã tắt (`is_active=false`)
+   dùng token cũ (403). Khi tắt NV trong EmployeeController → revoke toàn bộ token.
+
+4. **CC-R2** (Chấm công): NV gửi lại đăng ký ca không xóa dòng đã duyệt;
+   chỉ xóa/sửa dòng chưa duyệt, bỏ qua selection trùng dòng approved.
+
+5. **HD-R1** (Hóa đơn): Đơn nhóm delivery gọi báo giá hãng (quote + chọn gói như Checkout),
+   gửi `delivery_package`/`delivery_quoted_fee`/`delivery_provider` qua GroupOrderController → store.
+
+6. **HD-R2** (Hóa đơn): `confirmPayment` tạo đơn hãng cho đơn online delivery
+   (luồng chính Mini App, trước đây bypass `updateStatus` nên không bao giờ tạo đơn hãng).
+
+7. **HD-R3** (Hóa đơn): Xóa đơn (bulk) hoàn điểm đã đổi + thu hồi điểm tích + hoàn voucher
+   như khi hủy (trước đây xóa làm mất tài sản khách).
+
+8. **MH-R1** (Mặt hàng): `bulkUpdate` validate MỌI dòng (trước đây `$rules` nằm trong
+   foreach nên chỉ validate dòng cuối).
+
+9. **MH-R2** (Mặt hàng): Bảng cuộn ngang trên mobile (`overflow-x-auto` + `min-w-[900px]`),
+   thêm ô tìm kiếm theo tên/SKU + lọc danh mục/trạng thái (UI-MAP quy tắc 5).
+
+**Không làm trong gói này:** NV-R2/R3 (hardcode nhóm lỗi 3 Chuyên + loại thưởng) —
+chờ spec Danh mục dùng chung theo lệnh PM.
 
 ## 1. Thứ tự apply
 
-- Giải nén đè vào `D:\WORK\VIBE` (giữ cấu trúc `dbomni/`, `fnb-frontend/`, `zalo-miniapp/`).
-- **Phụ thuộc:** yêu cầu đã apply `goi-60-hoan-chinh.zip` (Gói 60 hub nhân viên) trước đó.
-  Nếu chưa apply gói 60 hub, các file `OrderController.php`, `OnlineOrderController.php`,
-  `routes/api.php` trong gói này vẫn đè được (chúng chứa cả phần hub + giao hàng),
-  nhưng các trang hub (`StaffHub.jsx`...) sẽ thiếu — nên apply gói 60 hub trước.
-- Gói này **đè lên** các file đã có (không xóa file nào).
+Giải nén đè vào `D:\WORK\VIBE` (cấu trúc từ repo root).
+Không phụ thuộc gói chưa apply nào (Gói 61c đã apply + push git).
 
 ## 2. Migration + lệnh chạy
 
-Migration mới: `2026_10_17_000060_delivery_integration.php`
-- Thêm 19 cột `delivery_*` vào bảng `orders` (gồm `delivery_dropoff_lat/lng`, `delivery_returned`).
-- Tạo bảng mới `delivery_logs` (lưu webhook + failover, tra cứu theo `provider_order_id`).
-- **Lưu ý:** file migration đã được sửa trực tiếp 1 lần (thêm 3 cột) — chấp nhận được
-  vì Gói 61 chưa từng được apply ở bất kỳ đâu.
+**Không có migration mới** trong gói này.
 
-Chạy tại `D:\WORK\VIBE\dbomni`:
-```powershell
-docker compose exec laravel.test php artisan migrate
-```
+## 3. Lệnh restart
 
-## 3. Lệnh restart + cd path
-
-Chạy tại `D:\WORK\VIBE\dbomni`:
+Backend (tại `D:\WORK\VIBE\dbomni`):
 ```powershell
 docker compose restart laravel.test
 ```
 
-Frontend (admin + Mini App) — chạy tại từng thư mục, **chỉ khi Đại Vương build production**:
-- `D:\WORK\VIBE\fnb-frontend`: `npm run build`
-- `D:\WORK\VIBE\zalo-miniapp`: `npm run build`
+Frontend: không cần restart đặc biệt (Vite HMR tự nhận), hoặc restart container frontend nếu chạy Docker.
 
-**Bắt buộc cho failover tự động:** cron `schedule:run` mỗi phút trên server.
-Nếu chưa có, failover quá 5 phút không tự chạy (đơn vẫn nằm chờ, Admin thấy được).
+## 4. Đại Vương cần test gì trong 10 phút
 
-**Cấu hình API key** (file `.env` của backend, tại `D:\WORK\VIBE\dbomni`):
-```dotenv
-AHAMOVE_API_KEY=
-AHAMOVE_BASE_URL=https://partner-apistg.ahamove.com/v3
-AHAMOVE_WEBHOOK_SECRET=
-LALAMOVE_API_KEY=
-LALAMOVE_API_SECRET=
-LALAMOVE_MARKET=VN
-LALAMOVE_BASE_URL=
-LALAMOVE_WEBHOOK_SECRET=
-DELIVERY_FAILOVER_TIMEOUT_MINUTES=5
-```
-Chưa có key → hệ thống tự dùng cách tính phí ship cũ, không lỗi.
-**Lưu ý:** thiếu `*_WEBHOOK_SECRET` thì webhook bị từ chối (fail-closed) —
-trang Thiết lập → Giao hàng sẽ hiện cảnh báo đỏ.
+1. **K-R1:** NV tạo phiếu nhập trên điện thoại → trạng thái "Nháp — chờ duyệt",
+   kho KHÔNG tăng. Admin vào Kho → Nhập kho → thấy phiếu "Nháp" → bấm Duyệt → kho tăng.
+2. **CC-R1:** Tắt 1 NV (is_active=false) → NV đó không chấm công được nữa (báo 403).
+3. **HD-R2:** Đặt đơn delivery trên Mini App → KDS bấm xác nhận thanh toán
+   → đơn hãng được tạo (kiểm tra cột delivery_provider/delivery_order_id).
+4. **MH-R2:** Trang Mặt hàng trên điện thoại → bảng cuộn ngang được, ô tìm kiếm hoạt động.
 
-## 4. Đại Vương test trong 10 phút
+## 5. Cách rollback
 
-1. **Thiết lập → card "Giao hàng"**: bật/tắt hãng, đổi ngưỡng failover (5 phút),
-   trần chênh (mặc định 10.000đ), ngưỡng hỗ trợ (150.000đ → hỗ trợ 15.000đ). Bấm Lưu.
-2. **Mini App → đặt đơn giao hàng**: nhập địa chỉ → thấy 2 gói (Nhanh mặc định,
-   Siêu Tốc). Phí ship hiện trong ~2 giây. Đặt đơn → tổng tiền tách dòng rõ ràng.
-3. **KDS**: đơn mới hiện, bấm xác nhận (pending → processing) → đơn hãng được tạo
-   (cần API key thật hoặc kiểm tra log `delivery_logs`).
-4. **Admin → Hóa đơn**: lọc theo hãng giao (AhaMove/Lalamove), trạng thái giao,
-   tick "Đã failover". Mở chi tiết đơn → thấy badge hãng + nút "Thử tạo lại đơn hãng".
-5. **Mini App → Theo dõi đơn**: thấy timeline giao hàng (tìm tài xế → đang giao...),
-   tên/SĐT tài xế, link theo dõi (poll 5 giây tự cập nhật).
-
-## 5. Rollback nếu lỗi
-
-1. Xóa các file mới:
-   - `dbomni/app/Services/Delivery/` (cả thư mục)
-   - `dbomni/app/Models/DeliveryLog.php`
-   - `dbomni/app/Http/Controllers/Api/DeliveryController.php`
-   - `dbomni/app/Http/Controllers/Api/DeliveryWebhookController.php`
-   - `dbomni/app/Console/Commands/CheckDeliveryFailover.php`
-   - `dbomni/config/delivery.php`
-   - `fnb-frontend/src/pages/admin/DeliverySettings.jsx`
-2. Rollback migration (chạy tại `D:\WORK\VIBE\dbomni`):
-   ```powershell
-   docker compose exec laravel.test php artisan migrate:rollback --step=1
-   ```
-3. Khôi phục các file đã sửa từ Git:
-   ```powershell
-   git checkout HEAD -- dbomni/app/Models/Order.php dbomni/app/Http/Controllers/Api/OrderController.php dbomni/app/Http/Controllers/Api/OnlineOrderController.php dbomni/routes/api.php dbomni/routes/console.php fnb-frontend/src/KdsScreen.jsx fnb-frontend/src/pages/admin/Orders.jsx fnb-frontend/src/pages/admin/Settings.jsx zalo-miniapp/src/api.js zalo-miniapp/src/pages/Checkout.jsx zalo-miniapp/src/pages/TrackOrder.jsx
-   ```
-   (chạy tại `D:\WORK\VIBE`)
-4. Restart backend: `docker compose restart laravel.test` tại `D:\WORK\VIBE\dbomni`.
-
-## Ghi chú quyết định
-
-- **Trần chênh failover mặc định 10.000đ/đơn** (DELIVERY chưa cho số cụ thể).
-  Chênh điển hình ~2.140đ ở 5km nên 10.000đ là trần an toàn.
-  Đại Vương chỉnh trong Thiết lập → Giao hàng.
-- **Trạng thái giao nội bộ** map vào 7 giá trị mới ở cột `delivery_status`
-  (không dùng chung enum `status` của đơn): `searching_driver`, `driver_assigned`,
-  `picked_up`, `delivering`, `delivered`, `failed`, `cancelled`.
-- **Thông báo cho khách**: qua trang Theo dõi đơn (poll 5s), chưa có push/Zalo OA.
-
-## 3 lưu ý runtime của TESTER (bắt buộc đọc)
-
-(a) **Failover tự động + dọn log cần cron `schedule:run` mỗi phút.**
-Trên máy Đại Vương chưa xác nhận đã có cron này — nếu chưa có, đơn quá 5 phút
-không tự chuyển hãng (vẫn nằm chờ, Admin thấy được để xử lý tay).
-
-(b) **Bắt buộc test sandbox với API key thật trước khi mở production** (checklist #31).
-Đăng ký key ở developers.ahamove.com và developers.lalamove.com, chạy thử
-end-to-end các kịch bản (đặt thường, failover, hủy, cả 2 hãng không có tài xế)
-rồi mới đổi sang key production.
-
-(c) **Webhook bị từ chối 401 cho đến khi set đủ 2 webhook secret** (đúng thiết kế
-fail-closed chống giả mạo). Thêm vào `.env` (xem mục 3):
-`AHAMOVE_WEBHOOK_SECRET` và `LALAMOVE_WEBHOOK_SECRET`.
-Trang Thiết lập → Giao hàng sẽ hiện cảnh báo đỏ khi thiếu.
+Git revert các file trong gói, hoặc giải nén đè bản backup trước khi apply.
+Không có migration nên không cần rollback DB.

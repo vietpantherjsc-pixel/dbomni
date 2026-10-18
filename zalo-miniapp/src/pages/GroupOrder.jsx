@@ -284,12 +284,52 @@ function GroupCheckout({ group, onDone, onBack }) {
   // Gói 12b: KM phí ship cho đơn nhóm (lọc theo tổng tiền hàng của nhóm)
   const [promos, setPromos] = useState([]);
   const [promoId, setPromoId] = useState('');
+  // HD-R1: báo giá hãng giao hàng cho đơn nhóm (như Checkout.jsx)
+  const [quote, setQuote] = useState(null);
+  const [quoteError, setQuoteError] = useState('');
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [deliveryPkg, setDeliveryPkg] = useState('nhanh');
 
   useEffect(() => {
     const g = getMyGroups()[group.code];
     if (g) setName(g.name);
     api.shipConfig().then(setShipCfg).catch(() => {});
   }, [group.code]);
+
+  // HD-R1: gọi báo giá hãng khi có địa chỉ (debounce 1s, timeout 8s)
+  useEffect(() => {
+    if (type !== 'delivery' || !address.trim()) { setQuote(null); setQuoteError(''); return; }
+    const timer = setTimeout(async () => {
+      setQuoteLoading(true); setQuoteError('');
+      try {
+        const data = await Promise.race([
+          api.deliveryQuote({
+            branch_id: b.id,
+            dropoff_address: address.trim(),
+            subtotal: group.subtotal,
+            cod_amount: payment === 'pay_at_store' ? group.subtotal : 0,
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+        ]);
+        setQuote(data);
+        const hasNhanh = (data.packages || []).some((p) => p.code === 'nhanh');
+        setDeliveryPkg(hasNhanh ? 'nhanh' : (data.packages[0]?.code || 'nhanh'));
+      } catch (e) {
+        setQuote(null);
+        setQuoteError(e.message === 'timeout'
+          ? 'Đang tính phí ship — vui lòng đợi giây lát.'
+          : (e.message || 'Chưa giao được tới địa chỉ này.'));
+      } finally {
+        setQuoteLoading(false);
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, address, group.subtotal, payment]);
+
+  const quotePkg = quote?.packages?.find((p) => p.code === deliveryPkg) || quote?.packages?.[0];
+  const shipFee = quotePkg ? quotePkg.customer_pays
+    : (type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0);
 
   const b = branch || {};
   const calcDist = async () => {
@@ -340,6 +380,9 @@ function GroupCheckout({ group, onDone, onBack }) {
   const place = async () => {
     if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
     if (type === 'delivery' && (!address.trim() || km == null)) { alert('Nhập địa chỉ và bấm "Tính khoảng cách".'); return; }
+    // HD-R1: chặn đặt khi đang tính phí hoặc quote lỗi (hãng đã cấu hình thì bắt buộc có báo giá)
+    if (type === 'delivery' && quoteLoading) { alert('Đang tính phí ship, vui lòng đợi.'); return; }
+    if (type === 'delivery' && quoteError && !quote) { alert(quoteError); return; }
     setPlacing(true);
     try {
       const order = await api.groupCheckout(group.code, {
@@ -352,6 +395,10 @@ function GroupCheckout({ group, onDone, onBack }) {
         promotion_id: promoId || null, // Gói 12b: KM phí ship cho đơn nhóm
         note: note.trim() || null,
         referred_by: getRef() || null,
+        // HD-R1: gửi báo giá hãng cho đơn nhóm delivery
+        delivery_package: type === 'delivery' ? deliveryPkg : null,
+        delivery_quoted_fee: type === 'delivery' && quotePkg ? quotePkg.fee : null,
+        delivery_provider: type === 'delivery' && quotePkg ? quotePkg.provider : null,
       });
       onDone(order.code);
     } catch (e) { alert(e.message); }

@@ -1122,6 +1122,16 @@ function InboundTab({ materials, onDone, branchId, branches }) {
             onDone();
         } catch (e) { alert(e.response?.data?.message || 'Không hủy được'); }
     };
+    // K-R1: duyệt phiếu nhập nháp của NV (cộng kho + sinh phiếu chi)
+    const approveReceipt = async (id) => {
+        if (!window.confirm('Duyệt phiếu nhập này? Kho sẽ tăng theo phiếu và sinh phiếu chi.')) return;
+        try {
+            await axios.post(`${API}/inbound-receipts/${id}/approve`);
+            setDetail(null);
+            fetchReceipts();
+            onDone();
+        } catch (e) { alert(e.response?.data?.message || 'Không duyệt được'); }
+    };
 
     return (
         <div>
@@ -1163,12 +1173,19 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                                         </span>
                                     </td>
                                     <td className="px-2 py-2.5">
-                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${r.status === 'confirmed' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
-                                            {r.status === 'confirmed' ? 'Đã nhập' : 'Đã hủy'}
+                                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${r.status === 'confirmed' ? 'bg-blue-100 text-blue-700' : r.status === 'draft' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
+                                            {r.status === 'confirmed' ? 'Đã nhập' : r.status === 'draft' ? 'Nháp' : 'Đã hủy'}
                                         </span>
                                     </td>
                                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                                         <button onClick={() => openDetail(r.id)} className="text-[#0d6efd] text-[12px] font-medium mr-3">Xem</button>
+                                        {/* K-R1: duyệt/hủy phiếu nháp */}
+                                        {r.status === 'draft' && (
+                                            <>
+                                                <button onClick={() => approveReceipt(r.id)} className="text-green-600 text-[12px] font-medium mr-3">Duyệt</button>
+                                                <button onClick={() => cancelReceipt(r.id)} className="text-red-500 text-[12px]">Hủy</button>
+                                            </>
+                                        )}
                                         {r.status === 'confirmed' && (
                                             <button onClick={() => cancelReceipt(r.id)} className="text-red-500 text-[12px]">Hủy</button>
                                         )}

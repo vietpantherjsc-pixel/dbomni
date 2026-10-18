@@ -266,9 +266,10 @@ class ProductController extends Controller
         ];
 
         // Validate toàn bộ trước khi ghi (fail rõ dòng + field)
+        // MH-R1: $rules phải ở ngoài vòng lặp để validate MỌI dòng (không chỉ dòng cuối)
         $allCodes = [];
+        $rules = [];
         foreach ($validated['rows'] as $i => $row) {
-            $rules = [];
             foreach ($row['values'] as $field => $v) {
                 if (isset($fieldRules[$field])) {
                     $rules["rows.{$i}.values.{$field}"] = $fieldRules[$field];

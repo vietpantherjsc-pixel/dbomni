@@ -67,7 +67,7 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10
 // Gói 35: đăng nhập trang nhân viên (public) — QR chấm công / đăng ký ca riêng
 Route::post('/employee/qr-login', [EmployeeAuthController::class, 'qrLogin'])->middleware('throttle:10,1');
 Route::post('/employee/phone-login', [EmployeeAuthController::class, 'phonePinLogin'])->middleware('throttle:10,1');
-Route::middleware('auth:sanctum')->prefix('employee')->group(function () {
+Route::middleware(['auth:sanctum', 'employee.active'])->prefix('employee')->group(function () {
     Route::get('/me', [EmployeeAuthController::class, 'me']);
     Route::get('/work-shifts', [ShiftRegistrationController::class, 'availableShifts']);
     Route::get('/shift-registrations/week', [ShiftRegistrationController::class, 'myWeek']);
@@ -102,6 +102,8 @@ Route::middleware('auth:sanctum')->prefix('employee')->group(function () {
     Route::post('/productions', [EmployeeInventoryController::class, 'storeProduction']);
     Route::get('/productions', [EmployeeInventoryController::class, 'productions']);
     Route::post('/inbound-receipts', [EmployeeInventoryController::class, 'storeInboundReceipt']);
+    // K-R1: NV xem phiếu nhập nháp của mình
+    Route::get('/inbound-receipts', [EmployeeInventoryController::class, 'myInboundReceipts']);
     Route::post('/outbound-receipts', [EmployeeInventoryController::class, 'storeOutboundReceipt']); // Gói 55 p11aa
     Route::post('/stock-transfers', [EmployeeInventoryController::class, 'storeStockTransfer']); // Gói 55 p11aa
     Route::get('/units', [UnitController::class, 'index']); // Gói 55 p11z: đơn vị tính cho NV chọn
@@ -313,6 +315,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/inbound-receipts', [InboundReceiptController::class, 'store']);
         Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update']);
         Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel']);
+        // K-R1: duyệt phiếu nhập nháp của NV (cần inventory.manage)
+        Route::post('/inbound-receipts/{id}/approve', [InboundReceiptController::class, 'approve']);
     });
     // Gói 55 p11z: phiếu xuất kho (trừ kho FIFO khi chốt) — Gói SEC
     Route::middleware('permission:inventory.manage')->group(function () {

@@ -129,6 +129,10 @@ const Products = () => {
     const [optionGroups, setOptionGroups] = useState([]);
     const [materials, setMaterials] = useState([]);
     const [loading, setLoading] = useState(true);
+    // MH-R2: tìm kiếm + lọc (UI-MAP quy tắc 5)
+    const [search, setSearch] = useState('');
+    const [filterCat, setFilterCat] = useState('');
+    const [filterActive, setFilterActive] = useState('');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -550,6 +554,16 @@ const Products = () => {
     }
     // ================= /Gói 33 =================
 
+    // MH-R2: lọc theo tên + danh mục + trạng thái (client-side)
+    const filteredProducts = products.filter((p) => {
+        if (search && !(p.name || '').toLowerCase().includes(search.toLowerCase())
+            && !(p.sku || '').toLowerCase().includes(search.toLowerCase())) return false;
+        if (filterCat && String(p.category_id) !== String(filterCat)) return false;
+        if (filterActive === '1' && !p.is_active) return false;
+        if (filterActive === '0' && p.is_active) return false;
+        return true;
+    });
+
     return (
         <AdminLayout>
             <div className="p-6 max-w-[1200px] mx-auto">
@@ -559,6 +573,31 @@ const Products = () => {
                     <p className="text-sm mt-1" style={{ color: 'var(--m-ink-soft)' }}>Bấm vào dòng để sửa · Quản lý giá theo kênh, định mức, nhóm tùy chọn</p>
                 </div>
                 <button onClick={openAdd} className="m-btn m-btn-primary">+ Thêm mặt hàng</button>
+            </div>
+
+            {/* MH-R2: thanh tìm kiếm + lọc */}
+            <div className="m-card p-3 mb-3 flex flex-wrap items-center gap-2">
+                <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="🔍 Tìm theo tên hoặc SKU..."
+                    className="m-input"
+                    style={{ minWidth: 200, flex: '1 1 200px' }}
+                />
+                <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} className="m-input" style={{ maxWidth: 180 }}>
+                    <option value="">Tất cả danh mục</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <select value={filterActive} onChange={(e) => setFilterActive(e.target.value)} className="m-input" style={{ maxWidth: 150 }}>
+                    <option value="">Tất cả trạng thái</option>
+                    <option value="1">Đang bán</option>
+                    <option value="0">Đang ẩn</option>
+                </select>
+                {(search || filterCat || filterActive) && (
+                    <span className="text-[12.5px]" style={{ color: 'var(--m-ink-soft)' }}>
+                        {filteredProducts.length}/{products.length} món
+                    </span>
+                )}
             </div>
 
             {/* Gói 33: thanh thao tác hàng loạt — CHỈ admin cấp cao nhất */}
@@ -598,8 +637,10 @@ const Products = () => {
                 </div>
             )}
 
+            {/* MH-R2: bọc overflow-x-auto + min-w để cuộn ngang trên mobile (UI-MAP quy tắc 5) */}
             <div className="m-card overflow-hidden">
-                <table className="m-table">
+                <div className="overflow-x-auto">
+                <table className="m-table min-w-[900px]">
                     <thead>
                         <tr>
                             {canBulk && (
@@ -626,10 +667,12 @@ const Products = () => {
                     <tbody>
                         {loading ? (
                             <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
-                        ) : products.length === 0 ? (
-                            <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có mặt hàng nào.</td></tr>
+                        ) : filteredProducts.length === 0 ? (
+                            <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>
+                                {products.length === 0 ? 'Chưa có mặt hàng nào.' : 'Không tìm thấy mặt hàng phù hợp.'}
+                            </td></tr>
                         ) : (
-                            products.map(product => (
+                            filteredProducts.map(product => (
                                 <tr key={product.id} onClick={() => handleEdit(product)} className="cursor-pointer">
                                     {canBulk && (
                                         <td onClick={(e) => e.stopPropagation()}>
@@ -697,6 +740,7 @@ const Products = () => {
                         )}
                     </tbody>
                 </table>
+                </div>
             </div>
 
             {isModalOpen && (

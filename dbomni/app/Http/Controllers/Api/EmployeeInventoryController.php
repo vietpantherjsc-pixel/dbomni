@@ -472,6 +472,20 @@ class EmployeeInventoryController extends Controller
         return app(InboundReceiptController::class)->store($request);
     }
 
+    /**
+     * K-R1: NV xem danh sách phiếu nhập nháp của mình (để theo dõi trạng thái duyệt).
+     */
+    public function myInboundReceipts(Request $request): JsonResponse
+    {
+        $emp = $request->user();
+        $q = \App\Models\InboundReceipt::with(['partner'])
+            ->where('created_by_employee_id', $emp->id)
+            ->orderByDesc('id');
+        if ($request->filled('status')) $q->where('status', $request->input('status'));
+        $per = min((int) $request->input('per_page', 20), 50);
+        return response()->json(['success' => true, 'data' => $q->paginate($per)]);
+    }
+
     // Gói 55 p11aa: nhân viên tạo phiếu xuất (tạo nháp, admin chốt sau)
     public function storeOutboundReceipt(Request $request): JsonResponse
     {

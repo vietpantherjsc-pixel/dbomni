@@ -134,11 +134,25 @@ class ShiftRegistrationController extends Controller
         }
 
         DB::transaction(function () use ($emp, $days, $v) {
-            ShiftRegistration::where('employee_id', $emp->id)->whereIn('date', $days)->delete();
+            // CC-R2: chỉ xóa dòng chưa duyệt — giữ nguyên dòng đã approved
+            // (quyết định duyệt của quản lý không bị hủy âm thầm)
+            $approvedKeys = ShiftRegistration::where('employee_id', $emp->id)
+                ->whereIn('date', $days)
+                ->where('status', 'approved')
+                ->get(['work_shift_id', 'date'])
+                ->map(fn ($r) => $r->work_shift_id . '|' . $r->date)
+                ->flip()
+                ->toArray();
+            ShiftRegistration::where('employee_id', $emp->id)
+                ->whereIn('date', $days)
+                ->where('status', '!=', 'approved')
+                ->delete();
             $rows = [];
             $now = now();
             foreach ($v['selections'] as $s) {
                 if (!in_array($s['date'], $days, true)) continue;
+                // Bỏ qua selection trùng dòng đã duyệt (không ghi đè)
+                if (isset($approvedKeys[$s['work_shift_id'] . '|' . $s['date']])) continue;
                 $rows[] = [
                     'employee_id' => $emp->id,
                     'work_shift_id' => $s['work_shift_id'],
