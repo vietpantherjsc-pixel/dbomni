@@ -24,6 +24,12 @@ export default function OnlineConfig() {
   // Gói 9: cover trang chủ Mini App + điểm thưởng giới thiệu
   const [cover, setCover] = useState('');
   const [refPoints, setRefPoints] = useState('100');
+  // Dời từ Thiết lập chung (2026-10-20): banner KM + card Quan tâm OA thuộc cấu hình Mini App
+  const [slideInt, setSlideInt] = useState('5');
+  const [savingSlide, setSavingSlide] = useState(false);
+  const [slideMsg, setSlideMsg] = useState('');
+  const [oaCfg, setOaCfg] = useState({ oa_card_enabled: '1', oa_card_headline: 'Quan tâm để nhận các chương trình ưu đãi đặc quyền !' });
+  const [oaMsg, setOaMsg] = useState('');
   const [savingCover, setSavingCover] = useState(false);
   const [uploading, setUploading] = useState(null); // Gói 10f: 'common' | branchId | null
   const [branches, setBranches] = useState([]);
@@ -47,6 +53,11 @@ export default function OnlineConfig() {
       if (s.data) {
         setCover(s.data.shop_cover_url || '');
         setRefPoints(String(s.data.ref_bonus_points ?? '100'));
+        if (s.data.promo_slide_interval) setSlideInt(String(s.data.promo_slide_interval));
+        setOaCfg({
+          oa_card_enabled: s.data.oa_card_enabled ?? '1',
+          oa_card_headline: s.data.oa_card_headline ?? 'Quan tâm để nhận các chương trình ưu đãi đặc quyền !',
+        });
       }
     } catch (e) { /* bỏ qua */ }
   };
@@ -207,6 +218,59 @@ export default function OnlineConfig() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Dời từ Thiết lập chung (2026-10-20): Banner khuyến mại Mini App */}
+      <div className="bg-white rounded-xl border p-5 mt-6">
+        <h2 className="font-bold mb-2">🎠 Banner khuyến mại (Zalo Mini App)</h2>
+        <p className="text-xs text-gray-500 mb-3">Banner hiển thị dạng slider trong mục Thành viên trên Mini App. Tải ảnh banner tại trang Khuyến mại.</p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-sm">Tự chuyển ảnh sau mỗi</label>
+          <input type="number" min="2" max="30" value={slideInt} onChange={(e) => setSlideInt(e.target.value)}
+            className="w-[76px] px-3 py-2 border rounded-lg text-sm text-center" />
+          <span className="text-sm text-gray-500">giây</span>
+          <button onClick={async () => {
+            setSavingSlide(true); setSlideMsg('');
+            try {
+              await api('/settings', { method: 'post', data: { settings: { promo_slide_interval: slideInt } } });
+              setSlideMsg('Đã lưu.');
+            } catch (e) { setSlideMsg('Lưu thất bại.'); }
+            finally { setSavingSlide(false); }
+          }} disabled={savingSlide} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+            {savingSlide ? 'Đang lưu...' : 'Lưu'}
+          </button>
+          {slideMsg && <span className="text-sm text-green-600">{slideMsg}</span>}
+        </div>
+      </div>
+
+      {/* Dời từ Thiết lập chung (2026-10-20): Card "Quan tâm OA" trên Home Mini App */}
+      <div className="bg-white rounded-xl border p-5 mt-6">
+        <h2 className="font-bold mb-2">💛 Card "Quan tâm OA" (Zalo Mini App)</h2>
+        <p className="text-xs text-gray-500 mb-3">Card hiện dưới thông tin quán trên trang chủ Mini App. Nút "Quan tâm" màu cam brand mở trang OA Daybreak.</p>
+        <div className="flex flex-col gap-4 mb-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={oaCfg.oa_card_enabled === '1'}
+              onChange={(e) => setOaCfg({ ...oaCfg, oa_card_enabled: e.target.checked ? '1' : '0' })}
+              className="w-5 h-5" />
+            <span className="text-sm font-medium">Hiện card "Quan tâm OA"</span>
+          </label>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Dòng tiêu đề</label>
+            <input type="text" value={oaCfg.oa_card_headline}
+              onChange={(e) => setOaCfg({ ...oaCfg, oa_card_headline: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Quan tâm để nhận các chương trình ưu đãi đặc quyền !" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={async () => {
+            setOaMsg('');
+            try {
+              await api('/settings', { method: 'post', data: { settings: oaCfg } });
+              setOaMsg('Đã lưu.');
+            } catch (e) { setOaMsg('Lưu thất bại.'); }
+          }} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">Lưu</button>
+          {oaMsg && <span className="text-sm text-green-600">{oaMsg}</span>}
+        </div>
       </div>
     </div>
     </AdminLayout>

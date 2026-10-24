@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import OACard from '../components/OACard'; // Demo Quan tâm OA v2 (Đại Vương chốt 2026-10-19)
 import { useNavigate, Link } from 'react-router-dom';
-import { api, fmt, priceOf, imgUrl, getProfile, captureRef } from '../api';
+import { api, fmt, priceOf, imgUrl, getProfile, captureRef, profileIdentity } from '../api';
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
 
@@ -41,7 +42,7 @@ export default function Home() {
 
   useEffect(() => { api.menu(branch?.id).then(setMenu).catch(() => {}); }, [branch]); // Gói 25: lọc theo CN
   useEffect(() => { api.shopInfo(branch?.id).then(setShopInfo).catch(() => {}); }, [branch]);
-  // Gói 55 p2: làm mới thông tin chi nhánh (SĐT, giờ mở cửa) — tránh cache localStorage cũ thiếu dữ liệu
+  // Gói 55 p2: làm mới thông tin chi nhánh (SĐT, giờ mở cửa) — tránh cache storage cũ thiếu dữ liệu
   useEffect(() => {
     if (!branch?.id || branch.opening_hours !== undefined) return;
     api.branches().then((list) => {
@@ -112,7 +113,7 @@ export default function Home() {
   };
 
   if (!branch) return null;
-  const img = (p) => p.image_url || 'https://via.placeholder.com/300?text=☕';
+  const img = (p) => p.image_url || '/default-product.svg';
   const allProducts = menu.flatMap((c) => c.products || []);
   const favorites = allProducts.filter((p) => p.is_favorite);
   const forYou = (favorites.length ? favorites : allProducts).slice(0, 4);
@@ -122,19 +123,10 @@ export default function Home() {
   const filtered = q    ? menu.map((c) => ({ ...c, products: (c.products || []).filter((p) => p.name.toLowerCase().includes(q.toLowerCase())) })).filter((c) => c.products.length)
     : menu;
 
-  // Gói 9: nút Chia sẻ — copy link giới thiệu (lưu ref để tính điểm affiliate sau này)
-  const share = async () => {
-    const code = getProfile()?.member_code || '';
-    const url = `${window.location.origin}${window.location.pathname}${code ? `?ref=${code}` : ''}`;
-    const msg = code
-      ? `Đã copy link giới thiệu! Người đặt qua link này, bạn được +${shopInfo.ref_bonus_points} điểm khi đơn hoàn tất.`
-      : 'Đã copy link quán! Vào mục Tài khoản nhập SĐT để lấy link giới thiệu riêng của bạn.';
-    try {
-      await navigator.clipboard.writeText(url);
-      alert(msg);
-    } catch (e) {
-      prompt('Copy link:', url);
-    }
+  // SPEC-02: nút Chia sẻ — mở trang Mời bạn (luồng referral mới: cả 2 cùng được voucher CP-02)
+  // Luồng cũ copy link tính điểm affiliate đã bỏ ở nút này (backend awardReferral giữ nguyên)
+  const share = () => {
+    nav('/invite');
   };
 
   const openSale = (s) => {
@@ -222,9 +214,15 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Demo "Quan tâm OA" v2 (Đại Vương chốt 2026-10-19): card OA dưới card thông tin quán */}
+      <OACard />
+
       <div className="zm-search">
         <input placeholder="Tìm món..." value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
+
+      {/* SPEC-02: Widget tích tem CP-03 */}
+      <StampWidget />
 
       {/* Slider khuyến mại */}
       {promos.length > 0 && (
@@ -248,7 +246,7 @@ export default function Home() {
           <div className="zm-hscroll">
             {sales.map((s) => (
               <div key={s.id} className="zm-sale-card" onClick={() => openSale(s)}>
-                <img src={s.image_url || 'https://via.placeholder.com/300?text=☕'} alt={s.name} loading="lazy" />
+                <img src={s.image_url || '/default-product.svg'} alt={s.name} loading="lazy" />
                 <div className="zm-sale-badge">-{Math.round((1 - s.sale_price / priceOf(s)) * 100)}%</div>
                 <div className="zm-card-name">{s.name}</div>
                 <div>
@@ -328,6 +326,53 @@ export default function Home() {
         </div>
       )}
       <TabBar />
+    </div>
+  );
+}
+
+// SPEC-02: Widget thanh tiến trình tích tem CP-03
+function StampWidget() {
+  const nav = useNavigate();
+  const [stamps, setStamps] = useState(null);
+  const profile = getProfile();
+
+  useEffect(() => {
+    if (!profile?.customer_id) return;
+    api.myStamps(profileIdentity(profile)).then(setStamps).catch(() => {});
+  }, []);
+
+  if (!profile?.customer_id || !stamps || stamps.stamps_required <= 0) return null;
+
+  const pct = Math.min(100, (stamps.stamps / stamps.stamps_required) * 100);
+
+  return (
+    <div
+      onClick={() => nav('/coupons')}
+      style={{
+        background: 'linear-gradient(135deg, #FFF7ED, #FFEDD5)', borderRadius: 12,
+        padding: '12px 16px', margin: '0 16px 12px', cursor: 'pointer',
+        border: '1px solid #FED7AA',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9A3412' }}>
+          🎫 Tích tem đổi quà
+        </div>
+        <div style={{ fontSize: 12, color: '#C2410C', fontWeight: 700 }}>
+          {stamps.stamps}/{stamps.stamps_required} tem
+        </div>
+      </div>
+      <div style={{ background: '#fff', borderRadius: 999, height: 8, marginTop: 8, overflow: 'hidden' }}>
+        <div style={{
+          width: `${pct}%`, height: '100%', borderRadius: 999,
+          background: 'linear-gradient(90deg, #F5A623, #F97316)', transition: 'width 0.5s',
+        }} />
+      </div>
+      <div style={{ fontSize: 12, color: '#9A3412', marginTop: 6 }}>
+        {stamps.remaining > 0
+          ? `Còn ${stamps.remaining} tem nữa được tặng quà`
+          : 'Đủ tem đổi quà rồi! Vào ví để nhận.'}
+      </div>
     </div>
   );
 }

@@ -40,18 +40,36 @@ class StocktakeAdjustmentController extends Controller
             return response()->json(['success' => false, 'message' => 'Nguyên liệu không còn tồn tại.'], 422);
         }
 
-        DB::transaction(function () use ($adj, $material, $actor) {
+        try {
+            DB::transaction(function () use ($adj, $material, $actor) {
+            // Audit 2026-10-23 KHO-03: khóa dòng phiếu + kiểm tra lại trạng thái
+            // TRONG transaction (mẫu InboundReceipt::approve) — chống duyệt trùng
+            // khi 2 request chạy đồng thời.
+            $locked = StocktakeAdjustment::where('id', $adj->id)->lockForUpdate()->first();
+            if (!$locked || $locked->status !== 'pending') {
+                throw new \Exception('Đề xuất đã được xử lý trước đó.');
+            }
             $diff = (float) $adj->diff_qty;
             $branchId = $adj->branch_id;
             if ($diff > 0) {
                 // Thừa so với sổ: tạo lô điều chỉnh tăng
+                // Audit 2026-10-23 KHO-08: giá vốn tham chiếu = giá vốn bình quân
+                // các lô đang có của NL tại CN (thay vì 0).
+                $refCost = (float) (Batch::where('branch_id', $branchId)
+                    ->where('material_id', $material->id)
+                    ->where('status', 'active')
+                    ->where('current_quantity', '>', 0)
+                    ->selectRaw('SUM(current_quantity * unit_cost) / NULLIF(SUM(current_quantity), 0) AS c')
+                    ->value('c') ?? 0);
                 $batch = Batch::create([
                     'branch_id' => $branchId,
                     'material_id' => $material->id,
+                    // Ngoại lệ luật định dạng mã (Đại Vương chốt 2026-10-21 ~23:14): họ DC-ADJ giữ '-'
+                    // làm mốc phân đoạn giữa 2 số id có độ dài thay đổi (phiếu + nguyên liệu).
                     'batch_code' => 'DC-ADJ' . $adj->id . '-' . $material->id,
                     'initial_quantity' => $diff,
                     'current_quantity' => $diff,
-                    'unit_cost' => 0,
+                    'unit_cost' => $refCost,
                     'status' => 'active',
                 ]);
                 StockMovement::create([
@@ -59,7 +77,7 @@ class StocktakeAdjustmentController extends Controller
                     'material_id' => $material->id,
                     'batch_id' => $batch->id,
                     'quantity' => -$diff, // nhập = số âm theo quy ước
-                    'unit_cost' => 0,
+                    'unit_cost' => $refCost,
                     'reference_type' => 'adjustment',
                     'reference_id' => $adj->id,
                     'note' => 'Duyệt điều chỉnh kiểm kê #' . $adj->stocktake_id . ': tăng ' . $diff . ' ' . $material->unit,
@@ -71,6 +89,8 @@ class StocktakeAdjustmentController extends Controller
                     ->where('material_id', $material->id)
                     ->where('status', 'active')
                     ->where('current_quantity', '>', 0)
+                    // Audit 2026-10-23 KHO-05: duyệt điều chỉnh giảm cũng loại lô đã quá hạn
+                    ->where(fn ($q) => $q->whereNull('expired_at')->orWhere('expired_at', '>=', now()->toDateString()))
                     ->orderByRaw('expired_at IS NULL, expired_at ASC, id ASC')
                     ->lockForUpdate()
                     ->get();
@@ -103,9 +123,14 @@ class StocktakeAdjustmentController extends Controller
             $adj->update([
                 'status' => 'approved',
                 'approved_by_user_id' => $actor instanceof \App\Models\User ? $actor->id : null,
+                // Gói "Chờ duyệt trên Hub" (2026-10-21): người duyệt là Employee
+                'approved_by_employee_id' => \App\Support\ApprovalActor::ids($actor)[1],
                 'approved_at' => now(),
             ]);
-        });
+            });
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
+        }
 
         return response()->json(['success' => true, 'message' => 'Đã duyệt và điều chỉnh kho.']);
     }
@@ -119,6 +144,8 @@ class StocktakeAdjustmentController extends Controller
         $adj->update([
             'status' => 'rejected',
             'approved_by_user_id' => $actor instanceof \App\Models\User ? $actor->id : null,
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): người từ chối là Employee
+            'approved_by_employee_id' => \App\Support\ApprovalActor::ids($actor)[1],
             'approved_at' => now(),
             'note' => trim(($adj->note ? $adj->note . ' | ' : '') . 'Từ chối: ' . ($v['note'] ?? 'không ghi lý do')),
         ]);

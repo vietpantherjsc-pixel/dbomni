@@ -3,6 +3,7 @@ import axios from 'axios';
 import { fmtDate, fmtTime } from '../utils/format';
 import { API } from '../utils/api'; // Gói 37e: API tương đối — chạy được trên điện thoại (IP LAN)
 import DateInput from '../components/DateInput';
+import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // Trang chấm công nhân viên (public, mở từ QR: /cham-cong?b=<id>&t=<token>)
 // Gói 35 — dùng endpoint /api/employee/... với header Authorization: Bearer <emp_token>
@@ -65,6 +66,8 @@ function errMsg(err, fallback) {
 }
 
 export default function ChamCong() {
+  // Gói 68: nút về Cổng nhân viên (giữ token QR như các trang NV khác)
+  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
   const [params] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     return { b: q.get('b') || '', t: q.get('t') || '' };
@@ -83,6 +86,12 @@ export default function ChamCong() {
   const [requests, setRequests] = useState([]);
   const [reqLoaded, setReqLoaded] = useState(false);
   const [fType, setFType] = useState('nghi');
+  // Spec danh mục dùng chung: loại yêu cầu đọc từ API (fallback cứng; 'khac' cũ được backend chuẩn hóa)
+  const leaveTypes = useSharedCategories('leave_types', [
+    { code: 'nghi', name: 'Xin nghỉ' },
+    { code: 'doica', name: 'Đổi ca' },
+    { code: 'other', name: 'Khác' },
+  ]);
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
   const [fReason, setFReason] = useState('');
@@ -240,6 +249,9 @@ export default function ChamCong() {
 
       {!token && (
         <div className="cc-body" style={{ paddingTop: 40 }}>
+          {/* Gói 68: nút về Hub ở màn hình nhập PIN */}
+          <button onClick={goHub} aria-label="Quay lại hub"
+            style={{ background: '#eef0f6', border: 'none', color: NAVY, fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 12 }}>‹ Hub</button>
           <div className="cc-hd" style={{ borderRadius: 18 }}>
             <div className="cc-title">Chấm công nhân viên</div>
             <div className="cc-branch">Quét QR tại quán để mở trang này</div>
@@ -270,6 +282,9 @@ export default function ChamCong() {
       {token && (
         <React.Fragment>
           <header className="cc-hd">
+            {/* Gói 68: nút về Hub ở header chính, nằm trong flow (không absolute) */}
+            <button onClick={goHub} aria-label="Quay lại hub"
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>‹ Hub</button>
             <div className="cc-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="cc-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
             <div className="cc-title">Chấm công</div>
@@ -346,9 +361,7 @@ export default function ChamCong() {
                   <div style={{ fontSize: 15, fontWeight: 700, color: NAVY }}>Gửi yêu cầu</div>
                   <label className="cc-label">Loại yêu cầu</label>
                   <select className="cc-field" value={fType} onChange={(e) => setFType(e.target.value)}>
-                    <option value="nghi">Xin nghỉ</option>
-                    <option value="doica">Đổi ca</option>
-                    <option value="khac">Khác</option>
+                    {leaveTypes.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
                   </select>
                   <label className="cc-label">Từ ngày</label>
                   <DateInput className="cc-field" value={fFrom} onChange={setFFrom} placeholder="dd/mm/yyyy" />

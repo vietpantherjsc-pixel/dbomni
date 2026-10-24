@@ -13,6 +13,15 @@ use Illuminate\Support\Facades\DB;
 // Gói 55 p11z: phiếu XUẤT KHO — tạo nháp, chốt trừ kho theo FIFO.
 class OutboundController extends Controller
 {
+    // Audit 2026-10-23 B-5: NV chỉ xem/thao tác phiếu xuất thuộc CN phân công.
+    protected function denyReceiptBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
+        }
+        return null;
+    }
     use \App\Traits\ValidatesEmployeeBranch;
     /**
      * Danh sách phiếu xuất theo chi nhánh (phân trang).
@@ -29,6 +38,10 @@ class OutboundController extends Controller
             ->withCount('items')
             ->orderByDesc('id');
 
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $q->whereIn('branch_id', $actor->allBranchIds());
+        }
         if (!empty($v['branch_id'])) {
             $q->where('branch_id', $v['branch_id']);
         }
@@ -56,7 +69,7 @@ class OutboundController extends Controller
         $v = $request->validate([
             'branch_id' => ($isEmployee ? 'nullable' : 'required') . '|exists:branches,id',
             'employee_id' => 'nullable|exists:employees,id',
-            'reason' => 'required|in:damaged,internal_use,sale,other',
+            'reason' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('outbound_reasons'))], // Spec danh mục dùng chung
             'note' => 'nullable|string|max:1000',
             'items' => 'required|array|min:1|max:100',
             'items.*.material_id' => 'required|exists:materials,id',
@@ -107,7 +120,7 @@ class OutboundController extends Controller
     /**
      * Chi tiết phiếu xuất kèm các dòng + nguyên liệu.
      */
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $receipt = OutboundReceipt::with([
             'items.material' => fn ($q) => $q->withTrashed(),
@@ -115,6 +128,7 @@ class OutboundController extends Controller
             'employee:id,name',
         ])->findOrFail($id);
 
+        if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
         $data = $receipt->toArray();
         $data['reason_label'] = $receipt->reason_label;
 
@@ -128,6 +142,7 @@ class OutboundController extends Controller
     public function confirm(Request $request, int $id): JsonResponse
     {
         $receipt = OutboundReceipt::with('items')->findOrFail($id);
+        if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
 
         if ($receipt->status !== 'draft') {
             return response()->json([
@@ -157,7 +172,19 @@ class OutboundController extends Controller
                     'note' => 'Chốt phiếu xuất ' . $receipt->code,
                 ]);
 
-                $locked->update(['status' => 'confirmed']);
+                // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người chốt (User hoặc Employee).
+                // TESTER fix: chỉ fallback auth()->id() khi CẢ 2 đều null — ở Hub,
+                // auth()->id() trả mã NV, ghi vào cột FK users sẽ vi phạm FK/sai người.
+                [$confirmUserId, $confirmEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+                if ($confirmUserId === null && $confirmEmployeeId === null) {
+                    $confirmUserId = auth()->id();
+                }
+                $locked->update([
+                    'status' => 'confirmed',
+                    'confirmed_by' => $confirmUserId,
+                    'confirmed_by_employee_id' => $confirmEmployeeId,
+                    'confirmed_at' => now(),
+                ]);
 
                 return $details;
             });
@@ -169,7 +196,7 @@ class OutboundController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage(),
+                'message' => $this->clientErrorMessage($e),
             ], 422);
         }
 
@@ -183,9 +210,10 @@ class OutboundController extends Controller
     /**
      * Hủy phiếu — chỉ cho hủy khi còn nháp (giữ toàn vẹn số liệu đã chốt).
      */
-    public function cancel(int $id): JsonResponse
+    public function cancel(Request $request, int $id): JsonResponse
     {
         $receipt = OutboundReceipt::findOrFail($id);
+        if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
 
         if ($receipt->status !== 'draft') {
             return response()->json([
@@ -194,7 +222,9 @@ class OutboundController extends Controller
             ], 422);
         }
 
-        $receipt->update(['status' => 'cancelled']);
+        // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
+        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
+        $receipt->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
 
         return response()->json([
             'success' => true,

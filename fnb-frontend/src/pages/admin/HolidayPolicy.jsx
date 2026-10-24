@@ -5,19 +5,23 @@ import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { useSharedCategories } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
-const VIOL_CATS = [
-    ['chuyen_can', 'Chuyên Cần'],
-    ['chuyen_mon', 'Chuyên Môn'],
-    ['chuyen_nghiep', 'Chuyên Nghiệp'],
+const VIOL_CATS_FB = [
+    { code: 'chuyen_can', name: 'Chuyên Cần' },
+    { code: 'chuyen_mon', name: 'Chuyên Môn' },
+    { code: 'chuyen_nghiep', name: 'Chuyên Nghiệp' },
 ];
-const violCatName = (c, fallback) => (VIOL_CATS.find(([k]) => k === c)?.[1]) || fallback || c;
+const violCatName = (cats) => (c, fallback) => (cats.find((x) => x.code === c)?.name) || fallback || c;
 
 // Gói 30: Chính sách lương lễ/tết + lương trách nhiệm theo vi phạm (chung toàn chuỗi).
 // Gói 54: đổi tên thành "Cấu hình Lương", thêm mục BHXH (chuyển từ Thiết lập sang).
 export default function HolidayPolicy() {
     const { can } = useAuth();
+    // Spec danh mục dùng chung: nhóm lỗi vi phạm đọc từ API, fallback cứng
+    const VIOL_CATS = useSharedCategories('violation_groups', VIOL_CATS_FB);
+    const getViolCatName = violCatName(VIOL_CATS);
     const [pol, setPol] = useState({ resp_base_per_hour: 2000, resp_deduction_per_violation: 500, resp_max_violations: 4, meal_price: 30000, meal_min_hours: 14.5, bhxh_emp_bhxh: 8, bhxh_emp_bhyt: 1.5, bhxh_emp_bhtn: 1, bhxh_employer_rate: 21.5 });
     const [holidays, setHolidays] = useState([]);
     const [form, setForm] = useState({ date: '', name: '', multiplier: 2 });
@@ -199,10 +203,10 @@ export default function HolidayPolicy() {
                                     <th className="py-2 font-medium text-center">Mặc định (lỗi)</th>{canEditTypes && <th className="py-2"></th>}
                                 </tr></thead>
                                 <tbody>
-                                    {VIOL_CATS.map(([ck, cn]) => (
-                                        <React.Fragment key={ck}>
-                                            <tr><td colSpan={canEditTypes ? 4 : 3} className="py-2 font-bold text-[#24305E] bg-gray-50 px-2">{cn}</td></tr>
-                                            {types.filter((t) => t.category === ck).map((t) => (
+                                    {VIOL_CATS.map((cat) => (
+                                        <React.Fragment key={cat.code}>
+                                            <tr><td colSpan={canEditTypes ? 4 : 3} className="py-2 font-bold text-[#24305E] bg-gray-50 px-2">{cat.name}</td></tr>
+                                            {types.filter((t) => t.category === cat.code).map((t) => (
                                                 <tr key={t.id} className="border-b border-gray-50">
                                                     <td className="py-2"></td>
                                                     <td className="py-2 font-medium">{t.name}{t.is_active === false && <span className="ml-2 text-[11px] text-gray-400">(đã ẩn)</span>}</td>
@@ -224,7 +228,7 @@ export default function HolidayPolicy() {
                                 <h4 className="text-[13px] font-bold mb-2">{editingType ? 'Sửa loại lỗi' : 'Thêm loại lỗi'}</h4>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                                     <select value={typeForm.category} onChange={(e) => setTypeForm({ ...typeForm, category: e.target.value })} className={inp}>
-                                        {VIOL_CATS.map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                                        {VIOL_CATS.map((cat) => <option key={cat.code} value={cat.code}>{cat.name}</option>)}
                                     </select>
                                     <input placeholder="Tên lỗi vi phạm *" value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} className={inp + ' md:col-span-2'} />
                                     <input type="number" min="1" value={typeForm.default_points} onChange={(e) => setTypeForm({ ...typeForm, default_points: e.target.value })} className={inp} title="Số lỗi mặc định" />

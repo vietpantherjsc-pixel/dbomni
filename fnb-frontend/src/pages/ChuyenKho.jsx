@@ -26,9 +26,6 @@ const CSS = `
 .ck-label{font-size:13px;font-weight:700;color:#6b7280;margin-top:12px;display:block;}
 .ck-field{width:100%;min-height:50px;border:1.5px solid #e8e9ee;border-radius:12px;padding:10px 12px;font-size:15px;font-family:inherit;background:#fbfbfc;margin-top:6px;box-sizing:border-box;}
 .ck-field:focus{outline:none;border-color:${ORANGE};}
-.ck-2col{display:flex;gap:10px;align-items:center;}
-.ck-2col>div{flex:1;min-width:0;}
-.ck-arrow{font-size:24px;color:${NAVY};font-weight:800;padding-top:32px;}
 .ck-addbtn{background:${NAVY};color:#fff;width:100%;min-height:50px;border:none;border-radius:12px;font-size:15px;font-weight:700;margin-top:12px;}
 .ck-submit{background:${ORANGE};color:#fff;width:100%;min-height:54px;border:none;border-radius:12px;font-size:16px;font-weight:800;margin-top:14px;}
 .ck-submit:disabled{opacity:.45;}
@@ -265,6 +262,7 @@ export default function ChuyenKho({ embed } = {}) {
               <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
               <div className="ck-sub">{curBranchName}</div>
             </div>
+            {!(embed && embed.onBack) && <button className="ck-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>}
             <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
           <div className="ck-title">🔄 Chuyển kho</div>
@@ -290,6 +288,7 @@ export default function ChuyenKho({ embed } = {}) {
             <div className="ck-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="ck-sub">{curBranchName}</div>
           </div>
+          {!(embed && embed.onBack) && <button className="ck-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>}
           <button className="ck-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>
         <div className="ck-title">🔄 Chuyển kho</div>
@@ -305,7 +304,7 @@ export default function ChuyenKho({ embed } = {}) {
 
           <section className="ck-card">
             <h3>Kho nguồn → Kho đích</h3>
-            <div className="ck-2col">
+            <div>
               <div>
                 <label className="ck-label" style={{ marginTop: 0 }}>Kho nguồn</label>
                 <select className="ck-field" value={fromId} onChange={(e) => setFromId(e.target.value)}>
@@ -313,9 +312,8 @@ export default function ChuyenKho({ embed } = {}) {
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </select>
               </div>
-              <div className="ck-arrow">→</div>
               <div>
-                <label className="ck-label" style={{ marginTop: 0 }}>Kho đích</label>
+                <label className="ck-label">Kho đích</label>
                 <select className="ck-field" value={toId} onChange={(e) => setToId(e.target.value)}>
                   <option value="">— Chọn —</option>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}

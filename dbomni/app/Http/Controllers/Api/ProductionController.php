@@ -133,7 +133,12 @@ class ProductionController extends Controller
                 );
 
                 // 3. Nhập lô mới cho bán thành phẩm
-                $inventoryService->addStock($validated['branch_id'], $material->id, $qty);
+                // Audit 2026-10-23 KHO-08: giá vốn BTP = tổng giá NL đã trừ / sản lượng
+                $inputCost = $movementIds
+                    ? (float) \App\Models\StockMovement::whereIn('id', $movementIds)->sum(\Illuminate\Support\Facades\DB::raw('quantity * unit_cost'))
+                    : 0;
+                $btpUnitCost = $qty > 0 ? $inputCost / $qty : 0;
+                $inventoryService->addStock($validated['branch_id'], $material->id, $qty, null, null, $btpUnitCost);
 
                 // 4. Lưu phiếu
                 $production = Production::create([

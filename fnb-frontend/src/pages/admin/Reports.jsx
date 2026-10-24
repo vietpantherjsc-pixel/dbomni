@@ -454,6 +454,7 @@ export default function Reports() {
         ['menu', 'Menu Engineering'],
         ['cancelled', 'Đơn hủy'],
         ['ops', 'Vận hành'],
+        ['hr', 'Nhân sự'],
     ];
 
     return (
@@ -667,6 +668,30 @@ export default function Reports() {
                             ))}
                             {(r.by_category || []).length === 0 && <div className="sub">Chưa có số liệu.</div>}
                         </div>
+                        <div className="card">
+                            <h3>Theo ca thu ngân</h3>
+                            <div className="sub">Đơn, doanh thu, AOV từng ca — đối chiếu với tiền két cuối ca.</div>
+                            {(r.by_shift || []).map((m) => (
+                                <div className="ch-row" key={m.key}>
+                                    <div className="nm">{m.name}</div>
+                                    <div className="ch-bar"><div className="ch-fill" style={{ width: m.share + '%', background: '#7C8DB0' }} /></div>
+                                    <div className="ch-val"><b>{fmtVND(m.value)}</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{fmtInt(m.orders)} đơn · AOV {fmtVND(m.avg)}</div></div>
+                                </div>
+                            ))}
+                            {(r.by_shift || []).length === 0 && <div className="sub">Chưa có số liệu.</div>}
+                        </div>
+                        <div className="card">
+                            <h3>Theo nhân viên thu ngân</h3>
+                            <div className="sub">Đơn, doanh thu, AOV từng NV — đánh giá hiệu suất thu ngân.</div>
+                            {(r.by_staff || []).map((m) => (
+                                <div className="ch-row" key={m.key}>
+                                    <div className="nm">{m.name}</div>
+                                    <div className="ch-bar"><div className="ch-fill" style={{ width: m.share + '%', background: '#0d6efd' }} /></div>
+                                    <div className="ch-val"><b>{fmtVND(m.value)}</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{fmtInt(m.orders)} đơn · AOV {fmtVND(m.avg)}</div></div>
+                                </div>
+                            ))}
+                            {(r.by_staff || []).length === 0 && <div className="sub">Chưa có số liệu.</div>}
+                        </div>
                         <Glossary keys={['gross', 'net', 'aov', 'commission']} />
                     </section>
                     )}
@@ -688,13 +713,22 @@ export default function Reports() {
                         </div>
                         <div className="card">
                             <h3>Cơ cấu chi phí</h3>
+                            {(() => {
+                                const sal = (p.costs || []).find((c) => c.name === 'Lương');
+                                const estimated = sal && sal.note && sal.note.includes('Ước tính');
+                                return estimated ? (
+                                    <div style={{ background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 12.5, color: '#9a3412', fontWeight: 600 }}>
+                                        ⚠ Chi phí lương là <b>ƯỚC TÍNH</b> — kỳ này chưa chốt lương. Số chính xác sau khi chốt ở trang Bảng lương.
+                                    </div>
+                                ) : null;
+                            })()}
                             <div className="donut-wrap">
                                 <div dangerouslySetInnerHTML={{ __html: donut(p.costs, p.cost_total) }} />
                                 <ul className="cost-legend">
                                     {p.costs.map((c, i) => (
                                         <li key={i}>
                                             <span className="dot" style={{ background: c.color }} />
-                                            <span className="nm">{c.name}</span>
+                                            <span className="nm">{c.name}{c.note ? <span style={{ color: '#999', fontSize: 11 }}> ({c.note})</span> : null}</span>
                                             <span className="pc">{trimN(p.cost_total > 0 ? c.value / p.cost_total * 100 : 0)}%</span>
                                             <span className="am">{fmtVND(c.value)}</span>
                                         </li>
@@ -702,6 +736,7 @@ export default function Reports() {
                                 </ul>
                             </div>
                         </div>
+                        <CashSummary branchId={branchId} />
                         <div className="card">
                             <h3>Phần B — Sổ dòng tiền</h3>
                             <div className="sub">Mỗi giao dịch có số dư lũy kế (running balance) — phát hiện "âm quỹ ảo" theo thời gian.</div>
@@ -1039,6 +1074,9 @@ export default function Reports() {
                     </section>
                     )}
 
+                    {/* Spec P4-C6: BÁO CÁO NHÂN SỰ */}
+                    {tab === 'hr' && <HrTab branchId={branchId} />}
+
                     {/* Ghi chú chung */}
                     <div className="foot">
                         <h4>Ghi chú về số liệu</h4>
@@ -1055,5 +1093,123 @@ export default function Reports() {
                 </main>
             </div>
         </AdminLayout>
+    );
+}
+
+// Spec P4-C5: tổng hợp thu/chi theo danh mục + kỳ (dùng trong tab Thu-chi)
+export function CashSummary({ branchId }) {
+    const [data, setData] = useState(null);
+    const [period, setPeriod] = useState('month');
+    useEffect(() => {
+        axios.get(API + '/reports/cash-summary', { params: { branch_id: branchId, period } })
+            .then((r) => setData(r.data?.data)).catch(() => {});
+    }, [branchId, period]);
+    if (!data) return null;
+    const maxV = Math.max(1, ...data.buckets.map((b) => Math.max(b.income, b.expense)));
+    return (
+        <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h3>Tổng hợp thu/chi theo danh mục</h3>
+                <select value={period} onChange={(e) => setPeriod(e.target.value)} className="m-select" style={{ width: 'auto' }}>
+                    <option value="day">Ngày</option>
+                    <option value="week">Tuần</option>
+                    <option value="month">Tháng</option>
+                </select>
+            </div>
+            <div className="kpis" style={{ marginBottom: 12 }}>
+                <div className="kpi"><div className="lb">Tổng thu</div><div className="v" style={{ color: 'var(--green)' }}>{fmtVND(data.total_income)}</div></div>
+                <div className="kpi"><div className="lb">Tổng chi</div><div className="v" style={{ color: 'var(--red)' }}>{fmtVND(data.total_expense)}</div></div>
+                <div className="kpi"><div className="lb">Chênh lệch</div><div className="v">{fmtVND(data.net)}</div></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div>
+                    <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Cơ cấu thu</div>
+                    {(data.by_category || []).filter((c) => c.type === 'income').map((c, i) => (
+                        <div className="ch-row" key={i}>
+                            <div className="nm">{c.name}</div>
+                            <div className="ch-bar"><div className="ch-fill" style={{ width: c.share + '%', background: '#16a34a' }} /></div>
+                            <div className="ch-val"><b>{fmtVND(c.value)}</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{c.share}%</div></div>
+                        </div>
+                    ))}
+                </div>
+                <div>
+                    <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Cơ cấu chi</div>
+                    {(data.by_category || []).filter((c) => c.type === 'expense').map((c, i) => (
+                        <div className="ch-row" key={i}>
+                            <div className="nm">{c.name}</div>
+                            <div className="ch-bar"><div className="ch-fill" style={{ width: c.share + '%', background: '#dc2626' }} /></div>
+                            <div className="ch-val"><b>{fmtVND(c.value)}</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{c.share}%</div></div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            <div className="sub" style={{ fontWeight: 700, margin: '12px 0 6px' }}>Thu/chi theo ngày</div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 120 }}>
+                {data.buckets.map((b, i) => (
+                    <div key={i} title={`${b.label}: thu ${fmtVND(b.income)}, chi ${fmtVND(b.expense)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                        <div style={{ width: '100%', display: 'flex', gap: 1, alignItems: 'flex-end', height: 100 }}>
+                            <div style={{ flex: 1, background: '#16a34a', height: (b.income / maxV * 100) + '%' }} />
+                            <div style={{ flex: 1, background: '#dc2626', height: (b.expense / maxV * 100) + '%' }} />
+                        </div>
+                        <div style={{ fontSize: 9, color: 'var(--muted)' }}>{b.label}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+// Spec P4-C6: báo cáo nhân sự tổng hợp
+function HrTab({ branchId }) {
+    const [data, setData] = useState(null);
+    const [month, setMonth] = useState(() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); });
+    useEffect(() => {
+        axios.get(API + '/reports/hr-summary', { params: { month, branch_id: branchId } })
+            .then((r) => setData(r.data?.data)).catch(() => {});
+    }, [month, branchId]);
+    if (!data) return <section><div className="card"><div className="sub">Đang tải…</div></div></section>;
+    return (
+        <section>
+            <div className="card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <h3>Báo cáo nhân sự — tháng {month}</h3>
+                    <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="m-select" style={{ width: 'auto' }} />
+                </div>
+                {!data.locked && <div className="sub" style={{ color: '#b45309', marginBottom: 8 }}>⚠ Kỳ lương chưa chốt — cột lương thực nhận chưa có số liệu.</div>}
+                <div className="kpis" style={{ marginBottom: 12 }}>
+                    <div className="kpi"><div className="lb">Tổng giờ công</div><div className="v">{data.total_hours}h</div></div>
+                    <div className="kpi"><div className="lb">Tổng lương thực nhận</div><div className="v">{fmtVND(data.total_net)}</div></div>
+                    <div className="kpi"><div className="lb">Số NV</div><div className="v">{data.rows.length}</div></div>
+                </div>
+                {data.warnings.length > 0 && (
+                    <div style={{ border: '1px solid #f5c2c7', background: '#fff5f5', borderRadius: 8, padding: '10px 14px', marginBottom: 12, color: '#b42318', fontWeight: 600, fontSize: 13 }}>
+                        ⚠ {data.warnings.length} NV vượt {data.over_hours_threshold}h/tháng: {data.warnings.map((w) => `${w.full_name} (${w.hours}h)`).join(', ')}
+                    </div>
+                )}
+                <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Top 5 NV giờ cao nhất</div>
+                {(data.top_hours || []).map((r, i) => (
+                    <div className="ch-row" key={r.employee_id}>
+                        <div className="nm">#{i + 1} {r.full_name} <span style={{ color: 'var(--muted)' }}>({r.branch_name})</span></div>
+                        <div className="ch-val"><b>{r.hours}h</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{r.workdays} ngày công{r.net != null && ' · ' + fmtVND(r.net)}</div></div>
+                    </div>
+                ))}
+            </div>
+            <div className="card">
+                <h3>Chi tiết theo nhân viên</h3>
+                <div className="tbl-wrap"><table className="tbl"><tbody>
+                    <tr><th>Nhân viên</th><th>Chi nhánh</th><th className="num">Giờ công</th><th className="num">Ngày công</th><th className="num">Lương thực nhận</th><th></th></tr>
+                    {data.rows.map((r) => (
+                        <tr key={r.employee_id} style={r.over_hours ? { background: '#fff5f5' } : undefined}>
+                            <td className="prod">{r.full_name}</td>
+                            <td>{r.branch_name}</td>
+                            <td className="num">{r.hours}h</td>
+                            <td className="num">{r.workdays}</td>
+                            <td className="num"><b>{r.net != null ? fmtVND(r.net) : '—'}</b></td>
+                            <td>{r.over_hours && <span style={{ color: '#b42318', fontWeight: 700, fontSize: 12 }}>⚠ Vượt giờ</span>}</td>
+                        </tr>
+                    ))}
+                </tbody></table></div>
+            </div>
+        </section>
     );
 }

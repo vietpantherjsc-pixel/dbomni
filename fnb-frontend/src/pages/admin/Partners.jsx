@@ -3,6 +3,7 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate as fmtDateShared } from '../../utils/format';
 import { API } from '../../utils/api';
+import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // =====================================================================
 // Gói 29 (2026-10-09): Trang Đối tác — dùng chung toàn chuỗi.
@@ -11,7 +12,7 @@ import { API } from '../../utils/api';
 //   (số tiền/đã trả/còn nợ) + form thanh toán trừ dần + lịch sử thanh toán.
 // =====================================================================
 
-const TYPE_LABEL = { supplier: 'Nhà cung cấp', customer: 'Khách hàng', other: 'Khác' };
+const TYPE_LABEL_FB = { supplier: 'Nhà cung cấp', customer: 'Khách hàng', other: 'Khác' };
 const METHOD_LABEL = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
 const fmtMoney = (n) => new Intl.NumberFormat('vi-VN').format(n || 0) + 'đ';
 // Gói 36: dùng chung utils/format (giữ fallback '-')
@@ -23,6 +24,9 @@ const emptyForm = () => ({
 });
 
 const Partners = () => {
+    // Spec danh mục dùng chung: nhãn loại đối tác đọc từ API, fallback cứng
+    const TYPE_LABEL = labelMap(useSharedCategories('partner_types', []), TYPE_LABEL_FB);
+    const partnerTypeItems = useSharedCategories('partner_types', Object.entries(TYPE_LABEL_FB).map(([code, name]) => ({ code, name })));
     const [rows, setRows] = useState([]);
     const [summary, setSummary] = useState({ receivable: 0, payable: 0 });
     const [loading, setLoading] = useState(true);
@@ -177,7 +181,7 @@ const Partners = () => {
                         <select value={fType} onChange={(e) => setFType(e.target.value)}
                             className="text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]">
                             <option value="">Tất cả loại</option>
-                            {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            {partnerTypeItems.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
                         </select>
                     </div>
                     <div className="overflow-x-auto">
@@ -244,7 +248,7 @@ const Partners = () => {
                                     <label className="text-[12.5px] text-gray-500 block mb-1">Loại *</label>
                                     <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
                                         className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]">
-                                        {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                        {partnerTypeItems.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
                                     </select>
                                 </div>
                             </div>

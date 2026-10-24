@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateTimeInput from '../../components/DateTimeInput';
 import TimeInput from '../../components/TimeInput';
 import { fmtDate, fmtDateTime } from '../../utils/format';
 import { API } from '../../utils/api';
+import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
+import VoucherManager from './VoucherManager'; // Spec 5 (2026-10-21): tab "Mã voucher" trong trang Khuyến mại
 
 // Gói 50b: backend trả URL tuyệt đối đúng host — dùng trực tiếp, fallback ghép host khi còn relative
 const imgSrc = (u) => {
@@ -14,9 +16,103 @@ const imgSrc = (u) => {
   catch { return u; }
 };
 
-const TYPE_LABELS = { percent: 'Theo phần trăm', fixed: 'Theo số tiền', fixed_price: 'Đồng giá', gift: 'Tặng món', shipping: '🚚 Giảm/miễn phí vận chuyển' };
-const SCOPE_LABELS = { order: 'Hóa đơn', category: 'Danh mục', menu: 'Thực đơn', product: 'Mặt hàng' };
+const TYPE_LABELS_FB = { percent: 'Theo phần trăm', fixed: 'Theo số tiền', fixed_price: 'Đồng giá', gift: 'Tặng món', shipping: '🚚 Giảm/miễn phí vận chuyển' };
+const SCOPE_LABELS_FB = { order: 'Hóa đơn', category: 'Danh mục', menu: 'Thực đơn', product: 'Mặt hàng' };
 const DAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+// SPEC-02b: giải thích từng trigger + JSON mẫu để quản lý không chuyên tự nhập được.
+// suggest_days: số ngày hiệu lực gợi ý khi chọn trigger.
+const TRIGGER_HELP = {
+    '': {
+        label: 'Không (thủ công)',
+        desc: 'Khuyến mại thường: tự áp dụng khi đơn đủ điều kiện, không phát coupon vào ví khách.',
+        sample: '{}', sample_note: 'Không cần tham số thêm.', suggest_days: 7,
+    },
+    manual: {
+        label: 'Thủ công — khách tự lấy trong ví (CP-04/CP-05/CP-09)',
+        desc: 'Coupon nằm trong mục "Ưu đãi" trên Mini App, khách tự bấm lấy. Dùng cho deal giờ vàng, BOGO theo đợt.',
+        sample: '{}', sample_note: 'Không cần tham số thêm.', suggest_days: 1,
+    },
+    first_order: {
+        label: 'CP-01 · Đơn đầu tiên',
+        desc: 'Hệ thống tự tặng coupon cho khách ngay khi họ đặt đơn đầu tiên trên Mini App.',
+        sample: '{\n  "max_gift_value": 45000,\n  "gift_product_ids": []\n}',
+        sample_note: 'max_gift_value: trị giá tối đa của món quà (đ). gift_product_ids: id các món được chọn làm quà — để [] nếu dùng ô "Món tặng" bên dưới.',
+        suggest_days: 7,
+    },
+    referral: {
+        label: 'CP-02 · Giới thiệu bạn',
+        desc: 'Khi bạn mới đặt đơn đầu tiên, cả người giới thiệu và bạn mới đều được tặng coupon.',
+        sample: '{\n  "referral_min_order": 50000\n}',
+        sample_note: 'referral_min_order: đơn đầu của bạn mới phải từ số tiền này trở lên thì cả hai mới được thưởng (đ).',
+        suggest_days: 30,
+    },
+    stamp: {
+        label: 'CP-03 · Tích tem',
+        desc: 'Khách tích đủ số tem sẽ tự nhận coupon đổi quà.',
+        sample: '{\n  "stamps_required": 5,\n  "window_days": 30,\n  "min_cups_per_order": 1,\n  "max_gift_value": 45000\n}',
+        sample_note: 'stamps_required: số tem cần để đổi quà. window_days: tem chỉ tính trong X ngày gần nhất. min_cups_per_order: mỗi đơn phải có ít nhất X cốc mới được tính tem. max_gift_value: trị giá tối đa của quà (đ).',
+        suggest_days: 30,
+    },
+    inactive: {
+        label: 'CP-06 · 14 ngày không đơn ("Nhớ bạn")',
+        desc: 'Tự gửi coupon cho khách đã lâu không đặt đơn, kéo khách quay lại quán.',
+        sample: '{\n  "inactive_days": 14\n}',
+        sample_note: 'inactive_days: số ngày không có đơn thì gửi coupon. Hiệu lực nên để 3 ngày (72 giờ) để tạo cảm giác gấp.',
+        suggest_days: 3,
+    },
+    birthday: {
+        label: 'CP-07 · Sinh nhật',
+        desc: 'Tự tặng coupon quà sinh nhật cho khách trong tháng sinh nhật.',
+        sample: '{\n  "max_gift_value": 55000\n}',
+        sample_note: 'max_gift_value: trị giá tối đa của quà sinh nhật (đ).',
+        suggest_days: 30,
+    },
+    new_product: {
+        label: 'CP-08 · Món mới',
+        desc: 'Tặng coupon dùng thử khi quán ra món mới.',
+        sample: '{\n  "new_product_ids": [],\n  "target_category_ids": []\n}',
+        sample_note: 'new_product_ids: id các món mới. target_category_ids: id nhóm món được giảm — để [] nếu áp dụng mọi món.',
+        suggest_days: 7,
+    },
+    next_order: {
+        label: 'CP-10 · Đơn tiếp theo',
+        desc: 'Sau khi khách hoàn tất 1 đơn, tự tặng coupon dùng cho đơn kế tiếp (chỉ Mini App).',
+        sample: '{}',
+        sample_note: 'Không cần tham số thêm — mức giảm lấy từ ô "Giảm giá (%)" bên dưới.',
+        suggest_days: 7,
+    },
+};
+
+// SPEC-02c (phương án A — form động theo trigger, giấu JSON):
+// suy field nhập liệu từ JSON mẫu của từng trigger.
+// type: 'number' → ô nhập số; 'products' → checklist món; 'categories' → checklist nhóm món.
+const TRIGGER_FIELDS = {
+    first_order: [
+        { key: 'max_gift_value', type: 'number', label: 'Trị giá tối đa của món quà (đ)', hint: 'Món quà tặng không vượt quá số tiền này.' },
+        { key: 'gift_product_ids', type: 'products', label: 'Các món được chọn làm quà', hint: 'Để trống nếu dùng ô "Món tặng" ở bên dưới.' },
+    ],
+    referral: [
+        { key: 'referral_min_order', type: 'number', label: 'Đơn đầu của bạn mới tối thiểu (đ)', hint: 'Đơn đầu từ số này trở lên thì cả người giới thiệu và bạn mới đều được thưởng.' },
+    ],
+    stamp: [
+        { key: 'stamps_required', type: 'number', label: 'Số tem cần để đổi quà', hint: '' },
+        { key: 'window_days', type: 'number', label: 'Tem chỉ tính trong X ngày gần nhất', hint: '' },
+        { key: 'min_cups_per_order', type: 'number', label: 'Mỗi đơn ít nhất X cốc mới tính tem', hint: '' },
+        { key: 'max_gift_value', type: 'number', label: 'Trị giá tối đa của quà (đ)', hint: '' },
+    ],
+    inactive: [
+        { key: 'inactive_days', type: 'number', label: 'Số ngày không có đơn thì gửi coupon', hint: '' },
+    ],
+    birthday: [
+        { key: 'max_gift_value', type: 'number', label: 'Trị giá tối đa của quà sinh nhật (đ)', hint: '' },
+    ],
+    new_product: [
+        { key: 'new_product_ids', type: 'products', label: 'Các món mới', hint: '' },
+        { key: 'target_category_ids', type: 'categories', label: 'Nhóm món được giảm', hint: 'Để trống = áp dụng mọi món.' },
+    ],
+    // '': Không có tham số riêng. 'manual': tham số theo đợt (nhập ở Nâng cao). 'next_order': không cần tham số thêm.
+};
 
 // =====================================================================
 // Gói 10 (2026-10-05): đồng bộ UI matcha + fix load danh mục/mặt hàng
@@ -24,6 +120,9 @@ const DAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 // thêm phạm vi Thực đơn.
 // =====================================================================
 export default function Promotions() {
+    // Spec danh mục dùng chung: nhãn loại/phạm vi KM đọc từ API, fallback cứng
+    const TYPE_LABELS = labelMap(useSharedCategories('promotion_types', []), TYPE_LABELS_FB);
+    const SCOPE_LABELS = labelMap(useSharedCategories('promotion_scopes', []), SCOPE_LABELS_FB);
     const [list, setList] = useState([]);
     const [page, setPage] = useState(1);
     const [lastPage, setLastPage] = useState(1);
@@ -33,15 +132,77 @@ export default function Promotions() {
     const [menus, setMenus] = useState([]);
     const [products, setProducts] = useState([]);
     const [tiers, setTiers] = useState([]);
+    // Spec kênh bán hàng: checklist kênh load từ DB, nhóm theo phân loại
+    const [priceLists, setPriceLists] = useState([]);
+    const CH_CAT_ORDER = ['store', 'online', 'partner'];
+    const CH_CAT_LABELS = { store: 'Tại cửa hàng', online: 'Online', partner: 'Đối tác giao hàng' };
 
     const emptyForm = () => ({
-        name: '', type: 'percent', value: '', scope: 'order', scope_ids: [],
+        name: '', code: '', type: 'percent', value: '', scope: 'order', scope_ids: [],
         min_order_amount: 0, max_discount_amount: '', gift_product_id: '', gift_quantity: 1,
         target: 'all', tier_ids: [], starts_at: '', expires_at: '', has_expires: false,
         days_of_week: [], use_days: false, time_from: '', time_to: '', use_time: false,
-        channels: ['pos'], is_active: true, banner_url: '',
+        channels: [], is_active: true, banner_url: '', // Spec kênh bán hàng: [] = mọi kênh (mặc định nhóm store khi tạo mới)
+        // Mô hình cộng dồn 2026-10-21 ~22:45: phía KM chỉ 1 cờ — cộng dồn với coupon (mặc định TẮT)
+        stack_with_coupon: false,
+        // SPEC-02: cấu hình trigger tự động (JSON)
+        auto_trigger: '', auto_valid_days: 7, auto_max_per_customer: 1,
+        auto_extra: '{}',
     });
     const [form, setForm] = useState(emptyForm());
+    // SPEC-02b: lỗi validate hiển thị ngay dưới từng trường (thay vì alert chung chung)
+    const [errs, setErrs] = useState({});
+    const FE = ({ k }) => errs[k]
+        ? <div className="text-[12px] mt-1 font-medium" style={{ color: 'var(--m-danger)' }}>⚠ {errs[k]}</div>
+        : null;
+    const errStyle = (k) => errs[k] ? { borderColor: 'var(--m-danger)' } : {};
+    // SPEC-02c: form động theo trigger — nguồn sự thật là form.auto_extra (chuỗi JSON);
+    // lastValidExtra giữ object parse OK gần nhất để field không crash khi JSON đang sai.
+    const [showAdv, setShowAdv] = useState(false);
+
+    // Spec 5 (2026-10-21): 2 tab — Chương trình khuyến mại | Mã voucher (deep-link ?tab=voucher)
+    const [tab, setTab] = useState(() => {
+        try {
+            return new URLSearchParams(window.location.search).get('tab') === 'voucher' ? 'voucher' : 'promo';
+        } catch { return 'promo'; }
+    });
+    const switchTab = (t) => {
+        setTab(t);
+        try {
+            const u = new URL(window.location.href);
+            if (t === 'voucher') u.searchParams.set('tab', 'voucher');
+            else u.searchParams.delete('tab');
+            window.history.replaceState(null, '', u.toString());
+        } catch { /* bỏ qua */ }
+    };
+    const lastValidExtra = useRef({});
+    const parseExtra = (str) => { try { const o = JSON.parse(str || '{}'); return (o && typeof o === 'object') ? o : null; } catch { return null; } };
+    const updField = (key, val) => {
+        const obj = { ...lastValidExtra.current };
+        if (val === '' || val === null || val === undefined) delete obj[key];
+        else obj[key] = val;
+        lastValidExtra.current = obj;
+        setForm((f) => ({ ...f, auto_extra: JSON.stringify(obj, null, 2) }));
+        setErrs((e) => { const n = { ...e }; delete n.auto_extra; return n; });
+    };
+    const applySample = () => {
+        const p = parseExtra(TRIGGER_HELP[form.auto_trigger]?.sample || '{}');
+        if (!p) return;
+        lastValidExtra.current = p;
+        setForm((f) => ({ ...f, auto_extra: JSON.stringify(p, null, 2) }));
+        setErrs((e) => { const n = { ...e }; delete n.auto_extra; return n; });
+    };
+    const onExtraChange = (e) => {
+        const v = e.target.value;
+        setForm((f) => ({ ...f, auto_extra: v }));
+        const p = parseExtra(v);
+        if (p) {
+            lastValidExtra.current = p;
+            setErrs((prev) => { const n = { ...prev }; delete n.auto_extra; return n; });
+        } else {
+            setErrs((prev) => ({ ...prev, auto_extra: 'Chuỗi JSON chưa đúng cú pháp. Sửa lại cho đúng hoặc bấm "Chèn mẫu".' }));
+        }
+    };
 
     const fetchList = async (p = 1) => {
         try {
@@ -64,31 +225,77 @@ export default function Promotions() {
 
     const fetchMeta = async () => {
         try {
-            const [cRes, mRes, pRes, tRes] = await Promise.all([
+            const [cRes, mRes, pRes, tRes, plRes] = await Promise.all([
                 axios.get(`${API}/categories`),
                 axios.get(`${API}/menus`),
                 axios.get(`${API}/products`),
                 axios.get(`${API}/membership-tiers`),
+                axios.get(`${API}/price-lists`), // Spec kênh bán hàng: checklist kênh từ DB
             ]);
             setCategories(asArray(cRes));
             const mData = mRes.data?.success ? mRes.data.data : mRes.data;
             setMenus(Array.isArray(mData) ? mData : []);
             setProducts(asArray(pRes));
             setTiers(tRes.data?.data || []);
+            const plData = plRes.data?.data || plRes.data;
+            setPriceLists(Array.isArray(plData) ? plData : []);
         } catch (err) { console.error('Lỗi tải meta:', err); }
     };
 
     useEffect(() => { fetchList(); fetchMeta(); }, []);
 
-    const startCreate = () => { setEditing(null); setForm(emptyForm()); setMode('form'); };
+    // Spec kênh bán hàng: chuẩn hóa channels về mảng ID (tương thích mảng code chuỗi cũ: pos/zalo/code kênh)
+    const normalizeChannels = (raw) => {
+        const out = [];
+        for (const c of (raw || [])) {
+            if (typeof c === 'number' || /^\d+$/.test(String(c))) { out.push(Number(c)); continue; }
+            const lc = String(c).toLowerCase().trim();
+            const hit = priceLists.find((pl) => String(pl.code).toLowerCase() === lc);
+            if (hit) { out.push(hit.id); continue; }
+            if (lc === 'pos') priceLists.filter((pl) => (pl.category || 'partner') === 'store').forEach((pl) => out.push(pl.id));
+            else if (lc === 'zalo') {
+                const o = priceLists.find((pl) => String(pl.code).toLowerCase() === 'online');
+                if (o) out.push(o.id);
+            }
+        }
+        return [...new Set(out)];
+    };
+    const channelChecked = (id) => normalizeChannels(form.channels).includes(id);
+    const toggleChannel = (id) => {
+        const cur = normalizeChannels(form.channels);
+        setForm({ ...form, channels: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+    };
+    const toggleChannelGroup = (cat) => {
+        const ids = priceLists.filter((pl) => pl.is_active && (pl.category || 'partner') === cat).map((pl) => pl.id);
+        const cur = normalizeChannels(form.channels);
+        const allIn = ids.length > 0 && ids.every((id) => cur.includes(id));
+        setForm({ ...form, channels: allIn ? cur.filter((x) => !ids.includes(x)) : [...new Set([...cur, ...ids])] });
+    };
+    // Giữ hành vi cũ: tạo mới mặc định tick nhóm "Tại cửa hàng" (trước đây là ['pos'])
+    const channelsDefaulted = useRef(false);
+    useEffect(() => {
+        if (mode === 'form' && !editing && priceLists.length > 0 && !channelsDefaulted.current) {
+            channelsDefaulted.current = true;
+            const storeIds = priceLists.filter((pl) => pl.is_active && (pl.category || 'partner') === 'store').map((pl) => pl.id);
+            setForm((f) => ({ ...f, channels: storeIds }));
+        }
+    }, [mode, editing, priceLists]);
+
+    const startCreate = () => { setEditing(null); setForm(emptyForm()); setErrs({}); lastValidExtra.current = {}; setShowAdv(false); channelsDefaulted.current = false; setMode('form'); };
     const startEdit = async (id) => {
         try {
             const res = await axios.get(`${API}/promotions/${id}`);
             if (res.data?.success) {
                 const p = res.data.data;
                 setEditing(id);
+                // SPEC-02b: tách auto_config thành trigger + valid_days + max_per_customer + JSON phần còn lại
+                const _ac = p.auto_config || {};
+                const { trigger: _tr, valid_days: _vd, max_per_customer: _mp, ..._extra } = _ac;
+                lastValidExtra.current = _extra; setShowAdv(false); setErrs({});
                 setForm({
-                    name: p.name, type: p.type, value: p.value ?? '', scope: p.scope, scope_ids: p.scope_ids || [],
+                    name: p.name, code: p.code || '', type: p.type, value: p.value ?? '', scope: p.scope, scope_ids: p.scope_ids || [],
+                    auto_trigger: _tr || '', auto_valid_days: _vd ?? 7, auto_max_per_customer: _mp ?? 1,
+                    auto_extra: Object.keys(_extra).length ? JSON.stringify(_extra, null, 2) : '{}',
                     min_order_amount: p.min_order_amount ?? 0, max_discount_amount: p.max_discount_amount ?? '',
                     gift_product_id: p.gift_product_id || '', gift_quantity: p.gift_quantity || 1,
                     target: p.target, tier_ids: p.tier_ids || [],
@@ -97,7 +304,8 @@ export default function Promotions() {
                     days_of_week: p.days_of_week || [], use_days: !!(p.days_of_week && p.days_of_week.length),
                     time_from: p.time_from ? p.time_from.slice(0, 5) : '', time_to: p.time_to ? p.time_to.slice(0, 5) : '',
                     use_time: !!(p.time_from && p.time_to),
-                    channels: p.channels || ['pos'], is_active: !!p.is_active, banner_url: p.banner_url || '',
+                    channels: p.channels || [], is_active: !!p.is_active, banner_url: p.banner_url || '',
+                    stack_with_coupon: !!p.stack_with_coupon,
                 });
                 setMode('form');
             }
@@ -107,13 +315,37 @@ export default function Promotions() {
     const toggleArr = (arr, v) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
     const handleSave = async () => {
-        if (!form.name.trim()) return alert('Nhập tên khuyến mại');
-        if (form.type !== 'gift' && form.type !== 'shipping' && !(Number(form.value) > 0)) return alert('Nhập giá trị khuyến mại');
-        if (form.type === 'gift' && !form.gift_product_id) return alert('Chọn món tặng');
-        if (form.type !== 'shipping' && form.scope !== 'order' && form.scope_ids.length === 0) return alert(`Chọn ít nhất 1 ${SCOPE_LABELS[form.scope].toLowerCase()} áp dụng`);
+        // SPEC-02b: validate inline — gom lỗi theo từng trường, hiện đỏ ngay dưới trường
+        const e = {};
+        if (!(form.name || '').trim()) e.name = 'Vui lòng nhập tên khuyến mại.';
+        if (form.code && form.code.trim().length > 20) e.code = 'Mã coupon tối đa 20 ký tự.';
+        if (form.type !== 'gift' && form.type !== 'shipping' && !(Number(form.value) > 0)) e.value = 'Vui lòng nhập giá trị khuyến mại lớn hơn 0.';
+        if (form.type === 'gift' && !form.gift_product_id) e.gift_product_id = 'Vui lòng chọn món sẽ tặng cho khách.';
+        if (form.type !== 'shipping' && form.scope !== 'order' && form.scope_ids.length === 0) e.scope_ids = `Vui lòng chọn ít nhất 1 ${SCOPE_LABELS[form.scope].toLowerCase()} áp dụng.`;
+        if (form.auto_trigger) {
+            try { JSON.parse(form.auto_extra || '{}'); }
+            catch { e.auto_extra = 'Chuỗi JSON chưa đúng cú pháp. Hãy bấm "Chèn mẫu" để lấy ví dụ đúng rồi sửa số.'; }
+        }
+        if (Object.keys(e).length) { setErrs(e); return; }
+        setErrs({});
         try {
+            // SPEC-02: build auto_config từ form
+            let autoConfig = null;
+            if (form.auto_trigger) {
+                autoConfig = {
+                    trigger: form.auto_trigger,
+                    valid_days: Number(form.auto_valid_days) || 7,
+                    max_per_customer: Number(form.auto_max_per_customer) || 1,
+                };
+                try {
+                    const extra = JSON.parse(form.auto_extra || '{}');
+                    autoConfig = { ...autoConfig, ...extra };
+                } catch { /* bỏ qua JSON lỗi */ }
+            }
             const payload = {
-                name: form.name.trim(), type: form.type,
+                // SPEC-02b: defensive — startEdit cũ từng để form.code undefined gây TypeError "Lưu thất bại" không lý do
+                name: (form.name || '').trim(), code: (form.code || '').trim().toUpperCase() || null,
+                type: form.type,
                 value: form.type === 'gift' ? null : Number(form.value),
                 scope: form.type === 'shipping' ? 'order' : form.scope, // Gói 10c: KM ship luôn áp dụng cả hóa đơn
                 scope_ids: form.scope === 'order' ? null : form.scope_ids,
@@ -127,14 +359,40 @@ export default function Promotions() {
                 days_of_week: form.use_days ? form.days_of_week : null,
                 time_from: form.use_time ? form.time_from : null,
                 time_to: form.use_time ? form.time_to : null,
-                channels: form.channels, is_active: form.is_active,
+                channels: normalizeChannels(form.channels), is_active: form.is_active, // Spec kênh bán hàng: mảng ID price_lists
+                // Mô hình cộng dồn 2026-10-21 ~22:45: cờ cộng dồn với coupon của KM này
+                stack_with_coupon: !!form.stack_with_coupon,
                 banner_url: form.banner_url || null, // Gói 48: ảnh banner cho Mini App
+                auto_config: autoConfig, // SPEC-02
             };
             const res = editing
                 ? await axios.patch(`${API}/promotions/${editing}`, payload)
                 : await axios.post(`${API}/promotions`, payload);
-            if (res.data?.success) { setMode('list'); fetchList(page); }
-        } catch (err) { alert(err.response?.data?.message || 'Lưu thất bại'); }
+            // SPEC-02b: 2xx và không bị success:false đánh dấu lỗi = thành công.
+            // (trước đây chỉ check res.data.success nên backend trả 200 thiếu field success sẽ lặng lẽ không làm gì)
+            if (res.data?.success === false) {
+                alert(res.data?.message || 'Máy chủ từ chối lưu. Vui lòng kiểm tra lại các trường.');
+            } else {
+                setMode('list'); fetchList(page);
+            }
+        } catch (err) {
+            // SPEC-02b: hiện lỗi THẬT — validation 422 -> inline từng trường; message server -> alert nguyên văn;
+            // không bao giờ hiện "Lưu thất bại" chung chung mà không có thông tin.
+            const bag = err.response?.data?.errors;
+            if (bag && typeof bag === 'object' && Object.keys(bag).length) {
+                const mapped = {};
+                for (const [k, v] of Object.entries(bag)) mapped[k] = Array.isArray(v) ? v[0] : String(v);
+                setErrs(mapped);
+            } else if (err.response?.data?.message) {
+                alert(err.response.data.message);
+            } else if (err.response) {
+                console.error('Lưu KM lỗi HTTP:', err.response);
+                alert(`Máy chủ báo lỗi (mã ${err.response.status}) nhưng không kèm lý do. Hãy chụp màn hình thẻ Console (F12) gửi kỹ thuật.`);
+            } else {
+                console.error('Lưu KM lỗi:', err);
+                alert('Không gửi được yêu cầu lưu (lỗi trình duyệt hoặc mất kết nối máy chủ). Kiểm tra backend có đang chạy không rồi thử lại.');
+            }
+        }
     };
 
     const handleDelete = async (id) => {
@@ -194,14 +452,135 @@ export default function Promotions() {
                             <div className="m-card p-4">
                                 <label className="m-label">Tên khuyến mại <span style={{ color: 'var(--m-danger)' }}>*</span></label>
                                 <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-                                    placeholder="Nhập tên khuyến mại" className="m-input w-full" />
+                                    placeholder="Nhập tên khuyến mại" className="m-input w-full" style={errStyle('name')} />
+                                <FE k="name" />
+                            </div>
+
+                            {/* SPEC-02: mã coupon + cấu hình trigger tự động */}
+                            {/* SPEC-02b: thêm hướng dẫn từng trường + gợi ý JSON mẫu theo trigger */}
+                            <div className="m-card p-4">
+                                <h3 className="text-xs font-bold uppercase mb-1" style={{ color: 'var(--m-ink-soft)' }}>Mã coupon & Trigger tự động (SPEC-02)</h3>
+                                <div className="text-[12px] mb-3" style={{ color: 'var(--m-ink-faint)' }}>
+                                    Phần này chỉ cần điền khi muốn hệ thống <b>tự phát coupon vào ví khách</b>. Khuyến mại thường (tự áp dụng khi đơn đủ điều kiện) thì bỏ qua.
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="m-label">Mã coupon (CP-01...CP-10)</label>
+                                        <input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+                                            placeholder="VD: CP-01" className="m-input w-full" maxLength={20} style={errStyle('code')} />
+                                        <FE k="code" />
+                                        <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                            Mã để hệ thống tự phát coupon, đặt theo chuẩn <b>CP-01 → CP-10</b>:
+                                            CP-01 quà chào mừng đơn đầu · CP-02 giới thiệu bạn bè · CP-03 tích tem đổi quà ·
+                                            CP-06 gọi khách 14 ngày không quay lại · CP-07 quà sinh nhật · CP-08 thử món mới ·
+                                            CP-10 ưu đãi đơn tiếp theo. Mỗi mã chỉ dùng 1 lần — nhập trùng sẽ báo lỗi.
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="m-label">Trigger tự động</label>
+                                        <select value={form.auto_trigger}
+                                            onChange={(e) => {
+                                                const v = e.target.value;
+                                                const sug = TRIGGER_HELP[v]?.suggest_days;
+                                                setForm({ ...form, auto_trigger: v, ...(sug ? { auto_valid_days: sug } : {}) });
+                                            }}
+                                            className="m-input w-full">
+                                            {Object.entries(TRIGGER_HELP).map(([k, h]) => <option key={k} value={k}>{h.label}</option>)}
+                                        </select>
+                                        <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                            Khi nào hệ thống tự phát coupon này. Chọn 1 dòng ở trên sẽ hiện giải thích chi tiết bên dưới.
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="m-label">Hiệu lực (ngày)</label>
+                                        <input type="number" value={form.auto_valid_days} onChange={(e) => setForm({ ...form, auto_valid_days: e.target.value })}
+                                            className="m-input w-full" min={1} />
+                                        <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                            Coupon tự hết hạn sau X ngày kể từ lúc vào ví khách. VD: 7 = dùng trong 1 tuần; CP-06 nên để 3 (72 giờ).
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="m-label">Tối đa /khách</label>
+                                        <input type="number" value={form.auto_max_per_customer} onChange={(e) => setForm({ ...form, auto_max_per_customer: e.target.value })}
+                                            className="m-input w-full" min={1} />
+                                        <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                            Mỗi khách được nhận tối đa X lần coupon này. VD: 1 = mỗi khách chỉ được 1 lần duy nhất.
+                                        </div>
+                                    </div>
+                                </div>
+                                {form.auto_trigger && TRIGGER_HELP[form.auto_trigger] && (
+                                    <div className="mt-3 rounded-lg p-3 text-[12px] leading-relaxed" style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }}>
+                                        <div className="font-semibold mb-1">📌 {TRIGGER_HELP[form.auto_trigger].label}</div>
+                                        <div style={{ color: 'var(--m-ink-soft)' }}>{TRIGGER_HELP[form.auto_trigger].desc}</div>
+                                        <div className="mt-1" style={{ color: 'var(--m-ink-soft)' }}>{TRIGGER_HELP[form.auto_trigger].sample_note}</div>
+                                    </div>
+                                )}
+                                {/* SPEC-02c: form động theo trigger — không cần đụng JSON */}
+                                {form.auto_trigger && (TRIGGER_FIELDS[form.auto_trigger] || []).length > 0 && (
+                                    <div className="mt-3 rounded-lg p-3" style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }}>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-[12px] font-semibold">Thông số cho trigger này</span>
+                                            <button type="button" className="m-btn m-btn-sm" onClick={applySample}>📋 Chèn mẫu</button>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {TRIGGER_FIELDS[form.auto_trigger].map((f) => (
+                                                <div key={f.key} className={f.type === 'number' ? '' : 'col-span-2'}>
+                                                    <label className="m-label">{f.label}</label>
+                                                    {f.type === 'number' ? (
+                                                        <input type="number" min="0" className="m-input w-full"
+                                                            value={lastValidExtra.current[f.key] ?? ''}
+                                                            onChange={(e) => updField(f.key, e.target.value === '' ? '' : Number(e.target.value))} />
+                                                    ) : (
+                                                        <div className="max-h-36 overflow-y-auto rounded p-2 bg-white" style={{ border: '1px solid var(--m-line)' }}>
+                                                            {(f.type === 'products' ? products : categories).map((it) => {
+                                                                const arr = lastValidExtra.current[f.key] || [];
+                                                                const checked = arr.includes(it.id);
+                                                                return (
+                                                                    <label key={it.id} className="flex items-center gap-2 text-sm py-1">
+                                                                        <input type="checkbox" checked={checked}
+                                                                            onChange={() => updField(f.key, checked ? arr.filter((x) => x !== it.id) : [...arr, it.id])} />
+                                                                        {it.name}
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                            {(f.type === 'products' ? products : categories).length === 0 &&
+                                                                <div className="text-xs py-2" style={{ color: 'var(--m-ink-faint)' }}>Chưa có dữ liệu.</div>}
+                                                        </div>
+                                                    )}
+                                                    {f.hint && <div className="text-[11px] mt-1" style={{ color: 'var(--m-ink-faint)' }}>{f.hint}</div>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                {/* SPEC-02c: JSON thu gọn — chỉ người rành mở; đồng bộ 2 chiều với các ô trên */}
+                                <div className="mt-3">
+                                    <button type="button" onClick={() => setShowAdv((v) => !v)}
+                                        className="text-[12px] font-semibold flex items-center gap-1" style={{ color: 'var(--m-ink-soft)' }}>
+                                        <span>{showAdv ? '▾' : '▸'}</span> Nâng cao (JSON)
+                                        <span className="font-normal" style={{ color: 'var(--m-ink-faint)' }}>— chỉ dành cho người rành kỹ thuật</span>
+                                    </button>
+                                    {showAdv && (
+                                        <div className="mt-2">
+                                            <textarea value={form.auto_extra} onChange={onExtraChange}
+                                                className="m-input w-full font-mono text-[12px] mt-1" rows={4}
+                                                placeholder='{"stamps_required": 5}' style={errStyle('auto_extra')} />
+                                            <FE k="auto_extra" />
+                                            <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                                JSON là cách ghi tham số cho máy đọc, dạng <span className="font-mono">{'{"tên_tham_số": giá_trị}'}</span>.
+                                                Sửa ở đây sẽ tự cập nhật các ô bên trên (và ngược lại).
+                                                Mọi mức giảm/ngưỡng đều chỉnh ở đây, không có số nào bị ghi cứng trong code.
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Gói 48: ảnh banner cho Zalo Mini App */}
                             <div className="m-card p-4">
                                 <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Ảnh banner (Zalo Mini App)</h3>
                                 {form.banner_url && (
-                                    <img src={imgSrc(form.banner_url)} alt="Banner" className="w-full rounded-lg mb-3" style={{ aspectRatio: '16/9', objectFit: 'cover' }} />
+                                    <img src={imgSrc(form.banner_url)} alt="Banner" className="w-full rounded-lg mb-3" style={{ aspectRatio: '32/9', objectFit: 'cover', objectPosition: 'center' }} />
                                 )}
                                 <div className="flex items-center gap-3">
                                     <label className="m-btn m-btn-sm cursor-pointer">
@@ -223,7 +602,7 @@ export default function Promotions() {
                                     {form.banner_url && (
                                         <button type="button" onClick={() => setForm({ ...form, banner_url: '' })} className="text-[13px] text-red-600 hover:underline">Xóa ảnh</button>
                                     )}
-                                    <span className="text-[11px]" style={{ color: 'var(--m-ink-faint)' }}>Tỉ lệ 16:9, jpg/png/webp ≤ 1MB. Hiện trong mục Thành viên trên Mini App.</span>
+                                    <span className="text-[11px]" style={{ color: 'var(--m-ink-faint)' }}>Tỉ lệ 32:9 (VD 1600×450), jpg/png/webp ≤ 1MB. Hiện trong mục Thành viên trên Mini App. Ảnh lệch tỉ lệ sẽ tự cắt phần trên/dưới, lấy giữa ảnh — đặt nội dung chính ở giữa khung.</span>
                                 </div>
                             </div>
 
@@ -240,16 +619,18 @@ export default function Promotions() {
                                         <div>
                                             <label className="m-label">{valueLabel()} <span style={{ color: 'var(--m-danger)' }}>*</span></label>
                                             <input type="number" min="0" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })}
-                                                placeholder={form.type === 'percent' ? '0 %' : '0 đ'} className="m-input w-full" />
+                                                placeholder={form.type === 'percent' ? '0 %' : '0 đ'} className="m-input w-full" style={errStyle('value')} />
+                                            <FE k="value" />
                                         </div>
                                     ) : (
                                         <>
                                             <div>
                                                 <label className="m-label">Món tặng <span style={{ color: 'var(--m-danger)' }}>*</span></label>
-                                                <select value={form.gift_product_id} onChange={(e) => setForm({ ...form, gift_product_id: e.target.value })} className="m-input m-select w-full">
+                                                <select value={form.gift_product_id} onChange={(e) => setForm({ ...form, gift_product_id: e.target.value })} className="m-input m-select w-full" style={errStyle('gift_product_id')}>
                                                     <option value="">-- Chọn món --</option>
                                                     {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                                                 </select>
+                                                <FE k="gift_product_id" />
                                             </div>
                                             <div>
                                                 <label className="m-label">Số lượng tặng</label>
@@ -273,8 +654,9 @@ export default function Promotions() {
                                 )}
                                 {(form.type === 'fixed' || form.type === 'fixed_price' || form.type === 'shipping') && (
                                     <div className="mt-3 w-1/2 pr-2">
-                                        <label className="m-label">Tổng tiền hóa đơn tối thiểu (đ) <span style={{ color: 'var(--m-danger)' }}>*</span></label>
+                                        <label className="m-label">Tổng tiền hóa đơn tối thiểu (đ)</label>
                                         <input type="number" min="0" value={form.min_order_amount} onChange={(e) => setForm({ ...form, min_order_amount: e.target.value })} className="m-input w-full" placeholder="VD: 100000" />
+                                        <div className="text-[11.5px] mt-1" style={{ color: 'var(--m-ink-faint)' }}>Không bắt buộc — để 0 nghĩa là không yêu cầu đơn tối thiểu.</div>
                                     </div>
                                 )}
                             </div>
@@ -342,7 +724,9 @@ export default function Promotions() {
                                 </div>
                                 )}
                                 {form.scope !== 'order' && (
-                                    <div className="mt-3 max-h-44 overflow-y-auto rounded p-2" style={{ border: '1px solid var(--m-line)' }}>
+                                    <>
+                                    <div className="mt-3 max-h-44 overflow-y-auto rounded p-2" style={{ border: '1px solid var(--m-line)', ...(errs.scope_ids ? { borderColor: 'var(--m-danger)' } : {}) }}>
+                                        <div className="text-[11.5px] mb-1" style={{ color: 'var(--m-ink-faint)' }}>Bắt buộc chọn ít nhất 1 mục <span style={{ color: 'var(--m-danger)' }}>*</span></div>
                                         {scopeItems().map((it) => (
                                             <label key={it.id} className="flex items-center gap-2 text-sm py-1">
                                                 <input type="checkbox" checked={form.scope_ids.includes(it.id)} onChange={() => setForm({ ...form, scope_ids: toggleArr(form.scope_ids, it.id) })} />
@@ -351,6 +735,8 @@ export default function Promotions() {
                                         ))}
                                         {scopeItems().length === 0 && <div className="text-xs py-2" style={{ color: 'var(--m-ink-faint)' }}>Chưa có dữ liệu.</div>}
                                     </div>
+                                    <FE k="scope_ids" />
+                                    </>
                                 )}
                             </div>
 
@@ -379,17 +765,34 @@ export default function Promotions() {
                             </div>
 
                             <div className="m-card p-4">
-                                <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Áp dụng với kênh bán hàng</h3>
-                                <div className="space-y-2">
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input type="checkbox" checked={form.channels.includes('pos')} onChange={() => setForm({ ...form, channels: toggleArr(form.channels, 'pos') })} />
-                                        Bán tại cửa hàng
-                                    </label>
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input type="checkbox" checked={form.channels.includes('online')} onChange={() => setForm({ ...form, channels: toggleArr(form.channels, 'online') })} />
-                                        Bán online
-                                    </label>
-                                </div>
+                                <h3 className="text-xs font-bold uppercase mb-1" style={{ color: 'var(--m-ink-soft)' }}>Áp dụng với kênh bán hàng</h3>
+                                <p className="text-xs mb-3" style={{ color: 'var(--m-ink-faint)' }}>Không tick kênh nào = áp dụng mọi kênh.</p>
+                                {CH_CAT_ORDER.map((cat) => {
+                                    const group = priceLists.filter((pl) => pl.is_active && (pl.category || 'partner') === cat);
+                                    if (group.length === 0) return null;
+                                    const ids = group.map((pl) => pl.id);
+                                    const allIn = ids.every((id) => channelChecked(id));
+                                    return (
+                                        <div key={cat} className="mb-3">
+                                            <div className="flex items-center justify-between mb-1">
+                                                <span className="text-xs font-bold uppercase" style={{ color: 'var(--m-ink-soft)' }}>{CH_CAT_LABELS[cat]}</span>
+                                                <button type="button" onClick={() => toggleChannelGroup(cat)}
+                                                    className="text-xs font-medium" style={{ color: 'var(--m-primary)' }}>
+                                                    {allIn ? 'Bỏ chọn cả nhóm' : 'Chọn cả nhóm'}
+                                                </button>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                {group.map((pl) => (
+                                                    <label key={pl.id} className="flex items-center gap-2 text-sm">
+                                                        <input type="checkbox" checked={channelChecked(pl.id)} onChange={() => toggleChannel(pl.id)} />
+                                                        {pl.name}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {priceLists.length === 0 && <div className="text-sm" style={{ color: 'var(--m-ink-faint)' }}>Đang tải danh sách kênh…</div>}
                             </div>
 
                             <div className="flex gap-2">
@@ -415,6 +818,17 @@ export default function Promotions() {
                                 <span className="text-sm">Đang hoạt động</span>
                                 <Switch on={form.is_active} onClick={() => setForm({ ...form, is_active: !form.is_active })} />
                             </div>
+                            {/* Mô hình cộng dồn 2026-10-21 ~22:45: phía KM đúng 1 cờ cộng dồn.
+                                Không còn công tắc toàn cục, không có cộng dồn KM + KM. */}
+                            <div className="m-card p-4 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-sm font-medium">Cho phép cộng dồn với coupon</div>
+                                        <div className="text-xs" style={{ color: 'var(--m-ink-soft)' }}>Bật: KM này được cộng thêm với 1 coupon/voucher khi mã đó cũng bật "Cho phép cộng dồn với khuyến mãi". Tắt (mặc định): mỗi đơn chỉ áp ưu đãi lớn hơn — hòa thì KM thắng, voucher không bị trừ.</div>
+                                    </div>
+                                    <Switch on={form.stack_with_coupon} onClick={() => setForm({ ...form, stack_with_coupon: !form.stack_with_coupon })} />
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -432,13 +846,32 @@ export default function Promotions() {
                         <p className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>Tự động áp dụng khi đơn hàng đủ điều kiện.</p>
                         <p className="text-xs mt-1" style={{ color: 'var(--m-ink-faint)' }}>
                             📌 Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>
-                            và có thể đặt thêm <b>giới hạn mỗi khách hàng</b> (cột <i>per_customer_limit</i> trong DB — tạo/sửa trực tiếp trong DB).
-                            Mỗi lượt dùng được ghi log theo khách để truy vết khi mã bị share. Hủy đơn sẽ hoàn lại lượt dùng.
+                            và có thể đặt thêm <b>giới hạn mỗi khách hàng</b>. Mỗi lượt dùng được ghi log theo khách để truy vết khi mã bị share. Hủy đơn sẽ hoàn lại lượt dùng.
                         </p>
                     </div>
-                    <button onClick={startCreate} className="m-btn m-btn-primary">+ Khuyến mại</button>
+                    {tab === 'promo' && (
+                        <button onClick={startCreate} className="m-btn m-btn-primary whitespace-nowrap shrink-0">+ Khuyến mại</button>
+                    )}
                 </div>
 
+                {/* Spec 5: tab Chương trình khuyến mại | Mã voucher (theo tiền lệ trang Báo cáo dùng tab) */}
+                <div className="flex gap-1 mb-4" style={{ borderBottom: '2px solid var(--m-line)' }}>
+                    <button onClick={() => switchTab('promo')}
+                        className="px-4 py-2 text-sm font-semibold"
+                        style={{ color: tab === 'promo' ? 'var(--m-primary)' : 'var(--m-ink-soft)', borderBottom: tab === 'promo' ? '2px solid var(--m-primary)' : '2px solid transparent', marginBottom: -2 }}>
+                        Chương trình khuyến mại
+                    </button>
+                    <button onClick={() => switchTab('voucher')}
+                        className="px-4 py-2 text-sm font-semibold"
+                        style={{ color: tab === 'voucher' ? 'var(--m-primary)' : 'var(--m-ink-soft)', borderBottom: tab === 'voucher' ? '2px solid var(--m-primary)' : '2px solid transparent', marginBottom: -2 }}>
+                        Mã voucher
+                    </button>
+                </div>
+
+                {tab === 'voucher' ? (
+                    <VoucherManager />
+                ) : (
+                <>
                 <div className="m-card overflow-x-auto">
                     <table className="m-table min-w-[800px]">
                         <thead>
@@ -490,6 +923,8 @@ export default function Promotions() {
                         <span className="text-xs py-2" style={{ color: 'var(--m-ink-soft)' }}>{page} / {lastPage}</span>
                         <button disabled={page >= lastPage} onClick={() => fetchList(page + 1)} className="m-btn m-btn-sm m-btn-ghost">Sau ›</button>
                     </div>
+                )}
+                </>
                 )}
             </div>
         </AdminLayout>

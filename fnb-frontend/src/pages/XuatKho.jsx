@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // Trang nhân viên tạo phiếu xuất kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
 // Token riêng: localStorage['xuatkho_token'] / ['xuatkho_emp']
@@ -11,11 +12,11 @@ import { API } from '../utils/api';
 const NAVY = '#24305E';
 const ORANGE = '#F5A623';
 
-const REASONS = [
-  { value: 'damaged', label: 'Hủy hàng' },
-  { value: 'internal_use', label: 'Dùng nội bộ' },
-  { value: 'sale', label: 'Xuất bán' },
-  { value: 'other', label: 'Khác' },
+const REASONS_FB = [
+  { code: 'damaged', name: 'Hủy hàng' },
+  { code: 'internal_use', name: 'Dùng nội bộ' },
+  { code: 'sale', name: 'Xuất bán' },
+  { code: 'other', name: 'Khác' },
 ];
 
 const CSS = `
@@ -68,6 +69,8 @@ function qtyNum(s) {
 
 export default function XuatKho({ embed } = {}) {
   const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
+  // Spec danh mục dùng chung: lý do xuất kho đọc từ API, fallback cứng
+  const REASONS = useSharedCategories('outbound_reasons', REASONS_FB);
   const hubT = (embed && embed.hubT) || '';
   const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('xuatkho_token') || '');
   const [emp, setEmp] = useState(() => {
@@ -203,7 +206,7 @@ export default function XuatKho({ embed } = {}) {
   const submit = async () => {
     const validItems = items.filter((it) => qtyNum(it.qty) > 0);
     if (validItems.length === 0) { toast('Vui lòng nhập số lượng cho ít nhất 1 mặt hàng.'); return; }
-    const reasonLabel = (REASONS.find((r) => r.value === reason) || {}).label || reason;
+    const reasonLabel = (REASONS.find((r) => r.code === reason) || {}).name || reason;
     if (!window.confirm('Tạo phiếu xuất ' + validItems.length + ' mặt hàng?\nLý do: ' + reasonLabel)) return;
     setSaving(true);
     try {
@@ -258,7 +261,8 @@ export default function XuatKho({ embed } = {}) {
               <div className="xk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
               <div className="xk-sub">{curBranchName}</div>
             </div>
-            <button className="xk-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
+            {!(embed && embed.onBack) && <button className="xk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>}
+          <button className="xk-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
           </div>
           <div className="xk-title">📤 Xuất kho</div>
         </header>
@@ -283,6 +287,7 @@ export default function XuatKho({ embed } = {}) {
             <div className="xk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="xk-sub">{curBranchName}</div>
           </div>
+          {!(embed && embed.onBack) && <button className="xk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>}
           <button className="xk-logout" onClick={embed && embed.onBack ? embed.onBack : logout}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>
         <div className="xk-title">📤 Xuất kho</div>
@@ -300,7 +305,7 @@ export default function XuatKho({ embed } = {}) {
             <h3>Thông tin phiếu</h3>
             <label className="xk-label" style={{ marginTop: 0 }}>Lý do xuất</label>
             <select className="xk-field" value={reason} onChange={(e) => setReason(e.target.value)}>
-              {REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              {REASONS.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
             </select>
             {reason === 'sale' && (
               <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8, background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e', fontSize: 13, lineHeight: 1.5 }}>

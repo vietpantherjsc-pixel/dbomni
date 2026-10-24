@@ -112,6 +112,11 @@ body.m-theme {
 .m-table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--m-line); }
 .m-table tbody tr:last-child td { border-bottom: none; }
 .m-table tbody tr:hover { background: var(--m-bg-soft); }
+/* F18 (2026-10-21): trước đây THIẾU rule cho tfoot — ô tổng không padding/không ngăn
+   cách (nhãn dính mép trái thẻ, số lệch cột ở RdFixedCosts). Đệm khớp thân bảng +
+   đường ngăn trên 2px. Chỉ RdFixedCosts dùng tfoot trong họ m-table nên không đổi
+   hiển thị bảng khác. */
+.m-table tfoot td { padding: 10px 12px; border-top: 2px solid var(--m-line); background: var(--m-bg-soft); }
 
 /* ---- Badge / trạng thái ---- */
 .m-badge {
@@ -174,6 +179,11 @@ body.m-theme {
 .m-modal-head { padding: 16px 20px; border-bottom: 1px solid var(--m-line); font-weight: 700; }
 .m-modal-body { padding: 20px; }
 .m-modal-foot { padding: 14px 20px; border-top: 1px solid var(--m-line); display: flex; justify-content: flex-end; gap: 8px; }
+/* Bổ trợ modal DÀI (2026-10-21, gói sửa modal Voucher/R&D): dùng KÈM .m-modal —
+   đầu + chân cố định, chỉ thân cuộn. Không đổi hành vi .m-modal gốc. */
+.m-modal--flex { display: flex; flex-direction: column; overflow: hidden; }
+.m-modal--flex .m-modal-head, .m-modal--flex .m-modal-foot { flex: 0 0 auto; }
+.m-modal--flex .m-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
 /* ---- Dấu triện đỏ (điểm nhấn thương hiệu) ---- */
 .m-stamp {

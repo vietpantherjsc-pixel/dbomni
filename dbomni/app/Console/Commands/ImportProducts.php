@@ -45,17 +45,17 @@ class ImportProducts extends Command
                 Menu::query()->delete();
             }
 
-            // 1. Bảng giá kênh
+            // 1. Bảng giá kênh — tên chuẩn theo spec phân loại kênh (không tạo trùng kênh Zalo Mini App)
             $lists = [
-                'nha_hang' => 'Giá tại nhà hàng',
-                'grabfood' => 'Giá GrabFood',
-                'shopeefood' => 'Giá ShopeeFood',
-                'greenfood' => 'Giá Green Food',
-                'online' => 'Giá bán online',
+                'nha_hang' => ['name' => 'Tại cửa hàng (POS)', 'category' => 'store'],
+                'grabfood' => ['name' => 'GrabFood', 'category' => 'partner'],
+                'shopeefood' => ['name' => 'ShopeeFood', 'category' => 'partner'],
+                'greenfood' => ['name' => 'Green Food', 'category' => 'partner'],
+                'online' => ['name' => 'Zalo Mini App', 'category' => 'online'],
             ];
             $listIds = [];
-            foreach ($lists as $code => $name) {
-                $listIds[$code] = PriceList::firstOrCreate(['code' => $code], ['name' => $name])->id;
+            foreach ($lists as $code => $meta) {
+                $listIds[$code] = PriceList::firstOrCreate(['code' => $code], ['name' => $meta['name'], 'category' => $meta['category']])->id;
             }
 
             // 2. Danh mục + thực đơn

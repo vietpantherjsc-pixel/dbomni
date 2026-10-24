@@ -376,9 +376,9 @@ export default function KiemKe() {
       <div className="kk-wrap">
         <style>{CSS}</style>
         <div className="kk-login">
-          <div className="kk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+          <div className="kk-hd" style={{ borderRadius: 18 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="kk-title">📦 Kiểm kê kho</div>
             <div className="kk-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -428,6 +428,7 @@ export default function KiemKe() {
             <div className="kk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="kk-sub">{(emp && emp.branch_name) || ''}</div>
           </div>
+          <button className="kk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
           <button className="kk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="kk-title">📦 Kiểm kê kho</div>

@@ -16,6 +16,17 @@ use Illuminate\Support\Facades\DB;
 // Gói 60: dùng ValidatesEmployeeBranch để NV nhiều CN chọn CN thao tác.
 class TransactionController extends Controller
 {
+    // Audit 2026-10-23 B-5: NV chỉ thao tác phiếu thu/chi thuộc CN phân công
+    // (phiếu branch_id = null là phiếu chung toàn chuỗi — vẫn xem/thao tác được).
+    protected function denyTransactionBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && $branchId !== null
+            && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
+        }
+        return null;
+    }
     use \App\Traits\ValidatesEmployeeBranch;
     /** Danh sách danh mục thu/chi (kèm cờ is_system). */
     public function categories(): JsonResponse
@@ -34,8 +45,14 @@ class TransactionController extends Controller
             ->when($request->filled('partner_id'), fn($qq) => $qq->where('partner_id', $request->partner_id))
             ->when($request->filled('status'), fn($qq) => $qq->where('status', $request->status))
             ->when($request->filled('account_id'), fn($qq) => $qq->where('account_id', $request->account_id)) // Gói 57
-            // Gói 59: lọc phiếu chờ duyệt cho trang duyệt của quản lý
-            ->when($request->input('pending_approval') == '1', fn($qq) => $qq->whereNull('approved_by'))
+            // Gói 59: lọc phiếu chờ duyệt cho trang duyệt của quản lý.
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): chờ = đủ 3 điều kiện (chưa duyệt user/employee, chưa từ chối).
+            ->when($request->user() instanceof \App\Models\Employee, fn($qq) => $qq->where(fn($w) => $w->whereIn('branch_id', $request->user()->allBranchIds())->orWhereNull('branch_id')))
+            ->when($request->input('pending_approval') == '1', fn($qq) => $qq->pendingApproval())
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt (trang Thu chi Admin).
+            ->when($request->input('approval_status') === 'pending', fn($qq) => $qq->pendingApproval())
+            ->when($request->input('approval_status') === 'approved', fn($qq) => $qq->wasApproved())
+            ->when($request->input('approval_status') === 'rejected', fn($qq) => $qq->wasRejected())
             ->when($request->filled('date_from'), fn($qq) => $qq->whereDate('paid_at', '>=', $request->date_from))
             ->when($request->filled('date_to'), fn($qq) => $qq->whereDate('paid_at', '<=', $request->date_to))
             ->when($request->filled('search'), function ($qq) use ($request) {
@@ -46,8 +63,9 @@ class TransactionController extends Controller
             ->orderByDesc('id');
 
         $summary = [
-            'total_income' => (float) (clone $q)->where('type', 'income')->where('status', 'paid')->sum('amount'),
-            'total_expense' => (float) (clone $q)->where('type', 'expense')->where('status', 'paid')->sum('amount'),
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu bị từ chối không tính vào số dư/báo cáo.
+            'total_income' => (float) (clone $q)->where('type', 'income')->where('status', 'paid')->whereNull('rejected_at')->sum('amount'),
+            'total_expense' => (float) (clone $q)->where('type', 'expense')->where('status', 'paid')->whereNull('rejected_at')->sum('amount'),
         ];
         $summary['balance'] = $summary['total_income'] - $summary['total_expense'];
 
@@ -74,7 +92,8 @@ class TransactionController extends Controller
         $data = $items->map(function ($tx) use ($rbMap) {
             $d = $tx->toArray();
             $d['running_balance'] = $rbMap[$tx->id] ?? null;
-            $d['is_approved'] = $tx->approved_by !== null; // Gói 59
+            $d['is_approved'] = $tx->approved_by !== null || $tx->approved_by_employee_id !== null; // Gói 59 + Hub 2026-10-21
+            $d['is_rejected'] = $tx->rejected_at !== null; // Gói "Chờ duyệt trên Hub" (2026-10-21)
             return $d;
         })->values();
 
@@ -98,7 +117,7 @@ class TransactionController extends Controller
             'occurred_at' => 'nullable|date', // Gói 57: ngày thực chi/phát sinh
             'account_id' => 'nullable|exists:accounts,id', // Gói 57: quỹ/tài khoản
             'attachment' => 'nullable|string|max:255', // Gói 57: path ảnh chứng từ (frontend upload riêng)
-            'status' => 'nullable|in:paid,pending',
+            'status' => 'nullable|in:paid,pending,cancelled', // Spec P4-B2: phiếu lương tự sinh chuyển sang hủy khi mở khóa
             'payment_method' => 'nullable|string|max:30',
             'note' => 'nullable|string|max:500',
         ]);
@@ -149,6 +168,12 @@ class TransactionController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $tx = Transaction::findOrFail($id);
+        if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
+
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu đã từ chối là hồ sơ đóng — không sửa.
+        if ($tx->rejected_at !== null) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã bị từ chối, không thể sửa. Hãy tạo phiếu mới.'], 422);
+        }
 
         // Gói 27: phiếu tự sinh chỉ cho sửa ghi chú.
         // Gói 29: phiếu đã có thanh toán trừ dần cũng chỉ cho sửa ghi chú (giữ toàn vẹn công nợ).
@@ -167,7 +192,7 @@ class TransactionController extends Controller
             'occurred_at' => 'nullable|date', // Gói 57
             'account_id' => 'nullable|exists:accounts,id', // Gói 57
             'attachment' => 'nullable|string|max:255', // Gói 57
-            'status' => 'nullable|in:paid,pending',
+            'status' => 'nullable|in:paid,pending,cancelled', // Spec P4-B2: phiếu lương tự sinh chuyển sang hủy khi mở khóa
             'payment_method' => 'nullable|string|max:30',
             'note' => 'nullable|string|max:500',
         ]);
@@ -190,9 +215,10 @@ class TransactionController extends Controller
         return response()->json(['success' => true, 'data' => $tx->fresh()->load('category', 'branch', 'partner')]);
     }
 
-    public function destroy(int $id): JsonResponse
+    public function destroy(Request $request, int $id): JsonResponse
     {
         $tx = Transaction::findOrFail($id);
+        if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
         // Gói 27: phiếu tự sinh giữ lại để đối soát với kho — không cho xóa.
         if ($tx->isAuto()) {
             return response()->json([
@@ -218,6 +244,11 @@ class TransactionController extends Controller
     public function pay(Request $request, int $id): JsonResponse
     {
         $tx = Transaction::findOrFail($id);
+        if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu đã từ chối không được thanh toán tiếp.
+        if ($tx->rejected_at !== null) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã bị từ chối, không thể thanh toán.'], 422);
+        }
         $remaining = $tx->remaining();
         if ($remaining <= 0) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã thanh toán đủ, còn nợ 0đ.'], 422);
@@ -256,16 +287,55 @@ class TransactionController extends Controller
     }
 
     // Gói 59: quản lý duyệt phiếu do NV tạo (route đặt trong group permission:finance.manage).
-    public function approve(int $id): JsonResponse
+    // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết Employee qua ApprovalActor; chặn cả phiếu đã từ chối.
+    public function approve(Request $request, int $id): JsonResponse
     {
         $tx = Transaction::findOrFail($id);
-        if ($tx->approved_by !== null) {
-            return response()->json(['success' => false, 'message' => 'Phiếu đã được duyệt trước đó.'], 422);
+        if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
+        if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
         }
-        $tx->update(['approved_by' => auth()->id(), 'approved_at' => now()]);
+        [$uid, $eid] = \App\Support\ApprovalActor::ids();
+        if ($uid === null && $eid === null) {
+            $uid = auth()->id(); // luồng Admin cũ
+        }
+        $tx->update(['approved_by' => $uid, 'approved_by_employee_id' => $eid, 'approved_at' => now()]);
         $d = $tx->fresh()->toArray();
         $d['is_approved'] = true;
         return response()->json(['success' => true, 'data' => $d]);
+    }
+
+    /**
+     * Gói "Chờ duyệt trên Hub" (2026-10-21, ĐÃ CHỐT — mục 4.3 spec): từ chối phiếu thu/chi.
+     * Dùng chung cho Admin (route permission:finance.manage) và Hub (EmployeeApprovalController gọi lại).
+     * Lý do BẮT BUỘC (trim không rỗng, tối đa 500 ký tự). Phiếu bị từ chối = hồ sơ đóng (terminal):
+     * không sửa, không gửi lại, không duyệt lại — muốn xử lý lại thì tạo phiếu mới.
+     */
+    public function reject(Request $request, int $id): JsonResponse
+    {
+        $v = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+        $reason = trim($v['reason']);
+        if ($reason === '') {
+            return response()->json(['success' => false, 'message' => 'Lý do từ chối không được để trống.'], 422);
+        }
+        $tx = Transaction::findOrFail($id);
+        if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
+        if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
+        }
+        [$uid, $eid] = \App\Support\ApprovalActor::ids();
+        if ($uid === null && $eid === null) {
+            $uid = auth()->id(); // luồng Admin cũ
+        }
+        $tx->update([
+            'rejected_at' => now(),
+            'reject_reason' => $reason,
+            'rejected_by' => $uid,
+            'rejected_by_employee_id' => $eid,
+        ]);
+        return response()->json(['success' => true, 'message' => 'Đã từ chối phiếu ' . $tx->code . '.']);
     }
 
     /** Sửa danh mục (tên; loại không cho đổi nếu đã có phiếu). */

@@ -87,7 +87,16 @@ class ShiftLeaveController extends Controller
         ]);
 
         $shift = WorkShift::findOrFail($v['work_shift_id']);
-        $shiftStart = Carbon::parse($v['date'] . ' ' . $shift->start_time);
+        // Phải là ca của chính NV (đã xếp hoặc đã duyệt đăng ký) — tìm TRƯỚC để
+        // tính hạn 48h theo giờ custom của lịch nếu có (A1-13)
+        $sched = WorkSchedule::where('employee_id', $emp->id)
+            ->where('date', $v['date'])->where('work_shift_id', $v['work_shift_id'])->first();
+        // Audit 2026-10-23 A1-13: giờ bắt đầu hiệu lực = giờ custom trên lịch
+        // đã xếp (nếu có), không luôn lấy giờ ca mẫu
+        $startTime = $sched?->custom_start_time
+            ? substr((string) $sched->custom_start_time, 0, 5)
+            : substr((string) $shift->start_time, 0, 5);
+        $shiftStart = Carbon::parse($v['date'] . ' ' . $startTime);
         if ($shiftStart->lt(Carbon::now()->addHours(48))) {
             return response()->json([
                 'success' => false,
@@ -95,9 +104,6 @@ class ShiftLeaveController extends Controller
             ], 422);
         }
 
-        // Phải là ca của chính NV (đã xếp hoặc đã duyệt đăng ký)
-        $sched = WorkSchedule::where('employee_id', $emp->id)
-            ->where('date', $v['date'])->where('work_shift_id', $v['work_shift_id'])->first();
         $reg = ShiftRegistration::where('employee_id', $emp->id)
             ->where('date', $v['date'])->where('work_shift_id', $v['work_shift_id'])
             ->where('status', 'approved')->first();
@@ -124,12 +130,31 @@ class ShiftLeaveController extends Controller
         return response()->json(['success' => true, 'message' => 'Đã gửi yêu cầu nghỉ, chờ quản lý duyệt.', 'data' => $lr]);
     }
 
+    // Bổ sung Mảng 4 (TESTER rà soát): quản lý là Employee chỉ duyệt/từ chối
+    // yêu cầu của NV thuộc CN mình được phân công (như index đã lọc)
+    private function denyLeaveBranch(Request $request, ShiftLeaveRequest $lr): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $empBranch = (int) (Employee::where('id', $lr->employee_id)->value('branch_id') ?? 0);
+            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+                return response()->json(['success' => false, 'message' => 'Yêu cầu thuộc chi nhánh bạn không được phân công.'], 403);
+            }
+        }
+        return null;
+    }
+
     // Admin: danh sách
     public function index(Request $request): JsonResponse
     {
         $q = ShiftLeaveRequest::with(['employee:id,full_name,branch_id', 'workShift:id,name,start_time,end_time'])
             ->orderByDesc('created_at');
         if ($request->filled('status')) $q->where('status', $request->string('status'));
+        // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thấy yêu cầu của CN mình
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
+        }
         return response()->json(['success' => true, 'data' => $q->get()]);
     }
 
@@ -142,9 +167,12 @@ class ShiftLeaveController extends Controller
             'work_shift_id' => 'required|exists:work_shifts,id',
             'reason' => 'nullable|string|max:500',
         ]);
-        return DB::transaction(function () use ($v) {
+        return DB::transaction(function () use ($v, $request) {
             $sched = WorkSchedule::where('employee_id', $v['employee_id'])
                 ->where('date', $v['date'])->where('work_shift_id', $v['work_shift_id'])->first();
+            // Bổ sung Mảng 4 (TESTER rà soát) A1-10 nửa sau: tạo trực tiếp = duyệt
+            // luôn nên ghi vết người tạo/duyệt như các đường duyệt khác
+            [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
             $lr = ShiftLeaveRequest::create([
                 'employee_id' => $v['employee_id'],
                 'date' => $v['date'],
@@ -153,6 +181,8 @@ class ShiftLeaveController extends Controller
                 'reason' => $v['reason'] ?? null,
                 'status' => 'approved',
                 'is_manager_created' => true,
+                'handled_by' => $handledUserId,
+                'handled_by_employee_id' => $handledEmployeeId,
             ]);
             if ($sched) $sched->delete();
             return response()->json(['success' => true, 'message' => 'Đã tạo và duyệt yêu cầu nghỉ, ca đã được gỡ khỏi lịch xếp.', 'data' => $lr]);
@@ -160,14 +190,18 @@ class ShiftLeaveController extends Controller
     }
 
     // Admin: duyệt → tự động gỡ ca khỏi lịch xếp
-    public function approve(int $id): JsonResponse
+    public function approve(Request $request, int $id): JsonResponse
     {
-        return DB::transaction(function () use ($id) {
+        $lr0 = ShiftLeaveRequest::findOrFail($id);
+        if ($deny = $this->denyLeaveBranch($request, $lr0)) return $deny;
+        return DB::transaction(function () use ($request, $id) {
             $lr = ShiftLeaveRequest::findOrFail($id);
             if ($lr->status !== 'pending') {
                 return response()->json(['success' => false, 'message' => 'Yêu cầu đã được xử lý.'], 422);
             }
-            $lr->update(['status' => 'approved']);
+            // Audit 2026-10-23 A1-10: ghi vết người duyệt (trước đây không lưu)
+            [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+            $lr->update(['status' => 'approved', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
             // Gỡ ca khỏi lịch xếp (tìm lại theo NV+ngày+ca để chắc chắn, kể cả khi xếp sau lúc tạo yêu cầu)
             WorkSchedule::where('employee_id', $lr->employee_id)
                 ->where('date', $lr->date->toDateString())
@@ -177,13 +211,16 @@ class ShiftLeaveController extends Controller
         });
     }
 
-    public function reject(int $id): JsonResponse
+    public function reject(Request $request, int $id): JsonResponse
     {
         $lr = ShiftLeaveRequest::findOrFail($id);
+        if ($deny = $this->denyLeaveBranch($request, $lr)) return $deny;
         if ($lr->status !== 'pending') {
             return response()->json(['success' => false, 'message' => 'Yêu cầu đã được xử lý.'], 422);
         }
-        $lr->update(['status' => 'rejected']);
+        // Audit 2026-10-23 A1-10: ghi vết người từ chối
+        [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        $lr->update(['status' => 'rejected', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

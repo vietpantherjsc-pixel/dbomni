@@ -84,18 +84,23 @@ export default function Tables() {
             <h1 className="text-xl font-semibold text-gray-800 mb-1">Quản lý bàn</h1>
             <p className="text-[13px] text-[#6b7280] mb-4">Danh sách bàn phục vụ tại quán (bấm vào thẻ để đổi trạng thái trống/có khách).</p>
 
-            <div className="flex gap-2 mb-4 max-w-xl flex-wrap">
+            <div className="flex gap-2 mb-4 max-w-xl flex-wrap items-center">
+                {/* C8 (2026-10-21): ở chế độ "Tất cả" ô chọn CN là BẮT BUỘC và ghi rõ;
+                    sidebar đang là 1 CN cụ thể thì bàn mới tự gắn CN đó (hiện dòng ghi chú dưới). */}
                 {showAll && (
-                    <select
-                        value={addBranchId}
-                        onChange={(e) => setAddBranchId(e.target.value)}
-                        className="px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb] bg-white"
-                    >
-                        <option value="">-- Chi nhánh --</option>
-                        {branches.map((b) => (
-                            <option key={b.id} value={b.id}>{b.name}</option>
-                        ))}
-                    </select>
+                    <>
+                        <label className="text-[13px] text-[#374151] font-medium">Chi nhánh <span className="text-red-600">*</span>:</label>
+                        <select
+                            value={addBranchId}
+                            onChange={(e) => setAddBranchId(e.target.value)}
+                            className="px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb] bg-white"
+                        >
+                            <option value="">-- Chọn chi nhánh --</option>
+                            {branches.map((b) => (
+                                <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                        </select>
+                    </>
                 )}
                 <input
                     type="text"
@@ -107,11 +112,17 @@ export default function Tables() {
                 />
                 <button
                     onClick={handleAdd}
-                    className="px-4 py-2 bg-[#2563eb] text-white text-[13px] font-semibold rounded-md hover:bg-[#1d4ed8]"
+                    disabled={showAll && !addBranchId}
+                    title={showAll && !addBranchId ? 'Chọn chi nhánh trước khi thêm bàn' : ''}
+                    className="px-4 py-2 bg-[#2563eb] text-white text-[13px] font-semibold rounded-md hover:bg-[#1d4ed8] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     + Thêm bàn
                 </button>
             </div>
+            {/* C8: sidebar đang là 1 CN cụ thể -> bàn mới tự gắn CN đó, nói rõ tại chỗ */}
+            {!showAll && (
+                <p className="text-[12.5px] text-[#6b7280] -mt-2 mb-4">Bàn mới sẽ thuộc chi nhánh đang chọn: <b className="text-[#374151]">{branchNameOf(branchId)}</b></p>
+            )}
 
             {loading ? (
                 <p className="text-[13px] text-[#6b7280]">Đang tải...</p>

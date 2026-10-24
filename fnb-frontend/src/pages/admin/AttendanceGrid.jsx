@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate, fmtTime, startOfWeek } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import TimeInput, { valid24 } from '../../components/TimeInput';
 import { API } from '../../utils/api';
 
 const WD = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'CN'];
@@ -28,11 +30,35 @@ const isLate = (info) => {
 export default function AttendanceGrid() {
     const { can } = useAuth();
     const [week, setWeek] = useState(() => fmtD(mondayOf(new Date())));
-    const [branchId, setBranchId] = useState('');
+    // C3 (2026-10-21): bộ lọc CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều với
+    // dropdown sidebar (đổi trong trang = đổi trạng thái chung). '' tại trang này = '0' (Tất cả) ở context.
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const branchId = ctxBranchId === '0' ? '' : ctxBranchId;
+    const setBranchId = (v) => setCtxBranchId(v === '' || v === null || v === undefined ? '0' : String(v));
     const [branches, setBranches] = useState([]);
     const [data, setData] = useState({ days: [], rows: [] });
     const [loading, setLoading] = useState(false);
     const [detail, setDetail] = useState(null); // {name, date, info}
+    // Bổ sung Mảng 4 (A3-7): sửa giờ chấm công có ghi vết lý do (PATCH /attendances/{id}/times)
+    const [editT, setEditT] = useState(null); // {id, name, date, checkIn, checkOut, reason, pairCount}
+    const [savingT, setSavingT] = useState(false);
+    const saveTimes = async () => {
+        if (!editT) return;
+        if (editT.checkIn && !valid24(editT.checkIn)) return alert('Giờ vào chưa đúng định dạng HH:MM (24h)');
+        if (editT.checkOut && !valid24(editT.checkOut)) return alert('Giờ ra chưa đúng định dạng HH:MM (24h)');
+        if (!editT.checkIn && !editT.checkOut) return alert('Nhập ít nhất giờ vào hoặc giờ ra mới');
+        if (!editT.reason.trim()) return alert('Bắt buộc nhập lý do sửa giờ');
+        setSavingT(true);
+        try {
+            await axios.patch(API + '/attendances/' + editT.id + '/times', {
+                check_in: editT.checkIn ? editT.date + ' ' + editT.checkIn + ':00' : null,
+                check_out: editT.checkOut ? editT.date + ' ' + editT.checkOut + ':00' : null,
+                reason: editT.reason.trim(),
+            });
+            setEditT(null); setDetail(null); fetchGrid();
+        } catch (e) { alert(e.response?.data?.message || 'Sửa giờ thất bại'); }
+        setSavingT(false);
+    };
     // Gói 46: thống kê ca theo tháng cho cột "Tổng số ca"
     const [shiftStats, setShiftStats] = useState({});
 
@@ -69,7 +95,8 @@ export default function AttendanceGrid() {
     const days = data.days?.length ? data.days : [];
     const shiftWeek = (delta) => { const m = mondayOf(week); m.setDate(m.getDate() + delta * 7); setWeek(fmtD(m)); };
     const tip = (info) => [info.check_in ? 'Vào: ' + fmtTime(info.check_in) : '', info.check_out ? 'Ra: ' + fmtTime(info.check_out) : '',
-        info.hours != null ? 'Số giờ: ' + info.hours : '', info.scheduled_hours != null ? 'Giờ theo lịch: ' + info.scheduled_hours : '']
+        info.hours != null ? 'Số giờ: ' + info.hours : '', info.scheduled_hours != null ? 'Giờ theo lịch: ' + info.scheduled_hours : '',
+        info.is_late ? '⚠ Đi muộn' : '', info.is_early_leave ? '⏰ Về sớm' : '', info.outside_shift ? '❓ Chấm ngoài ca' : '']
         .filter(Boolean).join('\n');
 
     return (
@@ -120,7 +147,10 @@ export default function AttendanceGrid() {
                                         </td>
                                         {days.map((d) => {
                                             const info = r.days?.[d];
-                                            const late = !!(info && isLate(info));
+                                            // Spec P4-B4: ưu tiên cờ backend (đã tính grace period cấu hình được)
+                                            const late = !!(info && (info.is_late ?? isLate(info)));
+                                            const early = !!(info && info.is_early_leave);
+                                            const outside = !!(info && info.outside_shift);
                                             const hasTime = !!(info && (info.check_in || info.check_out));
                                             return (
                                                 <td key={d} className="px-1.5 py-1 text-center">
@@ -131,8 +161,8 @@ export default function AttendanceGrid() {
                                                             <span className="italic text-gray-400">Nghỉ phép</span>
                                                         ) : hasTime ? (
                                                             <span className="block">
-                                                                <span className={'block font-bold font-mono ' + (late ? 'text-red-600' : 'text-gray-800')}>{fmtTime(info.check_in) || '—'}{late ? ' ⚠' : ''}</span>
-                                                                <span className="block font-mono text-gray-400">{fmtTime(info.check_out) || '—'}</span>
+                                                                <span className={'block font-bold font-mono ' + (late ? 'text-red-600' : 'text-gray-800')}>{fmtTime(info.check_in) || '—'}{late ? ' ⚠' : ''}{outside ? ' ❓' : ''}</span>
+                                                                <span className={'block font-mono ' + (early ? 'text-orange-500 font-bold' : 'text-gray-400')}>{fmtTime(info.check_out) || '—'}{early ? ' ⏰' : ''}</span>
                                                             </span>
                                                         ) : (
                                                             <span className="text-gray-300">—</span>
@@ -162,8 +192,39 @@ export default function AttendanceGrid() {
                                 <div className="flex justify-between"><span className="text-gray-500">Số giờ thực tế</span><span className="font-medium">{detail.info.hours ?? '—'}</span></div>
                                 <div className="flex justify-between"><span className="text-gray-500">Giờ theo lịch</span><span>{detail.info.scheduled_hours ?? '—'}</span></div>
                             </div>
-                            <div className="flex justify-end mt-5">
+                            <div className="flex justify-end gap-2 mt-5">
+                                {can('staff.edit') && detail.info.attendance_id ? (
+                                    <button onClick={() => setEditT({ id: detail.info.attendance_id, name: detail.name, date: detail.date, checkIn: fmtTime(detail.info.check_in) || '', checkOut: fmtTime(detail.info.check_out) || '', reason: '', pairCount: detail.info.pair_count || 1 })} className="px-4 py-2 rounded border border-[#24305E] text-[#24305E] text-[13px] font-medium">Sửa giờ</button>
+                                ) : null}
                                 <button onClick={() => setDetail(null)} className="px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">Đóng</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {editT && (
+                    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => !savingT && setEditT(null)}>
+                        <div className="bg-white rounded-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+                            <h2 className="font-bold text-[16px] mb-1">Sửa giờ chấm công</h2>
+                            <p className="text-[12px] text-gray-500 mb-4">{editT.name} · {fmtDate(editT.date)}</p>
+                            {editT.pairCount > 1 && <p className="text-[12px] text-amber-600 mb-3">Ngày này có {editT.pairCount} cặp chấm công — đang sửa cặp chấm đầu tiên.</p>}
+                            <div className="space-y-3 text-[13px]">
+                                <div className="flex items-center justify-between gap-3">
+                                    <label className="text-gray-500">Giờ vào mới</label>
+                                    <TimeInput value={editT.checkIn} onChange={(v) => setEditT({ ...editT, checkIn: v })} className="border border-gray-300 rounded px-3 py-2 w-28 text-center font-mono" />
+                                </div>
+                                <div className="flex items-center justify-between gap-3">
+                                    <label className="text-gray-500">Giờ ra mới</label>
+                                    <TimeInput value={editT.checkOut} onChange={(v) => setEditT({ ...editT, checkOut: v })} className="border border-gray-300 rounded px-3 py-2 w-28 text-center font-mono" />
+                                </div>
+                                <div>
+                                    <label className="text-gray-500 block mb-1">Lý do sửa <span className="text-red-500">*</span></label>
+                                    <textarea value={editT.reason} onChange={(e) => setEditT({ ...editT, reason: e.target.value })} rows={2} className="border border-gray-300 rounded px-3 py-2 w-full" placeholder="VD: NV quên chấm ra, xác nhận qua camera" />
+                                </div>
+                                <p className="text-[11px] text-gray-400">Mọi lần sửa đều được ghi vết (người sửa, giờ cũ/mới, lý do). Để trống cả 2 ô giờ = không đổi.</p>
+                            </div>
+                            <div className="flex justify-end gap-2 mt-5">
+                                <button onClick={() => setEditT(null)} disabled={savingT} className="px-4 py-2 rounded border border-gray-300 text-[13px]">Hủy</button>
+                                <button onClick={saveTimes} disabled={savingT} className="px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium disabled:opacity-50">{savingT ? 'Đang lưu...' : 'Lưu giờ mới'}</button>
                             </div>
                         </div>
                     </div>

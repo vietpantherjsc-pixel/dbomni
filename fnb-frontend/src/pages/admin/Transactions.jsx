@@ -52,6 +52,12 @@ const Transactions = () => {
     const [fFrom, setFFrom] = useState('');
     const [fTo, setFTo] = useState('');
     const [fStatus, setFStatus] = useState('');
+    // Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt (Chờ duyệt/Đã duyệt/Đã từ chối)
+    const [fApproval, setFApproval] = useState('');
+    const [rejecting, setRejecting] = useState(null); // row đang mở hộp từ chối
+    const [rejectReason, setRejectReason] = useState('');
+    const [rejectBusy, setRejectBusy] = useState(false);
+    const [actionBusy, setActionBusy] = useState(false);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
@@ -103,6 +109,7 @@ const Transactions = () => {
             if (fFrom) params.append('date_from', fFrom);
             if (fTo) params.append('date_to', fTo);
             if (fStatus) params.append('status', fStatus);
+            if (fApproval) params.append('approval_status', fApproval); // Gói "Chờ duyệt trên Hub"
             if (search) params.append('search', search);
             const res = await axios.get(`${API}/transactions?${params}`);
             if (res.data?.success) {
@@ -115,15 +122,18 @@ const Transactions = () => {
         } finally {
             setLoading(false);
         }
-    }, [tab, page, branchId, fCat, fFrom, fTo, fStatus, search]);
+    }, [tab, page, branchId, fCat, fFrom, fTo, fStatus, fApproval, search]);
 
     useEffect(() => { fetchCategories(); fetchBranches(); fetchPartners(); fetchAccounts(); }, [fetchCategories, fetchBranches, fetchPartners, fetchAccounts]);
     useEffect(() => { fetchRows(); }, [fetchRows]);
-    useEffect(() => { setPage(1); }, [tab, branchId, fCat, fFrom, fTo, fStatus, search]);
+    useEffect(() => { setPage(1); }, [tab, branchId, fCat, fFrom, fTo, fStatus, fApproval, search]);
 
     const openAdd = () => {
         setEditing(null);
-        setForm(emptyForm(tab));
+        // C2 (2026-10-21): form tạo phiếu theo CN đang chọn ở sidebar — sidebar là 1 CN cụ thể
+        // thì điền sẵn CN đó; sidebar = "Tất cả" thì để trống, người nhập PHẢI chọn tường minh
+        // (1 CN cụ thể hoặc "Chung toàn chuỗi" = 'common'), không còn lưu trống âm thầm.
+        setForm({ ...emptyForm(tab), branch_id: branchId !== '0' ? branchId : '' });
         setShowNewCat(false);
         setShowForm(true);
     };
@@ -132,7 +142,7 @@ const Transactions = () => {
         setForm({
             type: row.type,
             category_id: row.category_id || '',
-            branch_id: row.branch_id || '',
+            branch_id: row.branch_id ? String(row.branch_id) : 'common', // C2: phiếu không-CN hiện rõ là "Chung toàn chuỗi"
             amount: row.amount,
             paid_at: (row.paid_at || '').slice(0, 10),
             status: row.status,
@@ -167,12 +177,15 @@ const Transactions = () => {
     const handleSave = async () => {
         if (!form.category_id) return alert('Chọn danh mục.');
         if (!editing && (!form.amount || Number(form.amount) < 1)) return alert('Nhập số tiền hợp lệ.');
+        // C2: phiếu thường (không phải phiếu tự sinh) bắt buộc có lựa chọn CN tường minh —
+        // 'common' = Chung toàn chuỗi (lưu branch_id = null); trống = chưa chọn → chặn lưu.
+        if (!editing?.related_type && !form.branch_id) return alert('Chọn chi nhánh cho phiếu — chọn 1 chi nhánh cụ thể, hoặc "Chung toàn chuỗi" nếu phiếu không thuộc riêng chi nhánh nào.');
         setSaving(true);
         try {
             const payload = {
                 type: form.type,
                 category_id: form.category_id,
-                branch_id: form.branch_id || null,
+                branch_id: form.branch_id === 'common' ? null : (form.branch_id || null), // C2: 'common' -> null
                 partner_id: form.partner_id || null, // Gói 29
                 is_debt: !!form.is_debt && !editing, // Gói 29: chỉ áp dụng khi tạo mới
                 amount: Number(form.amount),
@@ -207,6 +220,34 @@ const Transactions = () => {
             fetchRows();
         } catch (e) {
             alert(e.response?.data?.message || 'Xóa thất bại.');
+        }
+    };
+
+    // Gói "Chờ duyệt trên Hub" (2026-10-21): duyệt/từ chối phiếu chờ ngay trong Admin (ngang hàng Hub)
+    const handleApprove = async (row) => {
+        if (!window.confirm(`Duyệt phiếu ${row.code} (${fmtMoney(row.amount)}đ)?`)) return;
+        setActionBusy(true);
+        try {
+            await axios.post(`${API}/transactions/${row.id}/approve`);
+            fetchRows();
+        } catch (e) {
+            alert(e.response?.data?.message || 'Duyệt thất bại.');
+        } finally {
+            setActionBusy(false);
+        }
+    };
+    const openReject = (row) => { setRejecting(row); setRejectReason(''); };
+    const handleReject = async () => {
+        if (!rejecting || !rejectReason.trim() || rejectBusy) return;
+        setRejectBusy(true);
+        try {
+            await axios.post(`${API}/transactions/${rejecting.id}/reject`, { reason: rejectReason.trim() });
+            setRejecting(null);
+            fetchRows();
+        } catch (e) {
+            alert(e.response?.data?.message || 'Từ chối thất bại.');
+        } finally {
+            setRejectBusy(false);
         }
     };
 
@@ -280,6 +321,14 @@ const Transactions = () => {
                             <option value="paid">Đã thanh toán</option>
                             <option value="pending">Chờ thanh toán</option>
                         </select>
+                        {/* Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt */}
+                        <select value={fApproval} onChange={(e) => setFApproval(e.target.value)}
+                            className="text-[13px] border border-gray-300 rounded px-3 py-2 min-h-[40px]">
+                            <option value="">Duyệt: Tất cả</option>
+                            <option value="pending">Chờ duyệt</option>
+                            <option value="approved">Đã duyệt</option>
+                            <option value="rejected">Đã từ chối</option>
+                        </select>
                         <div className="flex-1 relative min-w-[200px]">
                             <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && setSearch(searchInput)}
@@ -321,7 +370,7 @@ const Transactions = () => {
                                         <td className="px-3 py-3 font-medium text-[#0d6efd] whitespace-nowrap">{r.code}</td>
                                         <td className="px-3 py-3 whitespace-nowrap">{fmtDate(r.paid_at)}</td>
                                         <td className="px-3 py-3">{r.category?.name || '-'}</td>
-                                        <td className="px-3 py-3">{r.branch?.name || 'Tất cả CN'}</td>
+                                        <td className="px-3 py-3">{r.branch?.name || 'Chung toàn chuỗi'}</td>
                                         <td className="px-3 py-3">{r.partner?.name || '-'}</td> {/* Gói 29 */}
                                         <td className="px-3 py-3 whitespace-nowrap">{r.account?.name || '-'}</td> {/* Gói 56 */}
                                         <td className={`px-3 py-3 text-right font-semibold whitespace-nowrap ${r.type === 'income' ? 'text-green-700' : 'text-red-600'}`}>
@@ -334,12 +383,23 @@ const Transactions = () => {
                                                     ? 'bg-green-50 text-green-700 border-green-200'
                                                     : 'bg-amber-50 text-amber-700 border-amber-200'
                                             }`}>{STATUS_LABEL[r.status]}</span>
+                                            {/* Gói "Chờ duyệt trên Hub" (2026-10-21): badge trạng thái duyệt — đủ 3 badge theo spec §4.3 */}
+                                            {r.is_rejected ? (
+                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-red-50 text-red-700 border-red-200">Đã từ chối</span>
+                                            ) : r.is_approved ? (
+                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-green-50 text-green-700 border-green-200">Đã duyệt</span>
+                                            ) : (
+                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-amber-50 text-amber-700 border-amber-200">Chờ duyệt</span>
+                                            )}
                                         </td>
                                         <td className="px-3 py-3 max-w-[220px]">
                                             {r.related_type === 'inbound' && (
                                                 <span className="inline-block mb-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
                                                     Tự động từ nhập kho
                                                 </span>
+                                            )}
+                                            {r.is_rejected && r.reject_reason && (
+                                                <div className="text-red-700 text-[12px] font-medium">Từ chối: {r.reject_reason}</div>
                                             )}
                                             <div className="text-gray-600 truncate">{r.note || '-'}</div>
                                             {r.attachment && ( // Gói 56
@@ -348,7 +408,19 @@ const Transactions = () => {
                                             )}
                                         </td>
                                         <td className="px-3 py-3 text-right whitespace-nowrap">
-                                            <button onClick={() => openEdit(r)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
+                                            {/* Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu chờ → Duyệt/Từ chối;
+                                                phiếu đã từ chối = hồ sơ đóng → không Sửa/duyệt lại (giữ Xóa để dọn dữ liệu) */}
+                                            {!r.is_rejected && !r.is_approved && (
+                                                <>
+                                                    <button onClick={() => handleApprove(r)} disabled={actionBusy}
+                                                        className="text-green-700 hover:underline mr-3 disabled:opacity-50">Duyệt</button>
+                                                    <button onClick={() => openReject(r)}
+                                                        className="text-red-600 hover:underline mr-3">Từ chối</button>
+                                                </>
+                                            )}
+                                            {!r.is_rejected && (
+                                                <button onClick={() => openEdit(r)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
+                                            )}
                                             {!r.related_type && (
                                                 <button onClick={() => handleDelete(r)} className="text-red-600 hover:underline">Xóa</button>
                                             )}
@@ -427,11 +499,13 @@ const Transactions = () => {
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <label className="text-[12.5px] text-gray-500 block mb-1">Chi nhánh</label>
+                                    <label className="text-[12.5px] text-gray-500 block mb-1">Chi nhánh{!editing && <span className="text-red-600"> *</span>}</label>
                                     <select value={form.branch_id} disabled={isAuto}
                                         onChange={(e) => setForm({ ...form, branch_id: e.target.value })}
                                         className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px] disabled:bg-gray-100">
-                                        <option value="">Tất cả CN</option>
+                                        {/* C2: chưa chọn (khi sidebar = Tất cả) -> placeholder bắt chọn; "Chung toàn chuỗi" là lựa chọn tường minh = branch_id null */}
+                                        {!editing && branchId === '0' && <option value="">— Chọn chi nhánh —</option>}
+                                        <option value="common">Chung toàn chuỗi</option>
                                         {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                                     </select>
                                 </div>
@@ -545,6 +619,31 @@ const Transactions = () => {
                             <button onClick={handleSave} disabled={saving}
                                 className="flex-1 py-3 bg-[#24305E] text-white rounded-lg text-[14px] font-medium min-h-[48px] disabled:opacity-50">
                                 {saving ? 'Đang lưu...' : 'Lưu'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Gói "Chờ duyệt trên Hub" (2026-10-21): hộp từ chối phiếu thu/chi — lý do BẮT BUỘC */}
+            {rejecting && (
+                <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50" onClick={() => setRejecting(null)}>
+                    <div className="bg-white rounded-t-2xl sm:rounded-2xl p-5 w-full sm:max-w-md" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-[15px] font-semibold text-[#24305E] mb-1">Từ chối phiếu {rejecting.code}</h3>
+                        <p className="text-[13px] text-gray-600 mb-3">
+                            Phiếu bị từ chối là <b>hồ sơ đóng</b> — không sửa, không duyệt lại được. Muốn xử lý lại thì tạo phiếu mới.
+                        </p>
+                        <label className="text-[12.5px] text-gray-500 block mb-1">Lý do từ chối <span className="text-red-600">(bắt buộc)</span></label>
+                        <textarea value={rejectReason} rows={3} maxLength={500}
+                            onChange={(e) => setRejectReason(e.target.value)}
+                            placeholder="Nhập lý do từ chối..."
+                            className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5" />
+                        <div className="flex gap-2 mt-4">
+                            <button onClick={() => setRejecting(null)}
+                                className="flex-1 py-3 border border-gray-300 rounded-lg text-[14px] min-h-[48px]">Hủy bỏ</button>
+                            <button onClick={handleReject} disabled={rejectBusy || !rejectReason.trim()}
+                                className="flex-1 py-3 bg-red-600 text-white rounded-lg text-[14px] font-medium min-h-[48px] disabled:opacity-50">
+                                {rejectBusy ? 'Đang xử lý...' : 'Xác nhận từ chối'}
                             </button>
                         </div>
                     </div>

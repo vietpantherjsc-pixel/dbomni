@@ -101,7 +101,7 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
   return (
     <div className="zm-modal-mask" onClick={onClose}>
       <div className="zm-sheet" onClick={(e) => e.stopPropagation()}>
-        <img className="zm-sheet-hero" src={product.image_url || 'https://via.placeholder.com/400?text=☕'} alt={product.name} />
+        <img className="zm-sheet-hero" src={product.image_url || '/default-product.svg'} alt={product.name} />
         <div className="zm-sheet-body">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <h2 style={{ fontSize: 18 }}>{product.name}</h2>

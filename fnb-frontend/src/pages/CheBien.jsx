@@ -107,6 +107,14 @@ export default function CheBien() {
   const [qty, setQty] = useState('');
   const [note, setNote] = useState('');
 
+  // Spec P4-A1: mở từ cảnh báo BTP thiếu (?material_id=) → chọn sẵn BTP
+  useEffect(() => {
+    try {
+      const mid = new URLSearchParams(window.location.search).get('material_id');
+      if (mid && materials.some((m) => String(m.id) === String(mid))) onPickMaterial(mid);
+    } catch (e) {}
+  }, [materials]); // eslint-disable-line
+
   const toast = (m) => {
     setToastMsg(m); setToastOn(true);
     setTimeout(() => setToastOn(false), 2600);
@@ -222,9 +230,9 @@ export default function CheBien() {
       <div className="cb-wrap">
         <style>{CSS}</style>
         <div className="cb-login">
-          <div className="cb-hd" style={{ borderRadius: 18, position: 'relative' }}>
+          <div className="cb-hd" style={{ borderRadius: 18 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="cb-title">🍳 Chế biến</div>
             <div className="cb-sub">Đăng nhập để tiếp tục</div>
           </div>

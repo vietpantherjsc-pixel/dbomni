@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import VisibilityMatrix from './VisibilityMatrix'; // Demo tối ưu menu: tab Hiển thị trong trang cha
 
 // Gói 7f (2026-10-05): Quản lý Thực đơn (hiển thị trên POS/App).
 // - Kéo-thả đổi thứ tự thực đơn và món trong thực đơn
@@ -11,6 +12,8 @@ const fmt = (v) => `${Number(v || 0).toLocaleString('vi-VN')} đ`;
 
 export default function Menus() {
   const [menus, setMenus] = useState([]);
+  // Demo tối ưu menu (Đại Vương chốt 2026-10-19): tab "Hiển thị theo chi nhánh" trong trang Thực đơn
+  const [pageTab, setPageTab] = useState('list');
   const [sel, setSel] = useState(null);
   const [renaming, setRenaming] = useState(null);
   const [renameVal, setRenameVal] = useState('');
@@ -110,10 +113,28 @@ export default function Menus() {
     <AdminLayout>
       <div className="p-6 max-w-6xl mx-auto">
         <h1 className="text-[22px] font-bold text-[var(--m-ink)]">Thực đơn</h1>
-        <p className="text-sm mb-6" style={{ color: 'var(--m-ink-soft)' }}>
+        <p className="text-sm mb-4" style={{ color: 'var(--m-ink-soft)' }}>
           Thực đơn hiển thị trên POS và App đặt hàng — kéo-thả để sắp xếp thứ tự.
         </p>
-
+        <div className="flex gap-2 mb-4">
+            <button onClick={() => setPageTab('list')} className={`m-btn ${pageTab === 'list' ? 'm-btn-primary' : ''}`}>Danh sách</button>
+            <button onClick={() => setPageTab('visibility')} className={`m-btn ${pageTab === 'visibility' ? 'm-btn-primary' : ''}`}>Hiển thị theo chi nhánh</button>
+        </div>
+        {pageTab === 'visibility' && (
+            <VisibilityMatrix
+                title="Quản lý hiển thị thực đơn"
+                desc="Gạt tắt để ẩn cả thực đơn ở chi nhánh tương ứng (POS + Zalo Mini App)."
+                matrixUrl="/visibility/menus"
+                toggleUrl="/visibility/menus/toggle"
+                syncUrl="/visibility/menus/sync"
+                rowsKey="menus"
+                rowKey="menu_id"
+                syncIdsKey="menu_ids"
+                embedded
+                countKey="products_count"
+            />
+        )}
+        {pageTab === 'list' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Cột trái: danh sách thực đơn */}
           <div className="m-card p-3">
@@ -203,6 +224,7 @@ export default function Menus() {
             )}
           </div>
         </div>
+        )}
       </div>
     </AdminLayout>
   );

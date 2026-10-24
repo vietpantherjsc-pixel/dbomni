@@ -11,6 +11,14 @@ class Stocktake extends Model
 {
     protected $guarded = [];
 
+    // Rà mã 2026-10-20: sinh mã phiếu kiểm kê theo quy tắc Thiết lập (CodeGenerator 'stocktake').
+    // Gọi trong DB::transaction khi tạo phiếu (giống InboundReceipt::nextCode).
+    public static function nextCode(): string
+    {
+        $count = static::query()->lockForUpdate()->count();
+        return \App\Helpers\CodeGenerator::generate('stocktake', $count + 1, false);
+    }
+
     protected $casts = [
         'checked_at' => 'datetime', // Gói 19: ngày-giờ kiểm kho lúc chốt phiếu
     ];

@@ -66,9 +66,50 @@ class EmployeeController extends Controller
         ];
     }
 
+    // Audit 2026-10-23 B-1: Employee thao tác không được vượt quyền của chính mình:
+    // - gán role có khóa quyền ngoài tập quyền của actor -> 403
+    // - reset PIN/mật khẩu của NV thuộc role mạnh hơn actor -> 403
+    // (User admin: không giới hạn.)
+    protected function guardRoleAssignment(Request $request, $roleId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if (!$actor instanceof Employee || empty($roleId)) return null;
+        $role = \App\Models\Role::find((int) $roleId);
+        if (!$role) return null;
+        $actorRole = $actor->role;
+        foreach (($role->permissions ?? []) as $perm) {
+            if (!$actorRole || !$actorRole->hasPermission($perm)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Bạn không thể gán chức vụ có quyền vượt quá quyền của mình.',
+                ], 403);
+            }
+        }
+        return null;
+    }
+
+    protected function guardResetTarget(Request $request, Employee $target): ?JsonResponse
+    {
+        $actor = $request->user();
+        if (!$actor instanceof Employee) return null;
+        if ((int) $actor->id === (int) $target->id) return null;
+        $actorRole = $actor->role;
+        $targetRole = $target->role;
+        foreach (($targetRole?->permissions ?? []) as $perm) {
+            if (!$actorRole || !$actorRole->hasPermission($perm)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Bạn không thể đặt lại thông tin đăng nhập của nhân viên có quyền cao hơn mình.',
+                ], 403);
+            }
+        }
+        return null;
+    }
+
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate($this->rules());
+        if ($deny = $this->guardRoleAssignment($request, $validated['role_id'] ?? null)) return $deny;
         // Gói 38: PIN lưu hash — sinh ngẫu nhiên hoặc check trùng PIN nhập tay bằng Hash::check
         if (empty($validated['pin_code'])) {
             $plainPin = $this->generateUniquePin();
@@ -115,6 +156,9 @@ class EmployeeController extends Controller
     {
         $emp = Employee::findOrFail($id);
         $validated = $request->validate($this->rules($id));
+        if (array_key_exists('role_id', $validated)) {
+            if ($deny = $this->guardRoleAssignment($request, $validated['role_id'])) return $deny;
+        }
         // Không gửi password mới -> giữ nguyên
         if (empty($validated['password'])) unset($validated['password']);
         // Gói 38: PIN rỗng = không đổi (xóa key để cast hashed không hash chuỗi rỗng);
@@ -130,9 +174,11 @@ class EmployeeController extends Controller
         }
         $branchIds = $validated['branch_ids'] ?? null; // null = không đụng pivot
         unset($validated['branch_ids']);
+        $credChanged = $plainPin !== null || !empty($validated['password']);
         $emp->update($validated);
         // CC-R1: khi tắt NV → revoke toàn bộ token để token cũ không dùng được nữa
-        if (array_key_exists('is_active', $validated) && !$validated['is_active']) {
+        // Audit 2026-10-23 BM-10: đổi PIN/mật khẩu cũng thu hồi mọi token hiện có
+        if ((array_key_exists('is_active', $validated) && !$validated['is_active']) || $credChanged) {
             $emp->tokens()->delete();
         }
         if (is_array($branchIds)) {
@@ -160,11 +206,13 @@ class EmployeeController extends Controller
     }
 
     // Cấp lại PIN ngẫu nhiên (Gói 38: PIN lưu hash, trả plaintext 1 lần)
-    public function resetPin(int $id): JsonResponse
+    public function resetPin(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
+        if ($deny = $this->guardResetTarget($request, $emp)) return $deny;
         $pin = $this->generateUniquePin($id);
         $emp->update(['pin_code' => $pin]); // cast 'hashed' tự hash
+        $emp->tokens()->delete(); // Audit 2026-10-23 BM-10: thu hồi token khi cấp lại PIN
         return response()->json(['success' => true, 'data' => ['pin_code_plain' => $pin]]);
     }
 
@@ -172,8 +220,10 @@ class EmployeeController extends Controller
     public function resetPassword(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
+        if ($deny = $this->guardResetTarget($request, $emp)) return $deny;
         $validated = $request->validate(['password' => 'required|string|min:6|max:100']);
         $emp->update(['password' => $validated['password']]);
+        $emp->tokens()->delete(); // Audit 2026-10-23 BM-10: thu hồi token khi đặt lại mật khẩu
         return response()->json(['success' => true, 'message' => 'Đã đặt lại mật khẩu.']);
     }
 }

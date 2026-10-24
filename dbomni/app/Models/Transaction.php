@@ -14,6 +14,8 @@ class Transaction extends Model
         'code', 'type', 'category_id', 'branch_id', 'partner_id', 'amount', 'paid_amount',
         'paid_at', 'occurred_at', 'account_id', 'attachment', // Gói 57
         'approved_by', 'approved_at', // Gói 59: duyệt phiếu (null = chờ duyệt)
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): người duyệt/từ chối là Employee + trạng thái từ chối
+        'approved_by_employee_id', 'rejected_at', 'reject_reason', 'rejected_by', 'rejected_by_employee_id',
         'status', 'payment_method', 'related_type', 'related_id', 'note', 'created_by',
     ];
 
@@ -23,6 +25,7 @@ class Transaction extends Model
         'paid_at' => 'date',
         'occurred_at' => 'date', // Gói 57
         'approved_at' => 'datetime', // Gói 59
+        'rejected_at' => 'datetime', // Gói "Chờ duyệt trên Hub" (2026-10-21)
     ];
 
     public function category(): BelongsTo
@@ -44,6 +47,41 @@ class Transaction extends Model
     public function approver(): BelongsTo
     {
         return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    // Gói "Chờ duyệt trên Hub" (2026-10-21): người duyệt/từ chối là Employee.
+    public function approvedByEmployee(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Employee::class, 'approved_by_employee_id');
+    }
+
+    public function rejectedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
+    }
+
+    public function rejectedByEmployee(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Employee::class, 'rejected_by_employee_id');
+    }
+
+    /** Đang chờ duyệt: chưa duyệt (user/employee) và chưa bị từ chối. */
+    public function scopePendingApproval($q)
+    {
+        return $q->whereNull('approved_by')->whereNull('approved_by_employee_id')->whereNull('rejected_at');
+    }
+
+    /** Đã duyệt (bởi User hoặc Employee), chưa bị từ chối. */
+    public function scopeWasApproved($q)
+    {
+        return $q->whereNull('rejected_at')
+            ->where(fn ($w) => $w->whereNotNull('approved_by')->orWhereNotNull('approved_by_employee_id'));
+    }
+
+    /** Đã bị từ chối — hồ sơ đóng (terminal). */
+    public function scopeWasRejected($q)
+    {
+        return $q->whereNotNull('rejected_at');
     }
 
     /** Gói 29: đối tác gắn với phiếu (công nợ). */
@@ -82,13 +120,13 @@ class Transaction extends Model
      */
     public static function nextCode(string $type): string
     {
-        $prefix = $type === 'income' ? 'PT' : 'PC';
-        $datePart = now()->format('Ymd');
+        // Rà mã 2026-10-20: prefix + số chữ số đọc từ Thiết lập qua CodeGenerator
+        // (type receipt_income = PT / receipt_expense = PC), thay hardcode cũ.
         $count = DB::table('transactions')
             ->where('type', $type)
             ->whereDate('created_at', now()->toDateString())
             ->lockForUpdate()
             ->count();
-        return sprintf('%s-%s-%04d', $prefix, $datePart, $count + 1);
+        return \App\Helpers\CodeGenerator::generate($type === 'income' ? 'receipt_income' : 'receipt_expense', $count + 1, true);
     }
 }

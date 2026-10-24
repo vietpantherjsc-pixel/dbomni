@@ -302,9 +302,9 @@ export default function DangKyCa() {
       <div className="dk-wrap">
         <style>{CSS}</style>
         <div className="dk-login">
-          <div className="dk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+          <div className="dk-hd" style={{ borderRadius: 18 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="dk-title">Đăng ký ca làm việc</div>
             <div className="dk-branch">Đăng nhập để tiếp tục</div>
           </div>

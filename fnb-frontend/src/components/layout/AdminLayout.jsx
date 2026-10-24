@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext';
 import '../../styles/matcha.css';
-import { loadTheme } from '../../utils/theme';
+import { loadTheme, getStoredLogo } from '../../utils/theme';
 import { loadFont } from '../../utils/font';
 import { loadNumberSettings } from '../../utils/number';
 import axios from 'axios';
@@ -19,6 +19,7 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
     const paths = {
         home: <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" />,
         chart: <path d="M4 20V10m6 10V4m6 16v-7m4 7H2" />,
+        flask: <path d="M9 3h6M10 3v5.3L5 18a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18L14 8.3V3M7.5 14h9" />,
         receipt: <path d="M6 2h12a1 1 0 0 1 1 1v18l-3-2-2 2-2-2-2 2-2-2-3 2V3a1 1 0 0 1 1-1zm3 7h6m-6 4h6" />,
         tag: <path d="M20 12l-8 8-9-9V4a1 1 0 0 1 1-1h7l9 9zM7.5 7.5h.01" />,
         calendar: <path d="M8 2v4m8-4v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />,
@@ -57,78 +58,72 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
     );
 };
 
-// Menu chính (copy Sapo, trừ Kế toán/Thuế) + submenu
+// Demo tối ưu menu admin (Đại Vương chốt 2026-10-19): gom 10 nhóm theo nghiệp vụ.
+// Nguyên tắc: không đổi route, chỉ sắp xếp lại menu. "Đối tác tích hợp" ẩn khỏi menu (route giữ).
 const mainMenu = [
     { path: '/admin', label: 'Tổng quan', icon: 'home' },
-    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart', children: [
-        { label: 'Báo cáo doanh thu', path: '/admin/reports' },
-        { label: 'Báo cáo kho', path: '/admin/reports/inventory' },
-        { label: 'Báo cáo thu chi / PNL', path: '/admin/reports/pnl' },
+    // Nhóm Bán hàng (mới): Hóa đơn + POS + KDS + Bàn
+    { path: '/admin/orders', label: 'Bán hàng', icon: 'receipt', children: [
+        { label: 'Hóa đơn', path: '/admin/orders' },
+        { label: 'Bán hàng (POS)', path: '/pos' },
+        { label: 'Bếp (KDS)', path: '/kds' },
+        { label: 'Bàn', path: '/admin/tables' },
     ] },
-    { path: '/admin/orders', label: 'Hóa đơn', icon: 'receipt' },
-    { path: '/admin/products', label: 'Mặt hàng', icon: 'tag', children: [
+    // Nhóm Hàng hóa (mới): Mặt hàng + Thực đơn (Hiển thị thành tab trong trang cha)
+    { path: '/admin/products', label: 'Hàng hóa', icon: 'tag', children: [
         { label: 'Danh sách mặt hàng', path: '/admin/products' },
-        { label: 'Quản lý hiển thị', path: '/admin/products/visibility' }, // Gói 25: ẩn/hiện món theo CN
         { label: 'Danh mục', path: '/admin/categories' },
         { label: 'Nhóm tùy chọn', path: '/admin/option-groups' },
-    ] },
-    { path: '/admin/menus', label: 'Thực đơn', icon: 'book', children: [ // Gói 25: tách khỏi Mặt hàng theo demo đã chốt
         { label: 'Danh sách thực đơn', path: '/admin/menus' },
-        { label: 'Quản lý hiển thị', path: '/admin/menus/visibility' }, // Gói 25: ẩn/hiện thực đơn theo CN
     ] },
-    { path: '/admin/tables', label: 'Bàn', icon: 'table' },
-    { path: '/admin/staff', label: 'Nhân viên', icon: 'users', perm: 'staff.view', children: [ // Gói 26
-        { label: 'Danh sách nhân viên', path: '/admin/staff' },
-        { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles' },
-        { label: 'Bảng lương', path: '/admin/staff/salary' },
-        { label: 'Cấu hình Lương', path: '/admin/staff/holiday-policy' },
-    ] },
-    { path: '/admin/customers', label: 'Khách hàng', icon: 'user', children: [
-        { label: 'Danh sách khách hàng', path: '/admin/customers' },
-        { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
-    ] },
-    { path: '/admin/promotions', label: 'Khuyến mại', icon: 'percent' },
-    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: [ // Gói 55 p11: tách submenu
+    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: [
         { label: 'Danh sách tồn kho', path: '/admin/inventory' },
         { label: 'Nhập kho', path: '/admin/inventory/inbound' },
-        // Gói 55 p11aa: hiện lại Xuất kho — đã có API phiếu xuất riêng
         { label: 'Xuất kho', path: '/admin/inventory/outbound' },
         { label: 'Chuyển kho', path: '/admin/inventory/transfer' },
         { label: 'Kiểm kê kho', path: '/admin/inventory/stocktake' },
-        { label: 'Nhà cung cấp', path: '/admin/suppliers' }, // Gói 55 p11ab
+        { label: 'Nhà cung cấp', path: '/admin/suppliers' },
     ] },
-    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: [ // Gói 29
+    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: [
         { label: 'Danh sách thu chi', path: '/admin/transactions' },
         { label: 'Danh mục thu chi', path: '/admin/transaction-categories' },
+        { label: 'Quản lý quỹ', path: '/admin/accounts' },
+        { label: 'Chi phí trả trước', path: '/admin/prepaid-expenses' },
         { label: 'Đối tác', path: '/admin/partners' },
     ] },
-    { path: '/admin/attendance', label: 'Chấm công', icon: 'clock', perm: 'staff.view', children: [ // Gói 35
+    // Nhóm Nhân sự (gộp): Hồ sơ + Công & Ca + Lương & Kỷ luật
+    { path: '/admin/staff', label: 'Nhân sự', icon: 'users', perm: 'staff.view', children: [
+        { label: 'Danh sách nhân viên', path: '/admin/staff' },
+        { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles' },
         { label: 'Bảng chấm công', path: '/admin/attendance' },
-        { label: 'Lỗi 3 Chuyên', path: '/admin/attendance/violations' },
         { label: 'Ca làm việc', path: '/admin/attendance/shifts' },
         { label: 'Đăng ký & Xếp ca', path: '/admin/attendance/scheduling' },
         { label: 'Yêu cầu nghỉ', path: '/admin/attendance/requests' },
         { label: 'QR chấm công', path: '/admin/attendance/qr' },
+        { label: 'Bảng lương', path: '/admin/staff/salary' },
+        { label: 'Cấu hình Lương', path: '/admin/staff/holiday-policy' },
+        { label: 'Lỗi 3 Chuyên', path: '/admin/attendance/violations' },
     ] },
-];
-
-const channelMenu = [
-    { path: '/admin/price-lists', label: 'Kênh bán hàng', icon: 'tag' },
-    { path: '/admin/integrations', label: 'Đối tác tích hợp', icon: 'plug' },
-    { path: '/admin/online', label: 'Zalo Mini App', icon: 'zalo', children: [ // Gói 46: 2 submenu
-        { label: 'Cấu hình', path: '/admin/online' },
-        { label: 'Affiliate', path: '/admin/online/affiliate' },
+    // Nhóm Khách hàng & Khuyến mại (mới)
+    { path: '/admin/customers', label: 'Khách hàng & KM', icon: 'user', children: [
+        { label: 'Danh sách khách hàng', path: '/admin/customers' },
+        { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
+        { label: 'Cửa hàng đổi điểm', path: '/admin/point-exchange' },
+        { label: 'Khuyến mại', path: '/admin/promotions' },
     ] },
-    { path: '/admin/qr-order', label: 'QR Order', icon: 'qr', children: [ // Gói 28: submenu mở đúng tab
-        { label: 'Danh sách QR', path: '/admin/qr-order' },
-        { label: 'Tạo QR', path: '/admin/qr-order?tab=tao' },
+    // Báo cáo: 1 trang 8 tabs (bỏ 3 submenu trùng, deep-link giữ)
+    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart' },
+    // SPEC R&D (2026-10-21, Đại Vương duyệt NGOẠI LỆ UI-MAP): nhóm cấp 1 riêng "R&D".
+    // Xem = products.manage hoặc reports.view (permAny).
+    { path: '/admin/rd', label: 'R&D', icon: 'flask', permAny: ['products.manage', 'reports.view'] },
+    // Nhóm Kênh online (mới): Kênh bán hàng + Zalo Mini App + QR Order (bỏ "Đối tác tích hợp" khỏi menu)
+    { path: '/admin/price-lists', label: 'Kênh online', icon: 'tag', children: [
+        { label: 'Kênh bán hàng', path: '/admin/price-lists' },
+        { label: 'Zalo Mini App — Cấu hình', path: '/admin/online' },
+        { label: 'Zalo Mini App — Mời bạn bè', path: '/admin/online/invite-friends' },
+        { label: 'Cầu nối Sapo', path: '/admin/sapo' },
+        { label: 'QR Order', path: '/admin/qr-order' },
     ] },
-];
-
-// Nghiệp vụ bán hàng của hệ thống (giữ lại từ layout cũ)
-const opsMenu = [
-    { path: '/pos', label: 'Bán hàng (POS)', icon: 'pos' },
-    { path: '/kds', label: 'Bếp (KDS)', icon: 'kitchen' },
 ];
 
 const AdminLayout = ({ children }) => {
@@ -142,6 +137,15 @@ const AdminLayout = ({ children }) => {
     // Gói 18: dropdown chọn chi nhánh
     const [branches, setBranches] = useState([]);
     const [branchOpen, setBranchOpen] = useState(false);
+    // Logo thương hiệu (2026-10-21): setting brand_logo — có logo thì sidebar
+    // hiện ảnh thay chữ; đổi logo ở trang Thiết lập là sidebar cập nhật ngay.
+    const [brandLogo, setBrandLogo] = useState(() => getStoredLogo());
+    const [logoBroken, setLogoBroken] = useState(false);
+    useEffect(() => {
+        const onLogo = (e) => { setBrandLogo(e.detail ?? getStoredLogo()); setLogoBroken(false); };
+        window.addEventListener('brand-logo-changed', onLogo);
+        return () => window.removeEventListener('brand-logo-changed', onLogo);
+    }, []);
 
     useEffect(() => {
         axios.get(API + '/branches')
@@ -254,7 +258,8 @@ const AdminLayout = ({ children }) => {
 
     const renderMenu = (items) => (
         // Gói 26: ẩn menu theo quyền (mục nào có perm mà không đủ quyền thì ẩn)
-        <div className="space-y-[2px]">{items.filter((it) => !it.perm || can(it.perm)).map(renderItem)}</div>
+        // SPEC R&D: permAny = có ÍT NHẤT 1 quyền trong danh sách là hiện.
+        <div className="space-y-[2px]">{items.filter((it) => (!it.perm || can(it.perm)) && (!it.permAny || it.permAny.some((p) => can(p)))).map(renderItem)}</div>
     );
 
     return (
@@ -265,9 +270,18 @@ const AdminLayout = ({ children }) => {
                     mobileOpen ? 'translate-x-0' : '-translate-x-full'
                 } md:translate-x-0 w-[240px] ${collapsed ? 'md:w-14' : 'md:w-[216px]'}`}
             >
-                {/* Logo */}
+                {/* Logo — có brand_logo thì hiện ảnh (giữ tỷ lệ, vừa thanh 56px), chưa có thì giữ chữ như cũ */}
                 <div className="h-[56px] flex items-center justify-center border-b shrink-0" style={{ borderColor: 'var(--m-line)' }}>
-                    {!collapsed ? (
+                    {brandLogo && !logoBroken ? (
+                        <img
+                            src={brandLogo}
+                            alt="Logo"
+                            onError={() => setLogoBroken(true)}
+                            style={collapsed
+                                ? { maxHeight: 36, maxWidth: 40, objectFit: 'contain', display: 'block' }
+                                : { maxHeight: 40, maxWidth: 180, objectFit: 'contain', display: 'block' }}
+                        />
+                    ) : !collapsed ? (
                         <span className="text-[19px] font-extrabold tracking-tight flex items-center gap-2">
                             <span style={{ color: 'var(--m-primary)' }}>DBOmni</span>
                             <span className="m-stamp">POS</span>
@@ -320,20 +334,6 @@ const AdminLayout = ({ children }) => {
                 {/* Menu */}
                 <nav className="m-scroll flex-1 overflow-y-auto px-2.5 py-3 space-y-4">
                     <div>{renderMenu(mainMenu)}</div>
-
-                    {!collapsed && (
-                        <div className="m-kicker px-3" style={{ color: 'var(--m-ink-faint)' }}>
-                            Kênh bán hàng
-                        </div>
-                    )}
-                    <div className={collapsed ? '' : '-mt-2.5'}>{renderMenu(channelMenu)}</div>
-
-                    {!collapsed && (
-                        <div className="m-kicker px-3" style={{ color: 'var(--m-ink-faint)' }}>
-                            Nghiệp vụ
-                        </div>
-                    )}
-                    <div className={collapsed ? '' : '-mt-2.5'}>{renderMenu(opsMenu)}</div>
                 </nav>
 
                 {/* Thiết lập (đáy) */}

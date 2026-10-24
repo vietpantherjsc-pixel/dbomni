@@ -58,6 +58,7 @@ class StocktakeController extends Controller
 
         $stocktake = DB::transaction(function () use ($validated, $request) {
             $stocktake = Stocktake::create([
+                'code' => Stocktake::nextCode(), // Rà mã 2026-10-20
                 'branch_id' => $validated['branch_id'],
                 'user_id' => $request->user()->id,
                 'type' => $validated['type'] ?? 'spontaneous',
@@ -185,13 +186,21 @@ class StocktakeController extends Controller
                         $diffQty = $target - $total;
                         if ($diffQty > 0) {
                             // Thiếu: tạo lô điều chỉnh tăng
+                            // Audit 2026-10-23 KHO-08: giá vốn tham chiếu = giá vốn
+                            // bình quân các lô hiện có của NL tại CN (thay vì 0).
+                            $costQty = (float) $batches->sum('current_quantity');
+                            $refCost = $costQty > 0
+                                ? (float) $batches->sum(fn($b) => (float) $b->current_quantity * (float) $b->unit_cost) / $costQty
+                                : 0;
                             Batch::create([
                                 'branch_id' => $stocktake->branch_id,
                                 'material_id' => $item->material_id,
+                                // Ngoại lệ luật định dạng mã (Đại Vương chốt 2026-10-21 ~23:14): họ DC-ST giữ '-'
+                                // làm mốc phân đoạn giữa 2 số id có độ dài thay đổi (phiếu + nguyên liệu).
                                 'batch_code' => 'DC-ST' . $stocktake->id . '-' . $item->material_id,
                                 'initial_quantity' => $diffQty,
                                 'current_quantity' => $diffQty,
-                                'unit_cost' => 0,
+                                'unit_cost' => $refCost,
                                 'status' => 'active',
                             ]);
                         } elseif ($diffQty < 0) {
@@ -217,13 +226,18 @@ class StocktakeController extends Controller
 
             // Gói 55 p11b: tổng giá trị chênh vượt ngưỡng → tự sinh đề xuất điều chỉnh (chờ duyệt)
             // Bọc try/catch để không làm hỏng kết quả chốt nếu sinh đề xuất lỗi
+            // Audit 2026-10-23 KHO-02: chốt CÓ cân bằng (with_balance) thì kho đã về
+            // đúng số đếm ngay trong lúc chốt — TUYỆT ĐỐI không sinh đề xuất nữa,
+            // tránh duyệt đề xuất = điều chỉnh lần 2.
             $adjCount = 0;
-            try {
-                $adjCount = \App\Models\StocktakeAdjustment::createFromConfirmed(
-                    $result['stocktake'], $result['rows'], $result['stocktake']->employee_id ?? null
-                );
-            } catch (\Exception $adjEx) {
-                \Log::warning('Không tạo được đề xuất điều chỉnh kiểm kê #' . $result['stocktake']->id . ': ' . $adjEx->getMessage());
+            if (empty($validated['with_balance'])) {
+                try {
+                    $adjCount = \App\Models\StocktakeAdjustment::createFromConfirmed(
+                        $result['stocktake'], $result['rows'], $result['stocktake']->employee_id ?? null
+                    );
+                } catch (\Exception $adjEx) {
+                    \Log::warning('Không tạo được đề xuất điều chỉnh kiểm kê #' . $result['stocktake']->id . ': ' . $adjEx->getMessage());
+                }
             }
 
             return response()->json([
@@ -234,7 +248,7 @@ class StocktakeController extends Controller
                 'adjustments_created' => $adjCount,
             ]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 }

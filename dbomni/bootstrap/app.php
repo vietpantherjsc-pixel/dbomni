@@ -18,6 +18,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
         // Gói 1: ép mọi request /api/* trả JSON (kể cả khi client quên header Accept).
         $middleware->api(append: [
             \App\Http\Middleware\ForceJsonResponse::class,
+            \App\Http\Middleware\SecurityHeaders::class, // Audit 2026-10-23 BM-14
         ]);
         // Gói 26: kiểm tra quyền theo ma trận roles.permissions (vd "staff.view").
         $middleware->alias(['permission' => \App\Http\Middleware\CheckPermission::class]);

@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\Batch;
+use App\Models\Material;
+use App\Models\ProductionRecipe;
 use App\Models\Recipe;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -99,6 +101,10 @@ class InventoryService
                     ->where('material_id', $materialId)
                     ->where('status', 'active')
                     ->where('current_quantity', '>', 0)
+                    // Audit 2026-10-23 KHO-05: KHÔNG trừ lô đã quá hạn sử dụng
+                    // (expired_at < hôm nay) — an toàn thực phẩm; lô hết hạn đúng
+                    // hôm nay vẫn dùng được trong ngày.
+                    ->where(fn ($q) => $q->whereNull('expired_at')->orWhere('expired_at', '>=', now()->toDateString()))
                     ->orderByRaw('expired_at IS NULL, expired_at ASC')
                     ->orderBy('id', 'ASC')
                     ->lockForUpdate()
@@ -161,6 +167,8 @@ class InventoryService
                 ->where('material_id', $materialId)
                 ->where('status', 'active')
                 ->where('current_quantity', '>', 0)
+                // Audit 2026-10-23 KHO-05: KHÔNG trừ lô đã quá hạn sử dụng
+                ->where(fn ($q) => $q->whereNull('expired_at')->orWhere('expired_at', '>=', now()->toDateString()))
                 ->orderByRaw('expired_at IS NULL, expired_at ASC')
                 ->orderBy('id', 'ASC')
                 ->lockForUpdate()
@@ -228,13 +236,28 @@ class InventoryService
                     ->where('material_id', $materialId)
                     ->where('status', 'active')
                     ->where('current_quantity', '>', 0)
+                    // Audit 2026-10-23 KHO-05: KHÔNG trừ lô đã quá hạn sử dụng
+                    // (expired_at < hôm nay) — an toàn thực phẩm; lô hết hạn đúng
+                    // hôm nay vẫn dùng được trong ngày.
+                    ->where(fn ($q) => $q->whereNull('expired_at')->orWhere('expired_at', '>=', now()->toDateString()))
                     ->orderByRaw('expired_at IS NULL, expired_at ASC')
                     ->orderBy('id', 'ASC')
                     ->lockForUpdate()
                     ->get();
 
                 if ($batches->sum('current_quantity') < $qtyNeeded) {
-                    throw new Exception("Nguyên vật liệu #{$materialId} không đủ tồn kho để đáp ứng đơn hàng.");
+                    // Spec P4-A1: phân biệt BTP thiếu để POS gợi ý tạo phiếu chế biến
+                    $mat = Material::find($materialId);
+                    $isBtp = ProductionRecipe::where('material_id', $materialId)->exists();
+                    $ex = new Exception("Nguyên vật liệu #{$materialId} không đủ tồn kho để đáp ứng đơn hàng.");
+                    $ex->btpShortage = $isBtp ? [
+                        'material_id' => $materialId,
+                        'material_name' => $mat?->name ?? ('#' . $materialId),
+                        'available' => (float) $batches->sum('current_quantity'),
+                        'needed' => (float) $qtyNeeded,
+                        'unit' => $mat?->unit ?? '',
+                    ] : null;
+                    throw $ex;
                 }
 
                 $remaining = $qtyNeeded;
@@ -278,19 +301,63 @@ class InventoryService
      * Gói 4 (2026-10-04): Nhập kho trực tiếp 1 lô mới cho nguyên liệu.
      * Dùng cho thành phẩm sau chế biến và điều chỉnh tăng khi kiểm kê.
      */
-    public function addStock(int $branchId, int $materialId, float $qty, ?string $batchCode = null, ?string $note = null): \App\Models\Batch
+    public function addStock(int $branchId, int $materialId, float $qty, ?string $batchCode = null, ?string $note = null, ?float $unitCost = null): \App\Models\Batch
     {
-        return DB::transaction(function () use ($branchId, $materialId, $qty, $batchCode, $note) {
+        return DB::transaction(function () use ($branchId, $materialId, $qty, $batchCode, $note, $unitCost) {
             return \App\Models\Batch::create([
                 'branch_id' => $branchId,
                 'material_id' => $materialId,
-                'batch_code' => $batchCode ?? ('SX-' . date('Ymd') . '-' . strtoupper(\Illuminate\Support\Str::random(6))),
+                // Luật bỏ gạch mở rộng (2026-10-21 ~23:09): mã lô SX nối liền không '-'
+                'batch_code' => $batchCode ?? ('SX' . date('Ymd') . strtoupper(\Illuminate\Support\Str::random(6))),
                 'initial_quantity' => $qty,
                 'current_quantity' => $qty,
-                'unit_cost' => 0,
+                // Audit 2026-10-23 KHO-08: lô BTP mang giá vốn thật do caller
+                // tính (tổng giá NL vào / sản lượng); null -> 0 như cũ.
+                'unit_cost' => $unitCost ?? 0,
                 'status' => 'active',
             ]);
         });
+    }
+
+    /**
+     * Audit 2026-10-23 KHO-01: tách đơn — chuyển phần nhật ký trừ kho tương ứng
+     * với các dòng đã tách sang đơn mới, để hủy đơn nào hoàn đúng phần đơn đó
+     * (tổng hoàn của cả 2 đơn = đúng tổng đã trừ, không trùng/không thiếu).
+     * $movedLines cùng định dạng calculateNeeds(). KHÔNG tự bọc transaction —
+     * caller (split) đang ở trong transaction.
+     */
+    public function reassignMovementsForSplit(int $fromOrderId, int $toOrderId, array $movedLines): void
+    {
+        $needs = $this->calculateNeeds($movedLines);
+        if (!$needs) return;
+        $movements = \App\Models\StockMovement::where('reference_type', 'order')
+            ->where('reference_id', $fromOrderId)
+            ->where('quantity', '>', 0)
+            ->orderBy('id')
+            ->get();
+        foreach ($movements as $m) {
+            $mid = $m->material_id;
+            if (empty($needs[$mid]) || $needs[$mid] <= 0.0001) continue;
+            $move = min((float) $m->quantity, (float) $needs[$mid]);
+            if ($move <= 0) continue;
+            if ($move >= (float) $m->quantity - 0.0001) {
+                $m->update(['reference_id' => $toOrderId]);
+            } else {
+                // Tách dòng nhật ký: giảm dòng gốc, lập dòng mới thuộc đơn mới
+                $m->update(['quantity' => (float) $m->quantity - $move]);
+                \App\Models\StockMovement::create([
+                    'branch_id' => $m->branch_id,
+                    'material_id' => $mid,
+                    'batch_id' => $m->batch_id,
+                    'quantity' => $move,
+                    'unit_cost' => (float) $m->unit_cost,
+                    'reference_type' => 'order',
+                    'reference_id' => $toOrderId,
+                    'note' => $m->note,
+                ]);
+            }
+            $needs[$mid] -= $move;
+        }
     }
 
     /**
@@ -307,6 +374,7 @@ class InventoryService
 
         DB::transaction(function () use ($branchId, $needs, $orderId) {
             $restocked = []; // material_id => số lượng đã hoàn từ nhật ký
+            $hasMovementHistory = false; // Audit 23/10 KHO-13: đơn có nhật ký trừ kho hay không
 
             // 1. Hoàn vào đúng lô đã trừ (nếu có nhật ký xuất kho của đơn)
             if ($orderId) {
@@ -323,6 +391,7 @@ class InventoryService
                     ->where('quantity', '>', 0) // chỉ dòng xuất
                     ->orderBy('id')
                     ->get();
+                $hasMovementHistory = $movements->isNotEmpty();
                 foreach ($movements as $m) {
                     $batch = Batch::where('id', $m->batch_id)->lockForUpdate()->first();
                     if (!$batch) {
@@ -349,8 +418,12 @@ class InventoryService
                 }
             }
 
-            // 2. Fallback cho đơn cũ (chưa có nhật ký): hoàn phần còn lại vào lô mới nhất
-            foreach ($needs as $materialId => $qty) {
+            // 2. Fallback cho đơn cũ (chưa có nhật ký): hoàn phần còn lại vào lô mới nhất.
+            // Audit 2026-10-23 KHO-13/KHO-06: đơn ĐÃ có nhật ký trừ kho thì bước 1
+            // đã hoàn đúng toàn bộ phần đã trừ — KHÔNG chạy fallback nữa (fallback
+            // tính theo định mức/suy luận tùy chọn TẠI THỜI ĐIỂM HỦY, có thể cộng
+            // thừa nguyên liệu chưa từng bị trừ).
+            foreach (($hasMovementHistory ? [] : $needs) as $materialId => $qty) {
                 $remaining = $qty - ($restocked[$materialId] ?? 0);
                 if ($remaining < 0.001) {
                     continue;

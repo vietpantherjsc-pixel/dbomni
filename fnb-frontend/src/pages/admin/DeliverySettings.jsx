@@ -5,7 +5,7 @@ import { API } from '../../utils/api';
 // Gói 60: Cấu hình giao hàng AhaMove / Lalamove trong Thiết lập.
 // - Bật/tắt từng hãng, hãng chính, ngưỡng failover, trần chênh failover,
 //   ngưỡng + mức hỗ trợ phí ship. API key nằm trong .env (chỉ hiện trạng thái).
-const DeliverySettings = () => {
+const DeliverySettings = ({ onDirty, onSaved } = {}) => {
     const [cfg, setCfg] = useState(null);
     const [form, setForm] = useState({
         delivery_ahamove_enabled: true,
@@ -40,7 +40,8 @@ const DeliverySettings = () => {
     };
     useEffect(() => { fetchCfg(); }, []);
 
-    const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+    // Audit toàn diện 2026-10-21 🟠5: báo thẻ cha (Settings) mỗi lần đổi để gắn badge "● Chưa lưu"
+    const set = (k, v) => { onDirty?.(); setForm((f) => ({ ...f, [k]: v })); };
 
     const save = async () => {
         setSaving(true); setMsg('');
@@ -48,6 +49,7 @@ const DeliverySettings = () => {
             const settings = {};
             for (const [k, v] of Object.entries(form)) settings[k] = String(v);
             await axios.post(API + '/settings', { settings });
+            onSaved?.(); // 🟠5: tắt badge "Chưa lưu" ở thẻ cha sau khi lưu thành công
             setMsg('Đã lưu cấu hình giao hàng.');
             fetchCfg();
         } catch (e) {

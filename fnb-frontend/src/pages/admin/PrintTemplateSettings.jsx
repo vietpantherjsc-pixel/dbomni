@@ -17,7 +17,7 @@ const LABEL_LINES = [
   { k: 'label_show_opts', label: 'Tùy chọn' },
 ];
 
-export default function PrintTemplateSettings() {
+export default function PrintTemplateSettings({ onDirty, onSaved } = {}) {
   const [cfg, setCfg] = useState({});
   const [saving, setSaving] = useState(false);
 
@@ -31,7 +31,8 @@ export default function PrintTemplateSettings() {
     }).catch(() => {});
   }, []);
 
-  const toggle = (k) => setCfg((c) => ({ ...c, [k]: !c[k] }));
+  // Audit toàn diện 2026-10-21 🟠5: báo thẻ cha (Settings) mỗi lần đổi để gắn badge "● Chưa lưu"
+  const toggle = (k) => { onDirty?.(); setCfg((c) => ({ ...c, [k]: !c[k] })); };
 
   const save = async () => {
     setSaving(true);
@@ -40,6 +41,7 @@ export default function PrintTemplateSettings() {
       [...BILL_LINES, ...LABEL_LINES].forEach((l) => { settings[l.k] = cfg[l.k] ? '1' : '0'; });
       settings.thankyou_text = cfg.thankyou_text || '';
       await axios.post(`${API}/settings`, { settings });
+      onSaved?.(); // 🟠5: tắt badge "Chưa lưu" ở thẻ cha sau khi lưu thành công
       alert('Đã lưu mẫu in.');
     } catch (e) { alert('Lỗi'); }
     finally { setSaving(false); }
@@ -64,7 +66,7 @@ export default function PrintTemplateSettings() {
         {BILL_LINES.map((l) => <Line key={l.k} l={l} />)}
         <div className="mt-3">
           <label className="text-[12px] text-gray-500">Nội dung lời cảm ơn</label>
-          <input value={cfg.thankyou_text || ''} onChange={(e) => setCfg({ ...cfg, thankyou_text: e.target.value })}
+          <input value={cfg.thankyou_text || ''} onChange={(e) => { onDirty?.(); setCfg({ ...cfg, thankyou_text: e.target.value }); }}
             className="m-input w-full mt-1" />
         </div>
       </div>

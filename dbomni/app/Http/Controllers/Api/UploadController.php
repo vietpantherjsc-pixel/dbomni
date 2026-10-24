@@ -16,6 +16,17 @@ use Illuminate\Http\Request;
 //   không qua storage:link vì symlink bị web server chặn 403 trên Docker.
 class UploadController extends Controller
 {
+    // Audit 2026-10-23 BM-07: đuôi file do SERVER quyết theo MIME đã validate,
+    // không tin đuôi do client khai (getClientOriginalExtension)
+    private function serverExt($file): string
+    {
+        return match ($file->getMimeType()) {
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            default => 'jpg',
+        };
+    }
+
     public function cover(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -71,7 +82,7 @@ class UploadController extends Controller
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
-        $ext = $file->getClientOriginalExtension() ?: 'jpg';
+        $ext = $this->serverExt($file);
         $filename = 'promo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
         $file->move($dir, $filename);
         // Gói 50b: URL tuyệt đối theo host thật của request (tránh localhost:3001 của frontend)
@@ -89,10 +100,39 @@ class UploadController extends Controller
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
-        $ext = $file->getClientOriginalExtension() ?: 'jpg';
+        $ext = $this->serverExt($file);
         $filename = 'product_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
         $file->move($dir, $filename);
         return response()->json(['success' => true, 'data' => ['url' => $request->getSchemeAndHttpHost() . '/images/products/' . $filename]]);
+    }
+
+    // Logo thương hiệu sidebar Admin (2026-10-21, lệnh Đại Vương): giữ NGUYÊN
+    // tỷ lệ gốc (không crop/resize như cover), áp NGAY như cover — endpoint tự
+    // ghi setting brand_logo. Thay logo mới thì xóa file logo cũ cho đỡ rác.
+    public function logo(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:1024',
+        ]);
+        $file = $validated['image'];
+        $dir = public_path('images/brand');
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        // Xóa file logo cũ (nếu URL cũ trỏ vào thư mục brand của hệ thống)
+        $old = (string) Setting::get('brand_logo', '');
+        if ($old && str_contains($old, '/images/brand/')) {
+            $oldFile = $dir . '/' . basename(parse_url($old, PHP_URL_PATH) ?: '');
+            if (is_file($oldFile)) {
+                @unlink($oldFile);
+            }
+        }
+        $ext = $this->serverExt($file);
+        $filename = 'logo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $file->move($dir, $filename);
+        $url = $request->getSchemeAndHttpHost() . '/images/brand/' . $filename;
+        Setting::set('brand_logo', $url);
+        return response()->json(['success' => true, 'data' => ['url' => $url]]);
     }
 
     /**

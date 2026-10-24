@@ -1,20 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import TimeInput from '../../components/TimeInput'; // Gói 55 p2: ô nhập giờ 24h (không dùng input type=time)
-import { applyThemeColor, getStoredTheme, DEFAULT_PRIMARY, THEME_PRESETS } from '../../utils/theme';
+import { applyThemeColor, getStoredTheme, DEFAULT_PRIMARY, THEME_PRESETS, applyBrandLogo } from '../../utils/theme';
 import { applyFont, getStoredFont, DEFAULT_FONT, FONT_PRESETS } from '../../utils/font';
 import { DECIMAL_LABELS } from '../../utils/number';
 import PaymentMethodManager from './PaymentMethodManager'; // Gói 52
 import ProductAliasManager from './ProductAliasManager'; // Gói 55
 import UnitManager from './UnitManager'; // Gói 52
 import PrintTemplateSettings from './PrintTemplateSettings'; // Gói 52
-import AccountManager from './AccountManager'; // Gói 56: quản lý quỹ
-import PrepaidExpenseManager from './PrepaidExpenseManager'; // Gói 56: chi phí trả trước
 import StaffHubQr from './StaffHubQr'; // Gói 59: QR trang hub nhân viên
 import DeliverySettings from './DeliverySettings'; // Gói 60: cấu hình giao hàng
+import ZaloPaymentSettings from './ZaloPaymentSettings'; // SPEC-01: thanh toán Zalo Mini App
+import SharedCategoryManager from './SharedCategoryManager'; // Spec danh mục dùng chung: 13 tab
 import { API } from '../../utils/api';
 
 // Gói 22 (2026-10-09): Quản lý chi nhánh ngay trong Thiết lập.
@@ -222,10 +222,96 @@ const BranchManager = () => {
 };
 
 // Gói 7p (2026-10-05): Trang Thiết lập — Đại Vương tự pick màu chủ đạo giao diện.
+// Fix runtime zip tổng (mục 9): card Thiết lập dạng thu gọn — mặc định đóng,
+// bấm tiêu đề mới xổ nội dung. Trạng thái giữ trong từng card khi còn ở trang.
+const CollapsibleCard = ({ title, first = false, dirty = false, onTouch = null, children }) => {
+    const [open, setOpen] = useState(false);
+    return (
+        <div className={first ? 'm-card p-6' : 'm-card p-6 mt-4'}>
+            <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+                className="w-full flex items-center justify-between gap-3 text-left cursor-pointer">
+                <h2 className="text-[16px] font-bold text-[var(--m-ink)]">
+                    {title}
+                    {/* Audit UX 2026-10-21 (hạng 7): chỉ báo thẻ có thay đổi chưa lưu */}
+                    {dirty && <span className="ml-2 align-middle text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: '#FEF3C7', color: '#92400E' }}>● Chưa lưu</span>}
+                </h2>
+                <span className="text-[20px] leading-none shrink-0" style={{ color: 'var(--m-ink-faint)' }}>{open ? '▾' : '▸'}</span>
+            </button>
+            {open && <div className="mt-4" onChange={onTouch || undefined}>{children}</div>}
+        </div>
+    );
+};
+
 const Settings = () => {
+    // Audit UX 2026-10-21 (hạng 7): theo dõi thẻ nào có thay đổi chưa lưu + chặn rời trang
+    const [dirtyMap, setDirtyMap] = useState({});
+    const markDirty = (k) => setDirtyMap((d) => (d[k] ? d : { ...d, [k]: true }));
+    const clearDirty = (k) => setDirtyMap((d) => {
+        if (!d[k]) return d;
+        const n = { ...d };
+        delete n[k];
+        return n;
+    });
+    const anyDirty = Object.values(dirtyMap).some(Boolean);
+    useEffect(() => {
+        if (!anyDirty) return;
+        const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, [anyDirty]);
+
     const [primary, setPrimary] = useState(DEFAULT_PRIMARY);
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState('');
+    // Logo thương hiệu sidebar (2026-10-21): áp NGAY khi tải lên (như cover),
+    // không qua cơ chế "chưa lưu" — endpoint tự ghi setting brand_logo.
+    const [logoUrl, setLogoUrl] = useState('');
+    const [logoMsg, setLogoMsg] = useState('');
+    const [logoBusy, setLogoBusy] = useState(false);
+    const logoInputRef = useRef(null);
+
+    const onLogoFile = async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) { setLogoMsg('Chỉ nhận ảnh jpg/png/webp.'); return; }
+        if (f.size > 1024 * 1024) { setLogoMsg('Ảnh tối đa 1MB.'); return; }
+        setLogoBusy(true);
+        setLogoMsg('');
+        try {
+            const fd = new FormData();
+            fd.append('image', f);
+            const res = await axios.post(API + '/uploads/logo', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            const url = res.data?.data?.url;
+            if (res.data?.success && url) {
+                setLogoUrl(url);
+                applyBrandLogo(url); // sidebar cập nhật ngay
+                setLogoMsg('Đã cập nhật logo — sidebar đã đổi sang logo mới.');
+            } else {
+                setLogoMsg(res.data?.message || 'Tải lên thất bại, thử lại.');
+            }
+        } catch (err) {
+            setLogoMsg(err.response?.data?.message || 'Tải lên thất bại, thử lại.');
+        } finally {
+            setLogoBusy(false);
+        }
+    };
+
+    const onLogoDelete = async () => {
+        if (!window.confirm('Xóa logo? Sidebar sẽ quay về chữ "DBOmni POS" mặc định.')) return;
+        setLogoBusy(true);
+        setLogoMsg('');
+        try {
+            await axios.post(API + '/settings', { settings: { brand_logo: '' } });
+            setLogoUrl('');
+            applyBrandLogo('');
+            setLogoMsg('Đã xóa logo — sidebar đã về chữ mặc định.');
+        } catch (err) {
+            setLogoMsg('Xóa thất bại, thử lại.');
+        } finally {
+            setLogoBusy(false);
+        }
+    };
     // Gói 8a: thuế & giá
     const [defaultTaxRate, setDefaultTaxRate] = useState('8');
     const [savingTax, setSavingTax] = useState(false);
@@ -237,13 +323,23 @@ const Settings = () => {
     // Gói 47: font chữ
     const [font, setFont] = useState(DEFAULT_FONT);
     const [savingFont, setSavingFont] = useState(false);
-    // Gói 49c: thời gian trượt banner KM
-    const [slideInt, setSlideInt] = useState('5');
-    const [savingSlide, setSavingSlide] = useState(false);
-    const [slideMsg, setSlideMsg] = useState('');
+    // Spec P4: ngưỡng BTP + grace chấm công + trạng thái phiếu chi lương + ngưỡng vượt giờ
+    const [p4s, setP4s] = useState({ btp_low_portion_threshold: 20, attendance_grace_minutes: 10, payroll_voucher_status: 'paid', hr_over_hours_threshold: 200 });
+    const [p4msg, setP4msg] = useState('');
+    useEffect(() => {
+        axios.get(API + '/settings').then((res) => {
+            const d = res.data || {};
+            setP4s({
+                btp_low_portion_threshold: d.btp_low_portion_threshold ?? 20,
+                attendance_grace_minutes: d.attendance_grace_minutes ?? 10,
+                payroll_voucher_status: d.payroll_voucher_status ?? 'paid',
+                hr_over_hours_threshold: d.hr_over_hours_threshold ?? 200,
+            });
+        }).catch(() => {});
+    }, []);
     const [fontMsg, setFontMsg] = useState('');
-    // Gói 55 p11af (P0-13/P0-14): chính sách khuyến mại + ngưỡng Food cost
-    const [allowStack, setAllowStack] = useState(false);
+    // Gói 55 p11af (P0-13/P0-14): chính sách khuyến mại + ngưỡng Food cost.
+    // Công tắc cộng dồn toàn cục ĐÃ BỎ (2026-10-21 ~22:45) — cộng dồn do từng KM/coupon tự bật.
     const [maxDiscPct, setMaxDiscPct] = useState('50');
     const [foodCostAlert, setFoodCostAlert] = useState('30');
     // Gói 55 p11ag: ngưỡng kiểm soát kho & nhập hàng
@@ -257,23 +353,39 @@ const Settings = () => {
     // Gói 55 p11ab: quy tắc sinh mã
     const CODE_TYPES = [
         { key: 'member', label: 'Mã thành viên', withDate: false },
-        { key: 'invoice', label: 'Mã hóa đơn', withDate: false },
+        // withDate phải khớp ĐÚNG cách backend sinh mã (đã đối chiếu 2026-10-21):
+        // hóa đơn CÓ ngày (Order::nextCode dùng withDate=true), phiếu xuất KHÔNG ngày.
+        { key: 'invoice', label: 'Mã hóa đơn', withDate: true },
         { key: 'material', label: 'Mã nguyên liệu', withDate: false },
         { key: 'product', label: 'Mã mặt hàng', withDate: false },
         { key: 'inbound', label: 'Mã phiếu nhập', withDate: true },
-        { key: 'outbound', label: 'Mã phiếu xuất', withDate: true },
+        { key: 'outbound', label: 'Mã phiếu xuất', withDate: false },
         { key: 'transfer', label: 'Mã phiếu chuyển', withDate: true },
         { key: 'stocktake', label: 'Mã phiếu kiểm kê', withDate: false },
+        { key: 'receipt_income', label: 'Mã phiếu thu', withDate: true },
+        { key: 'receipt_expense', label: 'Mã phiếu chi', withDate: true },
     ];
     const CODE_DEFAULTS = {
         member: ['TV', 6], invoice: ['HD', 6], material: ['NL', 4], product: ['SP', 4],
         inbound: ['PN', 4], outbound: ['XK', 4], transfer: ['CK', 4], stocktake: ['KK', 4],
+        receipt_income: ['PT', 4], receipt_expense: ['PC', 4],
     };
     const [codeRules, setCodeRules] = useState(() => {
         const o = {};
         Object.entries(CODE_DEFAULTS).forEach(([k, [p, d]]) => { o[k] = { prefix: p, digits: d }; });
         return o;
     });
+    // Mã thành viên: xem trước phải là dạng NGẪU NHIÊN thật (tiền tố + ký tự chữ-số
+    // ngẫu nhiên) — khớp generateMemberCode ở backend, KHÔNG phải số thứ tự.
+    // Mẫu chỉ đổi khi tiền tố/độ dài đổi (useMemo) để tránh nhấp nháy mỗi lần gõ.
+    const memberSample = useMemo(() => {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        const len = Math.max(4, codeRules.member?.digits || 6);
+        let s = '';
+        for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+        return s;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [codeRules.member?.prefix, codeRules.member?.digits]);
     const [savingCode, setSavingCode] = useState(false);
     const [codeMsg, setCodeMsg] = useState('');
 
@@ -292,6 +404,7 @@ const Settings = () => {
                 const res = await axios.get(API + '/settings');
                 if (res.data) {
                     setDefaultTaxRate(String(res.data.default_tax_rate ?? '8'));
+                    if (res.data.brand_logo !== undefined) setLogoUrl(res.data.brand_logo || ''); // Logo sidebar (2026-10-21)
                     // Gói 8f: số thập phân
                     setDecimals({
                         price: Number(res.data.decimals_price ?? 0),
@@ -301,10 +414,7 @@ const Settings = () => {
                     });
                     // Gói 47: font chữ
                     if (res.data.font_family) setFont(res.data.font_family);
-                    // Gói 49c: thời gian trượt banner
-                    if (res.data.promo_slide_interval) setSlideInt(String(res.data.promo_slide_interval));
                     // Gói 55 p11af (P0-13/P0-14): chính sách KM + ngưỡng Food cost
-                    if (res.data.promo_allow_stack !== undefined) setAllowStack(res.data.promo_allow_stack === '1' || res.data.promo_allow_stack === true);
                     if (res.data.promo_max_discount_pct) setMaxDiscPct(String(res.data.promo_max_discount_pct));
                     if (res.data.food_cost_alert_pct) setFoodCostAlert(String(res.data.food_cost_alert_pct));
                     // Gói 55 p11ag: ngưỡng kiểm soát kho & nhập hàng
@@ -334,6 +444,7 @@ const Settings = () => {
         setPrimary(v);
         applyThemeColor(v); // xem trước ngay
         setMsg('');
+        markDirty('theme');
     };
 
     const save = async () => {
@@ -343,6 +454,7 @@ const Settings = () => {
             await axios.post(API + '/settings', { settings: { theme_primary: primary } });
             applyThemeColor(primary);
             setMsg('Đã lưu màu chủ đạo. Áp dụng cho cả web admin, POS và Mini App.');
+            clearDirty('theme');
         } catch (e) {
             setMsg('Lưu thất bại, thử lại.');
         } finally {
@@ -355,6 +467,7 @@ const Settings = () => {
         setFont(family);
         applyFont(family); // xem trước ngay
         setFontMsg('');
+        markDirty('font');
     };
     const saveFont = async () => {
         setSavingFont(true);
@@ -363,6 +476,7 @@ const Settings = () => {
             await axios.post(API + '/settings', { settings: { font_family: font } });
             applyFont(font);
             setFontMsg('Đã lưu font chữ. Áp dụng cho web admin.');
+            clearDirty('font');
         } catch (e) {
             setFontMsg('Lưu thất bại, thử lại.');
         } finally {
@@ -375,9 +489,13 @@ const Settings = () => {
             <div className="p-6 max-w-[900px] mx-auto">
                 <h1 className="text-[22px] font-bold text-[var(--m-ink)] mb-1">Thiết lập</h1>
                 <p className="text-sm mb-6" style={{ color: 'var(--m-ink-soft)' }}>Cấu hình chung của hệ thống</p>
+                {anyDirty && (
+                    <div className="mb-4 px-4 py-2.5 rounded-lg text-sm font-medium" style={{ background: '#FEF3C7', color: '#92400E', border: '1px solid #FDE68A' }}>
+                        ⚠ Có thay đổi chưa lưu (thẻ đánh dấu "● Chưa lưu"). Hãy bấm Lưu ở từng thẻ trước khi rời trang.
+                    </div>
+                )}
 
-                <div className="m-card p-6">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Màu chủ đạo giao diện</h2>
+                <CollapsibleCard title="Màu chủ đạo giao diện" first dirty={!!dirtyMap.theme} onTouch={() => markDirty('theme')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Chọn màu Đại Vương thích — áp dụng ngay cho sidebar, nút bấm, biểu đồ trên web admin, POS và Zalo Mini App.
                     </p>
@@ -432,11 +550,46 @@ const Settings = () => {
                         </button>
                         {msg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{msg}</span>}
                     </div>
-                </div>
+                </CollapsibleCard>
+
+                {/* Logo thương hiệu (2026-10-21): áp ngay khi tải lên như cover — không dirty badge */}
+                <CollapsibleCard title="Logo thương hiệu">
+                    <p className="text-sm mb-4" style={{ color: 'var(--m-ink-soft)' }}>
+                        Logo hiện ở đỉnh sidebar Admin thay cho chữ "DBOmni POS". Ảnh jpg/png/webp ≤ 1MB, giữ nguyên tỷ lệ gốc (không cắt xén), hiển thị cao tối đa 40px trong thanh sidebar.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-4">
+                        <div className="flex items-center justify-center rounded-lg border px-4" style={{ borderColor: 'var(--m-line)', background: 'var(--m-bg-soft)', height: 64, minWidth: 180 }}>
+                            {logoUrl ? (
+                                <img src={logoUrl} alt="Logo hiện tại" style={{ maxHeight: 44, maxWidth: 200, objectFit: 'contain', display: 'block' }} />
+                            ) : (
+                                <span className="text-[17px] font-extrabold tracking-tight flex items-center gap-2">
+                                    <span style={{ color: 'var(--m-primary)' }}>DBOmni</span>
+                                    <span className="m-stamp">POS</span>
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <input ref={logoInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={onLogoFile} style={{ display: 'none' }} />
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => logoInputRef.current?.click()} disabled={logoBusy} className="m-btn m-btn-primary" style={logoBusy ? { opacity: 0.5 } : {}}>
+                                    {logoBusy ? 'Đang xử lý...' : logoUrl ? 'Thay logo' : 'Tải lên logo'}
+                                </button>
+                                {logoUrl && (
+                                    <button onClick={onLogoDelete} disabled={logoBusy} className="m-btn" style={logoBusy ? { opacity: 0.5 } : {}}>
+                                        Xóa logo
+                                    </button>
+                                )}
+                            </div>
+                            <span className="text-xs" style={{ color: 'var(--m-ink-faint)' }}>
+                                {logoUrl ? 'Đang dùng logo ảnh. Xóa logo để quay về chữ mặc định.' : 'Chưa có logo — sidebar đang hiện chữ mặc định.'}
+                            </span>
+                        </div>
+                    </div>
+                    {logoMsg && <div className="text-sm mt-3" style={{ color: 'var(--m-success)' }}>{logoMsg}</div>}
+                </CollapsibleCard>
 
                 {/* Gói 47: Font chữ */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Font chữ giao diện</h2>
+                <CollapsibleCard title="Font chữ giao diện" dirty={!!dirtyMap.font} onTouch={() => markDirty('font')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Tất cả font đều hỗ trợ đầy đủ tiếng Việt. Bấm để xem trước ngay trên toàn trang.
                     </p>
@@ -462,55 +615,61 @@ const Settings = () => {
                         </button>
                         {fontMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{fontMsg}</span>}
                     </div>
-                </div>
+                </CollapsibleCard>
 
-                {/* Gói 49c: thời gian trượt banner KM */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Banner khuyến mại (Zalo Mini App)</h2>
+                {/* Spec P4: Kho + Nhân sự + Báo cáo */}
+                <CollapsibleCard title="Kho &amp; Nhân sự" dirty={!!dirtyMap.p4} onTouch={() => markDirty('p4')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
-                        Banner hiển thị dạng slider trong mục Thành viên trên Mini App. Tải ảnh banner tại trang Khuyến mại.
+                        Ngưỡng cảnh báo BTP, giờ grace chấm công, trạng thái phiếu chi khi chốt lương, ngưỡng vượt giờ.
                     </p>
-                    <div className="flex items-center gap-3">
-                        <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Tự chuyển ảnh sau mỗi</label>
-                        <input type="number" min="2" max="30" value={slideInt} onChange={(e) => setSlideInt(e.target.value)}
-                            className="!w-[76px] m-input text-center" />
-                        <span className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>giây</span>
-                        <button onClick={async () => {
-                            setSavingSlide(true); setSlideMsg('');
-                            try {
-                                await axios.post(API + '/settings', { settings: { promo_slide_interval: slideInt } });
-                                setSlideMsg('Đã lưu.');
-                            } catch (e) { setSlideMsg('Lưu thất bại.'); }
-                            finally { setSavingSlide(false); }
-                        }} disabled={savingSlide} className="m-btn m-btn-primary" style={savingSlide ? { opacity: 0.5 } : {}}>
-                            {savingSlide ? 'Đang lưu...' : 'Lưu'}
-                        </button>
-                        {slideMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{slideMsg}</span>}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                        <div>
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>BTP báo hết khi dưới (khẩu phần)</label>
+                            <input type="number" min="1" value={p4s.btp_low_portion_threshold} onChange={(e) => setP4s({ ...p4s, btp_low_portion_threshold: e.target.value })} className="m-input mt-1" />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Chấm công trễ (phút grace)</label>
+                            <input type="number" min="0" max="60" value={p4s.attendance_grace_minutes} onChange={(e) => setP4s({ ...p4s, attendance_grace_minutes: e.target.value })} className="m-input mt-1" />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Phiếu chi khi chốt lương</label>
+                            <select value={p4s.payroll_voucher_status} onChange={(e) => setP4s({ ...p4s, payroll_voucher_status: e.target.value })} className="m-input mt-1">
+                                <option value="paid">Đã thanh toán</option>
+                                <option value="pending">Chờ thanh toán</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Cảnh báo vượt giờ (giờ/tháng)</label>
+                            <input type="number" min="1" value={p4s.hr_over_hours_threshold} onChange={(e) => setP4s({ ...p4s, hr_over_hours_threshold: e.target.value })} className="m-input mt-1" />
+                        </div>
                     </div>
-                </div>
+                    <div className="flex items-center gap-3">
+                        <button onClick={async () => {
+                            setP4msg('');
+                            try {
+                                await axios.post(API + '/settings', { settings: {
+                                    btp_low_portion_threshold: Number(p4s.btp_low_portion_threshold) || 20,
+                                    attendance_grace_minutes: Number(p4s.attendance_grace_minutes) || 0,
+                                    payroll_voucher_status: p4s.payroll_voucher_status,
+                                    hr_over_hours_threshold: Number(p4s.hr_over_hours_threshold) || 200,
+                                }});
+                                setP4msg('Đã lưu.');
+                                clearDirty('p4');
+                            } catch (e) { setP4msg('Lưu thất bại.'); }
+                        }} className="m-btn m-btn-primary">Lưu</button>
+                        {p4msg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{p4msg}</span>}
+                    </div>
+                </CollapsibleCard>
 
                 {/* Gói 55 p11af (P0-13/P0-14): Chính sách khuyến mại */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Chính sách khuyến mại</h2>
+                <CollapsibleCard title="Chính sách khuyến mại" dirty={!!dirtyMap.promo} onTouch={() => markDirty('promo')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
-                        Kiểm soát việc cộng dồn giảm giá trên mỗi đơn hàng (voucher + khuyến mại + chiết khấu tay).
-                        Điểm đổi là tiền khách đã tích, không bị các giới hạn này.
+                        Mỗi đơn chỉ áp 1 khuyến mại cao nhất. Việc cộng dồn KM + coupon do từng
+                        chương trình tự bật: mục "Cho phép cộng dồn với coupon" trong form Khuyến mại
+                        và "Cho phép cộng dồn với khuyến mãi" trong form Voucher — cả hai cùng bật mới cộng.
+                        Chiết khấu tay tại POS luôn thay thế KM/coupon, không cộng dồn.
                     </p>
                     <div className="space-y-4 max-w-xl">
-                        <label className="flex items-start gap-3 cursor-pointer">
-                            <input type="checkbox" checked={allowStack}
-                                onChange={(e) => setAllowStack(e.target.checked)}
-                                className="mt-1 w-4 h-4" />
-                            <span>
-                                <span className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>
-                                    Cho phép cộng dồn các loại giảm giá
-                                </span>
-                                <span className="block text-xs mt-0.5" style={{ color: 'var(--m-ink-soft)' }}>
-                                    Tắt (khuyên dùng): mỗi đơn chỉ áp dụng 1 loại giảm giá cao nhất.
-                                    Bật: voucher + KM + CK tay cộng dồn với nhau.
-                                </span>
-                            </span>
-                        </label>
                         <div className="flex items-center gap-3">
                             <label className="text-sm font-medium" style={{ color: 'var(--m-ink)' }}>Trần giảm giá tối đa</label>
                             <input type="number" min="1" max="100" value={maxDiscPct}
@@ -530,11 +689,11 @@ const Settings = () => {
                                 setSavingPromo(true); setPromoMsg('');
                                 try {
                                     await axios.post(API + '/settings', { settings: {
-                                        promo_allow_stack: allowStack ? '1' : '0',
                                         promo_max_discount_pct: maxDiscPct,
                                         food_cost_alert_pct: foodCostAlert,
                                     } });
                                     setPromoMsg('Đã lưu.');
+                                    clearDirty('promo');
                                 } catch (e) { setPromoMsg('Lưu thất bại.'); }
                                 finally { setSavingPromo(false); }
                             }} disabled={savingPromo} className="m-btn m-btn-primary" style={savingPromo ? { opacity: 0.5 } : {}}>
@@ -543,11 +702,10 @@ const Settings = () => {
                             {promoMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{promoMsg}</span>}
                         </div>
                     </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 55 p11ag: Ngưỡng kiểm soát kho & nhập hàng (chống thất thoát) */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Kiểm soát kho & nhập hàng</h2>
+                <CollapsibleCard title="Kiểm soát kho & nhập hàng" dirty={!!dirtyMap.inv} onTouch={() => markDirty('inv')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Các ngưỡng cảnh báo/chặn tự động để chống thất thoát kho và giá nhập bất thường.
                     </p>
@@ -583,6 +741,7 @@ const Settings = () => {
                                         stocktake_diff_threshold: stocktakeDiffThreshold,
                                     } });
                                     setInvMsg('Đã lưu.');
+                                    clearDirty('inv');
                                 } catch (e) { setInvMsg('Lưu thất bại.'); }
                                 finally { setSavingInv(false); }
                             }} disabled={savingInv} className="m-btn m-btn-primary" style={savingInv ? { opacity: 0.5 } : {}}>
@@ -591,11 +750,10 @@ const Settings = () => {
                             {invMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{invMsg}</span>}
                         </div>
                     </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 8a: Thuế & giá */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Thuế & giá</h2>
+                <CollapsibleCard title="Thuế & giá" dirty={!!dirtyMap.tax} onTouch={() => markDirty('tax')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Cấu hình chung về thuế GTGT. Món nào có thuế suất riêng thì đặt tại form Mặt hàng (tab Thuế).
                     </p>
@@ -618,6 +776,7 @@ const Settings = () => {
                                         },
                                     });
                                     setTaxMsg('Đã lưu cấu hình thuế.');
+                                    clearDirty('tax');
                                 } catch (e) { setTaxMsg('Lưu thất bại, thử lại.'); }
                                 finally { setSavingTax(false); }
                             }}
@@ -626,11 +785,10 @@ const Settings = () => {
                         </button>
                         {taxMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{taxMsg}</span>}
                     </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 8f: Số thập phân */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Số thập phân</h2>
+                <CollapsibleCard title="Số thập phân" dirty={!!dirtyMap.dec} onTouch={() => markDirty('dec')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Tùy chỉnh số chữ số thập phân hiển thị cho từng loại số liệu (0–4).
                     </p>
@@ -664,6 +822,7 @@ const Settings = () => {
                                     });
                                     try { localStorage.setItem('number_decimals', JSON.stringify(decimals)); } catch (e) {}
                                     setDecMsg('Đã lưu. Tải lại trang để áp dụng hiển thị.');
+                                    clearDirty('dec');
                                 } catch (e) { setDecMsg('Lưu thất bại, thử lại.'); }
                                 finally { setSavingDec(false); }
                             }}
@@ -672,13 +831,13 @@ const Settings = () => {
                         </button>
                         {decMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{decMsg}</span>}
                     </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 55 p11ab: Quy tắc sinh mã */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Quy tắc sinh mã</h2>
+                <CollapsibleCard title="Quy tắc sinh mã" dirty={!!dirtyMap.code} onTouch={() => markDirty('code')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Cấu hình tiền tố và số chữ số cho từng loại mã. Áp dụng cho mã mới sinh ra sau khi lưu.
+                        Mã mới nối liền, không dấu gạch (VD: PN202610210001).
                     </p>
                     <div className="overflow-x-auto">
                         <table className="w-full text-[13px] min-w-[560px]">
@@ -693,8 +852,12 @@ const Settings = () => {
                             <tbody>
                                 {CODE_TYPES.map((t) => {
                                     const r = codeRules[t.key] || { prefix: '', digits: 4 };
-                                    const datePart = t.withDate ? new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' : '';
-                                    const preview = r.prefix + '-' + datePart + '1'.padStart(Math.max(1, r.digits), '0');
+                                    const datePart = t.withDate ? new Date().toISOString().slice(0, 10).replace(/-/g, '') : '';
+                                    // Luật 2026-10-21 ~22:59: mã nối liền KHÔNG dấu gạch. Riêng mã
+                                    // thành viên: xem trước là MẪU NGẪU NHIÊN (không phải số thứ tự).
+                                    const preview = t.key === 'member'
+                                        ? (r.prefix || '') + memberSample
+                                        : r.prefix + datePart + '1'.padStart(Math.max(1, r.digits), '0');
                                     return (
                                         <tr key={t.key} className="border-b border-gray-50">
                                             <td className="py-2 pr-3 font-medium">{t.label}</td>
@@ -711,9 +874,15 @@ const Settings = () => {
                                                         setCodeRules((p) => ({ ...p, [t.key]: { ...p[t.key], digits: v } }));
                                                     }}
                                                     className="m-input !py-1.5" />
+                                                {t.key === 'member' && (
+                                                    <div className="text-[11px] mt-1" style={{ color: 'var(--m-ink-soft)' }}>ký tự</div>
+                                                )}
                                             </td>
                                             <td className="py-2">
                                                 <code className="px-2 py-1 rounded text-[12px] font-semibold" style={{ background: 'var(--m-bg-soft)', color: 'var(--m-primary)' }}>{preview}</code>
+                                                {t.key === 'member' && (
+                                                    <div className="text-[11px] mt-1" style={{ color: 'var(--m-ink-soft)' }}>Mã sinh ngẫu nhiên để bảo mật — cài đặt chỉ áp dụng tiền tố + độ dài.</div>
+                                                )}
                                             </td>
                                         </tr>
                                     );
@@ -733,6 +902,7 @@ const Settings = () => {
                                     });
                                     await axios.post(API + '/settings', { settings });
                                     setCodeMsg('Đã lưu quy tắc sinh mã. Áp dụng cho mã mới.');
+                                    clearDirty('code');
                                 } catch (e) { setCodeMsg('Lưu thất bại, thử lại.'); }
                                 finally { setSavingCode(false); }
                             }}
@@ -741,88 +911,83 @@ const Settings = () => {
                         </button>
                         {codeMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{codeMsg}</span>}
                     </div>
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 22: Quản lý chi nhánh */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Chi nhánh</h2>
+                <CollapsibleCard title="Chi nhánh">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Thêm/sửa/bật-tắt chi nhánh. Tọa độ dùng để tính phí ship cho đơn Zalo Mini App.
                     </p>
                     <BranchManager />
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 52: Phương thức thanh toán */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Phương thức thanh toán</h2>
+                <CollapsibleCard title="Phương thức thanh toán">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Thêm/sửa/xóa phương thức. Bấm chip POS/Zalo để bật/tắt theo kênh bán.
                     </p>
                     <PaymentMethodManager />
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 55: Tên thay thế món (alias) */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Tên thay thế món</h2>
+                <CollapsibleCard title="Tên thay thế món">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Map tên món cũ (từ file Excel/app khác) về món hiện tại để import đúng.
                     </p>
                     <ProductAliasManager />
-                </div>
+                </CollapsibleCard>
 
                 {/* Gói 52: Đơn vị tính */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Đơn vị tính</h2>
+                <CollapsibleCard title="Đơn vị tính">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Dùng chung toàn hệ thống — chọn trong các chức năng nhập liệu.
                     </p>
                     <UnitManager />
-                </div>
+                </CollapsibleCard>
 
-                {/* Gói 52: Mẫu in */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Mẫu in Bill & Tem</h2>
+                {/* Gói 52: Mẫu in — 🟠5 Audit 2026-10-21: vào theo dõi chưa lưu như 8 thẻ native */}
+                <CollapsibleCard title="Mẫu in Bill & Tem" dirty={!!dirtyMap.print}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Bật/tắt từng dòng và sửa nội dung. Bill khổ K80, tem 50×30.
                     </p>
-                    <PrintTemplateSettings />
-                </div>
+                    <PrintTemplateSettings onDirty={() => markDirty('print')} onSaved={() => clearDirty('print')} />
+                </CollapsibleCard>
 
-                {/* Gói 56: Quản lý quỹ */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Quản lý Quỹ</h2>
-                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
-                        Tiền mặt tại quầy, két sắt, tài khoản ngân hàng, ví/sàn. Chọn quỹ khi tạo phiếu thu/chi.
-                    </p>
-                    <AccountManager />
-                </div>
-
-                {/* Gói 56: Chi phí trả trước */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Chi phí trả trước</h2>
-                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
-                        Tiền thuê trả nhiều tháng, CAPEX... được phân bổ đều vào P&L theo số tháng.
-                    </p>
-                    <PrepaidExpenseManager />
-                </div>
+                {/* Spec cài đặt danh sách (2026-10-21): Quản lý Quỹ + Chi phí trả trước đã
+                    chuyển thành trang riêng trong menu Thu chi (/admin/accounts, /admin/prepaid-expenses) */}
 
                 {/* Gói 59: QR Nhân viên */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">QR Nhân viên</h2>
+                <CollapsibleCard title="QR Nhân viên">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Mã QR mở trang hub nhân viên (/nhan-vien). In và dán tại quầy để nhân viên quét.
                     </p>
                     <StaffHubQr />
-                </div>
+                </CollapsibleCard>
 
-                {/* Gói 60: Giao hàng AhaMove / Lalamove */}
-                <div className="m-card p-6 mt-4">
-                    <h2 className="text-[16px] font-bold text-[var(--m-ink)] mb-1">Giao hàng</h2>
+                {/* Gói 60: Giao hàng AhaMove / Lalamove — 🟠5: vào theo dõi chưa lưu */}
+                <CollapsibleCard title="Giao hàng" dirty={!!dirtyMap.delivery}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         AhaMove (chính) / Lalamove (dự phòng). API key cấu hình trong file .env của backend.
                     </p>
-                    <DeliverySettings />
-                </div>
+                    <DeliverySettings onDirty={() => markDirty('delivery')} onSaved={() => clearDirty('delivery')} />
+                </CollapsibleCard>
+
+                {/* SPEC-01: Thanh toán Zalo Mini App — 🟠5: vào theo dõi chưa lưu */}
+                <CollapsibleCard title="Thanh toán Zalo Mini App" dirty={!!dirtyMap.zalopay}>
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Chuyển khoản (BANK) / Trả tại quán (COD) qua Checkout SDK. 0đ phí giao dịch.
+                    </p>
+                    <ZaloPaymentSettings onDirty={() => markDirty('zalopay')} onSaved={() => clearDirty('zalopay')} />
+                </CollapsibleCard>
+
+                {/* Spec danh mục dùng chung: 13 tab */}
+                <CollapsibleCard title="Danh mục dùng chung">
+                    <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
+                        Các danh sách nghiệp vụ dùng chung toàn hệ thống (loại thanh toán, loại đơn, loại KM...).
+                        Tắt 1 giá trị thì các dropdown tương ứng sẽ không hiện nó nữa.
+                    </p>
+                    <SharedCategoryManager />
+                </CollapsibleCard>
             </div>
         </AdminLayout>
     );

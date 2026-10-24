@@ -26,6 +26,7 @@ import { useBranch } from '../contexts/BranchContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { printBill, printLabels } from '../utils/print';
 import { fmtTime, fmtDate } from '../utils/format';
+import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // =====================================================================
 // Gói 3d (2026-10-04): Redesign POS theo giao diện Sapo (theme tối).
@@ -44,10 +45,10 @@ const authHeaders = () => ({
   'Authorization': `Bearer ${localStorage.getItem('access_token') || ''}`,
 });
 
-const ORDER_TYPES = [
-  { key: 'takeaway', label: 'Mang đi' },
-  { key: 'delivery', label: 'Giao hàng' },
-  { key: 'dine_in', label: 'Tại bàn' },
+const ORDER_TYPES_FB = [
+  { code: 'takeaway', name: 'Mang đi' },
+  { code: 'delivery', name: 'Giao hàng' },
+  { code: 'dine_in', name: 'Tại bàn' },
 ];
 
 const catEmoji = (name) => {
@@ -125,7 +126,22 @@ export default function PosScreen({ onBackToApp }) {
   }, []);
   const [receivedCash, setReceivedCash] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [btpShortage, setBtpShortage] = useState(null); // Spec P4-A1: BTP thiếu khi bán
   const [lastOrderCompleted, setLastOrderCompleted] = useState(null);
+  // Audit UX 2026-10-21 (hạng 5): popup thành công tự đóng sau 8s để bán đơn kế ngay;
+  // đang mở QR tích điểm / có tương tác trên popup thì hoãn tự đóng; in xong cũng tự đóng.
+  const successTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!lastOrderCompleted) return;
+    successTouchedRef.current = false;
+    const t = setTimeout(() => {
+      if (!successTouchedRef.current) setLastOrderCompleted(null);
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [lastOrderCompleted]);
+  useEffect(() => {
+    if (qrClaim || qrLoading) successTouchedRef.current = true;
+  }, [qrClaim, qrLoading]);
   // Gói 11: QR tích điểm — khách quét để gán TV vào đơn
   const [qrClaim, setQrClaim] = useState(null); // {id, code, token, expires_at, member}
   const [qrLoading, setQrLoading] = useState(false);
@@ -189,6 +205,8 @@ export default function PosScreen({ onBackToApp }) {
 
   // ---- Gói 3: loại đơn, bàn, chiết khấu ----
   const [orderType, setOrderType] = useState('takeaway');
+  // Spec danh mục dùng chung: loại đơn đọc từ API (fallback cứng khi lỗi)
+  const ORDER_TYPES = useSharedCategories('order_types', ORDER_TYPES_FB);
   const [tables, setTables] = useState([]);
   const [selectedTableId, setSelectedTableId] = useState('');
   const [discountType, setDiscountType] = useState('none');
@@ -225,10 +243,14 @@ export default function PosScreen({ onBackToApp }) {
   const [showCustomerResults, setShowCustomerResults] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [quickAdd, setQuickAdd] = useState({ name: '', phone: '' });
-  const [pointsRedeemInput, setPointsRedeemInput] = useState('');
+  // Loyalty 2.0: POS không còn ô đổi điểm (điểm chỉ đổi coupon trên Mini App)
   const [eligiblePromos, setEligiblePromos] = useState([]);
   const [selectedPromoId, setSelectedPromoId] = useState(null);
-  const [redeemCfg, setRedeemCfg] = useState({ points: 10, amount: 1000 });
+  // Audit toàn diện 2026-10-21 🟠4: voucher tại quầy POS (backend OrderController đã
+  // hỗ trợ voucher_code từ Spec 3 nhưng POS chưa có điểm chạm UI).
+  const [voucherInput, setVoucherInput] = useState('');
+  const [appliedVoucher, setAppliedVoucher] = useState(null); // {code,type,value,max_discount_amount,min_order_amount}
+  const [voucherApplying, setVoucherApplying] = useState(false);
 
   // ---- Đồng hồ status bar ----
   const [now, setNow] = useState(new Date());
@@ -277,14 +299,6 @@ export default function PosScreen({ onBackToApp }) {
 
   useEffect(() => {
     fetchCurrentShift();
-    // Gói 5: cấu hình quy đổi điểm
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/membership-tiers`, { headers: authHeaders() });
-        const data = await res.json();
-        if (data.success && data.redeem_config) setRedeemCfg(data.redeem_config);
-      } catch (e) { /* giữ mặc định */ }
-    })();
   }, []);
 
   const fetchCurrentShift = async () => {
@@ -411,14 +425,14 @@ export default function PosScreen({ onBackToApp }) {
     setCustomerName(c.name);
     setShowCustomerResults(false);
     setCustomerSearch('');
-    setPointsRedeemInput('');
+    
     setSelectedPromoId(null);
   };
 
   const clearCustomer = () => {
     setMemberCustomer(null);
     setCustomerName('Khách lẻ');
-    setPointsRedeemInput('');
+    
     setSelectedPromoId(null);
   };
 
@@ -613,17 +627,30 @@ export default function PosScreen({ onBackToApp }) {
   // Gói 5: khuyến mại + đổi điểm
   const selectedPromo = eligiblePromos.find((p) => p.id === selectedPromoId) || null;
   const promoDiscount = selectedPromo ? Math.min(selectedPromo.discount, Math.max(0, subtotalAmount - discountAmount)) : 0;
-  const redeemPreview = (() => {
-    if (!memberCustomer || !(Number(pointsRedeemInput) > 0)) return { points: 0, discount: 0 };
-    const cfgPoints = Math.max(1, Number(redeemCfg.points) || 10);
-    const cfgAmount = Math.max(1, Number(redeemCfg.amount) || 1000);
-    const usable = Math.min(Number(pointsRedeemInput), memberCustomer.points);
-    const steps = Math.floor(usable / cfgPoints);
-    const discount = Math.min(steps * cfgAmount, Math.max(0, subtotalAmount - discountAmount - promoDiscount));
-    const stepsActual = Math.floor(discount / cfgAmount);
-    return { points: stepsActual * cfgPoints, discount };
-  })();
-  const totalAmount = subtotalAmount - discountAmount - promoDiscount - redeemPreview.discount;
+  // 🟠4: giảm voucher phía hiển thị (server tính lại chính xác khi thanh toán).
+  // Luật server POS khi không cộng dồn: discount = max(voucher, CK tay, KM) — hiển thị
+  // khớp luật này qua programDiscount; KHÔNG có voucher thì giữ nguyên cách tính cũ.
+  const voucherDiscount = !appliedVoucher ? 0 : Math.max(0, Math.min(
+    appliedVoucher.type === 'percent'
+      ? Math.round(subtotalAmount * (Number(appliedVoucher.value) || 0) / 100)
+      : (Number(appliedVoucher.value) || 0),
+    appliedVoucher.max_discount_amount ? Number(appliedVoucher.max_discount_amount) : Infinity,
+    subtotalAmount
+  ));
+  // Mô hình cộng dồn KM (2026-10-21): server chốt — CK tay > 0 thì THAY THẾ toàn bộ
+  // KM/voucher. Xem trước khớp luật này (trước đây nhánh không-voucher CỘNG CK tay + KM).
+  const programDiscount = discountAmount > 0
+    ? discountAmount
+    : appliedVoucher
+      ? Math.max(promoDiscount, voucherDiscount)
+      : promoDiscount;
+  const discountWinnerLabel = discountAmount > 0 ? 'Chiết khấu tay'
+    : !appliedVoucher ? null
+    : voucherDiscount > 0 && voucherDiscount >= promoDiscount ? `Voucher ${appliedVoucher.code}`
+    : promoDiscount > 0 ? `KM ${selectedPromo?.name || ''}`.trim()
+    : 'Chiết khấu tay';
+  // Loyalty 2.0: không còn redeemPreview — điểm không trừ vào tổng đơn POS nữa.
+  const totalAmount = subtotalAmount - programDiscount;
   const changeDue = Math.max(0, (Number(receivedCash) || 0) - totalAmount);
 
   // Gói 5: tải KM đủ điều kiện khi giỏ hàng / khách hàng thay đổi
@@ -654,6 +681,38 @@ export default function PosScreen({ onBackToApp }) {
     return () => clearTimeout(t);
   }, [cart, memberCustomer]);
 
+  // 🟠4: áp voucher tại quầy — tra mã qua GET /vouchers (search), khớp CHÍNH XÁC mã
+  // (chuẩn hóa IN HOA như server), báo sớm khi chưa tới hạn/hết hạn/hết lượt/chưa đủ
+  // đơn tối thiểu; server vẫn kiểm lại toàn bộ + quyết định thắng/thua khi thanh toán.
+  const applyVoucher = async () => {
+    const code = voucherInput.trim().toUpperCase();
+    if (!code) return;
+    setVoucherApplying(true);
+    try {
+      const res = await fetch(`${API_BASE}/vouchers?search=${encodeURIComponent(code)}&per_page=50`, { headers: authHeaders() });
+      const data = await res.json();
+      const list = data?.data?.data || data?.data || [];
+      const v = Array.isArray(list) ? list.find((x) => String(x.code || '').toUpperCase() === code) : null;
+      if (!v) return alert('Không tìm thấy mã voucher này.');
+      if (!v.is_active) return alert('Voucher đang bị tắt, không dùng được.');
+      const now = Date.now();
+      if (v.starts_at && new Date(v.starts_at).getTime() > now) return alert('Voucher chưa tới thời gian áp dụng.');
+      if (v.expires_at && new Date(v.expires_at).getTime() < now) return alert('Voucher đã hết hạn.');
+      if (v.usage_limit && Number(v.used_count || 0) >= Number(v.usage_limit)) return alert('Voucher đã hết lượt sử dụng.');
+      if (v.min_order_amount && subtotalAmount < Number(v.min_order_amount)) {
+        return alert(`Đơn chưa đạt tối thiểu ${Number(v.min_order_amount).toLocaleString('vi-VN')}đ để dùng voucher này.`);
+      }
+      setAppliedVoucher({
+        code: v.code, type: v.type, value: Number(v.value) || 0,
+        max_discount_amount: v.max_discount_amount ? Number(v.max_discount_amount) : null,
+        min_order_amount: v.min_order_amount ? Number(v.min_order_amount) : null,
+      });
+      setVoucherInput('');
+    } catch (e) { alert('Không tra được voucher, thử lại sau.'); }
+    finally { setVoucherApplying(false); }
+  };
+  const removeVoucher = () => { setAppliedVoucher(null); setVoucherInput(''); };
+
   const buildItemsPayload = () => cart.map((i) => ({
     product_id: i.product_id,
     product_option_id: i.product_option_id,
@@ -669,13 +728,36 @@ export default function PosScreen({ onBackToApp }) {
     discount_amount: discountType === 'amount' ? Number(discountValue) || 0 : 0,
   });
 
+  // Audit UX 2026-10-21 (hạng 3): client_key CỐ ĐỊNH theo phiên giỏ — chữ ký giỏ đổi
+  // mới sinh key mới; bấm lại sau timeout (giỏ không đổi) dùng key cũ để server chặn trùng.
+  const cartKeyRef = useRef({ sig: null, key: null });
+  const newPosKey = () => (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const cartClientKey = (mode) => {
+    const sig = mode + '|' + JSON.stringify({
+      items: buildItemsPayload(),
+      d: buildDiscountPayload(),
+      promo: selectedPromoId, voucher: appliedVoucher?.code || null,
+      cust: memberCustomer?.id || null, name: customerName,
+      type: orderType, table: orderType === 'dine_in' ? selectedTableId : null,
+      pm: paymentMethod, branch: effBranchId,
+    });
+    if (cartKeyRef.current.sig !== sig || !cartKeyRef.current.key) {
+      cartKeyRef.current = { sig, key: newPosKey() };
+    }
+    return cartKeyRef.current.key;
+  };
+
   const resetCartState = () => {
+    cartKeyRef.current = { sig: null, key: null }; // giỏ mới → phiên key mới
     setCart([]); setReceivedCash('');
     setDiscountType('none'); setDiscountValue('');
     setSelectedTableId('');
     // Gói 5: reset CRM
     setMemberCustomer(null); setCustomerName('Khách lẻ');
-    setPointsRedeemInput(''); setSelectedPromoId(null); setEligiblePromos([]);
+    setSelectedPromoId(null); setEligiblePromos([]);
+    setVoucherInput(''); setAppliedVoucher(null); // 🟠4
     // P0-4: xóa nháp giỏ đã lưu (đã thanh toán / xóa giỏ)
     try { localStorage.removeItem(`pos_cart_draft_${effBranchId || 'none'}`); } catch (e) {}
     setShowDraftBanner(false);
@@ -705,7 +787,7 @@ export default function PosScreen({ onBackToApp }) {
       if (d.guestCount) setGuestCount(d.guestCount);
       if (d.paymentMethod) setPaymentMethod(d.paymentMethod);
       if (d.memberCustomer) setMemberCustomer(d.memberCustomer);
-      if (d.pointsRedeemInput !== undefined) setPointsRedeemInput(d.pointsRedeemInput);
+      // Loyalty 2.0: draft cũ có pointsRedeemInput → bỏ qua trường này (không lỗi)
       if (d.selectedPromoId !== undefined) setSelectedPromoId(d.selectedPromoId);
       if (d.receivedCash !== undefined) setReceivedCash(d.receivedCash);
       setShowDraftBanner(true);
@@ -723,13 +805,13 @@ export default function PosScreen({ onBackToApp }) {
         localStorage.setItem(`pos_cart_draft_${bid}`, JSON.stringify({
           cart, discountType, discountValue, selectedTableId, orderType,
           customerName, guestCount, paymentMethod, memberCustomer,
-          pointsRedeemInput, selectedPromoId, receivedCash, savedAt: Date.now(),
+          selectedPromoId, receivedCash, savedAt: Date.now(),
         }));
       } catch (e) { /* bỏ qua (hết quota) */ }
     }, 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart, discountType, discountValue, selectedTableId, orderType, customerName, guestCount, paymentMethod, memberCustomer, pointsRedeemInput, selectedPromoId, receivedCash, effBranchId]);
+  }, [cart, discountType, discountValue, selectedTableId, orderType, customerName, guestCount, paymentMethod, memberCustomer, selectedPromoId, receivedCash, effBranchId]);
 
   // ================= THANH TOÁN =================
   const handleCheckout = async () => {
@@ -737,7 +819,9 @@ export default function PosScreen({ onBackToApp }) {
     if (!effBranchId) {
       return alert('Vui lòng chọn chi nhánh trước khi thanh toán.');
     }
-    if (paymentMethod === 'cash' && Number(receivedCash) < totalAmount) {
+    // Audit UX 2026-10-21 (hạng 5): ô tiền khách đưa để TRỐNG = khách đưa đủ tiền
+    // (trường hợp phổ biến nhất) — chỉ chặn khi đã nhập mà nhỏ hơn tổng.
+    if (paymentMethod === 'cash' && receivedCash !== '' && Number(receivedCash) < totalAmount) {
       return alert('Số tiền khách đưa không đủ');
     }
     // P0-5: PTTT chuyển khoản — bắt buộc xác nhận đã nhận tiền trước khi tạo đơn
@@ -763,7 +847,8 @@ export default function PosScreen({ onBackToApp }) {
           orderType: orderType,
           tableId: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
           promoId: selectedPromoId || null,
-          pointsRedeem: redeemPreview.points || 0,
+          voucher: appliedVoucher?.code || null, // 🟠4: có voucher → không finalize, đi nhánh tạo đơn mới để server áp mã
+          pointsRedeem: 0, // Loyalty 2.0: giữ khóa này (luôn 0) để khớp snapshot đơn lưu khi so sánh finalize
         });
         useFinalize = currentState === resumingHeldSnapshot;
       }
@@ -781,7 +866,7 @@ export default function PosScreen({ onBackToApp }) {
             id: o.id,
             code: o.code,
             items: [...cart],
-            subtotal: subtotalAmount, discount: discountAmount, total: totalAmount,
+            subtotal: subtotalAmount, discount: appliedVoucher ? programDiscount : discountAmount, total: totalAmount,
             method: paymentMethod, order_type: orderType,
             customer_name: customerName.trim() || 'Khách lẻ',
             table_name: orderType === 'dine_in' ? (tables.find(t => t.id === Number(selectedTableId))?.name || '') : '',
@@ -796,8 +881,8 @@ export default function PosScreen({ onBackToApp }) {
         }
       } else {
       const orderPayload = {
-        // Gói 55 p11ac: idempotency key chống tạo trùng đơn khi retry
-        client_key: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+        // Audit UX 2026-10-21 (hạng 3): client_key cố định theo phiên giỏ
+        client_key: cartClientKey('pay'),
         branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
@@ -805,7 +890,7 @@ export default function PosScreen({ onBackToApp }) {
         customer_name: customerName.trim() || 'Khách lẻ',
         payment_method: paymentMethod,
         promotion_id: selectedPromoId, // Gói 5
-        points_redeem: redeemPreview.points || 0, // Gói 5
+        voucher_code: appliedVoucher?.code || null, // 🟠4 Audit 2026-10-21: voucher tại quầy (chỉ khi thanh toán, không gửi kèm đơn lưu)
         ...buildDiscountPayload(),
         note: guestCount > 1 ? `${guestCount} khách` : null,
         items: buildItemsPayload(),
@@ -819,7 +904,7 @@ export default function PosScreen({ onBackToApp }) {
           id: data.data?.id,
           code: data.data?.code || 'POS-' + Date.now().toString().slice(-4),
           items: [...cart],
-          subtotal: subtotalAmount, discount: discountAmount, total: totalAmount,
+          subtotal: subtotalAmount, discount: appliedVoucher ? programDiscount : discountAmount, total: totalAmount,
           method: paymentMethod, order_type: orderType,
           customer_name: customerName.trim() || 'Khách lẻ',
           table_name: orderType === 'dine_in' ? (tables.find(t => t.id === Number(selectedTableId))?.name || '') : '',
@@ -838,6 +923,9 @@ export default function PosScreen({ onBackToApp }) {
           fetchHeldOrders();
         }
         fetchCurrentShift(); fetchTables();
+      } else if (data.btp_shortage) {
+        // Spec P4-A1: BTP thiếu → cảnh báo + nút tạo phiếu chế biến ngay
+        setBtpShortage(data.btp_shortage);
       } else {
         alert(data.message || 'Tạo đơn thất bại, vui lòng thử lại');
       }
@@ -857,8 +945,8 @@ export default function PosScreen({ onBackToApp }) {
     }
     try {
       const orderPayload = {
-        // Gói 55 p11ac: idempotency key chống tạo trùng đơn khi retry
-        client_key: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'pos-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+        // Audit UX 2026-10-21 (hạng 3): client_key cố định theo phiên giỏ
+        client_key: cartClientKey('hold'),
         branch_id: Number(effBranchId),
         order_type: orderType,
         table_id: orderType === 'dine_in' && selectedTableId ? Number(selectedTableId) : null,
@@ -866,7 +954,6 @@ export default function PosScreen({ onBackToApp }) {
         customer_name: customerName.trim() || 'Khách lẻ',
         payment_method: paymentMethod,
         promotion_id: selectedPromoId, // Gói 5
-        points_redeem: redeemPreview.points || 0, // Gói 5
         ...buildDiscountPayload(),
         save_as_hold: true,
         note: guestCount > 1 ? `${guestCount} khách` : null,
@@ -928,7 +1015,7 @@ export default function PosScreen({ onBackToApp }) {
     } else {
       setMemberCustomer(null);
     }
-    setPointsRedeemInput(''); setSelectedPromoId(null);
+    setSelectedPromoId(null);
     setResumingHeldId(o.id); setResumingHeldCode(o.code);
     // Gói SEC2: snapshot để handleCheckout biết có sửa gì sau khi nạp không
     setResumingHeldSnapshot(JSON.stringify({
@@ -953,14 +1040,35 @@ export default function PosScreen({ onBackToApp }) {
 
   const cancelResuming = () => { setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null); };
 
-  const cancelHeldOrder = async (o, e) => {
+  // Spec danh mục dùng chung: lý do hủy đơn lưu — dropdown + nhập tay khi chọn "Khác"
+  const cancelReasons = useSharedCategories('cancel_reasons', [
+    { code: 'customer_cancel', name: 'Khách hủy' },
+    { code: 'out_of_stock', name: 'Hết nguyên liệu' },
+    { code: 'wrong_entry', name: 'Nhập nhầm' },
+    { code: 'other', name: 'Khác' },
+  ]);
+  const [cancelHeldTarget, setCancelHeldTarget] = useState(null);
+  const [cancelHeldReason, setCancelHeldReason] = useState('customer_cancel');
+  const [cancelHeldOther, setCancelHeldOther] = useState('');
+
+  const cancelHeldOrder = (o, e) => {
     e.stopPropagation();
-    const reason = window.prompt(`Lý do hủy đơn lưu ${o.code}:`, 'Khách đổi ý');
-    if (reason === null) return;
+    setCancelHeldTarget(o);
+    setCancelHeldReason('customer_cancel');
+    setCancelHeldOther('');
+  };
+
+  const confirmCancelHeld = async () => {
+    const o = cancelHeldTarget;
+    if (!o) return;
+    const reason = cancelHeldReason === 'other'
+      ? (cancelHeldOther.trim() || 'Hủy đơn lưu')
+      : (cancelReasons.find((r) => r.code === cancelHeldReason)?.name || 'Hủy đơn lưu');
+    setCancelHeldTarget(null);
     try {
       const res = await fetch(`${API_BASE}/orders/${o.id}/cancel`, {
         method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({ reason: reason || 'Hủy đơn lưu', restock: false }),
+        body: JSON.stringify({ reason, restock: false }),
       });
       const data = await res.json();
       if (data.success) {
@@ -1011,7 +1119,7 @@ export default function PosScreen({ onBackToApp }) {
     return menuProductMap[activeCategory] || [];
   }, [products, menuProductMap, activeCategory, searchQuery]);
 
-  const typeLabel = (ORDER_TYPES.find(t => t.key === orderType) || {}).label || '';
+  const typeLabel = (ORDER_TYPES.find(t => t.code === orderType) || {}).name || '';
 
   return (
     <div className="flex flex-col h-screen bg-[#151e2e] text-slate-100 font-sans select-none overflow-hidden">
@@ -1211,11 +1319,11 @@ export default function PosScreen({ onBackToApp }) {
             <div className="grid grid-cols-3 gap-1 bg-white/5 p-1 rounded-lg">
               {ORDER_TYPES.map((t) => (
                 <button
-                  key={t.key}
-                  onClick={() => setOrderType(t.key)}
-                  className={`py-1.5 text-xs font-bold rounded-md ${orderType === t.key ? 'bg-[#00b14f] text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  key={t.code}
+                  onClick={() => setOrderType(t.code)}
+                  className={`py-1.5 text-xs font-bold rounded-md ${orderType === t.code ? 'bg-[#00b14f] text-white' : 'text-slate-400 hover:text-slate-200'}`}
                 >
-                  {t.label}
+                  {t.name}
                 </button>
               ))}
             </div>
@@ -1324,13 +1432,10 @@ export default function PosScreen({ onBackToApp }) {
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
                   <span className="text-[11px] text-amber-400 font-bold whitespace-nowrap">{Number(memberCustomer.points).toLocaleString('vi-VN')} điểm</span>
-                  <input type="text" inputMode="numeric" value={pointsRedeemInput}
-                    onChange={(e) => setPointsRedeemInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder={`Đổi điểm (${redeemCfg.points}điểm=${Number(redeemCfg.amount).toLocaleString('vi-VN')}đ)`}
-                    className="flex-1 text-xs p-1.5 rounded bg-white/5 border border-white/10 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-400" />
+                  <span className="text-[10px] text-slate-400">Đổi điểm → coupon tại Mini App › Cửa hàng điểm</span>
                 </div>
-                {redeemPreview.discount > 0 && (
-                  <div className="text-[11px] text-emerald-400 mt-1">Đổi {redeemPreview.points} điểm → −{redeemPreview.discount.toLocaleString('vi-VN')} đ</div>
+                {Number(memberCustomer.points_expiring_soon) > 0 && (
+                  <div className="text-[11px] text-orange-400 mt-1">⚠ {Number(memberCustomer.points_expiring_soon).toLocaleString('vi-VN')} điểm sắp hết hạn — nhắc khách đổi coupon sớm</div>
                 )}
               </div>
             )}
@@ -1352,6 +1457,30 @@ export default function PosScreen({ onBackToApp }) {
             </div>
           )}
 
+          {/* Audit 2026-10-21 🟠4: nhập voucher tại quầy */}
+          <div className="px-3 py-2 border-t border-white/10 bg-[#161f30]">
+            <div className="text-[11px] text-slate-400 font-bold mb-1.5">🎟️ Voucher</div>
+            {appliedVoucher ? (
+              <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border border-emerald-400 bg-emerald-500/10 text-[11px]">
+                <span className="font-mono font-bold text-emerald-300">{appliedVoucher.code}</span>
+                <span className="text-emerald-400 font-bold">−{voucherDiscount.toLocaleString('vi-VN')}đ</span>
+                <button onClick={removeVoucher} className="text-red-400 font-bold px-1" title="Bỏ voucher">✕</button>
+              </div>
+            ) : (
+              <div className="flex gap-1.5">
+                <input value={voucherInput} onChange={(e) => setVoucherInput(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter') applyVoucher(); }}
+                  placeholder="Nhập mã voucher khách đưa..."
+                  className="flex-1 text-xs p-1.5 rounded bg-white/5 border border-white/10 text-slate-100 focus:outline-none focus:border-emerald-400 font-mono" />
+                <button onClick={applyVoucher} disabled={voucherApplying || !voucherInput.trim()}
+                  className="px-2.5 py-1.5 rounded bg-emerald-600 text-white text-[11px] font-bold disabled:opacity-50">
+                  {voucherApplying ? '...' : 'Áp dụng'}
+                </button>
+              </div>
+            )}
+            {appliedVoucher && <div className="text-[10px] text-slate-500 mt-1">Khi thanh toán, hệ thống áp mức giảm cao nhất giữa voucher / KM / chiết khấu tay (trừ khi Cài đặt cho phép cộng dồn).</div>}
+          </div>
+
           {/* Tính tiền */}
           <div className="px-3 py-2 border-t border-white/10 space-y-1.5 bg-[#161f30]">
             <div className="flex items-center gap-2">
@@ -1371,14 +1500,20 @@ export default function PosScreen({ onBackToApp }) {
               )}
             </div>
             <div className="flex justify-between text-xs text-slate-400"><span>Tạm tính:</span><span>{subtotalAmount.toLocaleString('vi-VN')} đ</span></div>
-            {discountAmount > 0 && (
-              <div className="flex justify-between text-xs text-emerald-400"><span>Chiết khấu:</span><span>-{discountAmount.toLocaleString('vi-VN')} đ</span></div>
-            )}
-            {promoDiscount > 0 && (
-              <div className="flex justify-between text-xs text-emerald-400"><span>Khuyến mại{selectedPromo ? ` (${selectedPromo.name})` : ''}:</span><span>-{promoDiscount.toLocaleString('vi-VN')} đ</span></div>
-            )}
-            {redeemPreview.discount > 0 && (
-              <div className="flex justify-between text-xs text-amber-400"><span>Đổi {redeemPreview.points} điểm:</span><span>-{redeemPreview.discount.toLocaleString('vi-VN')} đ</span></div>
+            {/* 🟠4: khi có voucher — hiển thị theo luật server: chỉ phía thắng được trừ */}
+            {appliedVoucher ? (
+              programDiscount > 0 && (
+                <div className="flex justify-between text-xs text-emerald-400"><span>Giảm giá ({discountWinnerLabel}):</span><span>-{programDiscount.toLocaleString('vi-VN')} đ</span></div>
+              )
+            ) : (
+              <>
+                {discountAmount > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-400"><span>Chiết khấu:</span><span>-{discountAmount.toLocaleString('vi-VN')} đ</span></div>
+                )}
+                {promoDiscount > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-400"><span>Khuyến mại{selectedPromo ? ` (${selectedPromo.name})` : ''}:</span><span>-{promoDiscount.toLocaleString('vi-VN')} đ</span></div>
+                )}
+              </>
             )}
             <div className="flex justify-between items-center">
               <span className="text-sm font-bold">Tổng tiền {typeLabel ? `(${typeLabel})` : ''}:</span>
@@ -1398,7 +1533,7 @@ export default function PosScreen({ onBackToApp }) {
             {paymentMethod === 'cash' && (
               <div className="space-y-1.5">
                 <div className="flex gap-2">
-                  <input type="text" inputMode="numeric" placeholder="Tiền khách đưa..."
+                  <input type="text" inputMode="numeric" placeholder="Tiền khách đưa (trống = đủ tiền)..."
                     value={receivedCash ? Number(receivedCash).toLocaleString('vi-VN') : ''}
                     onChange={(e) => setReceivedCash(e.target.value.replace(/\D/g, '').slice(0, 12))}
                     className="flex-1 text-sm p-2 rounded bg-white/5 border border-white/10 text-slate-100 font-bold focus:outline-none focus:border-emerald-400" />
@@ -1406,7 +1541,7 @@ export default function PosScreen({ onBackToApp }) {
                 </div>
                 <div className="flex justify-between text-xs text-slate-400">
                   <span>Tiền thừa trả khách:</span>
-                  <span className="text-red-400 font-bold">{changeDue.toLocaleString('vi-VN')} đ</span>
+                  <span className="text-red-400 font-bold">{receivedCash === '' ? '0 đ (đưa đủ)' : changeDue.toLocaleString('vi-VN') + ' đ'}</span>
                 </div>
                 {/* Bàn phím số kiểu Sapo */}
                 <div className="grid grid-cols-3 gap-1.5">
@@ -1512,6 +1647,29 @@ export default function PosScreen({ onBackToApp }) {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal lý do hủy đơn lưu — Spec danh mục dùng chung */}
+      {cancelHeldTarget && (
+        <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4" onClick={() => setCancelHeldTarget(null)}>
+          <div className="bg-[#1a2436] border border-white/10 rounded-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-sm mb-1">Hủy đơn lưu {cancelHeldTarget.code}</h3>
+            <p className="text-[11px] text-slate-500 mb-3">Chọn lý do hủy để báo cáo nhóm được theo lý do.</p>
+            <label className="text-xs text-slate-400">Lý do hủy</label>
+            <select value={cancelHeldReason} onChange={(e) => setCancelHeldReason(e.target.value)}
+              className="mt-1 w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm">
+              {cancelReasons.map((r) => <option key={r.code} value={r.code} className="text-slate-900">{r.name}</option>)}
+            </select>
+            {cancelHeldReason === 'other' && (
+              <input value={cancelHeldOther} onChange={(e) => setCancelHeldOther(e.target.value)}
+                placeholder="Nhập lý do cụ thể..." className="mt-2 w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm" />
+            )}
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => setCancelHeldTarget(null)} className="px-4 py-2 rounded-lg border border-white/20 text-sm">Bỏ qua</button>
+              <button onClick={confirmCancelHeld} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-bold">Xác nhận hủy</button>
+            </div>
           </div>
         </div>
       )}
@@ -1774,8 +1932,13 @@ export default function PosScreen({ onBackToApp }) {
 
       {/* ============ POPUP THÀNH CÔNG ============ */}
       {lastOrderCompleted && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#1e2a3f] border border-white/10 rounded-2xl w-full max-w-xs p-5 shadow-2xl text-center space-y-3">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setLastOrderCompleted(null)}>
+          <div className="bg-[#1e2a3f] border border-white/10 rounded-2xl w-full max-w-xs p-5 shadow-2xl text-center space-y-3 relative"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={() => { successTouchedRef.current = true; }}
+            onTouchStart={() => { successTouchedRef.current = true; }}>
+            <button onClick={() => setLastOrderCompleted(null)} title="Đóng"
+              className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-slate-200 text-sm font-bold">✕</button>
             <CheckCircle2 size={48} className="text-emerald-400 mx-auto" />
             <h3 className="font-bold text-base">Đơn Hàng {lastOrderCompleted.code}</h3>
             <p className="text-xs text-slate-400">Đã gửi dữ liệu sang màn hình KDS cho Barista</p>
@@ -1785,11 +1948,11 @@ export default function PosScreen({ onBackToApp }) {
               <QrCode size={14} /> {qrLoading ? 'Đang tạo QR...' : 'QR tích điểm cho khách'}
             </button>
             <div className="flex gap-2 pt-1">
-              <button onClick={() => printBill(lastOrderCompleted)}
+              <button onClick={() => { printBill(lastOrderCompleted); setLastOrderCompleted(null); }}
                 className="flex-1 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
                 <Printer size={14} /> In Bill
               </button>
-              <button onClick={() => printLabels(lastOrderCompleted)}
+              <button onClick={() => { printLabels(lastOrderCompleted); setLastOrderCompleted(null); }}
                 className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
                 <Printer size={14} /> In Tem
               </button>
@@ -1797,6 +1960,7 @@ export default function PosScreen({ onBackToApp }) {
                 Tiếp tục
               </button>
             </div>
+            <p className="text-[11px] text-slate-500">Popup tự đóng sau vài giây nếu không thao tác.</p>
           </div>
         </div>
       )}
@@ -1822,6 +1986,28 @@ export default function PosScreen({ onBackToApp }) {
             <button onClick={() => setQrClaim(null)} className="w-full py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold">
               Đóng
             </button>
+          </div>
+        </div>
+      )}
+      {/* Spec P4-A1: cảnh báo BTP thiếu + nút tạo phiếu chế biến ngay */}
+      {btpShortage && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setBtpShortage(null)}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 20, maxWidth: 420, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontWeight: 800, fontSize: 16, color: '#b45309', marginBottom: 8 }}>⚠ Bán thành phẩm sắp hết</h3>
+            <p style={{ fontSize: 14, color: '#444', lineHeight: 1.6 }}>
+              <b>{btpShortage.material_name}</b> không đủ cho đơn này
+              (cần {btpShortage.needed}{btpShortage.unit}, còn {btpShortage.available}{btpShortage.unit}).
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={() => { const m = btpShortage; setBtpShortage(null); window.open('/che-bien?material_id=' + m.material_id, '_blank'); }}
+                style={{ flex: 1, background: '#24305E', color: '#fff', border: 'none', borderRadius: 8, padding: '12px', fontWeight: 700, fontSize: 14 }}>
+                🧪 Tạo phiếu chế biến ngay
+              </button>
+              <button onClick={() => setBtpShortage(null)}
+                style={{ background: '#eee', border: 'none', borderRadius: 8, padding: '12px 16px', fontWeight: 600 }}>
+                Đóng
+              </button>
+            </div>
           </div>
         </div>
       )}

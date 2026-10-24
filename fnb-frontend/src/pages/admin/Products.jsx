@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import VisibilityMatrix from './VisibilityMatrix'; // Demo tối ưu menu: tab Hiển thị trong trang cha
 import { fmtPrice, getDecimals } from '../../utils/number';
 import { useBranch } from '../../contexts/BranchContext'; // Gói 25: badge ẩn/hiện theo CN
 import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
@@ -34,6 +35,7 @@ const initialFormState = {
     price_on_demand: false, // Gói 10c: giá nhập khi chọn món trên POS, ẩn trên Mini App
     option_group_ids: [],
     prices: [],   // [{price_list_id, price, is_active}]
+    category_prices: [], // Spec kênh bán hàng: [{category: 'store'|'online'|'partner', price}] — giá chung phân loại
     recipes: [],  // [{material_id, quantity, kind}]
     option_recipes: [], // Gói 8c: [{product_option_id, material_id, quantity, kind}]
 };
@@ -94,13 +96,17 @@ const BomLines = ({ lines, materials, onChange, materialFilter, addLabel }) => {
     return (
         <>
             {lines.map((l, i) => (
-                <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 150px 40px' }}>
+                <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 190px 40px' }}>
                     <select className="m-input" value={l.material_id} onChange={(e) => setLine(i, 'material_id', e.target.value)}>
                         <option value="">— Chọn —</option>
                         {list.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                     </select>
-                    <input type="number" min="0" step={Math.pow(10, -getDecimals('quantity')) || 1} className="m-input" placeholder={`SL (${matUnit(l.material_id) || 'đv'})`}
-                        value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)} />
+                    {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
+                    <div className="flex items-center gap-1.5">
+                        <input type="number" min="0" step={Math.pow(10, -getDecimals('quantity')) || 1} className="m-input" placeholder="SL"
+                            value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)} />
+                        <span className="text-[12px] whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }}>{matUnit(l.material_id) || 'đv cơ sở'}</span>
+                    </div>
                     <button type="button" className="m-btn m-btn-ghost m-btn-sm !px-0" onClick={() => onChange(lines.filter((_, j) => j !== i))}>✕</button>
                 </div>
             ))}
@@ -131,6 +137,8 @@ const Products = () => {
     const [loading, setLoading] = useState(true);
     // MH-R2: tìm kiếm + lọc (UI-MAP quy tắc 5)
     const [search, setSearch] = useState('');
+    // Demo tối ưu menu (Đại Vương chốt 2026-10-19): tab "Hiển thị theo chi nhánh" trong trang Mặt hàng
+    const [pageTab, setPageTab] = useState('list');
     const [filterCat, setFilterCat] = useState('');
     const [filterActive, setFilterActive] = useState('');
 
@@ -140,6 +148,35 @@ const Products = () => {
     const [tab, setTab] = useState('info');
     const [costPrice, setCostPrice] = useState(null);
     const [formData, setFormData] = useState(initialFormState);
+    // Audit UX 2026-10-21 (hạng 4): ảnh chụp form lúc mở modal — so sánh để biết có sửa chưa lưu
+    const formSnapshotRef = useRef(null);
+    // Audit UX 2026-10-21 (hạng 10): tạo nhanh nhóm tùy chọn ngay trong modal SP
+    const [newGroup, setNewGroup] = useState({ name: '', type: 'single', is_required: false });
+    const [creatingGroup, setCreatingGroup] = useState(false);
+    const createGroupInline = async () => {
+        const name = newGroup.name.trim();
+        if (!name) return alert('Nhập tên nhóm tùy chọn.');
+        setCreatingGroup(true);
+        try {
+            const res = await axios.post(`${BASE}/option-groups`, {
+                name, type: newGroup.type, is_required: newGroup.is_required,
+            });
+            const g = res.data?.data;
+            if (g?.id) {
+                setOptionGroups((prev) => [...prev, g]);
+                setFormData((p) => ({ ...p, option_group_ids: [...p.option_group_ids, g.id] }));
+            }
+            setNewGroup({ name: '', type: 'single', is_required: false });
+        } catch (e) {
+            alert('Tạo nhóm thất bại: ' + (e.response?.data?.message || 'vui lòng thử lại'));
+        } finally {
+            setCreatingGroup(false);
+        }
+    };
+    useEffect(() => {
+        if (isModalOpen) formSnapshotRef.current = JSON.stringify(formData);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isModalOpen]);
 
     // Gói 33: chọn + thao tác hàng loạt
     const [selected, setSelected] = useState({});
@@ -364,6 +401,10 @@ const Products = () => {
                     const ex = (p.prices || []).find((x) => x.price_list_id === pl.id);
                     return { price_list_id: pl.id, price: ex ? ex.price : '', is_active: ex ? Boolean(ex.is_active) : false };
                 }),
+                // Spec kênh bán hàng: giá chung theo phân loại (backend trả category_prices)
+                category_prices: (p.category_prices || [])
+                    .filter((x) => x && x.category && Number(x.price) > 0)
+                    .map((x) => ({ category: x.category, price: x.price })),
                 recipes: (p.recipes || []).filter((x) => !x.product_option_id)
                     .map((x) => ({ material_id: String(x.material_id), quantity: x.quantity, kind: x.kind || 'ingredient' })),
                 // Gói 8c: định mức theo món
@@ -396,7 +437,7 @@ const Products = () => {
         if (!window.confirm(`Xóa mặt hàng "${formData.name}"? Không thể hoàn tác.`)) return;
         try {
             await axios.delete(`${BASE}/products/${editingId}`);
-            handleCloseModal();
+            handleCloseModal(true);
             fetchProducts();
         } catch (error) {
             alert("Lỗi khi xóa: " + (error.response?.data?.message || "Vui lòng thử lại"));
@@ -416,6 +457,10 @@ const Products = () => {
                 prices: formData.prices
                     .filter((x) => x.is_active && x.price !== '' && Number(x.price) >= 0)
                     .map((x) => ({ price_list_id: x.price_list_id, price: Number(x.price), is_active: true })),
+                // Spec kênh bán hàng: giá chung theo phân loại
+                category_prices: (formData.category_prices || [])
+                    .filter((x) => x.category && x.price !== '' && Number(x.price) >= 0)
+                    .map((x) => ({ category: x.category, price: Number(x.price) })),
                 recipes: formData.recipes
                     .filter((x) => x.material_id && Number(x.quantity) > 0)
                     .map((x) => ({ material_id: Number(x.material_id), quantity: Number(x.quantity), kind: x.kind || 'ingredient' })),
@@ -429,7 +474,7 @@ const Products = () => {
             } else {
                 await axios.post(`${BASE}/products`, payload);
             }
-            handleCloseModal();
+            handleCloseModal(true);
             fetchProducts();
         } catch (error) {
             alert("Có lỗi xảy ra: " + (error.response?.data?.message || "Vui lòng kiểm tra lại dữ liệu"));
@@ -438,7 +483,13 @@ const Products = () => {
         }
     };
 
-    const handleCloseModal = () => {
+    const handleCloseModal = (force = false) => {
+        // Audit UX 2026-10-21 (hạng 4): có thay đổi chưa lưu → confirm trước khi đóng,
+        // tránh bấm ra ngoài / bấm Hủy làm mất sạch dữ liệu 5 tab không hỏi lại.
+        if (!force && formSnapshotRef.current !== null
+            && formSnapshotRef.current !== JSON.stringify(formData)) {
+            if (!window.confirm('Bạn có thay đổi chưa lưu trong form mặt hàng. Đóng sẽ mất các thay đổi này. Vẫn đóng?')) return;
+        }
         setIsModalOpen(false);
         setFormData(initialFormState);
         setEditingId(null);
@@ -450,6 +501,50 @@ const Products = () => {
         setFormData((p) => ({
             ...p,
             prices: p.prices.map((x) => x.price_list_id === plId ? { ...x, ...patch } : x),
+        }));
+    };
+
+    // Spec kênh bán hàng: giá chung theo phân loại
+    const CAT_ORDER = ['store', 'online', 'partner'];
+    const CAT_LABELS = { store: 'Tại cửa hàng', online: 'Online', partner: 'Đối tác giao hàng' };
+    const setCategoryPrice = (category, price) => {
+        setFormData((p) => {
+            const rows = (p.category_prices || []).filter((x) => x.category !== category);
+            if (price !== '' && price != null) rows.push({ category, price });
+            return { ...p, category_prices: rows };
+        });
+    };
+    const getCategoryPrice = (category) => {
+        const r = (formData.category_prices || []).find((x) => x.category === category);
+        return r ? r.price : '';
+    };
+    // Giá hiệu lực xem trước của 1 kênh: giá kênh -> giá phân loại -> giá gốc (price_on_demand -> 0)
+    const effectivePrice = (pl) => {
+        const row = formData.prices.find((x) => x.price_list_id === pl.id);
+        if (row && row.is_active && row.price !== '' && Number(row.price) > 0) {
+            return { price: Number(row.price), source: 'kênh' };
+        }
+        const cp = getCategoryPrice(pl.category || 'partner');
+        if (cp !== '' && Number(cp) > 0) {
+            return { price: Number(cp), source: 'phân loại' };
+        }
+        if (formData.price_on_demand) {
+            return { price: 0, source: 'nhập tay' };
+        }
+        return { price: Number(formData.base_price) || 0, source: 'gốc' };
+    };
+    const applyCategoryToGroup = (category) => {
+        const cp = getCategoryPrice(category);
+        if (cp === '' || !(Number(cp) > 0)) { alert('Nhập giá chung phân loại trước.'); return; }
+        setFormData((p) => ({
+            ...p,
+            prices: p.prices.map((x) => {
+                const pl = priceLists.find((l) => l.id === x.price_list_id);
+                if (pl && (pl.category || 'partner') === category) {
+                    return { ...x, price: cp, is_active: true };
+                }
+                return x;
+            }),
         }));
     };
 
@@ -571,9 +666,33 @@ const Products = () => {
                 <div>
                     <h1 className="text-[22px] font-bold text-[var(--m-ink)]">Mặt hàng</h1>
                     <p className="text-sm mt-1" style={{ color: 'var(--m-ink-soft)' }}>Bấm vào dòng để sửa · Quản lý giá theo kênh, định mức, nhóm tùy chọn</p>
+                    {/* C7 (2026-10-21): nói rõ phạm vi tác động của dropdown CN ở trang này */}
+                    <p className="text-[12.5px] mt-1" style={{ color: 'var(--m-ink-soft)' }}>
+                        📍 Danh mục mặt hàng <b>dùng chung toàn chuỗi</b> nên danh sách này <b>không lọc theo chi nhánh</b>.
+                        Dropdown chi nhánh ở thanh bên chỉ ảnh hưởng nhãn <b>ẩn/hiện món theo từng chi nhánh</b>
+                        {ctxBranchId !== '0' ? ' (badge "Đang ẩn ở CN này" trên tên món)' : ' (badge "Đang ẩn ở: …" trên tên món)'} — chỉnh ở tab "Hiển thị theo chi nhánh".
+                    </p>
                 </div>
                 <button onClick={openAdd} className="m-btn m-btn-primary">+ Thêm mặt hàng</button>
             </div>
+            <div className="flex gap-2 mb-4">
+                <button onClick={() => setPageTab('list')} className={`m-btn ${pageTab === 'list' ? 'm-btn-primary' : ''}`}>Danh sách</button>
+                <button onClick={() => setPageTab('visibility')} className={`m-btn ${pageTab === 'visibility' ? 'm-btn-primary' : ''}`}>Hiển thị theo chi nhánh</button>
+            </div>
+            {pageTab === 'visibility' && (
+                <VisibilityMatrix
+                    title="Quản lý hiển thị mặt hàng"
+                    desc="Gạt tắt để ẩn món ở chi nhánh tương ứng (POS + Zalo Mini App). Mặc định tất cả đều bật."
+                    matrixUrl="/visibility/products"
+                    toggleUrl="/visibility/products/toggle"
+                    syncUrl="/visibility/products/sync"
+                    rowsKey="products"
+                    rowKey="product_id"
+                    syncIdsKey="product_ids"
+                    embedded
+                />
+            )}
+            {pageTab === 'list' && (<>
 
             {/* MH-R2: thanh tìm kiếm + lọc */}
             <div className="m-card p-3 mb-3 flex flex-wrap items-center gap-2">
@@ -744,7 +863,7 @@ const Products = () => {
             </div>
 
             {isModalOpen && (
-                <div className="m-modal-backdrop" onClick={handleCloseModal}>
+                <div className="m-modal-backdrop" onClick={() => handleCloseModal()}>
                     <div className="m-modal !max-w-3xl" onClick={(e) => e.stopPropagation()}>
                         <div className="m-modal-head">{editingId ? 'Cập nhật mặt hàng' : 'Thêm mặt hàng mới'}</div>
                         {/* Tabs */}
@@ -839,21 +958,45 @@ const Products = () => {
                             {/* ===== TAB GIÁ THEO KÊNH ===== */}
                             {tab === 'prices' && (<>
                                 <p className="text-xs mb-3" style={{ color: 'var(--m-ink-soft)' }}>
-                                    Tick kênh muốn bán và nhập giá riêng. Kênh không tick = món ẩn trên kênh đó.
+                                    Thứ tự áp giá: <b>giá kênh riêng</b> → <b>giá chung phân loại</b> → <b>giá gốc</b>.
+                                    Kênh không tick = món ẩn trên kênh đó. Kênh để trống giá = dùng giá phân loại.
                                     Quản lý danh sách kênh tại <b>Kênh bán hàng</b>.
                                 </p>
                                 {priceLists.length === 0 && <div className="text-sm" style={{color:'var(--m-ink-faint)'}}>Chưa có kênh bán hàng nào.</div>}
-                                {priceLists.map((pl) => {
-                                    const row = formData.prices.find((x) => x.price_list_id === pl.id) || { price: '', is_active: false };
+                                {CAT_ORDER.map((cat) => {
+                                    const group = priceLists.filter((pl) => (pl.category || 'partner') === cat);
+                                    if (group.length === 0) return null;
+                                    const catPrice = getCategoryPrice(cat);
                                     return (
-                                        <div key={pl.id} className="grid items-center gap-3 py-2 border-b" style={{ gridTemplateColumns: 'auto 190px 1fr', borderColor: 'var(--m-line)' }}>
-                                            <input type="checkbox" checked={!!row.is_active}
-                                                onChange={(e) => setPriceRow(pl.id, { is_active: e.target.checked })}
-                                                className="w-4 h-4 accent-[#24305E]" />
-                                            <span className="text-sm font-medium truncate" title={pl.name} style={{ color: row.is_active ? 'var(--m-ink)' : 'var(--m-ink-faint)' }}>{pl.name}</span>
-                                            <input type="number" min="0" step={Math.pow(10, -getDecimals('price')) || 1} placeholder="Giá (đ)" disabled={!row.is_active}
-                                                value={row.price} onChange={(e) => setPriceRow(pl.id, { price: e.target.value })}
-                                                className="m-input" style={!row.is_active ? { opacity: 0.4 } : {}} />
+                                        <div key={cat} className="mb-4 rounded-lg border" style={{ borderColor: 'var(--m-line)' }}>
+                                            <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ background: 'var(--m-accent-soft)' }}>
+                                                <span className="text-sm font-bold" style={{ color: 'var(--m-primary)' }}>{CAT_LABELS[cat]}</span>
+                                                <input type="number" min="0" placeholder="Giá chung phân loại (đ)"
+                                                    value={catPrice} onChange={(e) => setCategoryPrice(cat, e.target.value)}
+                                                    className="m-input" style={{ width: 190 }} />
+                                                <button type="button" onClick={() => applyCategoryToGroup(cat)}
+                                                    className="m-btn text-xs" title="Chép giá phân loại vào tất cả kênh trong nhóm">
+                                                    Áp dụng cho cả nhóm
+                                                </button>
+                                            </div>
+                                            {group.map((pl) => {
+                                                const row = formData.prices.find((x) => x.price_list_id === pl.id) || { price: '', is_active: false };
+                                                const eff = effectivePrice(pl);
+                                                return (
+                                                    <div key={pl.id} className="grid items-center gap-3 px-3 py-2 border-b" style={{ gridTemplateColumns: 'auto 170px 1fr auto', borderColor: 'var(--m-line)' }}>
+                                                        <input type="checkbox" checked={!!row.is_active}
+                                                            onChange={(e) => setPriceRow(pl.id, { is_active: e.target.checked })}
+                                                            className="w-4 h-4 accent-[#24305E]" />
+                                                        <span className="text-sm font-medium truncate" title={pl.name} style={{ color: row.is_active ? 'var(--m-ink)' : 'var(--m-ink-faint)' }}>{pl.name}</span>
+                                                        <input type="number" min="0" step={Math.pow(10, -getDecimals('price')) || 1} placeholder="Giá riêng (đ) — trống = dùng giá nhóm" disabled={!row.is_active}
+                                                            value={row.price} onChange={(e) => setPriceRow(pl.id, { price: e.target.value })}
+                                                            className="m-input" style={!row.is_active ? { opacity: 0.4 } : {}} />
+                                                        <span className="text-xs whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }} title="Giá hiệu lực">
+                                                            {eff.price.toLocaleString('vi-VN')}đ <span style={{ color: 'var(--m-ink-faint)' }}>({eff.source})</span>
+                                                        </span>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     );
                                 })}
@@ -916,7 +1059,29 @@ const Products = () => {
                                             </span>
                                         </label>
                                     ))}
-                                    {optionGroups.length === 0 && <div className="text-sm col-span-2" style={{color:'var(--m-ink-faint)'}}>Chưa có nhóm tùy chọn nào.</div>}
+                                    {optionGroups.length === 0 && <div className="text-sm col-span-2" style={{color:'var(--m-ink-faint)'}}>Chưa có nhóm tùy chọn nào. Tạo nhanh ngay bên dưới.</div>}
+                                </div>
+
+                                {/* Audit UX 2026-10-21 (hạng 10): tạo nhóm ngay tại chỗ — khỏi hủy form, sang trang Nhóm rồi nhập lại từ đầu */}
+                                <div className="mt-3 p-3 rounded-lg border border-dashed" style={{ borderColor: 'var(--m-line)' }}>
+                                    <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: 'var(--m-ink)' }}>+ Tạo nhóm tùy chọn mới</div>
+                                    <div className="flex flex-wrap gap-2 items-center">
+                                        <input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })}
+                                            placeholder="Tên nhóm (VD: Size, Topping...)" className="m-input" style={{ flex: '1 1 180px' }} />
+                                        <select value={newGroup.type} onChange={(e) => setNewGroup({ ...newGroup, type: e.target.value })} className="m-select">
+                                            <option value="single">Chọn 1</option>
+                                            <option value="multiple">Chọn nhiều</option>
+                                        </select>
+                                        <label className="flex items-center gap-1.5 text-sm" style={{ color: 'var(--m-ink)' }}>
+                                            <input type="checkbox" checked={newGroup.is_required}
+                                                onChange={(e) => setNewGroup({ ...newGroup, is_required: e.target.checked })} className="w-4 h-4 accent-[#24305E]" />
+                                            Bắt buộc
+                                        </label>
+                                        <button type="button" onClick={createGroupInline} disabled={creatingGroup} className="m-btn m-btn-primary">
+                                            {creatingGroup ? 'Đang tạo...' : 'Tạo nhóm'}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs mt-2" style={{ color: 'var(--m-ink-faint)' }}>Nhóm mới được chọn ngay cho món này. Thêm từng tùy chọn con tại trang Nhóm tùy chọn sau.</p>
                                 </div>
 
                                 {/* Gói 8c: định mức theo món cho nhóm per_product đã tick */}
@@ -955,7 +1120,7 @@ const Products = () => {
                                 )}
                             </div>
                             <div className="flex gap-2">
-                                <button type="button" onClick={handleCloseModal} className="m-btn m-btn-ghost">Hủy</button>
+                                <button type="button" onClick={() => handleCloseModal()} className="m-btn m-btn-ghost">Hủy</button>
                                 <button type="submit" disabled={isSubmitting} className="m-btn m-btn-primary" style={isSubmitting ? { opacity: 0.5 } : {}}>
                                     {isSubmitting ? 'Đang lưu...' : 'Lưu mặt hàng'}
                                 </button>
@@ -1017,6 +1182,7 @@ const Products = () => {
                     </div>
                 </div>
             )}
+            </>)}
             </div>
         </AdminLayout>
     );

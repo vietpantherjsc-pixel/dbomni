@@ -62,6 +62,7 @@ export default function XinNghi() {
     const [sel, setSel] = useState('');
     const [reason, setReason] = useState('');
     const [msg, setMsg] = useState(null); // {ok, text}
+    const [tab, setTab] = useState('leave'); // 'leave' | 'swap'
 
     const api = (path, opts = {}) => axios({ url: API + path, headers: { Authorization: 'Bearer ' + token }, ...opts });
 
@@ -141,6 +142,13 @@ export default function XinNghi() {
 
                     <div className="xn-note">⏰ Chỉ được xin nghỉ trước giờ bắt đầu ca <b>ít nhất 48 giờ</b>. Sát giờ, vui lòng liên hệ quản lý trực tiếp.</div>
 
+                    <div style={{ display: 'flex', gap: 8, margin: '12px 16px 0' }}>
+                        {[['leave', 'Xin nghỉ'], ['swap', 'Đổi ca']].map(([k, l]) => (
+                            <button key={k} onClick={() => setTab(k)} className="xn-bigbtn" style={{ minHeight: 44, fontSize: 14, background: tab === k ? NAVY : '#e8e9ee', color: tab === k ? '#fff' : '#6b7280' }}>{l}</button>
+                        ))}
+                    </div>
+
+                    {tab === 'leave' ? (<>
                     <div className="xn-card">
                         <h3>📝 Tạo yêu cầu nghỉ</h3>
                         <label className="xn-label">Ca đã đăng ký / đã xếp</label>
@@ -172,8 +180,132 @@ export default function XinNghi() {
                             </div>
                         ))}
                     </div>
+                    </>) : <SwapTab api={api} shifts={shifts} fmtD={fmtD} />}
                 </>
             )}
+        </div>
+    );
+}
+
+// Spec P4-B5: tab đổi ca — A tạo yêu cầu → B xác nhận → quản lý duyệt
+function SwapTab({ api, shifts, fmtD }) {
+    const [mySched, setMySched] = useState('');
+    const [date, setDate] = useState('');
+    const [cols, setCols] = useState([]);
+    const [theirSched, setTheirSched] = useState('');
+    const [pending, setPending] = useState([]);
+    const [mine, setMine] = useState([]);
+    const [msg, setMsg] = useState(null);
+
+    const loadLists = async () => {
+        try {
+            const [p, m] = await Promise.all([
+                api('/employee/shift-swaps/pending-for-me'),
+                api('/employee/shift-swaps/my-requests'),
+            ]);
+            setPending(p.data?.data || []);
+            setMine(m.data?.data || []);
+        } catch (e) { /* bỏ qua */ }
+    };
+    useEffect(() => { loadLists(); }, []); // eslint-disable-line
+
+    const loadCols = async (d) => {
+        setDate(d); setTheirSched(''); setCols([]);
+        if (!d) return;
+        try {
+            const r = await api('/employee/shift-swaps/colleagues', { params: { date: d } });
+            setCols(r.data?.data || []);
+        } catch (e) { setMsg({ ok: false, text: e.response?.data?.message || 'Tải ca đồng nghiệp thất bại' }); }
+    };
+
+    const submit = async () => {
+        setMsg(null);
+        if (!mySched || !theirSched) return setMsg({ ok: false, text: 'Chọn ca của bạn và ca muốn đổi.' });
+        const col = cols.find((c) => String(c.work_schedule_id) === theirSched);
+        try {
+            const r = await api('/employee/shift-swaps', { method: 'post', data: {
+                requester_schedule_id: Number(mySched),
+                target_employee_id: col.employee_id,
+                target_schedule_id: Number(theirSched),
+            }});
+            setMsg({ ok: true, text: r.data?.message || 'Đã gửi yêu cầu.' });
+            setMySched(''); setTheirSched(''); setDate(''); setCols([]);
+            loadLists();
+        } catch (e) { setMsg({ ok: false, text: e.response?.data?.message || 'Gửi thất bại' }); }
+    };
+
+    const confirm = async (id, accept) => {
+        try {
+            const r = await api(`/employee/shift-swaps/${id}/confirm`, { method: 'post', data: { accept } });
+            setMsg({ ok: true, text: r.data?.message || 'Đã xử lý.' });
+            loadLists();
+        } catch (e) { setMsg({ ok: false, text: e.response?.data?.message || 'Thất bại' }); }
+    };
+
+    const ST = { pending: 'Chờ B xác nhận', target_confirmed: 'Chờ quản lý duyệt', approved: 'Đã duyệt', rejected: 'Đã từ chối' };
+    return (
+        <div>
+            <div className="xn-card">
+                <h3>🔄 Tạo yêu cầu đổi ca</h3>
+                <label className="xn-label">Ca của bạn</label>
+                <select className="xn-field" value={mySched} onChange={(e) => setMySched(e.target.value)}>
+                    <option value="">— Chọn ca của bạn —</option>
+                    {shifts.filter((s) => s.work_schedule_id).map((s) => (
+                        <option key={s.work_schedule_id} value={s.work_schedule_id}>
+                            {fmtD(s.date)} — {s.shift_name} ({s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)})
+                        </option>
+                    ))}
+                </select>
+                <label className="xn-label">Ngày muốn đổi (ca của đồng nghiệp)</label>
+                <input className="xn-field" type="date" value={date} onChange={(e) => loadCols(e.target.value)} />
+                {cols.length > 0 && (<>
+                    <label className="xn-label">Ca của đồng nghiệp</label>
+                    <select className="xn-field" value={theirSched} onChange={(e) => setTheirSched(e.target.value)}>
+                        <option value="">— Chọn ca —</option>
+                        {cols.map((c) => (
+                            <option key={c.work_schedule_id} value={c.work_schedule_id}>
+                                {c.employee_name} — {c.shift_name} ({c.start_time}–{c.end_time})
+                            </option>
+                        ))}
+                    </select>
+                </>)}
+                <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!mySched || !theirSched}>Gửi yêu cầu đổi ca</button>
+            </div>
+
+            {msg && <div className={msg.ok ? 'xn-ok' : 'xn-msg'}>{msg.text}</div>}
+
+            {pending.length > 0 && (
+                <div className="xn-card">
+                    <h3>📥 Chờ bạn xác nhận</h3>
+                    {pending.map((r) => (
+                        <div key={r.id} className="xn-row">
+                            <div>
+                                <div style={{ fontWeight: 700, fontSize: 14 }}>{r.requester?.full_name} muốn đổi ca</div>
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                    Ca bạn: {r.target_schedule?.work_shift?.name} — Ca họ: {r.requester_schedule?.work_shift?.name}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                                <button onClick={() => confirm(r.id, true)} style={{ background: '#dcfce7', color: '#15803d', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700 }}>Đồng ý</button>
+                                <button onClick={() => confirm(r.id, false)} style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700 }}>Từ chối</button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <div className="xn-card">
+                <h3>📋 Yêu cầu của tôi</h3>
+                {mine.length === 0 ? <div className="xn-empty">Chưa có yêu cầu nào.</div> : mine.map((r) => (
+                    <div key={r.id} className="xn-row">
+                        <div>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>Đổi với {r.target?.full_name}</div>
+                            <div style={{ fontSize: 12, color: '#6b7280' }}>{r.requester_schedule?.work_shift?.name} ↔ {r.target_schedule?.work_shift?.name}</div>
+                        </div>
+                        <span className="xn-badge xn-b-pending">{ST[r.status] || r.status}</span>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 }

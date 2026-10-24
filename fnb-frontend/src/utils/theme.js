@@ -41,6 +41,20 @@ export function getStoredTheme() {
     try { return localStorage.getItem(STORAGE_KEY) || null; } catch (e) { return null; }
 }
 
+// Logo thương hiệu sidebar Admin (2026-10-21): setting brand_logo ở server,
+// localStorage làm bộ đệm hiển thị ngay + sự kiện để AdminLayout cập nhật tức thì.
+const LOGO_KEY = 'brand_logo';
+export function getStoredLogo() {
+    try { return localStorage.getItem(LOGO_KEY) || ''; } catch (e) { return ''; }
+}
+export function applyBrandLogo(url) {
+    try {
+        if (url) localStorage.setItem(LOGO_KEY, url);
+        else localStorage.removeItem(LOGO_KEY);
+    } catch (e) { /* ignore */ }
+    try { window.dispatchEvent(new CustomEvent('brand-logo-changed', { detail: url || '' })); } catch (e) { /* ignore */ }
+}
+
 // Gọi lúc app khởi động: áp màu đã lưu ngay, rồi đồng bộ từ server
 export async function loadTheme(api) {
     const stored = getStoredTheme();
@@ -51,6 +65,11 @@ export async function loadTheme(api) {
         const primary = res.data && res.data.primary;
         if (primary && primary.toUpperCase() !== (stored || '').toUpperCase()) {
             applyThemeColor(primary);
+        }
+        // Logo sidebar: đồng bộ từ server (rỗng = xóa đệm, sidebar về chữ mặc định)
+        if (res.data && 'logo' in res.data) {
+            const logo = res.data.logo || '';
+            if (logo !== getStoredLogo()) applyBrandLogo(logo);
         }
     } catch (e) { /* giữ màu local */ }
 }

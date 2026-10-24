@@ -22,6 +22,41 @@ use Illuminate\Support\Str;
 
 class OrderController extends Controller
 {
+    // Audit 2026-10-23 B-5/B-6: NV chỉ được thao tác/xem đơn thuộc CN phân công.
+    protected function denyOrderBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
+        }
+        return null;
+    }
+
+    // Audit 2026-10-23 KHO-06: lấy option ids ĐÚNG theo định dạng lưu của dòng món:
+    // 1) cột option_ids đã lưu khi import (Sapo/Excel) — tin cậy nhất;
+    // 2) options dạng map [option_id => name] (POS/online) — lấy khóa;
+    // 3) options dạng list [['name' => ...]] (Sapo) KHÔNG chứa id -> [] —
+    //    tuyệt đối không suy khóa 0,1,2 của list thành option id.
+    protected function itemOptionIds($item): array
+    {
+        $stored = $item->option_ids ?? null;
+        if (is_array($stored) && $stored) {
+            return array_values(array_map('intval', $stored));
+        }
+        $opts = (array) ($item->options ?? []);
+        if (!$opts || array_is_list($opts)) {
+            return [];
+        }
+        return array_values(array_map('intval', array_keys($opts)));
+    }
+
+    protected function denyOrderById(Request $request, int $orderId): ?JsonResponse
+    {
+        $branchId = Order::where('id', $orderId)->value('branch_id');
+        if ($branchId === null) return null; // để findOrFail ở luồng chính xử lý 404
+        return $this->denyOrderBranch($request, $branchId);
+    }
+
     /**
      * Gói 2 (2026-10-04): Danh sách hóa đơn cho trang quản trị (kiểu Sapo).
      * Filters: tab=all|paid|pending_payment|cancelled, search (mã), branch_id.
@@ -33,9 +68,13 @@ class OrderController extends Controller
 
         $tab = $request->query('tab', 'all');
         // Gói 49: bỏ tab "Chờ xác nhận (Zalo)" — đơn Zalo giờ xác nhận ở KDS.
+        // Spec QR 2026-10-21: tab chờ thanh toán gồm cả đơn BANK qua Checkout SDK
+        // (payment_status pending_payment/transfer_notified) — trước đây bị lọt lưới.
+        // Audit 2026-10-21 🔴3: thêm 'confirmed' — đơn COD qua Checkout SDK chưa thu
+        // tiền cũng thuộc nhóm chờ thu tiền, NV có đường thấy + xác nhận ở Admin.
         match ($tab) {
             'paid' => $query->where('payment_status', 'paid')->where('status', '!=', 'cancelled'),
-            'pending_payment' => $query->where('payment_status', 'pending')->where('status', '!=', 'cancelled'),
+            'pending_payment' => $query->whereIn('payment_status', ['pending', 'pending_payment', 'transfer_notified', 'confirmed'])->where('status', '!=', 'cancelled'),
             'cancelled' => $query->where('status', 'cancelled'),
             default => $query, // Tất cả hóa đơn
         };
@@ -50,6 +89,12 @@ class OrderController extends Controller
 
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));
+        }
+
+        // Audit 2026-10-23 B-5/B-6: NV chỉ xem đơn thuộc CN phân công
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $query->whereIn('branch_id', $actor->allBranchIds());
         }
 
         // Gói 53: lọc theo status (hỗ trợ "pending,processing" cho badge KDS/chuông POS)
@@ -72,6 +117,16 @@ class OrderController extends Controller
 
         $orders = $query->paginate($request->query('per_page', 20));
 
+        // Spec QR 2026-10-21: gắn số phút chờ + cờ quá hạn cho đơn đang chờ tiền
+        // (ngưỡng cấu hình zalo_pay_wait_alert_minutes, mặc định 15) để Admin tô cảnh báo.
+        $alertMinutes = max(1, (int) \App\Models\Setting::get('zalo_pay_wait_alert_minutes', '15'));
+        $orders->getCollection()->each(function ($o) use ($alertMinutes) {
+            $waiting = in_array($o->payment_status, ['pending', 'pending_payment', 'transfer_notified'], true)
+                && $o->status !== 'cancelled';
+            $o->setAttribute('waiting_minutes', $waiting ? (int) $o->created_at->diffInMinutes(now()) : null);
+            $o->setAttribute('pay_overdue', $waiting && $o->created_at->diffInMinutes(now()) >= $alertMinutes);
+        });
+
         return response()->json(['success' => true, 'data' => $orders]);
     }
 
@@ -85,10 +140,15 @@ class OrderController extends Controller
      */
     public function store(Request $request, InventoryService $inventoryService, PromotionService $promotionService, LoyaltyService $loyaltyService): JsonResponse
     {
+        // Chuẩn hóa IN HOA khi tra cứu voucher (backlog Spec 5, 2026-10-21): chỉ chuẩn hóa
+        // phía đầu vào tra cứu (gõ thường/hoa đều trúng) — mã lưu trong DB giữ nguyên.
+        if ($request->filled('voucher_code')) {
+            $request->merge(['voucher_code' => strtoupper(trim((string) $request->input('voucher_code')))]);
+        }
         $validated = $request->validate([
             'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency key
             'branch_id' => 'required|exists:branches,id',
-            'order_type' => 'nullable|in:takeaway,delivery,dine_in',
+            'order_type' => ['nullable', \Illuminate\Validation\Rule::in(array_values(array_intersect(\App\Models\SharedCategory::activeCodes('order_types'), ['takeaway', 'delivery', 'dine_in'])))], // Spec danh mục dùng chung: validate động, giữ phạm vi POS
             'online_channel' => 'nullable|string|max:20', // Gói 57: kênh bán (pos/zalo/grabfood...)
             'table_id' => 'nullable|exists:tables,id',
             'customer_id' => 'nullable|exists:customers,id', // Gói 5: khách hàng thành viên
@@ -97,7 +157,7 @@ class OrderController extends Controller
             'payment_method' => 'nullable|string',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
             'promotion_id' => 'nullable|exists:promotions,id', // Gói 5: khuyến mại Sapo
-            'points_redeem' => 'nullable|integer|min:0', // Gói 5: số điểm muốn đổi
+            'points_redeem' => 'nullable|integer|min:0', // Loyalty 2.0: giữ validate lỏng để client cũ không lỗi — giá trị bị BỎ QUA, không trừ điểm nữa
             'discount_amount' => 'nullable|numeric|min:0',
             'discount_percent' => 'nullable|numeric|min:0|max:100',
             'save_as_hold' => 'nullable|boolean', // Gói 3b: true = lưu đơn tạm (chưa thanh toán, chưa trừ kho)
@@ -220,7 +280,7 @@ class OrderController extends Controller
                 }
 
                 // 2. Tính toán chiết khấu Voucher (nếu có) — tính riêng, chưa cộng vào tổng
-                // (quyết định cộng dồn hay lấy max ở bước 2d theo công tắc promo_allow_stack)
+                // (quyết định cộng dồn hay lấy max ở bước 2d theo cờ TỪNG chương trình)
                 $voucherDiscount = 0;
                 $discountAmount = 0;
                 $appliedVoucher = null;
@@ -325,32 +385,54 @@ class OrderController extends Controller
                     }
                 }
 
-                // 2d. Gói 55 p11af (P0-13): công tắc cộng dồn KM + trần % giảm giá.
-                // - promo_allow_stack=true (mặc định Gói 57): cộng dồn các loại giảm giá
-                //   (voucher vs KM vs CK tay), không cộng dồn. KM tặng món (gift) không phải
-                //   giảm giá tiền nên vẫn được giữ.
-                // - Trần: tổng giảm giá KM không vượt promo_max_discount_pct % subtotal.
-                //   Điểm đổi là tiền KH đã tích (loyalty), không bị trần này.
-                $allowStack = filter_var(Setting::get('promo_allow_stack', true), FILTER_VALIDATE_BOOLEAN);
+                // 2d. Mô hình cộng dồn MỚI (Đại Vương chốt 2026-10-21 ~22:45, thay
+                // Spec 3 cũ): BỎ công tắc toàn cục promo_allow_stack — quyền cộng dồn
+                // nằm ở TỪNG chương trình: KM stack_with_coupon + voucher
+                // stack_with_promotion cùng bật mới thành 1 cặp KM + 1 coupon.
+                // - CK tay KHÔNG cộng dồn: có CK tay → CK tay THAY toàn bộ kết quả
+                //   KM/voucher (voucher không tốn lượt, KM không ghi nhận).
+                // - Có cặp hợp lệ: so tổng cặp với từng lựa chọn đơn lẻ SAU trần —
+                //   áp phần lợi nhất; cặp hòa KM đơn lẻ → KM đơn lẻ (giữ voucher).
+                // - Không có cặp: chọn phần lợi nhất KM/voucher; hòa → KM thắng,
+                //   voucher không bị trừ (luật hòa đã chốt ở Spec 3).
+                // - Trần: tổng giảm giá không vượt promo_max_discount_pct % subtotal.
                 $maxDiscountPct = (float) Setting::get('promo_max_discount_pct', 50);
-                if ($allowStack) {
-                    $discountAmount = $voucherDiscount + $manualDiscount + $promotionDiscount;
-                    if ($appliedVoucher) {
-                        $appliedVoucher->increment('used_count');
-                    }
+                $capAmount = ($maxDiscountPct > 0 && $maxDiscountPct < 100)
+                    ? $subtotal * $maxDiscountPct / 100
+                    : $subtotal;
+                if ($manualDiscount > 0) {
+                    $discountAmount = min($manualDiscount, $capAmount);
+                    $appliedVoucher = null;
+                    // KM tiền bị CK tay thay thế; KM tặng món vẫn tặng qua $giftLine
+                    // ở dưới (không phải giảm tiền) — nhưng không ghi nhận KM vào đơn,
+                    // khớp hành vi cũ khi KM không thắng.
+                    $appliedPromotion = null;
+                    $promotionDiscount = 0;
                 } else {
-                    $discountAmount = max($voucherDiscount, $manualDiscount, $promotionDiscount);
-                    // Ghi nhận đúng loại đã thắng (loại thua không tốn lượt voucher)
-                    $voucherWins = $appliedVoucher && $voucherDiscount > 0
-                        && $voucherDiscount >= $manualDiscount && $voucherDiscount >= $promotionDiscount;
-                    if ($voucherWins) {
+                    $pairAllowed = $appliedVoucher && $appliedPromotion
+                        && $voucherDiscount > 0 && $promotionDiscount > 0
+                        && (bool) $appliedPromotion->stack_with_coupon
+                        && (bool) $appliedVoucher->stack_with_promotion;
+                    $promoSingle = $promotionDiscount > 0 ? min($promotionDiscount, $capAmount) : 0;
+                    $voucherSingle = $voucherDiscount > 0 ? min($voucherDiscount, $capAmount) : 0;
+                    $pairTotal = $pairAllowed ? min($voucherDiscount + $promotionDiscount, $capAmount) : 0;
+                    if ($pairAllowed && $pairTotal > $promoSingle && $pairTotal > $voucherSingle) {
+                        // Cặp thắng hẳn cả hai lựa chọn đơn lẻ → áp cặp, voucher bị trừ lượt.
+                        $discountAmount = $pairTotal;
                         $appliedVoucher->increment('used_count');
-                    } else {
+                    } elseif ($appliedPromotion && $appliedPromotion->type !== 'gift'
+                        && $promotionDiscount > 0 && $promotionDiscount >= $voucherDiscount) {
+                        // KM đơn lẻ thắng (hòa → KM thắng): voucher giữ nguyên.
+                        $discountAmount = $promoSingle;
                         $appliedVoucher = null;
-                    }
-                    $promoWins = $appliedPromotion && $appliedPromotion->type !== 'gift' && $promotionDiscount > 0
-                        && $promotionDiscount >= $voucherDiscount && $promotionDiscount >= $manualDiscount;
-                    if (!$promoWins) {
+                    } elseif ($appliedVoucher && $voucherDiscount > 0) {
+                        $discountAmount = $voucherSingle;
+                        $appliedVoucher->increment('used_count');
+                        $appliedPromotion = null;
+                        $promotionDiscount = 0;
+                    } else {
+                        $discountAmount = 0;
+                        $appliedVoucher = null;
                         $appliedPromotion = null;
                         $promotionDiscount = 0;
                     }
@@ -363,28 +445,15 @@ class OrderController extends Controller
                 }
                 $discountAmount = min($discountAmount, $subtotal);
 
-                // 2d. Gói 5: Đổi điểm lấy tiền (cần có customer_id)
+                // 2d. Khách hàng của đơn (gắn điểm/hạng)
+                // Loyalty 2.0 (2026-10-21): trừ điểm trực tiếp vào đơn POS ĐÃ GỠ
+                // (spec mục 4.2) — điểm chỉ đổi coupon ở Cửa hàng điểm trên Mini
+                // App. Client cũ còn gửi points_redeem → bỏ qua im lặng.
                 $customer = null;
                 $pointsUsed = 0;
                 $pointsDiscount = 0;
                 if (!empty($validated['customer_id'])) {
                     $customer = Customer::findOrFail($validated['customer_id']);
-                }
-                if (!empty($validated['points_redeem']) && (int) $validated['points_redeem'] > 0) {
-                    if (!$customer) {
-                        throw new Exception('Đổi điểm cần chọn khách hàng thành viên.');
-                    }
-                    $preview = $loyaltyService->previewRedeem(
-                        $customer,
-                        (int) $validated['points_redeem'],
-                        $subtotal - $discountAmount
-                    );
-                    $pointsUsed = $preview['points_used'];
-                    $pointsDiscount = $preview['discount'];
-                    if ($pointsUsed <= 0) {
-                        throw new Exception('Điểm không đủ để đổi (hoặc chưa đạt bội số quy đổi).');
-                    }
-                    $discountAmount += $pointsDiscount;
                 }
 
                 $discountAmount = min($discountAmount, $subtotal);
@@ -437,6 +506,7 @@ class OrderController extends Controller
                 $orderPriceList = \App\Models\PriceList::whereRaw('LOWER(code) = ?', [strtolower($orderChannel)])->first();
                 $orderCommissionRate = $orderPriceList ? (float) $orderPriceList->commission_rate : 0;
                 $orderCommissionAmount = $orderCommissionRate > 0 ? (int) round($finalAmount * $orderCommissionRate / 100) : 0;
+                $orderCode = $this->generateUniqueOrderCode(); // Rà mã 2026-10-20: order_number = mã đơn
                 $order = Order::create([
                     'user_id' => $userId,
                     'branch_id' => $validated['branch_id'],
@@ -446,8 +516,8 @@ class OrderController extends Controller
                     'commission_amount' => $orderCommissionAmount,
                     'table_id' => $tableId,
                     'shift_id' => $activeShift ? $activeShift->id : null,
-                    'order_number' => 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
-                    'code' => $this->generateUniqueOrderCode(), // Gói SEC2: retry nếu trùng
+                    'order_number' => $orderCode,
+                    'code' => $orderCode,
                     'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                     'customer_id' => $customer ? $customer->id : null, // Gói 5
                     'customer_name' => $customer ? $customer->name : ($validated['customer_name'] ?? 'Khách lẻ'),
@@ -491,10 +561,8 @@ class OrderController extends Controller
                     $order->items()->create($itemData);
                 }
 
-                // 6b. Gói 5: trừ điểm đã đổi + tích điểm khi thanh toán ngay (đơn held tích lúc finalize)
-                if ($customer && $pointsUsed > 0) {
-                    $loyaltyService->applyRedeem($customer, $order, $pointsUsed);
-                }
+                // 6b. Tích điểm khi thanh toán ngay (đơn held tích lúc finalize).
+                // Loyalty 2.0: không còn bước trừ điểm tại đơn (applyRedeem đã ngừng gọi).
                 if ($customer && !$isHold) {
                     $order->points_earned = $loyaltyService->earnForOrder($customer, $order, (float) $finalAmount);
                     $order->save();
@@ -523,10 +591,15 @@ class OrderController extends Controller
             $message = $e instanceof \Illuminate\Database\QueryException
                 ? 'Có lỗi xảy ra. Vui lòng thử lại.'
                 : $e->getMessage();
+            // Spec P4-A1: BTP thiếu → trả cấu trúc để POS gợi ý tạo phiếu chế biến
+            $btp = $e->btpShortage ?? null;
             return response()->json([
                 'success' => false,
-                'message' => $message
-            ], 400);
+                'message' => $btp
+                    ? "Bán thành phẩm \"{$btp['material_name']}\" không đủ (cần {$btp['needed']}{$btp['unit']}, còn {$btp['available']}{$btp['unit']})."
+                    : $message,
+                'btp_shortage' => $btp,
+            ], $btp ? 422 : 400);
         }
     }
 
@@ -544,6 +617,7 @@ class OrderController extends Controller
 
         // Tìm đơn theo code hoặc id kèm theo danh sách món (items)
         $order = Order::with('items')->where('code', $id)->orWhere('id', $id)->firstOrFail();
+        if ($deny = $this->denyOrderBranch($request, $order->branch_id)) return $deny;
 
         // Gói 55 p11ac: state machine — chặn chuyển đổi không hợp lệ
         // - 'cancelled' phải đi qua cancel() (hoàn kho/điểm), không cho set trực tiếp
@@ -552,6 +626,9 @@ class OrderController extends Controller
             'pending' => ['processing'],
             'processing' => ['ready'],
             'ready' => ['completed'],
+            // Audit 2026-10-21 🔴3: đơn COD cũ đang kẹt ở 'confirmed' (notify bản trước)
+            // phải có đường đi tiếp vào pha chế như đơn thường.
+            'confirmed' => ['processing'],
             'held' => [], // đơn lưu: chỉ finalize hoặc cancel
             'completed' => [],
             'cancelled' => [],
@@ -607,8 +684,9 @@ class OrderController extends Controller
             // COD = tổng khách trả khi nhận hàng (0 nếu đã trả trước)
             $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
             $order->delivery_cod_amount = $cod;
-            // Phí ship đã khóa lúc chốt đơn = phần khách chịu
-            $order->delivery_quoted_fee = $order->delivery_fee_charged ?? $order->shipping_fee;
+            // Phí ship đã khóa lúc chốt đơn: GIỮ phí gốc đã lưu (đối soát hãng) —
+            // audit 2026-10-21 🔴1: chỉ fallback khi chưa có, không ghi đè bằng phí khách chịu.
+            $order->delivery_quoted_fee = $order->delivery_quoted_fee ?? $order->delivery_fee_charged ?? $order->shipping_fee;
             $order->save();
             $service->createForOrder($order->fresh(), []);
         } catch (\Throwable $e) {
@@ -628,6 +706,7 @@ class OrderController extends Controller
             'restock' => 'boolean', // true: có hoàn kho, false: hủy không hoàn
         ]);
 
+        if ($deny = $this->denyOrderById($request, $id)) return $deny;
         $shouldRestock = $validated['restock'] ?? true;
 
         // Gói 55 p11ag: xác định người hủy để truy vết (user=admin, employee=NV)
@@ -651,7 +730,7 @@ class OrderController extends Controller
         } catch (Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage(),
+                'message' => $this->clientErrorMessage($e),
             ], 400);
         }
     }
@@ -682,7 +761,7 @@ class OrderController extends Controller
                 $order->items->map(fn($item) => [
                     'product_id' => $item->product_id,
                     'product_option_id' => $item->product_option_id,
-                    'option_ids' => $item->options ? array_keys((array) $item->options) : [],
+                    'option_ids' => $this->itemOptionIds($item),
                     'quantity' => $item->quantity,
                 ])->toArray(),
                 $order->id
@@ -826,7 +905,7 @@ class OrderController extends Controller
                 : "Đã xóa vĩnh viễn {$result['done']} hóa đơn." . ($result['skipped'] ? " (bỏ qua {$result['skipped']} đơn đã thanh toán — dùng Hủy đơn)" : '');
             return response()->json(['success' => true, 'message' => $msg, 'data' => $result]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -836,7 +915,7 @@ class OrderController extends Controller
      * Kho KHÔNG thay đổi (tổng số món giữ nguyên) — chỉ chia lại items giữa 2 đơn.
      * Chỉ cho đơn chưa hoàn thành / chưa hủy.
      */
-    public function split(Request $request, int $id): JsonResponse
+    public function split(Request $request, int $id, InventoryService $inventoryService): JsonResponse
     {
         $validated = $request->validate([
             'items' => 'required|array|min:1',
@@ -847,7 +926,9 @@ class OrderController extends Controller
         ]);
 
         try {
-            $result = DB::transaction(function () use ($id, $validated) {
+            $srcBranch = Order::where('id', $id)->value('branch_id');
+            if ($srcBranch !== null && ($deny = $this->denyOrderBranch($request, $srcBranch))) return $deny;
+            $result = DB::transaction(function () use ($id, $validated, $inventoryService) {
                 $source = Order::with('items')->lockForUpdate()->findOrFail($id);
 
                 if (in_array($source->status, ['cancelled', 'completed'])) {
@@ -867,14 +948,15 @@ class OrderController extends Controller
                 }
 
                 // Tạo đơn mới (không trừ kho lại)
+                $newOrderCode = $this->generateUniqueOrderCode(); // Rà mã 2026-10-20
                 $newOrder = Order::create([
                     'user_id' => $source->user_id,
                     'branch_id' => $source->branch_id,
                     'order_type' => $source->order_type,
                     'table_id' => $source->table_id,
                     'shift_id' => $source->shift_id,
-                    'order_number' => 'ORD-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
-                    'code' => $this->generateUniqueOrderCode(), // Gói SEC2: retry nếu trùng
+                    'order_number' => $newOrderCode,
+                    'code' => $newOrderCode,
                     'customer_name' => $validated['customer_name'] ?? $source->customer_name,
                     'customer_phone' => $source->customer_phone,
                     'status' => $source->status,
@@ -904,6 +986,7 @@ class OrderController extends Controller
                         'product_id' => $item->product_id,
                         'product_option_id' => $item->product_option_id,
                         'options' => $item->options, // Gói 13: giữ topping/size đã chọn
+                        'option_ids' => $item->option_ids, // Audit 23/10 KHO-06: giữ ids đã lưu (import)
                         'product_name' => $item->product_name,
                         'price' => $item->price,
                         'unit_price' => $item->unit_price,
@@ -925,6 +1008,21 @@ class OrderController extends Controller
                         $item->total_price = $item->unit_price * $item->quantity - $item->discount_amount;
                         $item->save();
                     }
+                }
+
+                // Audit 2026-10-23 KHO-01: chuyển phần nhật ký trừ kho tương ứng
+                // các dòng đã tách sang đơn mới — hủy đơn nào hoàn đúng phần đơn đó.
+                if ($source->stock_deducted) {
+                    $inventoryService->reassignMovementsForSplit(
+                        $source->id,
+                        $newOrder->id,
+                        collect($moveItems)->map(fn($mv) => [
+                            'product_id' => $mv['item']->product_id,
+                            'product_option_id' => $mv['item']->product_option_id,
+                            'option_ids' => $this->itemOptionIds($mv['item']),
+                            'quantity' => $mv['quantity'],
+                        ])->toArray()
+                    );
                 }
 
                 $newOrder->subtotal_amount = $newSubtotal;
@@ -950,7 +1048,7 @@ class OrderController extends Controller
 
             return response()->json(['success' => true, 'message' => 'Tách đơn thành công', 'data' => $result]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -971,6 +1069,7 @@ class OrderController extends Controller
             'order_ids.*' => 'exists:orders,id',
         ]);
 
+        if ($deny = $this->denyOrderById($request, (int) $validated['target_order_id'])) return $deny;
         try {
             $result = DB::transaction(function () use ($validated, $inventoryService, $loyaltyService) {
                 $target = Order::with('items')->lockForUpdate()->findOrFail($validated['target_order_id']);
@@ -1122,7 +1221,7 @@ class OrderController extends Controller
 
             return response()->json(['success' => true, 'message' => 'Gộp đơn thành công', 'data' => $result]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -1132,6 +1231,7 @@ class OrderController extends Controller
     public function heldOrders(Request $request): JsonResponse
     {
         $request->validate(['branch_id' => 'required|exists:branches,id']);
+        if ($deny = $this->denyOrderBranch($request, $request->branch_id)) return $deny;
 
         $orders = Order::with(['items.product', 'items.option', 'table'])
             ->where('branch_id', $request->branch_id)
@@ -1152,6 +1252,7 @@ class OrderController extends Controller
         $validated = $request->validate([
             'payment_method' => 'nullable|string',
         ]);
+        if ($deny = $this->denyOrderById($request, $id)) return $deny;
 
         try {
             $order = DB::transaction(function () use ($id, $validated, $inventoryService) {
@@ -1213,7 +1314,7 @@ class OrderController extends Controller
                 'data' => $order,
             ]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -1244,19 +1345,27 @@ class OrderController extends Controller
         $request->validate([
             'branch_id' => 'required|exists:branches,id',
         ]);
+        if ($deny = $this->denyOrderBranch($request, $request->branch_id)) return $deny;
 
         $orders = Order::with(['items.product', 'items.option'])
             ->where('branch_id', $request->branch_id)
-            ->whereIn('status', ['pending', 'processing', 'ready'])
+            // Audit 2026-10-21 🔴3: thêm 'confirmed' để đơn COD cũ đang kẹt hiện lên KDS
+            // (đơn COD mới sau sửa notify vào thẳng 'pending' như đơn thường).
+            ->whereIn('status', ['pending', 'processing', 'ready', 'confirmed'])
             ->orderBy('created_at', 'asc')
             ->get();
 
         // Gói 11: cờ "chờ xác nhận" cho KDS — đơn Zalo chưa thu tiền (chưa trừ kho).
         // Đơn POS đã thu tiền tại quầy nên không cần xác nhận, vào thẳng "Đang Pha Chế".
-        $orders->each(function ($o) {
-            $o->setAttribute('needs_confirm', $o->online_channel === 'zalo'
-                && $o->payment_status === 'pending'
-                && !$o->stock_deducted);
+        // Spec QR 2026-10-21: nới cho đơn BANK qua Checkout SDK (pending_payment/
+        // transfer_notified) + gắn cờ khách đã báo CK và chờ quá hạn để NV đối chiếu.
+        $alertMinutes = max(1, (int) \App\Models\Setting::get('zalo_pay_wait_alert_minutes', '15'));
+        $orders->each(function ($o) use ($alertMinutes) {
+            $awaiting = $o->online_channel === 'zalo'
+                && in_array($o->payment_status, ['pending', 'pending_payment', 'transfer_notified'], true)
+                && !$o->stock_deducted;
+            $o->setAttribute('needs_confirm', $awaiting);
+            $o->setAttribute('pay_overdue', $awaiting && $o->created_at->diffInMinutes(now()) >= $alertMinutes);
         });
 
         return response()->json([
@@ -1269,9 +1378,10 @@ class OrderController extends Controller
      * Gói 11: tạo mã QR tích điểm cho đơn POS — thu ngân bấm để hiện QR,
      * khách quét bằng Mini App để gán TV vào đơn (token 15 phút, dùng 1 lần).
      */
-    public function claimQr(int $id): JsonResponse
+    public function claimQr(Request $request, int $id): JsonResponse
     {
         $order = Order::findOrFail($id);
+        if ($deny = $this->denyOrderBranch($request, $order->branch_id)) return $deny;
         if (in_array($order->status, ['completed', 'cancelled'])) {
             return response()->json(['success' => false, 'message' => 'Đơn đã hoàn thành/hủy, không tạo QR được.'], 400);
         }
@@ -1289,11 +1399,12 @@ class OrderController extends Controller
     /**
      * Tra cứu chi tiết một đơn hàng theo mã hóa đơn
      */
-    public function showByCode(string $code): JsonResponse
+    public function showByCode(Request $request, string $code): JsonResponse
     {
         $order = Order::where('code', $code)
             ->with(['branch', 'customer:id,name,member_code,tier_id', 'customer.tier:id,name', 'items.product', 'items.option'])
             ->firstOrFail();
+        if ($deny = $this->denyOrderBranch($request, $order->branch_id)) return $deny;
 
         return response()->json([
             'success' => true,
@@ -1310,18 +1421,11 @@ class OrderController extends Controller
      * - Gộp product_option_id (size cũ) vào danh sách option (trước đây bỏ sót → thiếu giá vốn)
      */
     /**
-     * Gói SEC2: sinh mã đơn HD-YYYYMMDD-XXXXX duy nhất, retry tối đa 5 lần nếu trùng.
+     * Sinh mã đơn duy nhất — dùng chung Order::nextCode() (quy tắc mã trong Thiết lập).
      */
     private function generateUniqueOrderCode(): string
     {
-        for ($i = 0; $i < 5; $i++) {
-            $code = 'HD-' . date('Ymd') . '-' . strtoupper(Str::random(5));
-            if (!Order::where('code', $code)->exists()) {
-                return $code;
-            }
-        }
-        // Hết 5 lần vẫn trùng (xác suất cực thấp) — thêm microtime để chắc chắn duy nhất
-        return 'HD-' . date('Ymd') . '-' . strtoupper(Str::random(5)) . substr((string) microtime(true), -3);
+        return Order::nextCode();
     }
 
     private function calcItemUnitCost(int $productId, array $optionIds, array $materialCosts, $productOptionId = null): float

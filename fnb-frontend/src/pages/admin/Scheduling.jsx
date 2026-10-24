@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtTime, fmtDate, startOfWeek } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Gói 36: dùng chung
@@ -159,7 +160,11 @@ export default function Scheduling() {
     const { can } = useAuth();
     const [tab, setTab] = useState('sched');
     const [week, setWeek] = useState(() => fmtD(mondayOf(new Date())));
-    const [branchId, setBranchId] = useState('');
+    // C3 (2026-10-21): bộ lọc CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều với
+    // dropdown sidebar (đổi trong trang = đổi trạng thái chung). '' tại trang này = '0' (Tất cả) ở context.
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const branchId = ctxBranchId === '0' ? '' : ctxBranchId;
+    const setBranchId = (v) => setCtxBranchId(v === '' || v === null || v === undefined ? '0' : String(v));
     const [branches, setBranches] = useState([]);
     const [shifts, setShifts] = useState([]);
     const [employees, setEmployees] = useState([]);
@@ -497,6 +502,26 @@ export default function Scheduling() {
             fetchRegs(); fetchSched();
         } catch (e) { alert(e.response?.data?.message || 'Duyệt & xếp ca thất bại'); }
     };
+    // Audit UX 2026-10-21 (hạng 9): duyệt HÀNG LOẠT mọi đăng ký đang chờ trong tuần/CN đang xem
+    const [bulkApproving, setBulkApproving] = useState(false);
+    const pendingRegs = (regs.registrations || []).filter((r) => r.status === 'pending');
+    const approveAllRegs = async (assign) => {
+        const list = pendingRegs;
+        if (!list.length || bulkApproving) return;
+        if (!window.confirm(`Duyệt tất cả ${list.length} đăng ký đang chờ trong tuần này${assign ? ' và xếp luôn vào ca' : ''}?`)) return;
+        setBulkApproving(true);
+        let ok = 0, fail = 0;
+        for (const r of list) {
+            try {
+                await axios.post(API + '/shift-registrations/' + r.id + (assign ? '/approve-and-assign' : '/approve'));
+                ok++;
+            } catch (e) { fail++; }
+        }
+        setBulkApproving(false);
+        fetchRegs();
+        if (assign) fetchSched();
+        if (fail) alert(`Đã duyệt ${ok} đăng ký, ${fail} lỗi — kiểm tra lại danh sách.`);
+    };
 
     // Gói 37b: xuất PNG theo từng bảng chi nhánh
     const doExport = (b) => {
@@ -524,6 +549,13 @@ export default function Scheduling() {
                         <option value="">Tất cả chi nhánh</option>
                         {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
+                    {/* Audit UX hạng 9: duyệt hàng loạt đăng ký đang chờ */}
+                    {editable && pendingRegs.length > 0 && (
+                        <button onClick={() => approveAllRegs(tab === 'sched')} disabled={bulkApproving}
+                            className="px-4 py-2 rounded bg-green-600 text-white text-[13px] font-semibold disabled:opacity-50">
+                            {bulkApproving ? 'Đang duyệt...' : (tab === 'sched' ? `✓ Duyệt & xếp ca tất cả (${pendingRegs.length})` : `✓ Duyệt tất cả (${pendingRegs.length})`)}
+                        </button>
+                    )}
                     <div className="ml-auto flex gap-2">
                         {tab === 'sched' && editable && <button onClick={openSettings} className="px-4 py-2 rounded border border-gray-300 text-[13px]">⚙ Cài đặt</button>}
                     </div>
@@ -594,8 +626,8 @@ export default function Scheduling() {
                                                                         <span>{r.employee?.full_name}</span>
                                                                         {editable && r.status === 'submitted' && (
                                                                             <span className="ml-1 whitespace-nowrap">
-                                                                                <button onClick={() => approveReg(r.id)} title="Duyệt" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
-                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
+                                                                                <button onClick={() => approveReg(r.id)} title="Duyệt" className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
+                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
                                                                             </span>
                                                                         )}
                                                                     </div>
@@ -715,8 +747,8 @@ export default function Scheduling() {
                                                                         <div key={r.id} className="flex items-center gap-1 py-0.5">
                                                                             <span className="flex-1 text-[12px] font-semibold text-[#92400e] truncate">{r.employee?.full_name}</span>
                                                                             {editable && (<span className="whitespace-nowrap">
-                                                                                <button onClick={() => approveRegSched(r)} title="Duyệt & tự xếp vào ca" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
-                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
+                                                                                <button onClick={() => approveRegSched(r)} title="Duyệt & tự xếp vào ca" className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-700 text-[12px] font-bold mr-1">✓</button>
+                                                                                <button onClick={() => rejectReg(r.id)} title="Từ chối" className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-100 text-red-600 text-[12px] font-bold">✕</button>
                                                                             </span>)}
                                                                         </div>
                                                                     ))}

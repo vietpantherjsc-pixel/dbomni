@@ -12,15 +12,20 @@ import Menus from './pages/admin/Menus';
 import Categories from './pages/admin/Categories';
 import ComingSoon from './pages/admin/ComingSoon';
 import OnlineConfig from './pages/admin/OnlineConfig';
-import Affiliate from './pages/admin/Affiliate'; // Gói 46
+import InviteFriends from './pages/admin/InviteFriends'; // "Mời bạn bè" (đổi tên từ Affiliate Gói 46)
+import SapoConfig from './pages/admin/SapoConfig'; // Cầu nối Sapo — Phần B (2026-10-21)
 import Orders from './pages/admin/Orders';
 import Inventory from './pages/admin/Inventory';
 import Customers from './pages/admin/Customers';
 import MemberTiers from './pages/admin/MemberTiers';
+import PointExchange from './pages/admin/PointExchange'; // Loyalty 2.0: Cửa hàng đổi điểm
 import Promotions from './pages/admin/Promotions';
+import Rd from './pages/admin/Rd'; // SPEC R&D (2026-10-21)
 import Tables from './pages/admin/Tables';
 import Transactions from './pages/admin/Transactions'; // Gói 27: thu chi
 import TransactionCategories from './pages/admin/TransactionCategories'; // Gói 29: danh mục thu chi
+import Accounts from './pages/admin/Accounts'; // Spec cài đặt danh sách 2026-10-21: Quản lý quỹ (trang riêng Thu chi)
+import PrepaidExpenses from './pages/admin/PrepaidExpenses'; // Spec cài đặt danh sách 2026-10-21: Chi phí trả trước (trang riêng Thu chi)
 import Partners from './pages/admin/Partners'; // Gói 29: đối tác công nợ
 import Suppliers from './pages/admin/Suppliers'; // Gói 55 p11ab: nhà cung cấp (submenu kho)
 import PosScreen from './components/PosScreen';
@@ -190,7 +195,9 @@ const App = () => {
                     {/* Gói 5 (2026-10-05): CRM + Khuyến mại */}
                     <Route path="/admin/customers" element={<PrivateRoute><Customers /></PrivateRoute>} />
                     <Route path="/admin/member-tiers" element={<PrivateRoute><MemberTiers /></PrivateRoute>} />
+                    <Route path="/admin/point-exchange" element={<PrivateRoute><PointExchange /></PrivateRoute>} />
                     <Route path="/admin/promotions" element={<PrivateRoute><Promotions /></PrivateRoute>} />
+                    <Route path="/admin/rd" element={<PrivateRoute><Rd /></PrivateRoute>} />
 
                     {/* Gói 4 (2026-10-04): trang Kho hàng thật */}
                     {/* Gói 55 p11: submenu kho — /admin/inventory/:section */}
@@ -306,6 +313,23 @@ const App = () => {
                             </PrivateRoute>
                         }
                     />
+                    {/* Spec cài đặt danh sách 2026-10-21: Quỹ + Chi phí trả trước tách khỏi Cài đặt */}
+                    <Route
+                        path="/admin/accounts"
+                        element={
+                            <PrivateRoute>
+                                <Accounts />
+                            </PrivateRoute>
+                        }
+                    />
+                    <Route
+                        path="/admin/prepaid-expenses"
+                        element={
+                            <PrivateRoute>
+                                <PrepaidExpenses />
+                            </PrivateRoute>
+                        }
+                    />
                     <Route
                         path="/admin/partners"
                         element={
@@ -331,10 +355,21 @@ const App = () => {
                         }
                     />
                     <Route
-                        path="/admin/online/affiliate"
+                        path="/admin/online/invite-friends"
                         element={
                             <PrivateRoute>
-                                <Affiliate />
+                                <InviteFriends />
+                            </PrivateRoute>
+                        }
+                    />
+                    {/* Route cũ Affiliate → redirect sang Mời bạn bè (đổi tên 2026-10-20) */}
+                    <Route path="/admin/online/affiliate" element={<Navigate to="/admin/online/invite-friends" replace />} />
+                    {/* Cầu nối Sapo — Phần B: map món/tùy chọn + cấu hình */}
+                    <Route
+                        path="/admin/sapo"
+                        element={
+                            <PrivateRoute>
+                                <SapoConfig />
                             </PrivateRoute>
                         }
                     />

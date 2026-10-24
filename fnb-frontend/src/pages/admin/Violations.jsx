@@ -2,24 +2,32 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { useSharedCategories } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
-const CAT_META = {
+// Spec danh mục dùng chung: fallback khi API lỗi/chưa migrate
+const CAT_META_FB = {
     chuyen_can: { name: 'Chuyên Cần', badge: 'bg-blue-100 text-blue-700' },
     chuyen_mon: { name: 'Chuyên Môn', badge: 'bg-amber-100 text-amber-700' },
     chuyen_nghiep: { name: 'Chuyên Nghiệp', badge: 'bg-purple-100 text-purple-700' },
 };
-const catOf = (v) => CAT_META[v.category] || { name: v.category_name || v.category, badge: 'bg-gray-100 text-gray-600' };
-
 // Gói 40: Tab "Lỗi 3 Chuyên" trong Chấm công — quản lý cửa hàng ghi nhận lỗi
 // (không cần vào bảng lương). NV cũng có link riêng để tự báo lỗi của mình.
 export default function Violations() {
     const { can } = useAuth();
+    // Spec danh mục dùng chung: nhóm lỗi đọc từ API; badge màu giữ theo code cũ, nhóm mới dùng badge xám
+    const violGroups = useSharedCategories('violation_groups', Object.keys(CAT_META_FB).map((code) => ({ code, name: CAT_META_FB[code].name })));
+    const catOf = (v) => CAT_META_FB[v.category] || { name: v.category_name || violGroups.find((g) => g.code === v.category)?.name || v.category, badge: 'bg-gray-100 text-gray-600' };
     const [month, setMonth] = useState(() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); });
     const [empFilter, setEmpFilter] = useState('');
-    const [branchId, setBranchId] = useState('');
+    // C3 (2026-10-21): bộ lọc CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều với
+    // dropdown sidebar (đổi trong trang = đổi trạng thái chung). '' tại trang này = '0' (Tất cả) ở context.
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const branchId = ctxBranchId === '0' ? '' : ctxBranchId;
+    const setBranchId = (v) => setCtxBranchId(v === '' || v === null || v === undefined ? '0' : String(v));
     const [rows, setRows] = useState([]);
     const [types, setTypes] = useState([]);
     const [employees, setEmployees] = useState([]);
@@ -76,7 +84,7 @@ export default function Violations() {
         catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
     };
 
-    const cats = ['chuyen_can', 'chuyen_mon', 'chuyen_nghiep'];
+    const cats = violGroups.map((g) => g.code);
 
     return (
         <AdminLayout>

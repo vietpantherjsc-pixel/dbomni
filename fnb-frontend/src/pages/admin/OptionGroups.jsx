@@ -414,12 +414,16 @@ function RecipeModal({ option, onClose }) {
   const LineEditor = ({ lines, setLines, materialList, placeholder }) => (
     <>
       {lines.map((l, i) => (
-        <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 130px 40px' }}>
+        <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 175px 40px' }}>
           <select className="m-input" value={l.material_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, material_id: e.target.value } : x))}>
             <option value="">{placeholder}</option>
             {materialList.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
           </select>
-          <input type="number" min="0" step="0.5" className="m-input" placeholder="SL" value={l.quantity} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} />
+          {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
+          <div className="flex items-center gap-1.5">
+            <input type="number" min="0" step="0.5" className="m-input" placeholder="SL" value={l.quantity} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} />
+            <span className="text-[12px] whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }}>{(materialList.find((m) => String(m.id) === String(l.material_id))?.unit) || 'đv cơ sở'}</span>
+          </div>
           <button className="m-btn m-btn-ghost m-btn-sm !px-0" onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
         </div>
       ))}

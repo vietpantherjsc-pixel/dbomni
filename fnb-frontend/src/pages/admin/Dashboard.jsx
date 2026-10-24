@@ -48,6 +48,51 @@ const RANGE_OPTIONS = [
     { value: '30d', label: '30 ngày qua' },
 ];
 
+// Spec P4-A1/A2: badge cảnh báo BTP dưới ngưỡng khẩu phần + lô sắp hết HSD
+function StockAlerts({ branchId }) {
+    const [btp, setBtp] = useState([]);
+    const [exp, setExp] = useState([]);
+    const [showExp, setShowExp] = useState(false);
+    useEffect(() => {
+        const bq = branchId !== '0' ? `?branch_id=${branchId}` : '';
+        axios.get(`${API}/inventory/btp-low-stock${bq}`).then((r) => setBtp(r.data?.data || [])).catch(() => {});
+        axios.get(`${API}/inventory/expiring-batches${bq}`).then((r) => setExp(r.data?.data || [])).catch(() => {});
+    }, [branchId]);
+    if (btp.length === 0 && exp.length === 0) return null;
+    const red = exp.filter((e) => e.level === 'red');
+    const orange = exp.filter((e) => e.level === 'orange');
+    return (
+        <div className="mt-4 space-y-2">
+            {btp.length > 0 && (
+                <div className="m-card px-4 py-3" style={{ borderLeft: '4px solid #F5A623' }}>
+                    <div className="text-[13px] font-bold text-[#b45309]">⚠ BTP sắp hết ({btp.length})</div>
+                    <div className="text-[12px] text-gray-600 mt-1">
+                        {btp.slice(0, 5).map((b) => `${b.material_name} (còn ${b.portions} khẩu phần — ${b.branch_name})`).join(' · ')}
+                        {btp.length > 5 && ` +${btp.length - 5} nữa`}
+                    </div>
+                </div>
+            )}
+            {exp.length > 0 && (
+                <div className="m-card px-4 py-3" style={{ borderLeft: '4px solid #dc2626' }}>
+                    <button onClick={() => setShowExp(!showExp)} className="text-[13px] font-bold text-left w-full" style={{ color: red.length ? '#dc2626' : '#ea580c' }}>
+                        {red.length > 0 ? `🔴 ${red.length} lô hết HSD trong 7 ngày` : ''}{red.length > 0 && orange.length > 0 ? ' · ' : ''}{orange.length > 0 ? `🟠 ${orange.length} lô hết HSD trong 30 ngày` : ''} (bấm xem)
+                    </button>
+                    {showExp && (
+                        <div className="mt-2 text-[12px] space-y-1 max-h-[200px] overflow-y-auto">
+                            {exp.map((e) => (
+                                <div key={e.batch_id} className="flex justify-between gap-2 border-b border-gray-100 py-1">
+                                    <span>{e.material_name} <span className="text-gray-400">({e.batch_code})</span></span>
+                                    <span style={e.level === 'red' ? { color: '#dc2626', fontWeight: 700 } : { color: '#ea580c' }}>{e.quantity}{e.unit} — HSD {e.expired_at} (còn {e.days_left} ngày)</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const Dashboard = () => {
     const [range, setRange] = useState('today');
     const [data, setData] = useState(null);
@@ -120,6 +165,8 @@ const Dashboard = () => {
                         ))}
                     </select>
                 </div>
+
+                <StockAlerts branchId={branchId} />
 
                 {loading ? (
                     <div className="mt-4 m-card p-12 text-center text-sm text-[var(--m-ink-faint)]">

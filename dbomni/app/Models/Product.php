@@ -90,39 +90,71 @@ class Product extends Model
     // Gói 7a: giá bán theo kênh (mặc định dùng base_price khi chưa có giá kênh)
     // Gói 50c: giá kênh = 0 hoặc trống thì lấy giá cửa hàng (base_price),
     // trừ món price_on_demand (nhập giá thủ công) thì giữ nguyên 0
+    // Spec kênh bán hàng (2026-10-19): thêm bước giá phân loại —
+    // giá kênh chi tiết -> giá phân loại -> giá gốc (price_on_demand: -> 0)
     public function priceFor(string $channel): float
     {
+        // Map tương thích mã kênh cũ (giữ 1 phiên bản, có log deprecated)
+        $code = self::resolveChannelCode($channel);
         // Gói 55 p11ac: chỉ áp giá kênh đang is_active=true
-        $findActive = function ($code) {
-            return $this->prices->first(function ($p) use ($code) {
-                return ($p->priceList->code ?? null) === $code && !empty($p->is_active);
+        $findActive = function ($c) {
+            return $this->prices->first(function ($p) use ($c) {
+                return ($p->priceList->code ?? null) === $c && !empty($p->is_active);
             });
         };
-        // Món nhập giá thủ công: không áp giá mặc định
-        if (!empty($this->price_on_demand)) {
-            $price = $findActive($channel);
-            if ($price && (float) $price->price > 0) {
-                return (float) $price->price;
+        // 1. Giá kênh chi tiết
+        $price = $findActive($code);
+        if ($price && (float) $price->price > 0) {
+            return (float) $price->price;
+        }
+        // 2. Giá phân loại chứa kênh
+        $category = PriceList::categoryOf($code);
+        if ($category) {
+            $catPrice = $this->categoryPriceFor($category);
+            if ($catPrice > 0) {
+                return $catPrice;
             }
-            $map = ['pos' => 'nha_hang', 'zalo' => 'online'];
-            $price = $findActive($map[$channel] ?? $channel);
-            return ($price && (float) $price->price > 0) ? (float) $price->price : 0.0;
         }
-        $price = $findActive($channel);
-        if ($price && (float) $price->price > 0) {
-            return (float) $price->price;
-        }
-        $map = ['pos' => 'nha_hang', 'zalo' => 'online'];
-        $price = $findActive($map[$channel] ?? $channel);
-        if ($price && (float) $price->price > 0) {
-            return (float) $price->price;
+        // 3. Giá gốc (món nhập giá thủ công: không fallback)
+        if (!empty($this->price_on_demand)) {
+            return 0.0;
         }
         return (float) $this->base_price;
     }
 
+    // Map tương thích mã kênh cũ: pos -> nha_hang, zalo -> online (giữ 1 phiên bản, log deprecated 1 lần/request)
+    public static function resolveChannelCode(string $channel): string
+    {
+        static $map = ['pos' => 'nha_hang', 'zalo' => 'online'];
+        static $logged = [];
+        $lc = mb_strtolower(trim($channel));
+        if (isset($map[$lc])) {
+            if (!isset($logged[$lc])) {
+                $logged[$lc] = true;
+                \Illuminate\Support\Facades\Log::warning("[deprecated] priceFor: mã kênh cũ '{$channel}' được map sang '{$map[$lc]}' — hãy dùng mã chuẩn.");
+            }
+            return $map[$lc];
+        }
+        return $channel;
+    }
+
+    // Spec kênh bán hàng (2026-10-19): giá chung theo phân loại kênh
+    public function categoryPrices(): HasMany
+    {
+        return $this->hasMany(ProductCategoryPrice::class);
+    }
+
+    public function categoryPriceFor(string $category): float
+    {
+        $rows = $this->relationLoaded('categoryPrices') ? $this->categoryPrices : $this->categoryPrices()->get();
+        $row = $rows->first(fn($r) => $r->category === $category && !empty($r->is_active));
+        return $row ? (float) $row->price : 0.0;
+    }
+
     // Gói 49i: giá kênh online cho Zalo Mini App (dùng kèm eager load prices.priceList)
+    // Spec kênh bán hàng: dùng mã chuẩn 'online' (map tương thích 'zalo' vẫn giữ trong priceFor)
     public function getOnlinePriceAttribute(): float
     {
-        return $this->priceFor('zalo');
+        return $this->priceFor('online');
     }
 }

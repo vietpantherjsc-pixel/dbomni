@@ -42,21 +42,29 @@ export default function Inventory() {
     // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt form thêm mới trong tab Tồn kho
     const [addMaterialSignal, setAddMaterialSignal] = useState(0);
     // Gói 18: chi nhánh dùng chung từ BranchContext ('0' = tất cả)
-    const { branchId } = useBranch();
+    const { branchId, setBranchId } = useBranch();
     const [branches, setBranches] = useState([]);
-    // Tồn kho/nhập/chế biến cần 1 chi nhánh cụ thể: '0' -> lấy CN đầu tiên
-    const effBranchId = branchId === '0' ? (branches[0]?.id || 1) : Number(branchId);
+    // C1 (2026-10-21): DIỆT "âm thầm lấy CN đầu tiên" — ở chế độ '0' (Tất cả) effBranchId = null;
+    // các tab kho theo-CN không tải dữ liệu/không tạo phiếu cho tới khi chọn 1 CN cụ thể
+    // (khung chọn CN hiện ngay trong trang). Chỉ tab dùng dữ liệu chung (Loại NL, Định mức
+    // bán thành phẩm) mới chạy ở chế độ Tất cả.
+    const isAllBranches = branchId === '0';
+    const effBranchId = isAllBranches ? null : Number(branchId);
+    const effBranchName = isAllBranches
+        ? null
+        : (branches.find((b) => String(b.id) === String(effBranchId))?.name || ('Chi nhánh ' + effBranchId));
 
     const fetchAll = async (bid) => {
         try {
             const [mRes, sRes, bRes, cRes] = await Promise.all([
                 axios.get(`${API}/materials`),
-                axios.get(`${API}/inventory/branch/${bid}`),
+                bid ? axios.get(`${API}/inventory/branch/${bid}`) : Promise.resolve(null),
                 axios.get(`${API}/branches`),
                 axios.get(`${API}/material-categories`),
             ]);
             if (mRes.data?.success) setMaterials(mRes.data.data);
-            if (sRes.data?.success) setStock(sRes.data.data);
+            if (sRes?.data?.success) setStock(sRes.data.data);
+            else if (!bid) setStock([]);
             if (bRes.data?.success) setBranches(bRes.data.data || []);
             if (cRes.data?.success) setCategories(cRes.data.data || []);
         } catch (err) { console.error('Lỗi tải kho:', err); }
@@ -87,6 +95,13 @@ export default function Inventory() {
         stocktake: ['Kiểm kê kho', 'Kiểm kê và cân bằng tồn kho.'],
     };
     const [secTitle, secDesc] = sectionTitles[tab] || sectionTitles.stock;
+    // C1: các tab thao tác/dữ liệu theo-CN cần 1 CN cụ thể khi đang ở chế độ Tất cả
+    // (Nguyên liệu + Chế biến xem tồn theo CN; Nhập/Xuất/Chuyển/Kiểm kê tạo phiếu đóng dấu CN).
+    // Tab Loại NL + Định mức BTP là dữ liệu chung toàn chuỗi nên vẫn mở ở chế độ Tất cả.
+    const needsBranch = isAllBranches && (
+        tab === 'inbound' || tab === 'outbound' || tab === 'transfer' || tab === 'stocktake'
+        || (tab === 'stock' && (stockSubTab === 'materials' || stockSubTab === 'production'))
+    );
 
     return (
         <AdminLayout>
@@ -96,8 +111,18 @@ export default function Inventory() {
                     <div className="min-w-0">
                         <h1 className="text-xl font-semibold text-gray-800">{secTitle}</h1>
                         <p className="text-[13px] text-[#6b7280] mt-0.5">{secDesc}</p>
+                        {/* C1 (i): luôn hiện rõ CN đang hiệu lực ở đầu trang, mọi trạng thái */}
+                        {isAllBranches ? (
+                            <p className="text-[13px] mt-1.5 inline-block px-2.5 py-1 rounded bg-amber-50 border border-amber-200 text-amber-800">
+                                📍 Đang chọn: <b>Tất cả chi nhánh</b> — tồn kho và phiếu kho tách riêng theo từng chi nhánh, chọn 1 chi nhánh cụ thể để xem và tạo phiếu.
+                            </p>
+                        ) : (
+                            <p className="text-[13px] mt-1.5 inline-block px-2.5 py-1 rounded bg-[#eef1f8] border border-[#c9d2ea] text-[#24305E]">
+                                📍 Chi nhánh đang xem: <b>{effBranchName}</b>
+                            </p>
+                        )}
                     </div>
-                    {tab === 'stock' && stockSubTab === 'materials' && (
+                    {tab === 'stock' && stockSubTab === 'materials' && !isAllBranches && (
                         <button onClick={() => setAddMaterialSignal((s) => s + 1)}
                             className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] whitespace-nowrap self-start sm:self-auto shrink-0">
                             + Nguyên liệu
@@ -129,6 +154,26 @@ export default function Inventory() {
                     )}
 
                     <div className="p-4">
+                        {needsBranch ? (
+                            /* C1 (ii)+(iii): ở chế độ Tất cả — KHÔNG tải dữ liệu CN nào, KHÔNG tạo phiếu;
+                               yêu cầu chọn 1 CN cụ thể ngay tại đây (đồng bộ luôn dropdown sidebar). */
+                            <div className="text-center py-10 px-4">
+                                <div className="text-[15px] font-semibold text-gray-800 mb-1">Chọn 1 chi nhánh để tiếp tục</div>
+                                <p className="text-[13px] text-gray-500 mb-4 max-w-lg mx-auto">
+                                    Mục này làm việc theo từng chi nhánh (xem tồn kho, tạo phiếu nhập/xuất/chuyển/kiểm kê đều đóng dấu chi nhánh).
+                                    Đang ở chế độ "Tất cả chi nhánh" nên chưa hiển thị dữ liệu và chưa tạo phiếu được.
+                                </p>
+                                <div className="flex gap-2 justify-center flex-wrap">
+                                    {branches.map((b) => (
+                                        <button key={b.id} onClick={() => setBranchId(b.id)}
+                                            className="px-4 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded-lg hover:opacity-90 min-h-[44px]">
+                                            📍 {b.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                        <>
                         {tab === 'stock' && stockSubTab === 'materials' && <StockTab stock={stock} materials={materials} categories={categories} branchId={effBranchId} onChange={() => fetchAll(effBranchId)} addSignal={addMaterialSignal} />}
                         {tab === 'stock' && stockSubTab === 'cats' && <CategoryTab categories={categories} onChange={fetchCats} />}
                         {tab === 'stock' && stockSubTab === 'bom' && <BomTab materials={materials} onDone={() => fetchAll(effBranchId)} />}
@@ -138,6 +183,8 @@ export default function Inventory() {
                         {tab === 'outbound' && <OutboundTab materials={materials} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} branches={branches} />}
                         {tab === 'transfer' && <TransferTab materials={materials} branches={branches} branchId={effBranchId} onDone={() => fetchAll(effBranchId)} />}
                         {tab === 'stocktake' && <StocktakeTab materials={materials} categories={categories} onDone={() => fetchAll(effBranchId)} branchId={effBranchId} showAll={branchId === '0'} />}
+                        </>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1135,9 +1182,17 @@ function InboundTab({ materials, onDone, branchId, branches }) {
 
     return (
         <div>
-            {/* Gói 55 p11z: link nhân viên */}
-            <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-[12.5px] text-blue-700">
-                📱 Link nhân viên tạo phiếu nhập: <b>{typeof window !== 'undefined' ? window.location.origin : ''}/nhap-kho</b>
+            {/* Gói 67: link nhân viên (style đồng bộ box kiểm kê) */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 flex items-start gap-2">
+                <span className="text-blue-600 text-lg">💡</span>
+                <div className="text-[13px]">
+                    <b className="text-blue-800">Link nhập kho cho nhân viên:</b>
+                    <span className="text-blue-700"> Nhân viên đăng nhập PIN tại </span>
+                    <code className="bg-white px-2 py-0.5 rounded border border-blue-200 text-blue-800 font-mono text-[12px]">/nhap-kho</code>
+                    <span className="text-blue-700"> để tự tạo phiếu nhập kho của chi nhánh mình — không cần vào admin.</span>
+                    <button onClick={() => { navigator.clipboard?.writeText(window.location.origin + '/nhap-kho'); alert('Đã copy link!'); }}
+                        className="ml-2 px-2 py-1 bg-blue-600 text-white text-[12px] rounded hover:bg-blue-700">Copy link</button>
+                </div>
             </div>
             <div className="flex items-center justify-between mb-3">
                 <div className="text-[13px] text-gray-500">Phiếu nhập hàng theo hóa đơn nhà cung cấp</div>
@@ -1618,9 +1673,17 @@ function TransferTab({ materials, branches, branchId, onDone }) {
 
     return (
         <div>
-            {/* Gói 55 p11z: link nhân viên */}
-            <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-[12.5px] text-blue-700">
-                📱 Link nhân viên tạo phiếu chuyển: <b>{typeof window !== 'undefined' ? window.location.origin : ''}/chuyen-kho</b>
+            {/* Gói 67: link nhân viên (style đồng bộ box kiểm kê) */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 flex items-start gap-2">
+                <span className="text-blue-600 text-lg">💡</span>
+                <div className="text-[13px]">
+                    <b className="text-blue-800">Link chuyển kho cho nhân viên:</b>
+                    <span className="text-blue-700"> Nhân viên đăng nhập PIN tại </span>
+                    <code className="bg-white px-2 py-0.5 rounded border border-blue-200 text-blue-800 font-mono text-[12px]">/chuyen-kho</code>
+                    <span className="text-blue-700"> để tự tạo phiếu chuyển kho giữa các chi nhánh — không cần vào admin.</span>
+                    <button onClick={() => { navigator.clipboard?.writeText(window.location.origin + '/chuyen-kho'); alert('Đã copy link!'); }}
+                        className="ml-2 px-2 py-1 bg-blue-600 text-white text-[12px] rounded hover:bg-blue-700">Copy link</button>
+                </div>
             </div>
             <div className="flex items-center justify-between mb-3">
                 <div className="text-[13px] text-gray-500">Điều chuyển nguyên liệu giữa các chi nhánh (kèm giá vốn)</div>
@@ -2811,13 +2874,14 @@ function BomTab({ materials, onDone }) {
                     <div className="bg-white rounded-2xl w-full max-w-[560px] max-h-[90vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
                         <h3 className="font-bold text-lg mb-4">{editingId ? 'Sửa định mức' : 'Tạo định mức bán thành phẩm'}</h3>
                         <div className="mb-4">
-                            <label className="text-xs text-gray-500">Bán thành phẩm *</label>
+                            <label className="text-xs text-gray-500">{editingId ? 'Bán thành phẩm *' : 'Vật tư làm bán thành phẩm *'}</label>
                             <select value={formMatId} onChange={(e) => setFormMatId(e.target.value)}
                                 disabled={!!editingId} className={`w-full mt-1 ${inp} ${editingId ? 'bg-gray-50' : ''}`}>
                                 <option value="">— Chọn —</option>
-                                {/* Gói 55 p11o: khi tạo mới liệt kê tất cả NL (NL nào có định mức thì thành BTP) */}
-                                {(editingId ? semiFinished : materials).map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
+                                {/* Gói 68: tạo mới chỉ liệt kê vật tư CHƯA có định mức (lưu xong thành BTP); sửa giữ BTP cũ */}
+                                {(editingId ? semiFinished : rawMaterials).map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                             </select>
+                            {!editingId && <p className="text-[11px] text-gray-400 mt-1">Chỉ hiện vật tư chưa có định mức — lưu xong, vật tư này trở thành bán thành phẩm.</p>}
                         </div>
                         {/* Gói 55 p11c: số lượng BTP mỗi mẻ */}
                         <div className="mb-4">
@@ -2843,6 +2907,8 @@ function BomTab({ materials, onDone }) {
                                     <input type="number" min="0" step="any" placeholder="SL" value={l.quantity}
                                         onChange={(e) => setFormLines(formLines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))}
                                         className={`w-24 ${inp}`} />
+                                    {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
+                                    <span className="text-[12px] text-gray-500 whitespace-nowrap w-12">{materials.find((m) => String(m.id) === String(l.raw_material_id))?.unit || 'đv'}</span>
                                     <button onClick={() => removeFormLine(i)} className="text-red-500 hover:text-red-700 px-1">×</button>
                                 </div>
                             ))}
@@ -2925,8 +2991,17 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
 
     return (
         <div>
-            <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-[12.5px] text-blue-700">
-                📱 Link nhân viên tạo phiếu xuất: <b>{typeof window !== 'undefined' ? window.location.origin : ''}/xuat-kho</b>
+            {/* Gói 67: link nhân viên (style đồng bộ box kiểm kê) */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 flex items-start gap-2">
+                <span className="text-blue-600 text-lg">💡</span>
+                <div className="text-[13px]">
+                    <b className="text-blue-800">Link xuất kho cho nhân viên:</b>
+                    <span className="text-blue-700"> Nhân viên đăng nhập PIN tại </span>
+                    <code className="bg-white px-2 py-0.5 rounded border border-blue-200 text-blue-800 font-mono text-[12px]">/xuat-kho</code>
+                    <span className="text-blue-700"> để tự tạo phiếu xuất kho của chi nhánh mình — không cần vào admin.</span>
+                    <button onClick={() => { navigator.clipboard?.writeText(window.location.origin + '/xuat-kho'); alert('Đã copy link!'); }}
+                        className="ml-2 px-2 py-1 bg-blue-600 text-white text-[12px] rounded hover:bg-blue-700">Copy link</button>
+                </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 mb-3">
                 <div className="flex flex-1 min-w-[280px]">

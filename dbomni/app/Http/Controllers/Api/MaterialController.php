@@ -117,9 +117,11 @@ class MaterialController extends Controller
         try {
             $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($request->file('file')->getRealPath());
         } catch (\Throwable $e) {
+            // Audit 2026-10-23 BM-06: không lộ chi tiết lỗi đọc file ra client
+            \Illuminate\Support\Facades\Log::warning('Material import: không đọc được file: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Không đọc được file: ' . $e->getMessage(),
+                'message' => 'Không đọc được file. Kiểm tra lại định dạng file.',
             ], 422);
         }
 

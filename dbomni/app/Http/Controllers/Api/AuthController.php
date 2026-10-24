@@ -23,7 +23,7 @@ class AuthController extends Controller
         if (Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
             $user = User::where('email', $request->email)->firstOrFail();
             $user->tokens()->delete();
-            $token = $user->createToken('auth_token')->plainTextToken;
+            $token = $user->createToken('auth_token', ['*'])->plainTextToken;
             return response()->json([
                 'message' => 'Đăng nhập thành công',
                 'access_token' => $token,
@@ -46,7 +46,8 @@ class AuthController extends Controller
             ->first();
         if ($emp && $emp->password && Hash::check($request->string('password'), $emp->password)) {
             $emp->tokens()->delete();
-            $token = $emp->createToken('employee_token')->plainTextToken;
+            // Audit 2026-10-23 BM-10: token NV có hạn 7 ngày
+            $token = $emp->createToken('employee_token', ['employee'], now()->addDays(7))->plainTextToken;
             return response()->json([
                 'message' => 'Đăng nhập thành công',
                 'access_token' => $token,

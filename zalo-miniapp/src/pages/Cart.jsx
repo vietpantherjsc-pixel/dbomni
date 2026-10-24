@@ -24,7 +24,7 @@ export default function Cart() {
       <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Giỏ hàng ({count})</h1></div>
       {cart.map((l) => (
         <div key={l.key} className="zm-row-item" style={{ cursor: 'default' }}>
-          <img src={l.product.image_url || 'https://via.placeholder.com/100?text=☕'} alt="" />
+          <img src={l.product.image_url || '/default-product.svg'} alt="" />
           <div className="zm-row-info">
             <div className="zm-row-name">{l.product.name}</div>
             {l.optText && <div className="zm-row-desc">{l.optText}</div>}

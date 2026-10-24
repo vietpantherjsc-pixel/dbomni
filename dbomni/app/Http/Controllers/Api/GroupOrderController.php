@@ -70,7 +70,7 @@ class GroupOrderController extends Controller
             ]);
 
             $item = DB::transaction(function () use ($group, $v) {
-                $product = Product::with('prices.priceList')->findOrFail($v['product_id']);
+                $product = Product::with(['prices.priceList', 'categoryPrices'])->findOrFail($v['product_id']);
                 if ($product->is_service_fee || !$product->is_active) {
                     throw new Exception('Món không khả dụng.');
                 }
@@ -121,7 +121,7 @@ class GroupOrderController extends Controller
 
             return response()->json(['success' => true, 'data' => $item], 201);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -138,7 +138,7 @@ class GroupOrderController extends Controller
             $item->update($v);
             return response()->json(['success' => true, 'data' => $item->fresh()]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -150,7 +150,7 @@ class GroupOrderController extends Controller
             $group->items()->findOrFail($id)->delete();
             return response()->json(['success' => true]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -161,32 +161,67 @@ class GroupOrderController extends Controller
         PromotionService $promotionService,
         LoyaltyService $loyaltyService
     ): JsonResponse {
+        $group = GroupOrder::where('code', strtoupper($code))->firstOrFail();
+        // Spec đơn nhóm đồng bộ (2026-10-21): nhóm đã chốt mà request mang client_key
+        // trùng đơn đã tạo (bấm lại sau timeout) → trả lại đơn cũ, không tạo đơn mới.
+        if ($group->status === 'ordered' && $group->order_id && $request->filled('client_key')) {
+            $existing = \App\Models\Order::with('items')->find($group->order_id);
+            if ($existing && $existing->client_key === $request->input('client_key')) {
+                return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
+            }
+        }
         try {
             $group = $this->openGroup($code);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
         if ($group->items()->count() === 0) {
             return response()->json(['success' => false, 'message' => 'Nhóm chưa có món nào.'], 400);
         }
 
+        // Chuẩn hóa IN HOA khi tra cứu voucher (backlog Spec 5, 2026-10-21): chỉ chuẩn hóa
+        // phía đầu vào tra cứu — mã lưu trong DB giữ nguyên.
+        if ($request->filled('voucher_code')) {
+            $request->merge(['voucher_code' => strtoupper(trim((string) $request->input('voucher_code')))]);
+        }
         $v = $request->validate([
+            'client_key' => 'nullable|string|max:64', // Spec đơn nhóm: chống trùng như đơn thường
             'customer_name' => 'required|string|max:100',
             'customer_phone' => 'required|string|max:20',
-            'order_type' => 'required|in:takeaway,delivery',
+            // Spec KM chống mã Phần B: mã TV của trưởng nhóm để xác thực quyền lợi trong store()
+            'member_code' => 'nullable|string|max:20',
+            'order_type' => ['required', \Illuminate\Validation\Rule::in(array_values(array_intersect(\App\Models\SharedCategory::activeCodes('order_types'), ['takeaway', 'delivery'])))], // Spec danh mục dùng chung: validate động
             'delivery_address' => 'required_if:order_type,delivery|nullable|string|max:255',
-            'distance_km' => 'required_if:order_type,delivery|nullable|numeric|min:0|max:100',
-            'payment_method' => 'required|in:transfer,pay_at_store',
+            // Spec đơn nhóm: BỎ bắt buộc km — geocode lỗi vẫn đặt được, server tự tính lại phí
+            'distance_km' => 'nullable|numeric|min:0|max:100',
+            // Spec đơn nhóm: hẹn giờ giao / hẹn tới lấy (store() validate lại after:now)
+            'scheduled_at' => 'nullable|date',
+            'province' => 'nullable|string|max:100',
+            'ward' => 'nullable|string|max:100',
+            'delivery_note' => 'nullable|string|max:500',
+            // payment_method để store() validate (transfer/pay_at_store) — không hardcode thêm ở đây
+            'payment_method' => 'required|string|max:30',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
             'promotion_id' => 'nullable|exists:promotions,id',
-            'points_redeem' => 'nullable|integer|min:0',
+            'points_redeem' => 'nullable|integer|min:0', // Loyalty 2.0: giữ lỏng cho client cũ — bị bỏ qua ở OnlineOrderController::store
             'note' => 'nullable|string|max:255',
             'referred_by' => 'nullable|string|max:20',
             // HD-R1: báo giá hãng giao hàng cho đơn nhóm
             'delivery_package' => 'nullable|in:nhanh,sieu_toc',
             'delivery_quoted_fee' => 'nullable|numeric|min:0',
             'delivery_provider' => 'nullable|in:ahamove,lalamove',
+            'delivery_dropoff_lat' => 'nullable|numeric|between:-90,90',
+            'delivery_dropoff_lng' => 'nullable|numeric|between:-180,180',
         ]);
+
+        // Spec QR 2026-10-21: đơn nhóm trả bằng CHUYỂN KHOẢN cũng đi qua kênh BANK —
+        // FAIL-FAST cấu hình NH + private key TRƯỚC khi tạo đơn (chống đơn mồ côi).
+        $isBank = ($v['payment_method'] ?? '') === 'transfer' && (bool) \App\Models\Setting::get('zalo_pay_bank_enabled', '1');
+        $payService = app(\App\Services\ZaloPaymentService::class);
+        if ($isBank && (!$payService->paymentKeyReady() || !$payService->bankInfoComplete())) {
+            \Illuminate\Support\Facades\Log::warning('[ThanhToanQR] Đơn nhóm BANK bị chặn do thiếu cấu hình thanh toán.');
+            return response()->json(['success' => false, 'message' => 'Kênh chuyển khoản tạm chưa sẵn sàng. Vui lòng chọn trả tại quán.'], 422);
+        }
 
         // Dựng items cho đơn online: tên người đặt nối vào ghi chú từng dòng
         // Gói 55 p11ad: KM chỉ áp 1 lần tại checkout — items dựng lại GIÁ GỐC từ DB
@@ -211,7 +246,33 @@ class GroupOrderController extends Controller
         $response = $online->store($subRequest, $promotionService, $loyaltyService);
 
         if ($response->getStatusCode() === 201) {
-            $group->update(['status' => 'ordered']);
+            // Spec đơn nhóm đồng bộ: lưu đơn đã chốt để mọi thành viên thấy mã đơn + theo dõi
+            $data = $response->getData(true);
+            $group->update([
+                'status' => 'ordered',
+                'order_id' => $data['data']['id'] ?? null,
+            ]);
+
+            // Spec QR 2026-10-21: đơn nhóm BANK — gắn pay_channel + params CK vào response
+            // để trưởng nhóm vào màn "Chờ thanh toán" như đơn thường.
+            if ($isBank && !empty($data['data']['id'])) {
+                $order = \App\Models\Order::find($data['data']['id']);
+                try {
+                    $params = $payService->createCheckoutParams($order, \App\Services\ZaloPaymentService::CHANNEL_BANK);
+                    $orderData = $order->fresh()->load(['items.product', 'customer'])->toArray();
+                    $orderData['bank_info'] = $params['bank_info'];
+                    $orderData['transfer_content'] = $params['transfer_content'];
+                    $orderData['vietqr_payload'] = $params['vietqr_payload'] ?? null;
+                    $orderData['pay_channel'] = 'BANK';
+                    return response()->json(['success' => true, 'message' => $data['message'] ?? 'Đặt món thành công!', 'data' => $orderData], 201);
+                } catch (\Exception $e) {
+                    // Đã fail-fast ở trên — lỗi tới đây là bất thường: hủy đơn, không để mồ côi.
+                    $order->update(['status' => 'cancelled', 'payment_status' => 'failed']);
+                    $group->update(['status' => 'open', 'order_id' => null]);
+                    \Illuminate\Support\Facades\Log::error('[ThanhToanQR] Đơn nhóm tạo params thất bại — đã hủy đơn ' . $order->code . ': ' . $e->getMessage());
+                    return response()->json(['success' => false, 'message' => 'Không khởi tạo được thanh toán. Đơn đã được hủy, bạn không bị trừ tiền.'], 422);
+                }
+            }
         }
         return $response;
     }
@@ -232,6 +293,7 @@ class GroupOrderController extends Controller
                 'id' => $it->id,
                 'product_id' => $it->product_id,
                 'product_name' => $it->product_name,
+                'category_id' => $it->product?->category_id, // Spec đơn nhóm: KM theo danh mục cần category_id
                 'image_url' => $it->product?->image_url,
                 'option_names' => array_values($it->option_names ?? []),
                 'member_names' => $it->member_names ?? [],
@@ -243,9 +305,21 @@ class GroupOrderController extends Controller
         });
         return [
             'code' => $group->code,
-            'branch' => $group->branch ? ['id' => $group->branch->id, 'name' => $group->branch->name] : null,
+            // Audit 2026-10-21 🟠14: kèm tọa độ + giờ mở cửa để GroupCheckout tính
+            // phí ship/giờ hẹn theo ĐÚNG chi nhánh của nhóm (trước chỉ có id+name,
+            // frontend buộc phải mượn chi nhánh đang chọn trong máy trưởng nhóm).
+            'branch' => $group->branch ? [
+                'id' => $group->branch->id,
+                'name' => $group->branch->name,
+                'latitude' => $group->branch->latitude,
+                'longitude' => $group->branch->longitude,
+                'opening_hours' => $group->branch->opening_hours,
+            ] : null,
             'leader_name' => $group->leader_name,
             'status' => $group->status,
+            // Spec đơn nhóm đồng bộ: mã đơn đã chốt (mọi thành viên đều thấy)
+            'order_id' => $group->order_id,
+            'order_code' => $group->order?->code,
             'expires_at' => $group->expires_at,
             'items' => $items->values(),
             'total_qty' => $items->sum('quantity'),

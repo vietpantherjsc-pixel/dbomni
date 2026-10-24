@@ -50,9 +50,11 @@ class OrderImportController extends Controller
         try {
             $spreadsheet = IOFactory::load($request->file('file')->getRealPath());
         } catch (\Throwable $e) {
+            // Audit 2026-10-23 BM-06: không lộ chi tiết lỗi đọc file ra client
+            \Illuminate\Support\Facades\Log::warning('OrderImport: không đọc được file: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Không đọc được file Excel: ' . $e->getMessage(),
+                'message' => 'Không đọc được file Excel. Kiểm tra lại định dạng file.',
             ], 422);
         }
 
@@ -164,7 +166,7 @@ class OrderImportController extends Controller
         foreach ($cached['rows'] as $raw) {
             $d = $this->applyMapping($raw, $mapping);
             $chCode = $this->resolveChannel($d['service_type'] ?? '', $d['partner'] ?? '', $d['source'] ?? '');
-            if ($chCode !== '' && !in_array(mb_strtolower($chCode), ['pos', 'zalo'], true) && !isset($channelCandidates[$chCode])) {
+            if ($chCode !== '' && !in_array(mb_strtolower($chCode), ['nha_hang', 'online', 'pos', 'zalo'], true) && !isset($channelCandidates[$chCode])) {
                 $partnerName = trim((string) ($d['partner'] ?? ''));
                 $channelCandidates[$chCode] = $partnerName !== '' ? $partnerName : $chCode;
             }
@@ -418,14 +420,18 @@ class OrderImportController extends Controller
                             $order->items->map(fn($it) => [
                                 'product_id' => $it->product_id,
                                 'product_option_id' => null,
-                                'option_ids' => [],
+                                // Audit 2026-10-23 KHO-07: trừ cả định mức tùy chọn
+                                // theo option_ids ĐÃ LƯU trên từng dòng khi import.
+                                'option_ids' => $it->option_ids ?? [],
                                 'quantity' => $it->quantity,
                             ])->toArray(),
                             ['type' => 'order', 'id' => $order->id, 'note' => 'Import đơn lịch sử']
                         );
                         $order->update(['stock_deducted' => true]);
                     } catch (\Throwable $e) {
-                        $warnings[] = "Đơn {$code}: tạo thành công nhưng trừ kho thất bại ({$e->getMessage()}).";
+                        // Audit 2026-10-23 BM-06: chi tiết lỗi chỉ vào log
+                        \Illuminate\Support\Facades\Log::warning("Import đơn {$code}: trừ kho thất bại: " . $e->getMessage());
+                        $warnings[] = "Đơn {$code}: tạo thành công nhưng trừ kho thất bại (chi tiết đã ghi log).";
                     }
                 }
 
@@ -438,7 +444,8 @@ class OrderImportController extends Controller
                             $order->update(['points_earned' => $earned]);
                         }
                     } catch (\Throwable $e) {
-                        $warnings[] = "Đơn {$code}: không cộng được điểm ({$e->getMessage()}).";
+                        \Illuminate\Support\Facades\Log::warning("Import đơn {$code}: không cộng được điểm: " . $e->getMessage());
+                        $warnings[] = "Đơn {$code}: không cộng được điểm (chi tiết đã ghi log).";
                     }
                 }
 
@@ -688,23 +695,26 @@ class OrderImportController extends Controller
     }
 
     // Gói 58: tách hậu tố kênh khỏi tên món ("Cà phê sữa - CH" → "Cà phê sữa")
-    // Danh sách hậu tố: thêm mới vào mảng $suffixes khi phát sinh thêm
+    // Spec danh mục dùng chung: hậu tố đọc từ danh mục import_suffixes (fallback mảng cứng khi chưa migrate)
     private function stripChannelSuffix(string $name): string
     {
         $name = trim($name);
         // Hậu tố kênh bán (không phân biệt hoa thường, linh hoạt dấu cách quanh gạch ngang)
-        $suffixes = [
-            'CH',
-            'KM Giờ Vàng',
-            'Grab', 'GrabFood',
-            'Shopee', 'ShopeeFood',
-            'Be', 'BeFood',
-            'Zalo',
-            'Online',
-            'Mang Về',
-            'Tại Bàn', 'Tại Quán',
-            'Giao Hàng',
-        ];
+        $suffixes = \App\Models\SharedCategory::activeCodes('import_suffixes');
+        if (empty($suffixes)) {
+            $suffixes = [
+                'CH',
+                'KM Giờ Vàng',
+                'Grab', 'GrabFood',
+                'Shopee', 'ShopeeFood',
+                'Be', 'BeFood',
+                'Zalo',
+                'Online',
+                'Mang Về',
+                'Tại Bàn', 'Tại Quán',
+                'Giao Hàng',
+            ];
+        }
         foreach ($suffixes as $sfx) {
             $escaped = str_replace(' ', '\s+', preg_quote($sfx, '/'));
             $name = preg_replace('/\s*-\s*' . $escaped . '\s*$/iu', '', $name);
@@ -757,7 +767,8 @@ class OrderImportController extends Controller
     }
 
     // Gói 56: xác định kênh từ cột AK (loại hình phục vụ) + AO (chi tiết đối tác).
-    // - "Ăn tại bàn"/"mua trực tiếp" hoặc cả 2 cột trống → 'pos'
+    // Spec kênh bán hàng (2026-10-19): chuẩn hóa về mã chuẩn nha_hang/online.
+    // - "Ăn tại bàn"/"mua trực tiếp" hoặc cả 2 cột trống → 'nha_hang'
     // - Có đối tác → chuẩn hóa thành code (vd "GrabFood" → "grabfood")
     // - Fallback: logic mapChannel cũ theo cột nguồn.
     private function resolveChannel(string $serviceType, string $partner, string $source): string
@@ -766,18 +777,18 @@ class OrderImportController extends Controller
         $partnerNorm = $this->normalizeChannelCode($partner);
         $p = trim($partner);
 
-        // Zalo luôn về kênh zalo
+        // Zalo luôn về kênh online (mã chuẩn — tương thích mã cũ 'zalo')
         if (str_contains($stNorm, 'zalo') || str_contains($partnerNorm, 'zalo')) {
-            return 'zalo';
+            return 'online';
         }
 
-        // Ăn tại bàn / mua trực tiếp, hoặc cả 2 cột đều trống → kênh tại quầy
+        // Ăn tại bàn / mua trực tiếp, hoặc cả 2 cột đều trống → kênh tại quầy (mã chuẩn 'nha_hang')
         if (
             str_contains($stNorm, 'antaiban')
             || str_contains($stNorm, 'muatructiep')
             || ($stNorm === '' && $p === '')
         ) {
-            return 'pos';
+            return 'nha_hang';
         }
 
         // Có đối tác cụ thể → dùng code đã chuẩn hóa
@@ -795,12 +806,12 @@ class OrderImportController extends Controller
         $stNorm = $this->normalizeChannelCode($serviceType);
 
         // Tại bàn ăn ở quán
-        if ($channel === 'pos' && (str_contains($stNorm, 'antaiban') || str_contains($stNorm, 'muatructiep'))) {
+        if ($channel === 'nha_hang' && (str_contains($stNorm, 'antaiban') || str_contains($stNorm, 'muatructiep'))) {
             return 'dine_in';
         }
 
-        // Kênh sàn (khác pos/zalo) → giao hàng
-        if ($channel !== 'pos' && $channel !== 'zalo') {
+        // Kênh sàn (khác nha_hang/online) → giao hàng
+        if ($channel !== 'nha_hang' && $channel !== 'online') {
             return 'delivery';
         }
 
@@ -815,30 +826,35 @@ class OrderImportController extends Controller
         if ($code === '') return null;
         $pl = PriceList::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
         if ($pl) return $pl;
-        // Kênh nội bộ (pos/zalo) không có phí sàn → không tự tạo, trả null
-        if (in_array(mb_strtolower($code), ['pos', 'zalo'], true)) {
+        // Kênh nội bộ (nha_hang/online, tương thích mã cũ pos/zalo) không có phí sàn → không tự tạo, trả null
+        if (in_array(mb_strtolower($code), ['nha_hang', 'online', 'pos', 'zalo'], true)) {
             return null;
         }
-        return PriceList::create([
+        $data = [
             'code' => $code,
             'name' => trim($displayName) !== '' ? trim($displayName) : $code,
             'commission_rate' => 25,
             'commission_tax_included' => true,
             'commission_tax_rate' => 0,
             'is_active' => true,
-        ]);
+        ];
+        // Spec kênh bán hàng: kênh import tự tạo mặc định là đối tác (guard phòng khi migrate chưa chạy)
+        if (\Illuminate\Support\Facades\Schema::hasColumn('price_lists', 'category')) {
+            $data['category'] = 'partner';
+        }
+        return PriceList::create($data);
     }
 
     private function mapChannel(string $source): string
     {
         $t = mb_strtolower(trim($source));
         if (str_contains($t, 'grab') || str_contains($t, 'shopee') || str_contains($t, 'green')) {
-            return 'grab';
+            return 'grabfood';
         }
         if (str_contains($t, 'zalo')) {
-            return 'zalo';
+            return 'online';
         }
-        return 'pos';
+        return 'nha_hang';
     }
 
     private function mapOrderType(string $source): string

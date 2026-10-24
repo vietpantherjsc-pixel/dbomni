@@ -17,6 +17,7 @@ class SettingsController extends Controller
             // Gói 55 p11ac: bỏ price_includes_tax — key chết, không nơi nào đọc
             'default_tax_rate' => Setting::get('default_tax_rate', '8'),
             'theme_primary' => Setting::get('theme_primary', '#24305E'),
+            'brand_logo' => Setting::get('brand_logo', ''), // Logo sidebar Admin (2026-10-21)
             // Gói 8f: số thập phân
             'decimals_price' => Setting::get('decimals_price', '0'),
             'decimals_quantity' => Setting::get('decimals_quantity', '1'),
@@ -54,8 +55,13 @@ class SettingsController extends Controller
             'code_digits_transfer' => Setting::get('code_digits_transfer', '4'),
             'code_prefix_stocktake' => Setting::get('code_prefix_stocktake', 'KK'),
             'code_digits_stocktake' => Setting::get('code_digits_stocktake', '4'),
-            // Gói 55 p11af (P0-13): công tắc cộng dồn KM + trần % giảm giá — Gói 57 đổi mặc định BẬT cộng dồn (trần 50%)
-            'promo_allow_stack' => Setting::get('promo_allow_stack', '1'),
+            'code_prefix_receipt_income' => Setting::get('code_prefix_receipt_income', 'PT'),
+            'code_digits_receipt_income' => Setting::get('code_digits_receipt_income', '4'),
+            'code_prefix_receipt_expense' => Setting::get('code_prefix_receipt_expense', 'PC'),
+            'code_digits_receipt_expense' => Setting::get('code_digits_receipt_expense', '4'),
+            // Gói 55 p11af (P0-13): trần % giảm giá. Công tắc cộng dồn toàn cục
+            // promo_allow_stack ĐÃ BỎ (Đại Vương chốt 2026-10-21 ~22:45) — quyền
+            // cộng dồn nằm ở từng chương trình KM/coupon, không còn trả key này.
             'promo_max_discount_pct' => Setting::get('promo_max_discount_pct', '50'),
             // Gói 55 p11af (P0-14): ngưỡng cảnh báo Food cost % trên Dashboard
             'food_cost_alert_pct' => Setting::get('food_cost_alert_pct', '30'),
@@ -81,6 +87,8 @@ class SettingsController extends Controller
     {
         return response()->json([
             'primary' => Setting::get('theme_primary', '#24305E'),
+            // Logo sidebar Admin (2026-10-21): AdminLayout đọc cùng đường theme
+            'logo' => Setting::get('brand_logo', ''),
         ]);
     }
 
@@ -93,6 +101,9 @@ class SettingsController extends Controller
             'primary' => Setting::get('theme_primary', '#24305E'),
             'font_family' => Setting::get('font_family', 'Inter'),
             'promo_slide_interval' => (int) Setting::get('promo_slide_interval', 5),
+            // Demo "Quan tâm OA" v2 (Đại Vương chốt 2026-10-19): công tắc + headline card OA
+            'oa_card_enabled' => Setting::get('oa_card_enabled', '1'),
+            'oa_card_headline' => Setting::get('oa_card_headline', 'Quan tâm để nhận các chương trình ưu đãi đặc quyền !'),
         ]);
     }
 

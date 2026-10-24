@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Models\ProductCategoryPrice;
 use App\Models\Recipe;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,7 +23,7 @@ class ProductController extends Controller
         // Lấy danh sách mặt hàng kèm thông tin danh mục chứa nó
         // Gói 25: kèm hidden_branches (mảng {id, name}) để hiện badge "đang ẩn ở CN X"
         $hidden = \App\Models\BranchProductHidden::with('branch:id,name')->get()->groupBy('product_id');
-        $products = Product::with(['category', 'prices.priceList'])->get()->map(function ($p) use ($hidden) {
+        $products = Product::with(['category', 'prices.priceList', 'categoryPrices'])->get()->map(function ($p) use ($hidden) {
             $p->hidden_branches = isset($hidden[$p->id])
                 ? $hidden[$p->id]->map(fn($r) => ['id' => $r->branch->id, 'name' => $r->branch->name])->values()
                 : [];
@@ -54,6 +55,10 @@ class ProductController extends Controller
             'prices.*.price_list_id' => 'required|exists:price_lists,id',
             'prices.*.price' => 'required|numeric|min:0',
             'prices.*.is_active' => 'boolean',
+            // Spec kênh bán hàng (2026-10-19): giá chung theo phân loại kênh
+            'category_prices' => 'nullable|array',
+            'category_prices.*.category' => 'required|in:store,online,partner',
+            'category_prices.*.price' => 'required|numeric|min:0',
             'recipes' => 'nullable|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
             'recipes.*.quantity' => 'required|numeric|min:0',
@@ -71,13 +76,14 @@ class ProductController extends Controller
                 $validated['slug'] = Str::slug($validated['name']) . '-' . Str::random(4);
             }
             // Gói 8e: tách các khóa quan hệ ra khỏi attributes (tránh ghi vào cột products)
-            $attributes = array_diff_key($validated, array_flip(['option_group_ids', 'prices', 'recipes', 'option_recipes']));
+            $attributes = array_diff_key($validated, array_flip(['option_group_ids', 'prices', 'category_prices', 'recipes', 'option_recipes']));
             $product = Product::create($attributes);
 
             if (!empty($validated['option_group_ids'])) {
                 $product->optionGroups()->sync($validated['option_group_ids']);
             }
             $this->syncPrices($product, $validated['prices'] ?? []);
+            $this->syncCategoryPrices($product, $validated['category_prices'] ?? []);
             $this->syncRecipes($product, $validated['recipes'] ?? []);
             $this->syncOptionRecipes($product, $validated['option_recipes'] ?? []);
 
@@ -115,6 +121,10 @@ class ProductController extends Controller
             'prices.*.price_list_id' => 'required|exists:price_lists,id',
             'prices.*.price' => 'required|numeric|min:0',
             'prices.*.is_active' => 'boolean',
+            // Spec kênh bán hàng (2026-10-19): giá chung theo phân loại kênh
+            'category_prices' => 'nullable|array',
+            'category_prices.*.category' => 'required|in:store,online,partner',
+            'category_prices.*.price' => 'required|numeric|min:0',
             'recipes' => 'nullable|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
             'recipes.*.quantity' => 'required|numeric|min:0',
@@ -129,7 +139,7 @@ class ProductController extends Controller
 
         DB::transaction(function () use ($product, $validated) {
             // Gói 8e: tách các khóa quan hệ ra khỏi attributes (tránh ghi vào cột products)
-            $attributes = array_diff_key($validated, array_flip(['option_group_ids', 'prices', 'recipes', 'option_recipes']));
+            $attributes = array_diff_key($validated, array_flip(['option_group_ids', 'prices', 'category_prices', 'recipes', 'option_recipes']));
             $product->update($attributes);
 
             if (array_key_exists('option_group_ids', $validated)) {
@@ -137,6 +147,9 @@ class ProductController extends Controller
             }
             if (array_key_exists('prices', $validated)) {
                 $this->syncPrices($product, $validated['prices'] ?? []);
+            }
+            if (array_key_exists('category_prices', $validated)) {
+                $this->syncCategoryPrices($product, $validated['category_prices'] ?? []);
             }
             if (array_key_exists('recipes', $validated)) {
                 $this->syncRecipes($product, $validated['recipes'] ?? []);
@@ -200,13 +213,24 @@ class ProductController extends Controller
                         throw new \Exception('Thiếu params.channels {<mã kênh>: true/false}.');
                     }
                     $priceLists = PriceList::all()->keyBy('code');
+                    // Spec kênh bán hàng (2026-10-19): map mã cũ pos/zalo sang mã chuẩn (1 phiên bản, có log deprecated)
+                    $compat = ['pos' => 'nha_hang', 'zalo' => 'online'];
+                    $compatLogged = false;
                     foreach ($ids as $id) {
                         $product = Product::findOrFail($id);
                         $sellAttrs = [];
                         foreach ($channels as $code => $on) {
                             $on = (bool) $on;
-                            if ($code === 'pos') { $sellAttrs['sell_on_pos'] = $on; continue; }
-                            if ($code === 'zalo') { $sellAttrs['sell_on_zalo'] = $on; continue; }
+                            $lc = strtolower($code);
+                            if (isset($compat[$lc])) {
+                                if (!$compatLogged) {
+                                    $compatLogged = true;
+                                    \Illuminate\Support\Facades\Log::warning("[deprecated] bulkAction set_channels: mã kênh cũ '{$code}' được map sang '{$compat[$lc]}' — hãy dùng mã chuẩn.");
+                                }
+                                // Tương thích cũ: vẫn cập nhật cờ sell_on_* như trước
+                                $sellAttrs[$lc === 'pos' ? 'sell_on_pos' : 'sell_on_zalo'] = $on;
+                                $code = $compat[$lc];
+                            }
                             $pl = $priceLists->get($code);
                             if (!$pl) throw new \Exception("Kênh không tồn tại: {$code}.");
                             $row = ProductPrice::firstOrNew([
@@ -337,6 +361,7 @@ class ProductController extends Controller
             'optionGroups' => fn($q) => $q->orderBy('sort_order'),
             'optionGroups.options' => fn($q) => $q->orderBy('sort_order')->orderBy('id'),
             'prices.priceList',
+            'categoryPrices',
             'recipes.material',
         ]);
         $product->option_group_ids = $product->optionGroups->pluck('id')->values();
@@ -358,6 +383,25 @@ class ProductController extends Controller
                 ['price' => $p['price'], 'is_active' => $p['is_active'] ?? true]
             );
         }
+    }
+
+    // Spec kênh bán hàng (2026-10-19): đồng bộ giá theo phân loại (chỉ lưu mức > 0)
+    private function syncCategoryPrices(Product $product, array $rows): void
+    {
+        $keep = [];
+        foreach ($rows as $r) {
+            if (empty($r['category']) || (float) ($r['price'] ?? 0) <= 0) {
+                continue;
+            }
+            $row = ProductCategoryPrice::updateOrCreate(
+                ['product_id' => $product->id, 'category' => $r['category']],
+                ['price' => $r['price'], 'is_active' => $r['is_active'] ?? true]
+            );
+            $keep[] = $row->id;
+        }
+        ProductCategoryPrice::where('product_id', $product->id)
+            ->when($keep, fn($q) => $q->whereNotIn('id', $keep))
+            ->delete();
     }
 
     private function syncRecipes(Product $product, array $recipes): void

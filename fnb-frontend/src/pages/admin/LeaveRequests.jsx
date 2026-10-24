@@ -5,9 +5,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
-// NV-R1: thống nhất code loại nghỉ với backend (nghi/doica/khac)
-const TYPE_LABEL = { nghi: 'Nghỉ phép', doica: 'Đổi ca', khac: 'Nghỉ khác' };
+// Spec danh mục dùng chung: fallback khi API lỗi/chưa migrate (giữ 'khac' cho dữ liệu cũ)
+const TYPE_LABEL_FB = { nghi: 'Nghỉ phép', doica: 'Đổi ca', khac: 'Nghỉ khác', other: 'Khác' };
 const ST_TABS = [
     ['', 'Tất cả'],
     ['pending', 'Chờ duyệt'],
@@ -26,6 +27,8 @@ const ST_LABEL = { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected:
 // quản lý duyệt → tự động gỡ ca khỏi lịch xếp; quản lý tạo trực tiếp (sát giờ).
 export default function LeaveRequests() {
     const { can } = useAuth();
+    // Spec danh mục dùng chung: nhãn loại nghỉ đọc từ API, fallback cứng
+    const TYPE_LABEL = labelMap(useSharedCategories('leave_types', []), TYPE_LABEL_FB);
     const [mainTab, setMainTab] = useState(0);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
@@ -39,8 +42,9 @@ export default function LeaveRequests() {
                 <div className="flex gap-2 mb-4">
                     <button onClick={() => setMainTab(0)} className={`px-4 py-2 rounded-lg text-[13px] font-medium border ${mainTab === 0 ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300'}`}>Nghỉ chung</button>
                     <button onClick={() => setMainTab(1)} className={`px-4 py-2 rounded-lg text-[13px] font-medium border ${mainTab === 1 ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300'}`}>Nghỉ theo ca</button>
+                    <button onClick={() => setMainTab(2)} className={`px-4 py-2 rounded-lg text-[13px] font-medium border ${mainTab === 2 ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300'}`}>Đổi ca</button>
                 </div>
-                {mainTab === 0 ? <GeneralTab can={can} /> : <ShiftTab can={can} />}
+                {mainTab === 0 ? <GeneralTab can={can} /> : mainTab === 1 ? <ShiftTab can={can} /> : <SwapTab can={can} />}
             </div>
         </AdminLayout>
     );
@@ -60,9 +64,33 @@ function GeneralTab({ can }) {
 
     const editable = can('staff.edit');
     const decide = async (id, ok) => {
-        if (!window.confirm(ok ? 'Duyệt yêu cầu nghỉ này?' : 'Từ chối yêu cầu nghỉ này?')) return;
+        // Audit UX 2026-10-21 (hạng 9): DUYỆT thì làm ngay, bỏ confirm thừa; từ chối giữ confirm
+        if (!ok && !window.confirm('Từ chối yêu cầu nghỉ này?')) return;
         try { await axios.post(API + '/leave-requests/' + id + (ok ? '/approve' : '/reject')); fetchAll(); }
         catch (e) { alert(e.response?.data?.message || 'Xử lý thất bại'); }
+    };
+    // Audit UX 2026-10-21 (hạng 9): duyệt hàng loạt các yêu cầu đang chờ đã tick chọn
+    const [sel, setSel] = useState({});
+    const pendingIds = list.filter((r) => r.status === 'pending').map((r) => r.id);
+    const selIds = pendingIds.filter((id) => sel[id]);
+    const toggleSel = (id) => setSel((s) => ({ ...s, [id]: !s[id] }));
+    const toggleAll = () => {
+        if (selIds.length === pendingIds.length) setSel({});
+        else setSel(Object.fromEntries(pendingIds.map((id) => [id, true])));
+    };
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const approveSelected = async () => {
+        if (!selIds.length || bulkBusy) return;
+        if (!window.confirm(`Duyệt ${selIds.length} yêu cầu nghỉ đã chọn?`)) return;
+        setBulkBusy(true);
+        let fail = 0;
+        for (const id of selIds) {
+            try { await axios.post(API + '/leave-requests/' + id + '/approve'); } catch (e) { fail++; }
+        }
+        setBulkBusy(false);
+        setSel({});
+        fetchAll();
+        if (fail) alert(`Có ${fail} yêu cầu duyệt lỗi — kiểm tra lại danh sách.`);
     };
 
     return (
@@ -72,9 +100,23 @@ function GeneralTab({ can }) {
                     <button key={k} onClick={() => setStatus(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (status === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                 ))}
             </div>
+            {editable && pendingIds.length > 0 && (
+                <div className="flex items-center gap-3 mb-3">
+                    <button onClick={approveSelected} disabled={!selIds.length || bulkBusy}
+                        className="px-4 py-2 rounded bg-green-600 text-white text-[13px] font-semibold disabled:opacity-40">
+                        {bulkBusy ? 'Đang duyệt...' : `✓ Duyệt đã chọn (${selIds.length})`}
+                    </button>
+                    <span className="text-[12px] text-gray-500">Đang chờ: {pendingIds.length} yêu cầu — tick chọn ở đầu mỗi dòng.</span>
+                </div>
+            )}
             <div className="m-card overflow-x-auto">
                 <table className="w-full text-[13px] min-w-[760px]">
                     <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                        {editable && <th className="pl-4 pr-1 py-3 font-medium w-10">
+                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
+                                checked={pendingIds.length > 0 && selIds.length === pendingIds.length}
+                                onChange={toggleAll} />
+                        </th>}
                         <th className="px-4 py-3 font-medium">Nhân viên</th>
                         <th className="px-3 py-3 font-medium">Loại nghỉ</th>
                         <th className="px-3 py-3 font-medium">Từ – đến</th>
@@ -85,6 +127,12 @@ function GeneralTab({ can }) {
                     <tbody>
                         {list.map((r) => (
                             <tr key={r.id} className="border-b border-gray-50">
+                                {editable && <td className="pl-4 pr-1 py-3 w-10">
+                                    {r.status === 'pending' && (
+                                        <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                    )}
+                                </td>}
                                 <td className="px-4 py-3 font-medium">{r.employee?.full_name || '—'}</td>
                                 <td className="px-3 py-3">{TYPE_LABEL[r.type] || r.type}</td>
                                 <td className="px-3 py-3 whitespace-nowrap">{fmtDate(r.date_from)} → {fmtDate(r.date_to)}</td>
@@ -100,7 +148,7 @@ function GeneralTab({ can }) {
                                 </td>}
                             </tr>
                         ))}
-                        {list.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Không có yêu cầu nào.</td></tr>}
+                        {list.length === 0 && <tr><td colSpan={editable ? 7 : 6} className="px-4 py-8 text-center text-gray-400">Không có yêu cầu nào.</td></tr>}
                     </tbody>
                 </table>
             </div>
@@ -130,12 +178,36 @@ function ShiftTab({ can }) {
 
     const editable = can('staff.edit');
     const decide = async (id, ok) => {
-        if (!window.confirm(ok ? 'Duyệt & gỡ ca này khỏi lịch xếp?' : 'Từ chối yêu cầu này?')) return;
+        // Audit UX 2026-10-21 (hạng 9): duyệt thì làm ngay; từ chối giữ confirm
+        if (!ok && !window.confirm('Từ chối yêu cầu này?')) return;
         try {
             const r = await axios.post(API + '/shift-leaves/' + id + (ok ? '/approve' : '/reject'));
             alert(r.data?.message || 'Xong');
             fetchAll();
         } catch (e) { alert(e.response?.data?.message || 'Xử lý thất bại'); }
+    };
+    // Audit UX 2026-10-21 (hạng 9): duyệt hàng loạt (duyệt = gỡ ca khỏi lịch xếp)
+    const [sel, setSel] = useState({});
+    const pendingIds = list.filter((r) => r.status === 'pending').map((r) => r.id);
+    const selIds = pendingIds.filter((id) => sel[id]);
+    const toggleSel = (id) => setSel((s) => ({ ...s, [id]: !s[id] }));
+    const toggleAll = () => {
+        if (selIds.length === pendingIds.length) setSel({});
+        else setSel(Object.fromEntries(pendingIds.map((id) => [id, true])));
+    };
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const approveSelected = async () => {
+        if (!selIds.length || bulkBusy) return;
+        if (!window.confirm(`Duyệt ${selIds.length} yêu cầu đã chọn? Các ca tương ứng sẽ bị gỡ khỏi lịch xếp.`)) return;
+        setBulkBusy(true);
+        let fail = 0;
+        for (const id of selIds) {
+            try { await axios.post(API + '/shift-leaves/' + id + '/approve'); } catch (e) { fail++; }
+        }
+        setBulkBusy(false);
+        setSel({});
+        fetchAll();
+        if (fail) alert(`Có ${fail} yêu cầu duyệt lỗi — kiểm tra lại danh sách.`);
     };
     const managerCreate = async () => {
         if (!cf.employee_id || !cf.date || !cf.work_shift_id) return alert('Chọn nhân viên, ngày và ca.');
@@ -159,6 +231,16 @@ function ShiftTab({ can }) {
                 {editable && <button onClick={() => setShowCreate(!showCreate)} className="m-btn m-btn-primary">+ Tạo yêu cầu (quản lý)</button>}
             </div>
             <div className="text-[12px] text-gray-500 mb-3">NV tạo qua link <b>/xin-nghi</b> (chỉ trước giờ ca 48h). Quản lý duyệt → ca <b>tự động gỡ khỏi lịch xếp</b>.</div>
+
+            {editable && pendingIds.length > 0 && (
+                <div className="flex items-center gap-3 mb-3">
+                    <button onClick={approveSelected} disabled={!selIds.length || bulkBusy}
+                        className="px-4 py-2 rounded bg-green-600 text-white text-[13px] font-semibold disabled:opacity-40">
+                        {bulkBusy ? 'Đang duyệt...' : `✓ Duyệt & gỡ ca đã chọn (${selIds.length})`}
+                    </button>
+                    <span className="text-[12px] text-gray-500">Đang chờ: {pendingIds.length} yêu cầu — tick chọn ở đầu mỗi dòng.</span>
+                </div>
+            )}
 
             {showCreate && (
                 <div className="m-card p-4 mb-4">
@@ -189,6 +271,11 @@ function ShiftTab({ can }) {
             <div className="m-card overflow-x-auto">
                 <table className="w-full text-[13px] min-w-[820px]">
                     <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                        {editable && <th className="pl-4 pr-1 py-3 font-medium w-10">
+                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
+                                checked={pendingIds.length > 0 && selIds.length === pendingIds.length}
+                                onChange={toggleAll} />
+                        </th>}
                         <th className="px-4 py-3 font-medium">Nhân viên</th>
                         <th className="px-3 py-3 font-medium">Ca xin nghỉ</th>
                         <th className="px-3 py-3 font-medium">Lý do</th>
@@ -199,6 +286,12 @@ function ShiftTab({ can }) {
                     <tbody>
                         {list.map((r) => (
                             <tr key={r.id} className="border-b border-gray-50">
+                                {editable && <td className="pl-4 pr-1 py-3 w-10">
+                                    {r.status === 'pending' && (
+                                        <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                    )}
+                                </td>}
                                 <td className="px-4 py-3 font-medium">{r.employee?.full_name || '—'}</td>
                                 <td className="px-3 py-3 whitespace-nowrap">{fmtDate(r.date)} — {r.work_shift?.name} <span className="text-gray-400 text-[11px]">({(r.work_shift?.start_time || '').slice(0, 5)}–{(r.work_shift?.end_time || '').slice(0, 5)})</span></td>
                                 <td className="px-3 py-3 text-gray-600 max-w-[260px]">{r.reason || '—'}</td>
@@ -218,6 +311,102 @@ function ShiftTab({ can }) {
                     </tbody>
                 </table>
             </div>
+        </>
+    );
+}
+
+// Spec P4-B5: quản lý duyệt/từ chối yêu cầu đổi ca (đã qua B xác nhận → duyệt là hoán đổi)
+function SwapTab({ can }) {
+    const [list, setList] = useState([]);
+    const editable = can('staff.edit');
+    const fetchAll = useCallback(async () => {
+        try {
+            const r = await axios.get(API + '/shift-swaps');
+            setList(r.data?.data || []);
+        } catch (e) { alert(e.response?.data?.message || 'Tải danh sách thất bại'); }
+    }, []);
+    useEffect(() => { fetchAll(); }, [fetchAll]);
+    const decide = async (id, ok) => {
+        // Audit UX 2026-10-21 (hạng 9): duyệt thì làm ngay; từ chối giữ confirm
+        if (!ok && !window.confirm('Từ chối yêu cầu đổi ca này?')) return;
+        try {
+            const r = await axios.post(API + '/shift-swaps/' + id + (ok ? '/approve' : '/reject'));
+            alert(r.data?.message || 'Xong');
+            fetchAll();
+        } catch (e) { alert(e.response?.data?.message || 'Xử lý thất bại'); }
+    };
+    // Audit UX 2026-10-21 (hạng 9): duyệt hàng loạt yêu cầu đổi ca đã tick chọn
+    const [sel, setSel] = useState({});
+    const selIds = list.map((r) => r.id).filter((id) => sel[id]);
+    const toggleSel = (id) => setSel((s) => ({ ...s, [id]: !s[id] }));
+    const toggleAll = () => {
+        if (selIds.length === list.length) setSel({});
+        else setSel(Object.fromEntries(list.map((r) => [r.id, true])));
+    };
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const approveSelected = async () => {
+        if (!selIds.length || bulkBusy) return;
+        if (!window.confirm(`Duyệt & hoán đổi ca cho ${selIds.length} yêu cầu đã chọn?`)) return;
+        setBulkBusy(true);
+        let fail = 0;
+        for (const id of selIds) {
+            try { await axios.post(API + '/shift-swaps/' + id + '/approve'); } catch (e) { fail++; }
+        }
+        setBulkBusy(false);
+        setSel({});
+        fetchAll();
+        if (fail) alert(`Có ${fail} yêu cầu duyệt lỗi — kiểm tra lại danh sách.`);
+    };
+    const fmtT = (t) => t ? String(t).slice(0, 5) : '';
+    return (
+        <>
+            {editable && list.length > 0 && (
+                <div className="flex items-center gap-3 mb-3">
+                    <button onClick={approveSelected} disabled={!selIds.length || bulkBusy}
+                        className="px-4 py-2 rounded bg-green-600 text-white text-[13px] font-semibold disabled:opacity-40">
+                        {bulkBusy ? 'Đang duyệt...' : `✓ Duyệt & hoán đổi đã chọn (${selIds.length})`}
+                    </button>
+                    <span className="text-[12px] text-gray-500">Tick chọn ở đầu mỗi dòng để duyệt nhiều yêu cầu cùng lúc.</span>
+                </div>
+            )}
+            <div className="overflow-x-auto border border-gray-200 rounded-lg bg-white">
+                <table className="w-full text-[13px] min-w-[760px]">
+                    <thead><tr className="bg-gray-50 text-left text-gray-500">
+                        {editable && <th className="pl-4 pr-1 py-2 font-medium w-10">
+                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả"
+                                checked={list.length > 0 && selIds.length === list.length}
+                                onChange={toggleAll} />
+                        </th>}
+                        <th className="px-4 py-2 font-medium">NV A</th>
+                        <th className="px-4 py-2 font-medium">Ca của A</th>
+                        <th className="px-4 py-2 font-medium">NV B</th>
+                        <th className="px-4 py-2 font-medium">Ca của B</th>
+                        <th className="px-4 py-2 font-medium">B xác nhận</th>
+                        {editable && <th className="px-4 py-2 font-medium text-right">Duyệt</th>}
+                    </tr></thead>
+                    <tbody>
+                        {list.map((r) => (
+                            <tr key={r.id} className="border-t border-gray-100">
+                                {editable && <td className="pl-4 pr-1 py-3 w-10">
+                                    <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                        checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                </td>}
+                                <td className="px-4 py-3 font-medium">{r.requester?.full_name}</td>
+                                <td className="px-4 py-3">{r.requester_schedule?.work_shift?.name} ({fmtT(r.requester_schedule?.work_shift?.start_time)}–{fmtT(r.requester_schedule?.work_shift?.end_time)})</td>
+                                <td className="px-4 py-3 font-medium">{r.target?.full_name}</td>
+                                <td className="px-4 py-3">{r.target_schedule?.work_shift?.name} ({fmtT(r.target_schedule?.work_shift?.start_time)}–{fmtT(r.target_schedule?.work_shift?.end_time)})</td>
+                                <td className="px-4 py-3 text-green-600">✓ {r.target_confirmed_at?.slice(0, 16).replace('T', ' ')}</td>
+                                {editable && <td className="px-4 py-3 text-right whitespace-nowrap">
+                                    <button onClick={() => decide(r.id, true)} className="px-3 py-1.5 rounded bg-green-600 text-white text-[12px] font-medium mr-2">Duyệt & hoán đổi</button>
+                                    <button onClick={() => decide(r.id, false)} className="px-3 py-1.5 rounded bg-red-500 text-white text-[12px] font-medium">Từ chối</button>
+                                </td>}
+                            </tr>
+                        ))}
+                        {list.length === 0 && <tr><td colSpan={editable ? 7 : 6} className="px-4 py-8 text-center text-gray-400">Không có yêu cầu nào chờ duyệt.</td></tr>}
+                    </tbody>
+                </table>
+            </div>
+            <p className="text-[12px] text-gray-400 mt-2">Luồng: NV A tạo yêu cầu → NV B xác nhận (qua trang Xin nghỉ) → quản lý duyệt tại đây → hệ thống hoán đổi ca của 2 NV.</p>
         </>
     );
 }

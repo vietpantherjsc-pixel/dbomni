@@ -29,7 +29,7 @@ class AccountController extends Controller
         $v = $request->validate([
             'branch_id' => 'nullable|exists:branches,id',
             'name' => 'required|string|max:100',
-            'type' => 'required|in:cash,safe,bank,ewallet',
+            'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('account_types'))], // Spec danh mục dùng chung
             'opening_balance' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ]);
@@ -53,7 +53,7 @@ class AccountController extends Controller
         $v = $request->validate([
             'branch_id' => 'nullable|exists:branches,id',
             'name' => 'sometimes|string|max:100',
-            'type' => 'sometimes|in:cash,safe,bank,ewallet',
+            'type' => ['sometimes', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('account_types'))], // Spec danh mục dùng chung
             'opening_balance' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
         ]);

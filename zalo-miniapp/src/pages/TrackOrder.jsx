@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api, fmt, getProfile } from '../api';
+import TransferGuide from '../components/TransferGuide';
+import { storage } from '../utils/storage';
 import { fmtDateTime } from '../utils/format';
 import { TabBar } from './Home';
 
@@ -28,29 +30,51 @@ export default function TrackOrder() {
   const [code, setCode] = useState(params.get('code') || '');
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(false);
+  // Audit UX 2026-10-21 (hạng 11): mã đang theo dõi thực tế (từ URL, gõ tay hay đơn gần nhất)
+  const [trackedCode, setTrackedCode] = useState('');
+  // Audit 2026-10-23 BM-03: tra cứu đơn bắt buộc SĐT khớp — giữ SĐT đã dùng để poll 5s
+  const [trackPhone, setTrackPhone] = useState('');
 
   const lookup = async (c) => {
     const cd = (c || code).trim();
     if (!cd) return;
+    // Audit 2026-10-23 BM-03: SĐT từ hồ sơ; chưa có thì hỏi như luồng hủy đơn
+    let phone = getProfile()?.phone || trackPhone || '';
+    if (!phone) {
+      phone = (prompt('Nhập SĐT đã dùng để đặt đơn (để tra cứu):') || '').trim();
+    }
+    if (!phone) { alert('Cần SĐT đặt đơn để tra cứu.'); return; }
+    setTrackPhone(phone);
     setLoading(true);
     try {
-      const o = await api.trackOrder(cd);
+      const o = await api.trackOrder(cd, phone);
       setOrder(o);
+      setTrackedCode(cd);
+      try { storage.set('zm_last_order', cd); } catch { /* bỏ qua */ }
     } catch (e) { alert(e.message); setOrder(null); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { if (params.get('code')) lookup(params.get('code')); }, []);
-
-  // Gói 11: tự tải lại trạng thái mỗi 5s (không cần F5 tay)
   useEffect(() => {
-    const cd = (params.get('code') || '').trim();
-    if (!cd) return;
+    const pc = params.get('code');
+    if (pc) { lookup(pc); return; }
+    // Không có mã trên URL → hiện sẵn đơn gần nhất đã lưu (khỏi gõ lại / khỏi mất lối xem đơn)
+    try {
+      const last = storage.get('zm_last_order');
+      if (last) { setCode(last); lookup(last); }
+    } catch { /* bỏ qua */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Gói 11 + Audit UX hạng 11: tự tải lại mỗi 5s theo mã ĐÃ TẢI ĐƯỢC (kể cả gõ tay),
+  // không chỉ khi mã nằm trên URL như trước.
+  useEffect(() => {
+    if (!trackedCode) return;
     const t = setInterval(() => {
-      api.trackOrder(cd).then(setOrder).catch(() => {});
+      api.trackOrder(trackedCode, trackPhone).then(setOrder).catch(() => {});
     }, 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [trackedCode, trackPhone]);
 
   const [cancelling, setCancelling] = useState(false);
   const cancel = async () => {
@@ -96,6 +120,12 @@ export default function TrackOrder() {
               {order.scheduled_at && ` · ⏰ Lấy lúc ${fmtDateTime(order.scheduled_at)}`}
             </div>
           </div>
+
+          {/* Spec QR 2026-10-21: đơn BANK chưa xác nhận tiền → hiện lại khối CK
+              (backend chỉ trả transfer khi đang chờ tiền; NV xác nhận xong khối tự biến mất nhờ poll 5s) */}
+          {order.transfer && (
+            <TransferGuide code={order.code} transfer={order.transfer} notifiedAt={order.customer_notified_at} />
+          )}
 
           {order.status !== 'cancelled' && (
             <div className="zm-timeline">
@@ -180,7 +210,9 @@ export default function TrackOrder() {
             <div className="zm-total-row grand"><span>Tổng</span><span>{fmt(order.total_amount)}đ</span></div>
           </div>
 
-          {order.status === 'pending' && order.payment_status === 'pending' && (
+          {/* Audit 2026-10-21 🟠12: hiện nút hủy cho cả đơn chờ CK (BANK) + COD chờ xử lý,
+              khớp điều kiện backend cancel() — trước đây chỉ đơn 'pending/pending' mới thấy. */}
+          {['pending', 'confirmed'].includes(order.status) && ['pending', 'pending_payment', 'transfer_notified', 'confirmed'].includes(order.payment_status) && (
             <div style={{ padding: '8px 16px' }}>
               <button className="zm-btn-outline" onClick={cancel} disabled={cancelling}>{cancelling ? 'Đang hủy...' : 'Hủy đơn'}</button>
             </div>

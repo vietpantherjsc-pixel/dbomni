@@ -7,6 +7,7 @@ import { printBill, printLabels } from '../../utils/print';
 import ImportExcelModal from './ImportExcelModal'; // Gói 23: import đơn từ Excel
 import { fmtDateTime as fmtDateTimeShared } from '../../utils/format';
 import { API } from '../../utils/api';
+import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // =====================================================================
 // Gói 2 (2026-10-04): Trang Hóa đơn theo style Sapo.
@@ -17,13 +18,21 @@ import { API } from '../../utils/api';
 const TABS = [
     { key: 'all', label: 'Tất cả hóa đơn' },
     { key: 'paid', label: 'Đã thanh toán' },
-    { key: 'pending_payment', label: 'Chờ xác nhận' },
+    { key: 'pending_payment', label: 'Chờ thanh toán' },
     { key: 'cancelled', label: 'Đã hủy' },
 ];
 
-const PAYMENT_LABELS = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
+// Spec danh mục dùng chung: fallback khi API lỗi/chưa migrate.
+// (i) Bỏ nhãn 'card' lẻ — chỉ dùng debit_card/credit_card.
+const PAYMENT_LABELS_FB = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', debit_card: 'Thẻ ghi nợ', credit_card: 'Thẻ tín dụng', ewallet: 'Ví điện tử', other: 'Khác' };
 // Gói 3: nhãn loại đơn hàng
-const ORDER_TYPE_LABELS = { takeaway: 'Mang đi', delivery: 'Giao hàng', dine_in: 'Tại bàn' };
+const ORDER_TYPE_LABELS_FB = { takeaway: 'Mang đi', delivery: 'Giao hàng', dine_in: 'Tại bàn' };
+const CANCEL_REASONS_FB = [
+    { code: 'customer_cancel', name: 'Khách hủy' },
+    { code: 'out_of_stock', name: 'Hết nguyên liệu' },
+    { code: 'wrong_entry', name: 'Nhập nhầm' },
+    { code: 'other', name: 'Khác' },
+];
 
 const statusPill = (status) => {
     switch (status) {
@@ -42,6 +51,10 @@ const statusPill = (status) => {
 const fmtDateTime = (iso) => fmtDateTimeShared(iso) || '-';
 
 const Orders = () => {
+    // Spec danh mục dùng chung: nhãn đọc từ API, fallback cứng
+    const PAYMENT_LABELS = labelMap(useSharedCategories('payment_types', []), PAYMENT_LABELS_FB);
+    const ORDER_TYPE_LABELS = labelMap(useSharedCategories('order_types', []), ORDER_TYPE_LABELS_FB);
+    const cancelReasons = useSharedCategories('cancel_reasons', CANCEL_REASONS_FB);
     // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
     const branchCtx = useBranch();
     const branchId = (branchCtx && branchCtx.branchId) || '0';
@@ -82,6 +95,7 @@ const Orders = () => {
     const canBulk = can('orders.bulk');
     const [showBulkCancel, setShowBulkCancel] = useState(false);
     const [bulkReason, setBulkReason] = useState('');
+    const [bulkReasonOther, setBulkReasonOther] = useState(''); // Spec danh mục dùng chung: nhập tay khi chọn "Khác"
 
     const toggleCheck = (id) => {
         setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -91,11 +105,15 @@ const Orders = () => {
     const checkedOrders = orders.filter((o) => checkedIds.includes(o.id));
 
     // Gói 33: hủy hàng loạt (tái dùng logic cancel đơn lẻ: hoàn kho + hoàn/thu hồi điểm)
+    // Spec danh mục dùng chung: lý do chọn từ danh mục; chọn "Khác" thì nhập tay. Lưu nhãn để báo cáo nhóm được.
     const handleBulkCancel = async () => {
-        if (!bulkReason.trim()) return alert('Nhập lý do hủy.');
+        const reasonLabel = bulkReason === 'other'
+            ? bulkReasonOther.trim()
+            : (cancelReasons.find((r) => r.code === bulkReason)?.name || '');
+        if (!reasonLabel) return alert(bulkReason === 'other' ? 'Nhập lý do hủy cụ thể.' : 'Chọn lý do hủy.');
         try {
             const res = await axios.post(API + '/orders/bulk-action', {
-                ids: checkedIds, action: 'cancel', reason: bulkReason.trim(),
+                ids: checkedIds, action: 'cancel', reason: reasonLabel,
             });
             alert(res.data?.message || 'Đã hủy hàng loạt.');
             setShowBulkCancel(false); setBulkReason(''); setChecked({});
@@ -394,6 +412,13 @@ const Orders = () => {
                                                 {o.online_channel === 'zalo' && (
                                                     <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded">ZALO</span>
                                                 )}
+                                                {/* Spec QR 2026-10-21: cờ chờ tiền ở danh sách */}
+                                                {o.customer_notified_at && ['pending', 'pending_payment', 'transfer_notified'].includes(o.payment_status) && o.status !== 'cancelled' && (
+                                                    <span className="ml-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded">ĐÃ BÁO CK</span>
+                                                )}
+                                                {o.pay_overdue && (
+                                                    <span className="ml-1 px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded">CHỜ {o.waiting_minutes} PHÚT</span>
+                                                )}
                                             </td>
                                             <td className="px-3 py-3">{o.user?.name || '-'}</td>
                                             <td className="px-3 py-3">{o.branch?.name || '-'}</td>
@@ -560,20 +585,35 @@ const Orders = () => {
                                 )}
                             </div>
 
-                            {selected.online_channel === 'zalo' && selected.payment_status === 'pending' && selected.status !== 'cancelled' && (
-                                <button
-                                    onClick={async () => {
-                                        if (!confirm(`Xác nhận đã nhận tiền đơn ${selected.code}? Đơn sẽ trừ kho và vào KDS.`)) return;
-                                        try {
-                                            const res = await axios.post(`${API}/orders/${selected.id}/confirm-payment`);
-                                            if (res.data?.success) { alert(res.data.message); setSelected(null); fetchOrders(); }
-                                            else alert(res.data?.message || 'Lỗi');
-                                        } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
-                                    }}
-                                    className="w-full py-2.5 mt-4 bg-green-600 text-white rounded text-[13px] font-bold hover:bg-green-700"
-                                >
-                                    ✅ Xác nhận đã nhận tiền (vào KDS)
-                                </button>
+                            {/* Spec QR 2026-10-21: nới cho đơn BANK qua Checkout SDK (pending_payment/transfer_notified).
+                                Audit 2026-10-21 🔴3: thêm 'confirmed' — đơn COD đã được kênh xác nhận,
+                                NV xác nhận khi đã thu tiền (backend confirmPayment không chặn trạng thái này). */}
+                            {selected.online_channel === 'zalo' && ['pending', 'pending_payment', 'transfer_notified', 'confirmed'].includes(selected.payment_status) && selected.status !== 'cancelled' && (
+                                <>
+                                    {selected.customer_notified_at && (
+                                        <div className="mt-4 text-[12.5px] px-3 py-2 rounded-lg" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46' }}>
+                                            💳 Khách đã báo chuyển khoản lúc {fmtDateTime(selected.customer_notified_at)} — hãy đối chiếu sao kê trước khi xác nhận.
+                                        </div>
+                                    )}
+                                    {selected.pay_overdue && (
+                                        <div className="mt-2 text-[12.5px] px-3 py-2 rounded-lg font-semibold" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+                                            ⚠️ Đơn đã chờ thanh toán {selected.waiting_minutes} phút — quá ngưỡng cảnh báo, cần đối chiếu ngay.
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={async () => {
+                                            if (!confirm(`Xác nhận đã nhận tiền đơn ${selected.code}? Đơn sẽ trừ kho và vào KDS.`)) return;
+                                            try {
+                                                const res = await axios.post(`${API}/orders/${selected.id}/confirm-payment`);
+                                                if (res.data?.success) { alert(res.data.message); setSelected(null); fetchOrders(); }
+                                                else alert(res.data?.message || 'Lỗi');
+                                            } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+                                        }}
+                                        className="w-full py-2.5 mt-4 bg-green-600 text-white rounded text-[13px] font-bold hover:bg-green-700"
+                                    >
+                                        ✅ Xác nhận đã nhận tiền (vào KDS)
+                                    </button>
+                                </>
                             )}
                             <div className="flex gap-2 pt-4">
                                 {!['cancelled', 'completed'].includes(selected.status) && (
@@ -686,8 +726,15 @@ const Orders = () => {
                             Đơn đã hủy trước đó sẽ được bỏ qua.
                         </p>
                         <label className="text-[12px] font-semibold text-gray-600">Lý do hủy</label>
-                        <input value={bulkReason} onChange={(e) => setBulkReason(e.target.value)}
-                            placeholder="VD: Khách hủy, nhập nhầm..." className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]" />
+                        <select value={bulkReason} onChange={(e) => setBulkReason(e.target.value)}
+                            className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]">
+                            <option value="">— Chọn lý do —</option>
+                            {cancelReasons.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
+                        </select>
+                        {bulkReason === 'other' && (
+                            <input value={bulkReasonOther} onChange={(e) => setBulkReasonOther(e.target.value)}
+                                placeholder="Nhập lý do cụ thể..." className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]" />
+                        )}
                         <div className="flex justify-end gap-2 mt-4">
                             <button onClick={() => setShowBulkCancel(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-[13px]">Bỏ qua</button>
                             <button onClick={handleBulkCancel} className="px-4 py-2 rounded-lg text-white text-[13px] font-medium" style={{ background: 'var(--m-primary)' }}>Xác nhận hủy</button>

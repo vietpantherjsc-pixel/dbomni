@@ -102,6 +102,7 @@ export const REPORT_CSS = `
 .rpt .tbl .prod{font-weight:600;color:var(--navy)}
 .rpt .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-weight:800;font-size:12px;white-space:nowrap}
 .rpt .pill.g{background:var(--green-bg);color:var(--green)}
+.rpt .pill.o{background:#ffedd5;color:#ea580c}
 .rpt .pill.y{background:var(--yellow-bg);color:var(--yellow)}
 .rpt .pill.r{background:var(--red-bg);color:var(--red)}
 .rpt .explain{background:#FFF8E8;border:1px solid #F3DFAC;border-radius:var(--r);padding:12px 14px;font-size:13px;color:#6B5A2E;margin-bottom:12px}

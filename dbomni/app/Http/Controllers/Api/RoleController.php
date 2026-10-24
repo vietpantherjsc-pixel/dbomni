@@ -31,10 +31,66 @@ class RoleController extends Controller
         return response()->json(['success' => true, 'data' => self::MATRIX]);
     }
 
+    // Audit 2026-10-23 B-1: danh sách trắng khóa quyền hợp lệ = ma trận UI +
+    // các khóa nghiệp vụ đang dùng thật trong routes/controllers. Khóa '*'
+    // bị CẤM trong mọi role của nhân viên (chỉ User admin mới full quyền).
+    public static function allowedPermissions(): array
+    {
+        $allowed = [];
+        foreach (self::MATRIX as $m) {
+            foreach ($m['actions'] as $a) {
+                $allowed[] = $m['key'] . '.' . $a;
+            }
+            $allowed[] = $m['key'] . '.*';
+        }
+        foreach (['branches.manage', 'finance.manage', 'inventory.manage', 'inventory.adjust',
+                  'orders.bulk', 'orders.discount', 'products.bulk', 'products.manage',
+                  'customers.manage'] as $extra) {
+            $allowed[] = $extra;
+        }
+        return array_values(array_unique($allowed));
+    }
+
+    // Validate danh sách quyền xin lưu: mọi khóa phải thuộc danh sách trắng.
+    // Nếu người lưu là Employee: chỉ được cấp quyền mình đang có (chặn leo thang).
+    protected function guardPermissions(Request $request, ?array $perms): ?JsonResponse
+    {
+        if ($perms === null) return null;
+        $allowed = self::allowedPermissions();
+        foreach ($perms as $perm) {
+            if (!in_array($perm, $allowed, true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Khóa quyền không hợp lệ: ' . $perm,
+                    'errors' => ['permissions' => ['Khóa quyền không hợp lệ: ' . $perm]],
+                ], 422);
+            }
+        }
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $actorRole = $actor->role;
+            foreach ($perms as $perm) {
+                if (!$actorRole || !$actorRole->hasPermission($perm)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Bạn không thể cấp quyền vượt quá quyền của mình: ' . $perm,
+                    ], 403);
+                }
+            }
+        }
+        return null;
+    }
+
     public function index(): JsonResponse
     {
         $roles = Role::withCount('employees')->orderBy('name')->get();
         return response()->json(['success' => true, 'data' => $roles]);
+    }
+
+    public function show(int $id): JsonResponse
+    {
+        $role = Role::withCount('employees')->findOrFail($id);
+        return response()->json(['success' => true, 'data' => $role]);
     }
 
     public function store(Request $request): JsonResponse
@@ -44,6 +100,7 @@ class RoleController extends Controller
             'permissions' => 'nullable|array',
             'permissions.*' => 'string|max:50',
         ]);
+        if ($deny = $this->guardPermissions($request, $validated['permissions'] ?? null)) return $deny;
         $role = Role::create($validated);
         return response()->json(['success' => true, 'data' => $role], 201);
     }
@@ -56,6 +113,9 @@ class RoleController extends Controller
             'permissions' => 'nullable|array',
             'permissions.*' => 'string|max:50',
         ]);
+        if (array_key_exists('permissions', $validated)) {
+            if ($deny = $this->guardPermissions($request, $validated['permissions'])) return $deny;
+        }
         $role->update($validated);
         return response()->json(['success' => true, 'data' => $role]);
     }

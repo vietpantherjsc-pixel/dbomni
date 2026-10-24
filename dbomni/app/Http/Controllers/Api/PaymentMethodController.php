@@ -39,11 +39,18 @@ class PaymentMethodController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        // Spec danh mục dùng chung: chuẩn hóa mã kênh cũ (pos/zalo) về mã price_lists trước khi validate
+        if (is_array($request->input('channels'))) {
+            $request->merge(['channels' => array_map(
+                fn($c) => \App\Models\PriceList::normalizeChannelCode((string) $c),
+                $request->input('channels')
+            )]);
+        }
         $v = $request->validate([
             'name' => 'required|string|max:100',
-            'type' => 'required|in:transfer,cash,debit_card,credit_card,ewallet,other',
+            'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('payment_types'))],
             'channels' => 'nullable|array',
-            'channels.*' => 'in:pos,zalo',
+            'channels.*' => [\Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('payment_channels'))],
             'is_active' => 'boolean',
             'sort_order' => 'integer|min:0',
         ]);
@@ -54,11 +61,17 @@ class PaymentMethodController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $m = PaymentMethod::findOrFail($id);
+        if (is_array($request->input('channels'))) {
+            $request->merge(['channels' => array_map(
+                fn($c) => \App\Models\PriceList::normalizeChannelCode((string) $c),
+                $request->input('channels')
+            )]);
+        }
         $v = $request->validate([
             'name' => 'sometimes|string|max:100',
-            'type' => 'sometimes|in:transfer,cash,debit_card,credit_card,ewallet,other',
+            'type' => ['sometimes', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('payment_types'))],
             'channels' => 'nullable|array',
-            'channels.*' => 'in:pos,zalo',
+            'channels.*' => [\Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('payment_channels'))],
             'is_active' => 'boolean',
             'sort_order' => 'integer|min:0',
         ]);

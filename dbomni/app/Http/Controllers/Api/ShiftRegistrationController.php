@@ -16,6 +16,20 @@ use Illuminate\Support\Facades\DB;
 // Gói 35: Đăng ký ca — NV chỉ thấy/sửa của chính mình; admin xem theo tuần/chi nhánh.
 class ShiftRegistrationController extends Controller
 {
+    // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thao tác đăng ký của NV
+    // thuộc CN mình được phân công (User admin không bị giới hạn).
+    private function denyRegBranch(Request $request, ShiftRegistration $reg): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $empBranch = (int) (Employee::where('id', $reg->employee_id)->value('branch_id') ?? 0);
+            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+                return response()->json(['success' => false, 'message' => 'Đăng ký này thuộc chi nhánh bạn không được phân công.'], 403);
+            }
+        }
+        return null;
+    }
+
     // Gói 37: hạn chót đăng ký = thứ + giờ đã cài, tính trong TUẦN TRƯỚC tuần mục tiêu.
     // VD: tuần mục tiêu 12/10 (T2), cài Thứ 7 20:00 → hạn = 10/10 20:00.
     public static function deadlineForWeek(Carbon $monday): Carbon
@@ -133,6 +147,35 @@ class ShiftRegistrationController extends Controller
             }
         }
 
+        // Audit 2026-10-23 A1-6: ca đăng ký phải thuộc CN của NV (ca dùng chung
+        // branch_id null thì được) và đang hoạt động.
+        // Audit 2026-10-23 A1-5: chặn 2 ca CHỒNG GIỜ trong cùng 1 ngày (đăng ký
+        // nhiều ca/ngày vẫn được phép — chỉ chặn khi khoảng giờ giao nhau).
+        $shiftMap = WorkShift::whereIn('id', array_column($v['selections'], 'work_shift_id'))->get()->keyBy('id');
+        $byDate = [];
+        foreach ($v['selections'] as $s) {
+            if (!in_array($s['date'], $days, true)) continue;
+            $shift = $shiftMap->get($s['work_shift_id']);
+            if (!$shift || !$shift->is_active) {
+                return response()->json(['success' => false, 'message' => 'Ca đăng ký không còn hoạt động. Vui lòng tải lại danh sách ca.'], 422);
+            }
+            if ($shift->branch_id !== null && !in_array((int) $shift->branch_id, $emp->allBranchIds(), true)) {
+                return response()->json(['success' => false, 'message' => 'Ca "' . $shift->name . '" không thuộc chi nhánh của bạn.'], 422);
+            }
+            $start = Carbon::parse($s['date'] . ' ' . substr((string) $shift->start_time, 0, 5));
+            $end = Carbon::parse($s['date'] . ' ' . substr((string) $shift->end_time, 0, 5));
+            if ($end->lte($start)) $end->addDay(); // ca qua đêm
+            $byDate[$s['date']][] = [$start, $end, $shift->name];
+        }
+        foreach ($byDate as $date => $intervals) {
+            usort($intervals, fn ($a, $b) => $a[0] <=> $b[0]);
+            for ($i = 1; $i < count($intervals); $i++) {
+                if ($intervals[$i][0]->lt($intervals[$i - 1][1])) {
+                    return response()->json(['success' => false, 'message' => 'Ngày ' . Carbon::parse($date)->format('d/m') . ': ca "' . $intervals[$i][2] . '" chồng giờ với ca "' . $intervals[$i - 1][2] . '".'], 422);
+                }
+            }
+        }
+
         DB::transaction(function () use ($emp, $days, $v) {
             // CC-R2: chỉ xóa dòng chưa duyệt — giữ nguyên dòng đã approved
             // (quyết định duyệt của quản lý không bị hủy âm thầm)
@@ -192,6 +235,11 @@ class ShiftRegistrationController extends Controller
             ->whereIn('date', $days)
             // audit #16: loại bản nháp — admin chỉ xem submitted/approved/rejected
             ->whereIn('status', ['submitted', 'approved', 'rejected']);
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $scope = $actor->allBranchIds();
+            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $scope));
+        }
         if (!empty($v['branch_id'])) {
             $q->whereHas('employee', function ($qq) use ($v) {
                 $qq->where('branch_id', $v['branch_id']);
@@ -214,10 +262,13 @@ class ShiftRegistrationController extends Controller
     public function approve(Request $request, int $id): JsonResponse
     {
         $reg = ShiftRegistration::findOrFail($id);
+        if ($deny = $this->denyRegBranch($request, $reg)) return $deny;
         if ($reg->status !== 'submitted') {
             return response()->json(['success' => false, 'message' => 'Chỉ duyệt được đăng ký đang chờ.'], 422);
         }
         $reg->status = 'approved';
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người duyệt là Employee
+        $reg->handled_by_employee_id = \App\Support\ApprovalActor::ids($request->user())[1];
         $reg->save();
         return response()->json(['success' => true, 'message' => 'Đã duyệt đăng ký ca.']);
     }
@@ -227,6 +278,7 @@ class ShiftRegistrationController extends Controller
     public function approveAndAssign(Request $request, int $id): JsonResponse
     {
         $reg = ShiftRegistration::with('employee:id,branch_id')->findOrFail($id);
+        if ($deny = $this->denyRegBranch($request, $reg)) return $deny;
         if ($reg->status !== 'submitted') {
             return response()->json(['success' => false, 'message' => 'Chỉ duyệt được đăng ký đang chờ.'], 422);
         }
@@ -243,6 +295,8 @@ class ShiftRegistrationController extends Controller
             return $res; // lỗi (VD vượt sức chứa) → giữ nguyên chưa duyệt
         }
         $reg->status = 'approved';
+        // Audit 2026-10-23 A1-15: ghi vết người duyệt như approve()
+        $reg->handled_by_employee_id = \App\Support\ApprovalActor::ids($request->user())[1];
         $reg->save();
         return response()->json(['success' => true, 'message' => 'Đã duyệt và xếp ca.']);
     }
@@ -252,10 +306,13 @@ class ShiftRegistrationController extends Controller
     {
         $v = $request->validate(['note' => 'nullable|string|max:500']);
         $reg = ShiftRegistration::findOrFail($id);
+        if ($deny = $this->denyRegBranch($request, $reg)) return $deny;
         if ($reg->status !== 'submitted') {
             return response()->json(['success' => false, 'message' => 'Chỉ từ chối được đăng ký đang chờ.'], 422);
         }
         $reg->status = 'rejected';
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người từ chối là Employee
+        $reg->handled_by_employee_id = \App\Support\ApprovalActor::ids($request->user())[1];
         $reg->save();
         return response()->json(['success' => true, 'message' => 'Đã từ chối đăng ký ca.']);
     }

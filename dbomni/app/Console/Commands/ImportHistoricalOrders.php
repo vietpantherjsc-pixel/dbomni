@@ -89,7 +89,7 @@ class ImportHistoricalOrders extends Command
                     'user_id' => $userId,
                     'branch_id' => $branchId,
                     'order_type' => $this->mapType($o['service_type'], $o['source']),
-                    'online_channel' => in_array($o['source'], ['Grabfood', 'ShopeeFood', 'Green Food']) ? 'grab' : 'pos',
+                    'online_channel' => in_array($o['source'], ['Grabfood', 'ShopeeFood', 'Green Food']) ? 'grabfood' : 'nha_hang',
                     'order_number' => $o['code'],
                     'code' => $o['code'],
                     'customer_id' => $customerId,

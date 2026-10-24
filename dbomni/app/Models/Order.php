@@ -42,6 +42,9 @@ class Order extends Model
         'total_amount',
         'status',
         'payment_method',
+        // SPEC-01: thanh toán Zalo Mini App
+        'pay_channel', 'pay_trans_id', 'pay_notified_at', 'pay_needs_review',
+        'customer_notified_at', // Spec QR 2026-10-21: khách bấm "Tôi đã chuyển khoản"
         'payment_status',
         'stock_deducted',
         'note',
@@ -74,6 +77,8 @@ class Order extends Model
         'delivery_searching_since',
         // Gói 61b: tọa độ điểm giao + cờ hàng trả về
         'delivery_dropoff_lat', 'delivery_dropoff_lng', 'delivery_returned',
+        // Cầu nối Sapo (2026-10-21): định danh đơn import từ Sapo
+        'sapo_invoice_code', 'sapo_created_at', 'paid_at', 'source',
     ];
 
     protected $casts = [
@@ -90,6 +95,9 @@ class Order extends Model
         'claim_expires_at' => 'datetime', // Gói 13: fix crash QR claim (isPast() trên string)
         'scheduled_at' => 'datetime',
         'stock_deducted' => 'boolean',
+        'pay_notified_at' => 'datetime', // SPEC-01: mốc nhận notify từ Zalo
+        'customer_notified_at' => 'datetime', // Spec QR 2026-10-21
+        'pay_needs_review' => 'boolean', // SPEC-01
         // Gói 60: giao hàng
         'delivery_fee' => 'decimal:2',
         'delivery_fee_charged' => 'decimal:2',
@@ -102,6 +110,9 @@ class Order extends Model
         'delivery_dropoff_lat' => 'decimal:8',
         'delivery_dropoff_lng' => 'decimal:8',
         'delivery_returned' => 'boolean',
+        // Cầu nối Sapo (2026-10-21)
+        'sapo_created_at' => 'datetime',
+        'paid_at' => 'datetime',
     ];
 
     // Một đơn hàng có nhiều chi tiết mặt hàng
@@ -142,5 +153,25 @@ class Order extends Model
     public function table(): BelongsTo
     {
         return $this->belongsTo(Table::class, 'table_id');
+    }
+
+    /**
+     * Sinh mã đơn theo quy tắc cấu hình trong Thiết lập (CodeGenerator 'invoice'):
+     * PREFIXYYYYMMDDSOTHUTU — nối liền không dấu gạch (luật 2026-10-21 ~22:59).
+     * Đếm đơn trong ngày + retry khi trùng (an toàn song song ở mức cơ bản).
+     * Dùng chung cho POS (OrderController) + Mini App (OnlineOrderController) — thay 2 chỗ hardcode HD-/ZL-.
+     */
+    public static function nextCode(): string
+    {
+        $seq = static::whereDate('created_at', now()->toDateString())->count() + 1;
+        for ($i = 0; $i < 5; $i++) {
+            $code = \App\Helpers\CodeGenerator::generate('invoice', $seq + $i, true);
+            if (!static::where('code', $code)->exists()) {
+                return $code;
+            }
+        }
+        // Hết 5 lần vẫn trùng (xác suất cực thấp) — thêm hậu tố ngẫu nhiên để chắc chắn
+        // duy nhất; nối liền KHÔNG dấu gạch như mọi mã khác (luật 2026-10-21 ~22:59)
+        return \App\Helpers\CodeGenerator::generate('invoice', $seq, true) . strtoupper(\Illuminate\Support\Str::random(3));
     }
 }

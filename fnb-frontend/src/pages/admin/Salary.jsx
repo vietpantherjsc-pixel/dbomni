@@ -1,10 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate, fmtTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
+
+// Spec danh mục dùng chung: fallback khi API lỗi/chưa migrate
+const BONUS_TYPE_LABELS_FB = { performance: 'Hiệu suất', birthday: 'Sinh nhật', other: 'Khác' };
 
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
 const fmtH = (n) => (Math.round((n || 0) * 100) / 100).toString();
@@ -28,16 +33,21 @@ function exportPayslipPNG(payroll) {
     });
     const sum = (label, val, bold, bg) => R([C(label, 3, { bold }), C(val, 1, { bold, align: 'center' }), C('', 1)], bg);
     sum('A. TỔNG GIỜ CÔNG', fmtH(s.total_hours), true);
-    const dedRows = Array.isArray(s.deductions) ? s.deductions : (s.line1_deduction ? [{ name: s.line1_note || 'Các khoản trừ khác', amount: s.line1_deduction, note: '' }] : []);
+    // Bổ sung A4-12c: khoản trừ chi tiết nằm ở payroll.deductions (summary không có key này)
+    // — trước đây luôn rơi về 1 dòng gộp tổng, mất chi tiết từng khoản
+    const dedRows = (Array.isArray(payroll.deductions) && payroll.deductions.length) ? payroll.deductions : (s.line1_deduction ? [{ name: s.line1_note || 'Các khoản trừ khác', amount: s.line1_deduction, note: '' }] : []);
     dedRows.forEach((d) => sum('Trừ khác: ' + d.name + (d.note ? ' (' + d.note + ')' : ''), d.amount ? fmt(d.amount) : ''));
     if (s.violations > 0 || s.violations_override) sum('Số lỗi 3 Chuyên' + (s.violations_override ? ' (điều chỉnh tay)' : ' (tự động)') + (s.violation_note ? ' — ' + s.violation_note : ''), s.violations + ' lỗi');
     sum('2. Lương trách nhiệm (' + s.resp_formula + ')', fmt(s.line2_responsibility) + '/h');
     sum('3. Lương cơ bản/h', fmt(s.line3_base_rate));
-    sum('4. Mức lương/h (2 + 3)', fmt(s.line4_rate), true);
+    if (s.line_rank_rate) sum('3b. Lương cấp bậc/h', fmt(s.line_rank_rate));
+    sum('4. Mức lương/h (2 + 3 + cấp bậc)', fmt(s.line4_rate), true);
     sum('B. LƯƠNG', fmt(s.gross), true);
     if (s.meal_total) sum('Phụ cấp tiền ăn (' + fmt(s.meal_price) + 'đ × ' + (s.meal_count_total || 0) + ' suất)', fmt(s.meal_total));
     if (s.holiday_extra) sum('Lương lễ/tết', (s.holiday_days || []).map((h) => ((h.date ? fmtDate(h.date) + ' ' : '') + '(x' + h.multiplier + '): +' + fmt(h.extra) + 'đ')).join('; '));
     if (s.bonus_total) sum('Thưởng', fmt(s.bonus_total));
+    // Audit 2026-10-23 A4-8: phiếu PNG trước đây THIẾU dòng phụ cấp dù tổng thực nhận đã gồm
+    (payroll.allowances || []).forEach((a) => sum('Phụ cấp: ' + a.name, fmt(a.amount)));
     if (s.advance_total) sum('Ứng lương (trừ)', fmt(s.advance_total));
     sum('C. THỰC NHẬN', fmt(s.net), true, '#c6efce');
     if (ins) {
@@ -94,11 +104,89 @@ function exportPayslipPNG(payroll) {
     a.click();
 }
 
-// Gói 55: Tab Tổng lương — tổng hợp lương toàn NV dạng list, 2 chế độ xem (tất cả CN / từng CN)
+// Spec P4-B1/B2: thanh chốt + khóa kỳ lương
+function PayrollLockBar({ month }) {
+    const [st, setSt] = useState(null);
+    const [showHist, setShowHist] = useState(false);
+    const [unlockReason, setUnlockReason] = useState('');
+    const [showUnlock, setShowUnlock] = useState(false);
+
+    const load = () => axios.get(API + '/salary-lock/status', { params: { month } })
+        .then((r) => setSt(r.data?.data)).catch(() => {});
+    useEffect(() => { load(); }, [month]);
+
+    const doLock = async () => {
+        if (!confirm('Chốt lương tháng ' + month + '? Sau khi chốt sẽ khóa toàn bộ giờ công/mức lương/thưởng/trừ/BHXH của kỳ và tự sinh 1 phiếu chi.')) return;
+        try {
+            const r = await axios.post(API + '/salary-lock/lock', { month });
+            alert('Đã chốt lương tháng ' + month + ' — tổng thực nhận ' + Number(r.data.data.net_total).toLocaleString('vi-VN') + 'đ'
+                + (r.data.data.voucher_code ? ' (phiếu chi ' + r.data.data.voucher_code + ')' : ''));
+            load();
+        } catch (e) { alert(e.response?.data?.message || 'Chốt thất bại'); }
+    };
+    const doUnlock = async () => {
+        if (!unlockReason.trim()) return alert('Nhập lý do mở khóa');
+        try {
+            await axios.post(API + '/salary-lock/unlock', { month, reason: unlockReason.trim() });
+            setShowUnlock(false); setUnlockReason(''); load();
+        } catch (e) { alert(e.response?.data?.message || 'Mở khóa thất bại'); }
+    };
+
+    if (!st) return null;
+    return (
+        <div className="mb-4">
+            <div className={'flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ' + (st.locked ? 'bg-green-50 border-green-300' : 'bg-amber-50 border-amber-300')}>
+                {st.locked ? (<>
+                    <span className="text-[14px] font-bold text-green-700">🔒 Đã chốt lương tháng {month}</span>
+                    <span className="text-[13px] text-gray-600">({st.locked_at} — tổng thực nhận {Number(st.net_total).toLocaleString('vi-VN')}đ)</span>
+                    <button onClick={() => setShowUnlock(true)} className="px-3 py-1.5 rounded border border-red-300 text-red-600 text-[13px]">Mở khóa</button>
+                </>) : (<>
+                    <span className="text-[14px] text-amber-700">Kỳ lương tháng {month} chưa chốt.</span>
+                    <button onClick={doLock} className="px-4 py-1.5 rounded bg-[#24305E] text-white text-[13px] font-medium">Chốt lương tháng</button>
+                </>)}
+                <button onClick={() => setShowHist(!showHist)} className="text-[13px] text-gray-500 underline">Lịch sử chốt/mở khóa</button>
+            </div>
+            {showHist && st.logs?.length > 0 && (
+                <div className="mt-2 border rounded-lg bg-white text-[13px]">
+                    {st.logs.map((l) => (
+                        <div key={l.id} className="px-4 py-2 border-b border-gray-100 flex gap-3">
+                            <span className={l.action === 'lock' ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                                {l.action === 'lock' ? 'Chốt' : 'Mở khóa'}
+                            </span>
+                            <span className="text-gray-400">{l.created_at?.slice(0, 16).replace('T', ' ')}</span>
+                            <span className="text-gray-600">{l.reason}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {showUnlock && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowUnlock(false)}>
+                    <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="font-bold mb-3">Mở khóa kỳ lương tháng {month}</h3>
+                        <p className="text-[13px] text-gray-500 mb-2">Phiếu chi tự sinh sẽ chuyển sang trạng thái hủy. Lý do được ghi vào lịch sử.</p>
+                        <textarea value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} rows={3}
+                            placeholder="Lý do mở khóa *" className="w-full border border-gray-300 rounded px-3 py-2 text-[13px]" />
+                        <div className="flex gap-2 mt-3 justify-end">
+                            <button onClick={() => setShowUnlock(false)} className="px-4 py-2 rounded border text-[13px]">Hủy</button>
+                            <button onClick={doUnlock} className="px-4 py-2 rounded bg-red-600 text-white text-[13px]">Xác nhận mở khóa</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Spec tổng lương (Đại Vương chốt 2026-10-19): redesign tab Tổng lương — 16 cột
+// (15 cột spec + 10b Lương ngày lễ tách riêng). 1 dòng/(NV, chi nhánh).
 function TotalSalaryTab({ month }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [viewMode, setViewMode] = useState('all'); // 'all' | branch_id
+    // C3 (2026-10-21): chế độ xem theo CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
+    // với dropdown sidebar ('all' tại tab này = '0' — Tất cả — ở context).
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const viewMode = ctxBranchId === '0' ? 'all' : ctxBranchId;
+    const setViewMode = (v) => setCtxBranchId(v === 'all' ? '0' : String(v));
     const [branches, setBranches] = useState([]);
 
     const loadBranches = () => {
@@ -120,6 +208,13 @@ function TotalSalaryTab({ month }) {
     useEffect(() => { load(viewMode); }, [month, viewMode]);
 
     const fmtVnd = (n) => Number(n || 0).toLocaleString('vi-VN');
+    const dash = (v) => v === null || v === undefined
+        ? <span className="text-gray-300">—</span>
+        : fmtVnd(v) + 'đ';
+
+    // Tổng các cột tiền ở footer (null = dòng CN phụ → tính 0)
+    const sum = (k) => (data?.rows || []).reduce((s, r) => s + (Number(r[k]) || 0), 0);
+    const singleBranch = viewMode !== 'all';
 
     return (
         <div>
@@ -156,41 +251,76 @@ function TotalSalaryTab({ month }) {
                     </div>
 
                     <div className="overflow-x-auto border border-gray-300 rounded-lg bg-white">
-                        <table className="w-full text-[13px] min-w-[640px] border-collapse">
+                        <table className="text-[12px] min-w-[1500px] border-collapse whitespace-nowrap">
                             <thead>
                                 <tr className="bg-gray-50">
-                                    <th className="px-3 py-2 border text-left">Nhân viên</th>
-                                    <th className="px-3 py-2 border text-left">Chi nhánh</th>
-                                    <th className="px-3 py-2 border text-left">Chức vụ</th>
-                                    <th className="px-3 py-2 border text-right">Tổng giờ</th>
-                                    <th className="px-3 py-2 border text-right">Đơn giá/giờ</th>
-                                    <th className="px-3 py-2 border text-right">Tổng lương</th>
+                                    <th className="px-2 py-2 border text-left sticky left-0 bg-gray-50">Nhân viên</th>
+                                    <th className="px-2 py-2 border text-left">Chức vụ</th>
+                                    <th className="px-2 py-2 border text-left">Chi nhánh</th>
+                                    <th className="px-2 py-2 border text-right" title="Bình quân gia quyền theo giờ">Lương CB/giờ</th>
+                                    <th className="px-2 py-2 border text-right" title="Chính sách chung, trừ theo số lỗi">Lương TN/giờ</th>
+                                    <th className="px-2 py-2 border text-right" title="Bình quân gia quyền theo giờ">Lương cấp bậc/giờ</th>
+                                    <th className="px-2 py-2 border text-right font-bold">Tổng lương/giờ</th>
+                                    <th className="px-2 py-2 border text-right">Tổng giờ</th>
+                                    <th className="px-2 py-2 border text-right">Tiền ăn</th>
+                                    <th className="px-2 py-2 border text-right">Thưởng</th>
+                                    <th className="px-2 py-2 border text-right" title="Giờ lễ × (hệ số−1) × đơn giá">Lương lễ</th>
+                                    <th className="px-2 py-2 border text-right">Trừ khác</th>
+                                    <th className="px-2 py-2 border text-right">Trừ ứng</th>
+                                    <th className="px-2 py-2 border text-right">Trừ BHXH</th>
+                                    <th className="px-2 py-2 border text-right font-bold">Tổng lương</th>
+                                    {!singleBranch && <th className="px-2 py-2 border text-right font-bold">Tổng cộng</th>}
                                 </tr>
                             </thead>
                             <tbody>
                                 {data.rows.map((r) => (
-                                    <tr key={r.employee_id} className="hover:bg-gray-50">
-                                        <td className="px-3 py-2 border font-medium">{r.full_name}</td>
-                                        <td className="px-3 py-2 border">{r.branch_name}</td>
-                                        <td className="px-3 py-2 border text-gray-500">{r.role_name}</td>
-                                        <td className="px-3 py-2 border text-right">{r.total_hours}h</td>
-                                        <td className="px-3 py-2 border text-right">{fmtVnd(r.hourly_rate)}đ</td>
-                                        <td className="px-3 py-2 border text-right font-bold text-[#0d6efd]">{fmtVnd(r.gross)}đ</td>
+                                    <tr key={r.employee_id + '_' + r.branch_id} className="hover:bg-gray-50">
+                                        <td className="px-2 py-2 border font-medium sticky left-0 bg-white">{r.full_name}</td>
+                                        <td className="px-2 py-2 border text-gray-500">{r.role_name}</td>
+                                        <td className="px-2 py-2 border">
+                                            {r.branch_name}
+                                            {!r.is_main_branch && <span className="ml-1 text-[10px] text-gray-400">(phụ)</span>}
+                                        </td>
+                                        <td className="px-2 py-2 border text-right">{fmtVnd(r.base_rate)}đ</td>
+                                        <td className="px-2 py-2 border text-right">{fmtVnd(r.resp_rate)}đ</td>
+                                        <td className="px-2 py-2 border text-right">{fmtVnd(r.rank_rate)}đ</td>
+                                        <td className="px-2 py-2 border text-right font-medium">{fmtVnd(r.hourly_rate)}đ</td>
+                                        <td className="px-2 py-2 border text-right">{r.total_hours}h</td>
+                                        <td className="px-2 py-2 border text-right">{fmtVnd(r.meal_total)}đ</td>
+                                        <td className="px-2 py-2 border text-right">{dash(r.bonus_total)}</td>
+                                        <td className="px-2 py-2 border text-right">{dash(r.holiday_extra)}</td>
+                                        <td className="px-2 py-2 border text-right text-red-600">{dash(r.deduction_total)}</td>
+                                        <td className="px-2 py-2 border text-right text-red-600">{dash(r.advance_total)}</td>
+                                        <td className="px-2 py-2 border text-right text-red-600">{dash(r.bhxh_deduct)}</td>
+                                        <td className="px-2 py-2 border text-right font-bold text-[#0d6efd]">{fmtVnd(r.net)}đ</td>
+                                        {!singleBranch && <td className="px-2 py-2 border text-right font-bold">{fmtVnd(r.grand_total)}đ</td>}
                                     </tr>
                                 ))}
                             </tbody>
                             <tfoot>
                                 <tr className="bg-[#24305E] text-white font-bold">
-                                    <td className="px-3 py-2 border" colSpan={3}>TỔNG CỘNG ({data.employee_count} NV)</td>
-                                    <td className="px-3 py-2 border text-right">{data.grand_hours}h</td>
-                                    <td className="px-3 py-2 border"></td>
-                                    <td className="px-3 py-2 border text-right">{fmtVnd(data.grand_total)}đ</td>
+                                    <td className="px-2 py-2 border sticky left-0 bg-[#24305E]" colSpan={3}>TỔNG CỘNG ({data.employee_count} NV)</td>
+                                    <td className="px-2 py-2 border"></td>
+                                    <td className="px-2 py-2 border"></td>
+                                    <td className="px-2 py-2 border"></td>
+                                    <td className="px-2 py-2 border"></td>
+                                    <td className="px-2 py-2 border text-right">{data.grand_hours}h</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('meal_total'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('bonus_total'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('holiday_extra'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('deduction_total'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('advance_total'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(sum('bhxh_deduct'))}đ</td>
+                                    <td className="px-2 py-2 border text-right">{fmtVnd(data.grand_total)}đ</td>
+                                    {!singleBranch && <td className="px-2 py-2 border text-right">{fmtVnd(data.grand_total)}đ</td>}
                                 </tr>
                             </tfoot>
                         </table>
                     </div>
                     <div className="text-[12px] text-gray-400 mt-2">
-                        * Tổng lương = tổng giờ × đơn giá giờ (chưa gồm phụ cấp, thưởng, BHXH chi tiết — xem từng NV ở tab Bảng lương)
+                        Tổng lương = Tổng lương/giờ × Tổng giờ + Tiền ăn + Thưởng + Lương lễ − Trừ khác − Trừ ứng − Trừ BHXH.
+                        Thưởng/Lương lễ/các khoản trừ chỉ tính ở chi nhánh chính (dòng "phụ" hiện —).
+                        Số liệu chi tiết từng NV xem ở tab Bảng lương.
                     </div>
                 </>
             )}
@@ -201,6 +331,9 @@ function TotalSalaryTab({ month }) {
 // Gói 26: Bảng lương theo giờ (đúng mẫu Excel của Đại Vương).
 export default function Salary() {
     const { can } = useAuth();
+    // Spec danh mục dùng chung: loại thưởng đọc từ API, fallback cứng
+    const BONUS_TYPE_LABELS = labelMap(useSharedCategories('bonus_types', []), BONUS_TYPE_LABELS_FB);
+    const bonusTypeItems = useSharedCategories('bonus_types', Object.entries(BONUS_TYPE_LABELS_FB).map(([code, name]) => ({ code, name })));
     const [employees, setEmployees] = useState([]);
     const [empId, setEmpId] = useState('');
     const [month, setMonth] = useState(() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); });
@@ -218,7 +351,19 @@ export default function Salary() {
     const [violAuto, setViolAuto] = useState(0);
     const [violOverride, setViolOverride] = useState('');
     const [violNote, setViolNote] = useState('');
+    // Audit UX 2026-10-21 (hạng 8): snapshot sau khi nạp — đổi NV/tháng khi còn sửa
+    // dở (ngày công / trừ khác / lỗi chuyên cần / ghi chú) phải cảnh báo, không ghi đè lặng lẽ.
+    const payrollSnapRef = useRef(null);
+    const payrollDirty = () => {
+        if (!payrollSnapRef.current) return false;
+        return payrollSnapRef.current !== JSON.stringify({
+            days, deductions, violOverride, violNote, monthNote,
+        });
+    };
+    const guardSwitch = () => !payrollDirty()
+        || window.confirm('Bạn có thay đổi CHƯA LƯU trong bảng lương của nhân viên hiện tại (ngày công / khoản trừ / ghi chú). Đổi nhân viên hoặc tháng sẽ mất các thay đổi này. Tiếp tục?');
     const [wlForm, setWlForm] = useState({ hourly_rate: '', start_date: '', note: '' });
+    const [rankForm, setRankForm] = useState({ amount: '', start_date: '', note: '' }); // Gói 67: lương cấp bậc
     const [advForm, setAdvForm] = useState({ amount: '', date: '', note: '' });
     const [bonusForm, setBonusForm] = useState({ type: 'performance', amount: '', date: '', note: '' });
     // Đổ giờ công từ chấm công
@@ -239,6 +384,8 @@ export default function Salary() {
     const fetchPayroll = useCallback(async () => {
         if (!empId) return;
         setLoading(true);
+        // Audit UX 2026-10-21 (hạng 8): biến nguồn để chụp snapshot sau khi nạp (so dirty khi đổi NV/tháng)
+        let snapDed = [], snapDays = [], snapVO = '', snapVN = '', snapMN = '';
         try {
             const res = await axios.get(API + '/salary/' + empId, { params: { month } });
             if (res.data?.success) {
@@ -249,26 +396,35 @@ export default function Salary() {
                 if (dl) {
                     setDeductions(dl.map((d) => ({ ...d })));
                     setDeductionsOrig(dl.map((d) => ({ ...d })));
+                    snapDed = dl.map((d) => ({ ...d }));
                 } else {
                     try {
                         const dd = await axios.get(API + '/salary/' + empId + '/deductions', { params: { month } });
                         const list = dd.data?.data || [];
                         setDeductions(list.map((d) => ({ ...d })));
                         setDeductionsOrig(list.map((d) => ({ ...d })));
-                    } catch { setDeductions([]); setDeductionsOrig([]); }
+                        snapDed = list.map((d) => ({ ...d }));
+                    } catch { setDeductions([]); setDeductionsOrig([]); snapDed = []; }
                 }
                 setViolAuto(sum.violations_auto ?? sum.violations ?? 0);
-                setViolOverride(sum.violations_override ? String(sum.violations ?? '') : '');
-                setViolNote(sum.violation_note || '');
-                setMonthNote(res.data.data.record?.note || '');
+                snapVO = sum.violations_override ? String(sum.violations ?? '') : '';
+                setViolOverride(snapVO);
+                snapVN = sum.violation_note || '';
+                setViolNote(snapVN);
+                snapMN = res.data.data.record?.note || '';
+                setMonthNote(snapMN);
             }
             const h = await axios.get(API + '/salary/' + empId + '/history');
             if (h.data?.success) setHist(h.data.data);
             const d = await axios.get(API + '/salary/' + empId + '/days', { params: { month } });
-            if (d.data?.success) { setDays(d.data.data); if (d.data.meta) setMealCfg(d.data.meta); }
+            if (d.data?.success) { setDays(d.data.data); snapDays = d.data.data; if (d.data.meta) setMealCfg(d.data.meta); }
             const ins = await axios.get(API + '/employees/' + empId + '/insurance');
             if (ins.data?.success && ins.data.data) setInsForm({ base_amount: ins.data.data.base_amount, employer_pays_all: !!ins.data.data.employer_pays_all });
             else setInsForm({ base_amount: '', employer_pays_all: false });
+            payrollSnapRef.current = JSON.stringify({
+                days: snapDays, deductions: snapDed,
+                violOverride: snapVO, violNote: snapVN, monthNote: snapMN,
+            });
         } catch (e) { alert(e.response?.data?.message || 'Tải bảng lương thất bại'); }
         setLoading(false);
     }, [empId, month]);
@@ -313,26 +469,24 @@ export default function Salary() {
     };
     // Gói 40: Trừ khác — diff với danh sách gốc rồi POST/PUT/DELETE
     const updDed = (i, k, v) => { const nd = [...deductions]; nd[i] = { ...nd[i], [k]: v }; setDeductions(nd); };
-    const addDed = () => setDeductions([...deductions, { name: '', amount: '', note: '' }]);
+    const addDed = (kind) => setDeductions([...deductions, { name: kind === 'fine' ? 'Phạt tiền' : '', amount: '', note: '', kind: kind || 'other' }]);
     const delDedRow = (i) => setDeductions(deductions.filter((_, x) => x !== i));
+    // Audit UX 2026-10-21 (hạng 8): gửi TOÀN BỘ danh sách 1 request bulk (server xử lý
+    // trong 1 transaction) thay vì POST/PUT/DELETE tuần tự từng khoản như trước.
     const saveDeductions = async () => {
-        const origById = Object.fromEntries(deductionsOrig.filter((d) => d.id).map((d) => [d.id, d]));
         const curIds = new Set(deductions.filter((d) => d.id).map((d) => d.id));
+        const items = deductions
+            .filter((d) => String(d.name || '').trim() || Number(d.amount))
+            .map((d) => ({
+                id: d.id || null,
+                name: String(d.name).trim(),
+                amount: Number(d.amount) || 0,
+                note: d.note || null,
+                kind: d.kind || 'other',
+            }));
+        const deleted_ids = deductionsOrig.filter((o) => o.id && !curIds.has(o.id)).map((o) => o.id);
         try {
-            for (const o of deductionsOrig) {
-                if (o.id && !curIds.has(o.id)) await axios.delete(API + '/salary/deductions/' + o.id);
-            }
-            for (const d of deductions) {
-                if (!String(d.name || '').trim() && !Number(d.amount)) continue;
-                if (!d.id) {
-                    await axios.post(API + '/salary/' + empId + '/deductions', { month, name: String(d.name).trim(), amount: Number(d.amount) || 0, note: d.note || null });
-                } else {
-                    const o = origById[d.id];
-                    if (!o || o.name !== d.name || Number(o.amount) !== Number(d.amount) || (o.note || '') !== (d.note || '')) {
-                        await axios.put(API + '/salary/deductions/' + d.id, { name: String(d.name).trim(), amount: Number(d.amount) || 0, note: d.note || null });
-                    }
-                }
-            }
+            await axios.post(API + '/salary/' + empId + '/deductions/bulk', { month, items, deleted_ids });
             await axios.post(API + '/salary/' + empId + '/record', { month, hours: s?.total_hours || 0, work_days: 0, note: monthNote || null });
             alert('Đã lưu khoản trừ khác.'); fetchPayroll();
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
@@ -342,6 +496,14 @@ export default function Salary() {
         try {
             await axios.post(API + '/salary/' + empId + '/wage-levels', { hourly_rate: Number(wlForm.hourly_rate), start_date: wlForm.start_date, note: wlForm.note || null });
             setWlForm({ hourly_rate: '', start_date: '', note: '' }); fetchPayroll();
+        } catch (e) { alert(e.response?.data?.message || 'Thêm thất bại'); }
+    };
+    // Gói 67: thêm mức lương cấp bậc
+    const addRankWage = async () => {
+        if (!rankForm.amount || !rankForm.start_date) return alert('Nhập mức cấp bậc/h và ngày áp dụng');
+        try {
+            await axios.post(API + '/salary/' + empId + '/rank-wage-levels', { amount: Number(rankForm.amount), start_date: rankForm.start_date, note: rankForm.note || null });
+            setRankForm({ amount: '', start_date: '', note: '' }); fetchPayroll();
         } catch (e) { alert(e.response?.data?.message || 'Thêm thất bại'); }
     };
     const addAdv = async () => {
@@ -374,10 +536,10 @@ export default function Salary() {
             <div className="p-5">
                 <div className="flex flex-wrap items-center gap-3 mb-4">
                     <h1 className="text-xl font-bold">Bảng lương</h1>
-                    <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]">
+                    <select value={empId} onChange={(e) => { if (guardSwitch()) setEmpId(e.target.value); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]">
                         {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {e.branch?.name}</option>)}
                     </select>
-                    <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]" />
+                    <input type="month" value={month} onChange={(e) => { if (e.target.value && guardSwitch()) setMonth(e.target.value); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]" />
                     {payroll && editable && <button onClick={() => exportPayslipPNG(payroll)} className={btn + 'bg-[#24305E] text-white'}>⬇ Xuất ảnh</button>}
                     {editable && <button onClick={openImport} className={btn + 'bg-[#0d6efd] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
                 </div>
@@ -387,6 +549,9 @@ export default function Salary() {
                         <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
+
+                {/* Spec P4-B1/B2: chốt + khóa kỳ lương */}
+                {editable && <PayrollLockBar month={month} />}
 
                 {loading && <div className="text-gray-500 text-sm">Đang tính...</div>}
 
@@ -421,9 +586,11 @@ export default function Salary() {
                                 {(s.violations > 0 || s.violations_override) && sumRow('Số lỗi 3 Chuyên' + (s.violations_override ? ' (điều chỉnh tay)' : ' (tự động)') + (s.violation_note ? ' — ' + s.violation_note : ''), s.violations + ' lỗi')}
                                 {sumRow('2. Lương trách nhiệm (' + s.resp_formula + ')', fmt(s.line2_responsibility) + '/h')}
                                 {sumRow('3. Lương cơ bản/h', fmt(s.line3_base_rate))}
-                                {sumRow('4. Mức lương/h (2 + 3)', fmt(s.line4_rate), true)}
+                                {s.line_rank_rate > 0 && sumRow('3b. Lương cấp bậc/h', fmt(s.line_rank_rate))}
+                                {sumRow('4. Mức lương/h (2 + 3 + cấp bậc)', fmt(s.line4_rate), true)}
                                 {sumRow('B. LƯƠNG', fmt(s.gross), true)}
                                 {s.meal_total > 0 && sumRow('Phụ cấp tiền ăn (' + fmt(s.meal_price) + 'đ × ' + (s.meal_count_total || 0) + ' suất)', fmt(s.meal_total))}
+                                {(payroll.allowances || []).map((a) => sumRow('Phụ cấp: ' + a.name, fmt(a.amount)))}
                                 {s.holiday_extra > 0 && sumRow('Lương lễ/tết', (s.holiday_days || []).map((h) => (h.date ? fmtDate(h.date) + ' ' : '') + '(x' + h.multiplier + '): +' + fmt(h.extra) + 'đ').join('; '))}
                                 {s.bonus_total > 0 && sumRow('Thưởng', fmt(s.bonus_total))}
                                 {s.advance_total > 0 && sumRow('Ứng lương (trừ)', fmt(s.advance_total))}
@@ -515,19 +682,21 @@ export default function Salary() {
                             </div>}
                         </div>
 
+                        {/* Gói 67: Lương cấp bậc — cộng thêm trên lương giờ, pattern giống Mức lương theo giờ */}
                         <div className="m-card p-4">
-                            <h3 className="font-bold mb-2">BHXH nhân viên</h3>
-                            {editable ? (<>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <input type="number" placeholder="Mức lương đóng *" value={insForm.base_amount} onChange={(e) => setInsForm({ ...insForm, base_amount: e.target.value })} className={inp} />
-                                    <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={insForm.employer_pays_all} onChange={(e) => setInsForm({ ...insForm, employer_pays_all: e.target.checked })} /> DN đóng thay cả phần NLĐ</label>
+                            <h3 className="font-bold mb-2">Lương cấp bậc</h3>
+                            {hist?.rank_wage_levels?.map((w) => (
+                                <div key={w.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
+                                    <span>{fmt(w.amount)}đ/h <span className="text-gray-400">({fmtDate(w.start_date)} → {fmtDate(w.end_date) || 'nay'})</span></span>
+                                    {editable && <button onClick={() => del(API + '/salary/rank-wage-levels/' + w.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
-                                <div className="flex gap-2 mt-2">
-                                    <button onClick={saveInsurance} className={btn + 'bg-[#24305E] text-white'}>Lưu BHXH</button>
-                                    <button onClick={() => del(API + '/employees/' + empId + '/insurance', 'Xóa cấu hình BHXH của nhân viên này?')} className={btn + 'border border-red-300 text-red-500'}>Xóa</button>
-                                </div>
-                                <p className="text-[12px] text-gray-400 mt-2">Tỷ lệ cấu hình trong Thiết lập (mặc định NLĐ 10.5% = 8/1.5/1, DN 21.5%).</p>
-                            </>) : <p className="text-[13px] text-gray-500">Chưa cấu hình / không có quyền sửa.</p>}
+                            ))}
+                            {editable && <div className="grid grid-cols-2 gap-2 mt-3">
+                                <input type="number" placeholder="Lương cấp bậc/h *" value={rankForm.amount} onChange={(e) => setRankForm({ ...rankForm, amount: e.target.value })} className={inp} />
+                                <DateInput value={rankForm.start_date} onChange={(v) => setRankForm({ ...rankForm, start_date: v })} className={inp} />
+                                <input placeholder="Ghi chú" value={rankForm.note} onChange={(e) => setRankForm({ ...rankForm, note: e.target.value })} className={inp} />
+                                <button onClick={addRankWage} className={btn + 'bg-[#24305E] text-white col-span-2'}>+ Thêm mức cấp bậc (tự đóng mức cũ)</button>
+                            </div>}
                         </div>
 
                         <div className="m-card p-4">
@@ -550,19 +719,51 @@ export default function Salary() {
                             <h3 className="font-bold mb-2">Thưởng</h3>
                             {hist?.bonuses?.filter((b) => b.date?.startsWith(month)).map((b) => (
                                 <div key={b.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
-                                    <span>{b.type === 'performance' ? 'Hiệu suất' : b.type === 'birthday' ? 'Sinh nhật' : 'Khác'}: {fmt(b.amount)}đ <span className="text-gray-400">({fmtDate(b.date)}{b.note ? ' — ' + b.note : ''})</span></span>
+                                    <span>{BONUS_TYPE_LABELS[b.type] || b.type}: {fmt(b.amount)}đ <span className="text-gray-400">({fmtDate(b.date)}{b.note ? ' — ' + b.note : ''})</span></span>
                                     {editable && <button onClick={() => del(API + '/salary/bonuses/' + b.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
                             ))}
                             {editable && <div className="grid grid-cols-2 gap-2 mt-3">
                                 <select value={bonusForm.type} onChange={(e) => setBonusForm({ ...bonusForm, type: e.target.value })} className={inp}>
-                                    <option value="performance">Thưởng hiệu suất</option><option value="birthday">Thưởng sinh nhật</option><option value="other">Thưởng khác</option>
+                                    {bonusTypeItems.map((t) => <option key={t.code} value={t.code}>Thưởng {t.name.toLowerCase()}</option>)}
                                 </select>
                                 <input type="number" placeholder="Số tiền *" value={bonusForm.amount} onChange={(e) => setBonusForm({ ...bonusForm, amount: e.target.value })} className={inp} />
                                 <DateInput value={bonusForm.date} onChange={(v) => setBonusForm({ ...bonusForm, date: v })} className={inp} />
                                 <input placeholder="Ghi chú" value={bonusForm.note} onChange={(e) => setBonusForm({ ...bonusForm, note: e.target.value })} className={inp} />
                                 <button onClick={addBonus} className={btn + 'bg-[#24305E] text-white col-span-2'}>+ Thêm thưởng</button>
                             </div>}
+                        </div>
+
+                        <div className="m-card p-4">
+                            <h3 className="font-bold mb-2">Lỗi 3 Chuyên (tháng {month})</h3>
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-[13px]">
+                                Tự động từ chấm công: <b className="text-[#24305E]">{violAuto} lỗi</b>
+                                <div className="text-[12px] text-gray-400 mt-0.5">Cộng từ tab Lỗi 3 Chuyên — quản lý cửa hàng ghi nhận tại đó.</div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                                <input type="number" min="0" placeholder="Điều chỉnh tay (trống = tự động)" value={violOverride} onChange={(e) => setViolOverride(e.target.value)} className={inp} disabled={!editable} />
+                                <input placeholder="Lý do / ghi chú" value={violNote} onChange={(e) => setViolNote(e.target.value)} className={inp} disabled={!editable} />
+                            </div>
+                            {editable && <button onClick={saveViolations} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu</button>}
+                        </div>
+                        <div className="m-card p-4">
+                            <h3 className="font-bold mb-2">BHXH nhân viên</h3>
+                            {editable ? (<>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="number" placeholder="Mức lương đóng *" value={insForm.base_amount} onChange={(e) => setInsForm({ ...insForm, base_amount: e.target.value })} className={inp} />
+                                    <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={insForm.employer_pays_all} onChange={(e) => setInsForm({ ...insForm, employer_pays_all: e.target.checked })} /> DN đóng thay cả phần NLĐ</label>
+                                </div>
+                                <div className="flex gap-2 mt-2">
+                                    <button onClick={saveInsurance} className={btn + 'bg-[#24305E] text-white'}>Lưu BHXH</button>
+                                    <button onClick={() => del(API + '/employees/' + empId + '/insurance', 'Xóa cấu hình BHXH của nhân viên này?')} className={btn + 'border border-red-300 text-red-500'}>Xóa</button>
+                                </div>
+                                <p className="text-[12px] text-gray-400 mt-2">Tỷ lệ cấu hình trong Thiết lập (mặc định NLĐ 10.5% = 8/1.5/1, DN 21.5%).</p>
+                            </>) : <p className="text-[13px] text-gray-500">Chưa cấu hình / không có quyền sửa.</p>}
+                        </div>
+
+                        {/* Spec P4-B6: phụ cấp nhiều loại */}
+                        <div className="m-card p-4 md:col-span-2">
+                            <AllowanceManager empId={empId} month={month} editable={editable} btn={btn} inp={inp} />
                         </div>
 
                         <div className="m-card p-4 md:col-span-2">
@@ -578,7 +779,8 @@ export default function Salary() {
                                     <tbody>
                                         {deductions.map((d, i) => (
                                             <tr key={d.id || 'new-' + i} className="border-b border-gray-50">
-                                                <td className="py-1.5 pr-2"><input disabled={!editable} value={d.name || ''} onChange={(e) => updDed(i, 'name', e.target.value)} className={inp} placeholder="VD: Tạm ứng" /></td>
+                                                <td className="py-1.5 pr-2"><div className="flex items-center gap-1.5"><input disabled={!editable} value={d.name || ''} onChange={(e) => updDed(i, 'name', e.target.value)} className={inp + ' flex-1 min-w-0'} placeholder="VD: Tạm ứng" />
+                                                    {d.kind === 'fine' && <span className="text-[10px] text-white bg-red-600 font-bold px-1.5 py-0.5 rounded whitespace-nowrap">PHẠT</span>}</div></td>
                                                 <td className="py-1.5 pr-2"><input disabled={!editable} type="number" min="0" value={d.amount ?? ''} onChange={(e) => updDed(i, 'amount', e.target.value)} className={inp + ' !w-32'} placeholder="0" /></td>
                                                 <td className="py-1.5 pr-2"><input disabled={!editable} value={d.note || ''} onChange={(e) => updDed(i, 'note', e.target.value)} className={inp} placeholder="Lý do" /></td>
                                                 {editable && <td className="py-1.5"><button onClick={() => delDedRow(i)} className="text-red-500 text-[14px]" title="Xóa dòng">✕</button></td>}
@@ -594,22 +796,10 @@ export default function Salary() {
                             </div>
                             <input placeholder="Ghi chú tháng" value={monthNote} onChange={(e) => setMonthNote(e.target.value)} className={inp + ' mt-2'} disabled={!editable} />
                             {editable && <div className="flex gap-2 mt-3">
-                                <button onClick={addDed} className={btn + 'border border-gray-300'}>＋ Thêm khoản trừ</button>
+                                <button onClick={() => addDed('other')} className={btn + 'border border-gray-300'}>＋ Thêm khoản trừ</button>
+                                <button onClick={() => addDed('fine')} className={btn + 'border border-red-300 text-red-600'}>⚠ Phạt tiền</button>
                                 <button onClick={saveDeductions} className={btn + 'bg-[#24305E] text-white'}>Lưu</button>
                             </div>}
-                        </div>
-
-                        <div className="m-card p-4">
-                            <h3 className="font-bold mb-2">Lỗi 3 Chuyên (tháng {month})</h3>
-                            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-[13px]">
-                                Tự động từ chấm công: <b className="text-[#24305E]">{violAuto} lỗi</b>
-                                <div className="text-[12px] text-gray-400 mt-0.5">Cộng từ tab Lỗi 3 Chuyên — quản lý cửa hàng ghi nhận tại đó.</div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 mt-2">
-                                <input type="number" min="0" placeholder="Điều chỉnh tay (trống = tự động)" value={violOverride} onChange={(e) => setViolOverride(e.target.value)} className={inp} disabled={!editable} />
-                                <input placeholder="Lý do / ghi chú" value={violNote} onChange={(e) => setViolNote(e.target.value)} className={inp} disabled={!editable} />
-                            </div>
-                            {editable && <button onClick={saveViolations} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu</button>}
                         </div>
                     </div>
                 )}
@@ -672,5 +862,84 @@ export default function Salary() {
                 </div>
             )}
         </AdminLayout>
+    );
+}
+
+// Spec P4-B6: quản lý phụ cấp nhiều loại của NV
+function AllowanceManager({ empId, month, editable, btn, inp }) {
+    const [types, setTypes] = useState([]);
+    const [rows, setRows] = useState([]);
+    const [form, setForm] = useState({ allowance_type_id: '', amount: '', month: '', onlyMonth: false });
+
+    const load = () => {
+        axios.get(API + '/allowance-types').then((r) => setTypes(r.data?.data || [])).catch(() => {});
+        if (empId) axios.get(API + '/salary/' + empId + '/allowances').then((r) => setRows(r.data?.data || [])).catch(() => {});
+    };
+    useEffect(() => { load(); }, [empId]); // eslint-disable-line
+
+    const add = async () => {
+        if (!form.allowance_type_id || !form.amount) return alert('Chọn loại phụ cấp và nhập mức');
+        try {
+            await axios.post(API + '/salary/' + empId + '/allowances', {
+                allowance_type_id: Number(form.allowance_type_id),
+                amount: Number(form.amount),
+                month: form.onlyMonth ? (form.month || month) : null,
+            });
+            setForm({ allowance_type_id: '', amount: '', month: '', onlyMonth: false });
+            load();
+        } catch (e) { alert(e.response?.data?.message || 'Thêm thất bại'); }
+    };
+    const del = async (id) => {
+        if (!confirm('Xóa phụ cấp này?')) return;
+        try { await axios.delete(API + '/salary/allowances/' + id); load(); }
+        catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
+    };
+
+    return (
+        <div>
+            <h3 className="font-bold mb-2">Phụ cấp (ngoài tiền ăn)</h3>
+            <div className="overflow-x-auto">
+                <table className="w-full text-[13px] min-w-[480px]">
+                    <thead><tr className="text-left text-gray-500 border-b border-gray-100">
+                        <th className="py-2 font-medium">Loại</th>
+                        <th className="py-2 font-medium">Mức/tháng</th>
+                        <th className="py-2 font-medium">Áp dụng</th>
+                        {editable && <th className="py-2 w-10"></th>}
+                    </tr></thead>
+                    <tbody>
+                        {rows.map((a) => (
+                            <tr key={a.id} className="border-b border-gray-50">
+                                <td className="py-1.5">{a.type?.name}</td>
+                                <td className="py-1.5">{Number(a.amount).toLocaleString('vi-VN')}đ</td>
+                                <td className="py-1.5 text-gray-500">{a.month ? 'Tháng ' + a.month : 'Mọi tháng'}</td>
+                                {editable && <td className="py-1.5"><button onClick={() => del(a.id)} className="text-red-500 text-[14px]" title="Xóa">✕</button></td>}
+                            </tr>
+                        ))}
+                        {rows.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-gray-400">Chưa có phụ cấp.</td></tr>}
+                    </tbody>
+                </table>
+            </div>
+            {editable && (
+                <div className="flex flex-wrap gap-2 mt-3 items-end">
+                    <div>
+                        <div className="text-[12px] text-gray-500">Loại phụ cấp</div>
+                        <select value={form.allowance_type_id} onChange={(e) => setForm({ ...form, allowance_type_id: e.target.value })} className={inp + ' !w-40'}>
+                            <option value="">— Chọn —</option>
+                            {types.filter((t) => t.is_active).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <div className="text-[12px] text-gray-500">Mức/tháng (đ)</div>
+                        <input type="number" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className={inp + ' !w-32'} placeholder="0" />
+                    </div>
+                    <label className="flex items-center gap-1 text-[13px] pb-2">
+                        <input type="checkbox" checked={form.onlyMonth} onChange={(e) => setForm({ ...form, onlyMonth: e.target.checked })} /> Chỉ tháng
+                    </label>
+                    {form.onlyMonth && <input type="month" value={form.month || month} onChange={(e) => setForm({ ...form, month: e.target.value })} className={inp + ' !w-36'} />}
+                    <button onClick={add} className={btn + 'bg-[#24305E] text-white'}>＋ Thêm</button>
+                </div>
+            )}
+            <p className="text-[12px] text-gray-400 mt-2">Phụ cấp cộng vào lương, hiện dòng riêng trên phiếu lương. Quản lý loại phụ cấp trong Thiết lập.</p>
+        </div>
     );
 }

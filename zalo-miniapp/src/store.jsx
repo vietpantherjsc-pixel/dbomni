@@ -1,19 +1,20 @@
 import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
 import { getBranch } from './api';
+import { storage } from './utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk)
 
 const ShopContext = createContext(null);
 export const useShop = () => useContext(ShopContext);
 
 // Giỏ hàng: mỗi dòng {key, product, option, toppings:[], qty, note}
-// Persist vào localStorage để không mất khi reload/trở lại app.
+// Persist qua module storage (zmp-sdk trong Zalo) để không mất khi reload/trở lại app.
 export function ShopProvider({ children }) {
   const [branch, setBranchState] = useState(() => getBranch());
   const [cart, setCart] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('zm_cart') || '[]'); } catch { return []; }
+    return storage.getJSON('zm_cart', []);
   });
 
   useEffect(() => {
-    try { localStorage.setItem('zm_cart', JSON.stringify(cart)); } catch {}
+    storage.set('zm_cart', cart);
   }, [cart]);
 
   const setBranch = (b) => {
@@ -25,7 +26,7 @@ export function ShopProvider({ children }) {
       setCart([]);
     }
     setBranchState(b);
-    try { localStorage.setItem('zm_branch', JSON.stringify(b)); } catch {}
+    storage.set('zm_branch', b);
   };
 
   const addToCart = (line) => {

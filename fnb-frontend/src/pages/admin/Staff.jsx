@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
@@ -16,7 +17,11 @@ export default function Staff() {
     const [roles, setRoles] = useState([]);
     const [branches, setBranches] = useState([]);
     const [search, setSearch] = useState('');
-    const [branchId, setBranchId] = useState('');
+    // C3 (2026-10-21): bộ lọc CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều với
+    // dropdown sidebar (đổi trong trang = đổi trạng thái chung). '' tại trang này = '0' (Tất cả) ở context.
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const branchId = ctxBranchId === '0' ? '' : ctxBranchId;
+    const setBranchId = (v) => setCtxBranchId(v === '' || v === null || v === undefined ? '0' : String(v));
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);

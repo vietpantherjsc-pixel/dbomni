@@ -43,7 +43,7 @@ class OnlineOrderController extends Controller
         $menu = Category::where('is_active', true)
             ->orderBy('sort_order', 'asc')
             ->with(['products' => function ($query) {
-                $query->where('is_active', true)->where('is_service_fee', false)->with(['options', 'prices.priceList']);
+                $query->where('is_active', true)->where('is_service_fee', false)->with(['options', 'prices.priceList', 'categoryPrices']);
             }])
             ->get();
 
@@ -108,7 +108,7 @@ class OnlineOrderController extends Controller
             };
             foreach ($ids as $pid) {
                 $product = Product::where('id', $pid)->where('is_active', true)
-                    ->where('is_service_fee', false)->with('prices.priceList')->first();
+                    ->where('is_service_fee', false)->with(['prices.priceList', 'categoryPrices'])->first();
                 if (!$product) continue;
                 $base = $product->online_price;
                 $sale = $promo->type === 'percent'
@@ -201,7 +201,7 @@ class OnlineOrderController extends Controller
                 'label' => $data[0]['display_name'] ?? '',
             ]]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
     }
 
@@ -214,7 +214,7 @@ class OnlineOrderController extends Controller
             if ($raw === false) throw new \RuntimeException('Không kết nối được');
             return response()->json(['success' => true, 'data' => json_decode($raw, true) ?: []]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => []], 502);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e), 'data' => []], 502);
         }
     }
 
@@ -230,7 +230,7 @@ class OnlineOrderController extends Controller
             $data = json_decode($raw, true);
             return response()->json(['success' => true, 'data' => $data['wards'] ?? []]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => []], 502);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e), 'data' => []], 502);
         }
     }
 
@@ -322,7 +322,7 @@ class OnlineOrderController extends Controller
                 'state' => $addr['state'] ?? '',
             ]]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
     }
 
@@ -384,24 +384,109 @@ class OnlineOrderController extends Controller
             'items' => 'nullable|array',
             'customer_id' => 'nullable|exists:customers,id',
             'shipping_fee' => 'nullable|numeric|min:0', // Gói 10c: để tính KM phí ship
+            // Spec KM chống mã (2026-10-21) Phần B: định danh đi kèm để tin customer_id
+            'phone' => 'nullable|string|max:20',
+            'member_code' => 'nullable|string|max:20',
+            'zalo_id' => 'nullable|string|max:100',
         ]);
+        // customer_id trần KHÔNG được tin: chỉ dùng khi định danh khớp đúng khách đó,
+        // ngược lại tính KM như khách vãng lai (KM công khai vẫn hiện, KM theo hạng thì không).
+        $effectiveCustomerId = null;
+        if (!empty($validated['customer_id'])) {
+            $verified = \App\Services\CustomerIdentityService::verifiedCustomer($validated);
+            if ($verified && (int) $verified->id === (int) $validated['customer_id']) {
+                $effectiveCustomerId = $verified->id;
+            }
+        }
         return response()->json(['success' => true, 'data' => $service->eligiblePromotions([
             'subtotal' => (float) $validated['subtotal'],
             'items' => $validated['items'] ?? [],
-            'customer_id' => $validated['customer_id'] ?? null,
+            'customer_id' => $effectiveCustomerId,
             'channel' => 'online',
             'shipping_fee' => (float) ($validated['shipping_fee'] ?? 0),
         ])]);
+    }
+
+    /**
+     * Audit toàn diện 2026-10-21 🟠8: validate voucher gõ tay để Mini App HIỂN THỊ
+     * đúng số giảm + đưa vào tổng trước khi khách xác nhận (trước đây voucher chỉ áp
+     * ở server lúc tạo đơn → tổng khách thấy cao hơn số bị thu thật).
+     * Chỉ TÍNH THỬ bằng đúng công thức của store() — không trừ lượt, không khóa bản ghi;
+     * store() vẫn kiểm lại toàn bộ khi chốt đơn. per_customer_limit chỉ kiểm khi định
+     * danh khách đã xác thực (phone + member_code khớp).
+     */
+    public function validateVoucher(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'code' => 'required|string|max:50',
+            'subtotal' => 'required|numeric|min:0',
+            'phone' => 'nullable|string|max:20',
+            'member_code' => 'nullable|string|max:20',
+            'zalo_id' => 'nullable|string|max:100',
+        ]);
+        $fail = fn (string $message) => response()->json(['success' => false, 'message' => $message], 422);
+
+        $code = strtoupper(trim($validated['code']));
+        $voucher = Voucher::where('code', $code)->where('is_active', true)->first();
+        if (!$voucher) {
+            return $fail('Mã voucher không hợp lệ.');
+        }
+        if ($voucher->usage_limit && $voucher->used_count >= $voucher->usage_limit) {
+            return $fail('Voucher đã hết lượt sử dụng.');
+        }
+        if ($voucher->expires_at && now()->isAfter($voucher->expires_at)) {
+            return $fail('Voucher đã hết hạn.');
+        }
+        if ($voucher->starts_at && now()->isBefore($voucher->starts_at)) {
+            return $fail('Voucher chưa đến thời gian áp dụng.');
+        }
+        $subtotal = (float) $validated['subtotal'];
+        if ($subtotal < (float) $voucher->min_order_amount) {
+            return $fail('Chưa đạt giá trị tối thiểu của voucher.');
+        }
+        if ($voucher->per_customer_limit) {
+            $customer = \App\Services\CustomerIdentityService::verifiedCustomer($validated);
+            if ($customer) {
+                $usedTimes = VoucherUsage::where('voucher_id', $voucher->id)
+                    ->where('customer_id', $customer->id)->count();
+                if ($usedTimes >= $voucher->per_customer_limit) {
+                    return $fail('Bạn đã dùng hết lượt của mã khuyến mãi này.');
+                }
+            }
+        }
+        $discount = $voucher->type === 'fixed'
+            ? (float) $voucher->value
+            : ($subtotal * (float) $voucher->value) / 100;
+        if ($voucher->max_discount_amount) {
+            $discount = min($discount, (float) $voucher->max_discount_amount);
+        }
+        $discount = min($discount, $subtotal);
+
+        return response()->json(['success' => true, 'data' => [
+            'code' => $voucher->code,
+            'name' => $voucher->name,
+            'discount' => (int) round($discount),
+            // Cờ cộng dồn với KM để frontend ước lượng phía thắng khi hiển thị tổng
+            // (server quyết định cuối). Cờ coupon+coupon đã bỏ hẳn (tối đa 1 coupon/đơn).
+            'stack_with_promotion' => (bool) $voucher->stack_with_promotion,
+        ]]);
     }
 
     // Thông tin tích điểm của KH theo SĐT
     public function customer(Request $request): JsonResponse
     {
         // Gói 11: đăng nhập bằng SĐT + Mã TV (bỏ tra cứu tự do bằng SĐT để bảo mật)
+        // Audit 2026-10-21 🟠10: member_code cho phép RỖNG — khách chưa có mã TV nhận
+        // data=null (khách vãng lai) thay vì lỗi 422 (lỗi này từng làm danh sách KM —
+        // kể cả KM công khai — trống lặng lẽ ở checkout). Vẫn KHÔNG tra khách chỉ bằng
+        // SĐT (giữ nguyên tắc bảo mật Gói 11).
         $validated = $request->validate([
             'phone' => 'required|string|max:20',
-            'member_code' => 'required|string|max:20',
+            'member_code' => 'nullable|string|max:20',
         ]);
+        if (empty($validated['member_code'])) {
+            return response()->json(['success' => true, 'data' => null]);
+        }
         $customer = Customer::with('tier')
             ->where('phone', $validated['phone'])
             ->where('member_code', $validated['member_code'])
@@ -429,9 +514,9 @@ class OnlineOrderController extends Controller
             'points' => $customer->points,
             'total_spent' => (float) $customer->total_spent,
             'tier' => $customer->tier?->name,
-            // Gói 13: tỉ giá đổi điểm từ settings (frontend không hardcode)
-            'redeem_points' => max(1, (int) Setting::get('points_redeem_points', 10)),
-            'redeem_amount' => (float) Setting::get('points_redeem_amount', 1000),
+            // Loyalty 2.0: bỏ redeem_points/redeem_amount (tỷ giá trừ điểm trực
+            // tiếp cũ) — thay bằng payload loyalty đầy đủ (spec mục 8).
+            'loyalty' => app(LoyaltyService::class)->loyaltyPayload($customer),
             'orders' => $orders,
         ]]);
     }
@@ -444,12 +529,20 @@ class OnlineOrderController extends Controller
         PromotionService $promotionService,
         LoyaltyService $loyaltyService
     ): JsonResponse {
+        // Chuẩn hóa IN HOA khi tra cứu voucher (backlog Spec 5, 2026-10-21): chỉ chuẩn hóa
+        // phía đầu vào tra cứu (gõ thường/hoa đều trúng) — mã lưu trong DB giữ nguyên.
+        // (Endpoint validateVoucher đã chuẩn hóa sẵn từ trước, không đổi.)
+        if ($request->filled('voucher_code')) {
+            $request->merge(['voucher_code' => strtoupper(trim((string) $request->input('voucher_code')))]);
+        }
         $validated = $request->validate([
             'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency key
             'branch_id' => 'required|exists:branches,id',
-            'order_type' => 'required|in:takeaway,delivery',
+            'order_type' => ['required', \Illuminate\Validation\Rule::in(array_values(array_intersect(\App\Models\SharedCategory::activeCodes('order_types'), ['takeaway', 'delivery'])))], // Spec danh mục dùng chung: validate động, đơn online không có tại bàn
             'customer_name' => 'required|string|max:100',
             'customer_phone' => 'required|string|max:20',
+            // Spec KM chống mã (2026-10-21) Phần B: mã TV để xác thực quyền lợi theo SĐT
+            'member_code' => 'nullable|string|max:20',
             'zalo_user_id' => 'nullable|string|max:100',
             'delivery_address' => 'required_if:order_type,delivery|nullable|string|max:255',
             'distance_km' => 'nullable|numeric|min:0|max:100', // Gói 55 p11ac: chỉ để tham khảo, server tự tính lại
@@ -457,15 +550,13 @@ class OnlineOrderController extends Controller
             'payment_method' => 'required|in:transfer,pay_at_store',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
             'promotion_id' => 'nullable|exists:promotions,id',
-            'points_redeem' => 'nullable|integer|min:0',
+            // SPEC-02: coupon từ ví cá nhân
+            'customer_coupon_id' => 'nullable|exists:customer_coupons,id',
+            // Loyalty 2.0: 'points_redeem' cố ý KHÔNG validate nữa — client cũ
+            // gửi kèm sẽ bị bỏ qua im lặng (spec mục 4.2).
             'note' => 'nullable|string|max:255',
             'referred_by' => 'nullable|string|max:20', // Gói 9: mã TV người giới thiệu
-            // Gói 48: hóa đơn VAT + địa chỉ chi tiết + ghi chú giao hàng
-            'need_vat_invoice' => 'nullable|boolean',
-            'vat_tax_code' => 'required_if:need_vat_invoice,true|nullable|string|max:30',
-            'vat_company_name' => 'required_if:need_vat_invoice,true|nullable|string|max:200',
-            'vat_company_address' => 'nullable|string|max:255',
-            'vat_email' => 'required_if:need_vat_invoice,true|nullable|email|max:150',
+            // Gói 64: bỏ VAT đơn online — giữ validate lỏng để không gãy client cũ (luôn bỏ qua khi tạo đơn)
             'delivery_note' => 'nullable|string|max:500',
             'province' => 'nullable|string|max:100',
             'ward' => 'nullable|string|max:100',
@@ -500,7 +591,7 @@ class OnlineOrderController extends Controller
 
                 // 1. Tính tiền theo GIÁ MENU phía server (Gói 49i: giá kênh online)
                 foreach ($validated['items'] as $item) {
-                    $product = Product::with('prices.priceList')->findOrFail($item['product_id']);
+                    $product = Product::with(['prices.priceList', 'categoryPrices'])->findOrFail($item['product_id']);
                     if ($product->is_service_fee) {
                         throw new Exception('Món phí dịch vụ do hệ thống tự tính.');
                     }
@@ -543,7 +634,9 @@ class OnlineOrderController extends Controller
 
                 // 2. Tìm hoặc tạo khách hàng theo SĐT
                 $customer = Customer::where('phone', $validated['customer_phone'])->first();
+                $customerJustCreated = false;
                 if (!$customer) {
+                    $customerJustCreated = true;
                     $tier = MembershipTier::where('is_default', true)->first()
                         ?? MembershipTier::orderBy('sort_order')->first();
                     $customer = Customer::create([
@@ -555,6 +648,11 @@ class OnlineOrderController extends Controller
                         'referred_by' => $validated['referred_by'] ?? null,
                     ]);
                 }
+                // Spec KM chống mã (2026-10-21) Phần B: SĐT gõ tay KHÔNG đủ để hưởng
+                // quyền lợi của khách đã có — phải khớp SĐT + mã TV (Audit BM-02: bỏ nhánh zalo_id trần).
+                // Chưa xác thực vẫn đặt đơn như khách vãng lai (chỉ chặn quyền lợi).
+                $identityVerified = $customerJustCreated
+                    || \App\Services\CustomerIdentityService::matches($customer, $validated);
 
                 // 3. Phí ship (đơn giao hàng) — server tự tính, KHÔNG tin client.
                 // Gói 10c: chưa cộng dòng "Phí dịch vụ" vội — đợi trừ KM phí ship (bước 5b).
@@ -589,11 +687,13 @@ class OnlineOrderController extends Controller
                         $quotedFee = (int) $validated['delivery_quoted_fee'];
                         $matched = false;
                         $quotedDistance = null;
+                        $matchedPkgFee = null;
                         foreach ($fresh['providers'] as $p) {
                             foreach ($p['packages'] as $pkg) {
                                 if (abs($pkg['fee'] - $quotedFee) <= 5000) {
                                     $matched = true;
                                     $quotedDistance = $p['distance_km'];
+                                    $matchedPkgFee = (int) $pkg['fee'];
                                     break 2;
                                 }
                             }
@@ -601,7 +701,12 @@ class OnlineOrderController extends Controller
                         if (!$matched) {
                             throw new Exception('Phí ship đã thay đổi so với lúc báo giá. Vui lòng kiểm tra lại phí ship trước khi đặt đơn.');
                         }
-                        $shippingFee = $quotedFee;
+                        // Audit toàn diện 2026-10-21 🔴1: KHÔNG thu full phí hãng khi quán có hỗ trợ.
+                        // Server tự tính lại customer_pays bằng đúng applySupport của báo giá
+                        // (dựa trên subtotal server tự tính) — tổng chốt đơn + VietQR khớp số
+                        // khách đã thấy ở checkout. Áp cho cả đơn thường lẫn đơn nhóm (dùng chung store()).
+                        $supportCalc = $deliveryService->applySupport((int) $subtotal, $matchedPkgFee);
+                        $shippingFee = (int) $supportCalc['charged'];
                         $distanceKm = $quotedDistance;
                         $deliveryQuote = $fresh;
                     } else {
@@ -618,7 +723,7 @@ class OnlineOrderController extends Controller
                 $discountAmount = 0;
 
                 // 4. Voucher — tính riêng, chưa cộng vào tổng
-                // (quyết định cộng dồn hay lấy max ở sau theo công tắc promo_allow_stack)
+                // (quyết định cộng dồn hay lấy max ở bước 5d theo cờ TỪNG chương trình)
                 $voucherDiscount = 0;
                 $appliedVoucher = null;
                 if (!empty($validated['voucher_code'])) {
@@ -665,11 +770,85 @@ class OnlineOrderController extends Controller
                 $shippingDiscount = 0; // Gói 10c
                 $shippingPromotion = null; // Gói 10c
                 $giftLinePending = null;
-                if (!empty($validated['promotion_id'])) {
+                // SPEC-02: coupon từ ví cá nhân (quy tắc 1 hóa đơn = 1 coupon)
+                // Nếu có customer_coupon_id thì dùng coupon ví thay promotion_id
+                $appliedCoupon = null;
+                $couponStackPromo = null; // chương trình nguồn của phía KM để xét cờ chồng mã
+                $couponIsShipping = false; // coupon KM phí ship: không tham gia so sánh tiền hàng
+                $couponIsMoney = false; // coupon giảm tiền hàng: thua chồng mã thì không bị trừ lượt
+                if (!empty($validated['customer_coupon_id'])) {
+                    // Phần B: coupon ví là quyền lợi cá nhân — chỉ cấp khi định danh đã xác thực
+                    if (!$identityVerified) {
+                        throw new Exception(\App\Services\PromotionService::reasonText('NOT_VERIFIED'));
+                    }
+                    $coupon = \App\Models\CustomerCoupon::with('promotion')
+                        ->lockForUpdate()
+                        ->findOrFail($validated['customer_coupon_id']);
+                    // Kiểm tra chủ sở hữu
+                    if ((int) $coupon->customer_id !== (int) $customer->id) {
+                        throw new Exception('Coupon không thuộc về bạn.');
+                    }
+                    if (!$coupon->isUsable()) {
+                        throw new Exception('Coupon đã hết hạn hoặc đã dùng.');
+                    }
+                    $promo = $coupon->promotion;
+                    if (!$promo) {
+                        throw new Exception('Ưu đãi không còn hiệu lực.');
+                    }
+                    // Phần A: kiểm ĐỦ điều kiện chương trình như đường promotion_id
+                    // (cửa sổ hiệu lực, thứ, khung giờ, kênh, hạng, đơn tối thiểu, phạm vi)
+                    $chk = $promotionService->checkConditions($promo, [
+                        'subtotal' => $subtotal,
+                        'items' => $promoItems,
+                        'customer' => $customer,
+                        'channel' => 'online',
+                        'shipping_fee' => $shippingFee,
+                    ]);
+                    if (!$chk['ok']) {
+                        throw new Exception($chk['message']);
+                    }
+                    // Phần A: kiểm lại trigger tại thời điểm dùng
+                    $trig = $promotionService->checkTrigger($promo, $coupon, $customer);
+                    if (!$trig['ok']) {
+                        throw new Exception($trig['message']);
+                    }
+                    // Tính giảm THEO PHẠM VI bằng hàm chung (khớp đường promotion_id).
+                    // Loại chưa hỗ trợ → từ chối rõ ràng; transaction rollback nên coupon
+                    // KHÔNG bị đánh dấu used khi giảm 0 do không hỗ trợ.
+                    $calc = $promotionService->discountFor($promo, $subtotal, $promoItems, $shippingFee);
+                    if ($calc['unsupported']) {
+                        throw new Exception(\App\Services\PromotionService::reasonText('UNSUPPORTED_TYPE', $promo));
+                    }
+                    if ($calc['is_shipping']) {
+                        $couponIsShipping = true;
+                        $shippingDiscount = min((float) $calc['discount'], $shippingFee);
+                        $shippingFee = max(0, $shippingFee - $shippingDiscount);
+                        $shippingPromotion = $promo;
+                    } elseif ($calc['gift_product_id']) {
+                        $giftProduct = Product::findOrFail($calc['gift_product_id']);
+                        $giftLinePending = [
+                            'product_id' => $giftProduct->id,
+                            'product_option_id' => null,
+                            'product_name' => $giftProduct->name . ' (Coupon tặng)',
+                            'price' => 0, 'unit_price' => 0,
+                            'quantity' => $calc['gift_quantity'],
+                            'subtotal' => 0, 'total_price' => 0, 'discount_amount' => 0,
+                            'note' => 'Quà tặng từ coupon: ' . $promo->name,
+                        ];
+                        $appliedPromotion = $promo;
+                    } else {
+                        $couponIsMoney = true;
+                        $promotionDiscount = min((float) $calc['discount'], $subtotal);
+                        $appliedPromotion = $promo;
+                    }
+                    $appliedCoupon = $coupon;
+                    $couponStackPromo = $promo;
+                } elseif (!empty($validated['promotion_id'])) {
                     $eligible = $promotionService->eligiblePromotions([
                         'subtotal' => $subtotal,
                         'items' => $promoItems,
-                        'customer_id' => $customer->id,
+                        // Phần B: KM theo hạng chỉ khi định danh đã xác thực
+                        'customer_id' => $identityVerified ? $customer->id : null,
                         'channel' => 'online',
                         'shipping_fee' => $shippingFee, // Gói 10c: để tính KM phí ship
                     ]);
@@ -700,21 +879,40 @@ class OnlineOrderController extends Controller
                     }
                 }
 
-                // 5d. Gói 55 p11af (P0-13): công tắc cộng dồn KM + trần % giảm giá.
-                // - promo_allow_stack=true (mặc định Gói 57): cộng dồn các loại giảm giá
-                //   (voucher vs KM), không cộng dồn. KM phí ship và KM tặng món không phải
-                //   giảm giá tiền nên giữ nguyên.
+                // 5d. Mô hình cộng dồn MỚI (Đại Vương chốt 2026-10-21 ~22:45, thay
+                // Spec 3 cũ): BỎ công tắc toàn cục promo_allow_stack — quyền cộng dồn
+                // nằm ở TỪNG chương trình: phía KM stack_with_coupon + voucher
+                // stack_with_promotion cùng bật mới thành 1 cặp KM + 1 coupon.
+                // - Có cặp hợp lệ: so tổng cặp với từng lựa chọn đơn lẻ SAU trần —
+                //   áp phần lợi nhất; cặp hòa KM đơn lẻ → KM đơn lẻ (giữ voucher).
+                // - Không có cặp: chọn phần lợi nhất KM/voucher; hòa → KM thắng,
+                //   voucher/coupon thua không bị trừ (luật hòa đã chốt ở Spec 3).
+                // - KM phí ship / tặng món không tham gia xét cộng dồn.
                 // - Trần: tổng giảm giá KM không vượt promo_max_discount_pct % subtotal.
-                $allowStack = filter_var(Setting::get('promo_allow_stack', true), FILTER_VALIDATE_BOOLEAN);
                 $maxDiscountPct = (float) Setting::get('promo_max_discount_pct', 50);
-                if ($allowStack) {
-                    $discountAmount = $voucherDiscount + $promotionDiscount;
-                    if ($appliedVoucher) {
-                        $appliedVoucher->increment('used_count');
-                    }
+                $capAmount = ($maxDiscountPct > 0 && $maxDiscountPct < 100)
+                    ? $subtotal * $maxDiscountPct / 100
+                    : $subtotal;
+                $stackPromo = $couponStackPromo ?? $appliedPromotion;
+                $pairAllowed = $appliedVoucher && $stackPromo
+                    && $promotionDiscount > 0 && $voucherDiscount > 0
+                    && (bool) $stackPromo->stack_with_coupon
+                    && (bool) $appliedVoucher->stack_with_promotion;
+                $promoSingle = $promotionDiscount > 0 ? min($promotionDiscount, $capAmount) : 0;
+                $voucherSingle = $voucherDiscount > 0 ? min($voucherDiscount, $capAmount) : 0;
+                $pairTotal = $pairAllowed ? min($voucherDiscount + $promotionDiscount, $capAmount) : 0;
+                if ($pairAllowed && $pairTotal > $promoSingle && $pairTotal > $voucherSingle) {
+                    // Cặp thắng hẳn cả hai lựa chọn đơn lẻ → áp cặp, voucher bị trừ lượt;
+                    // phía KM (KM thường hoặc coupon ví) giữ nguyên ghi nhận như cũ.
+                    $discountAmount = $pairTotal;
+                    $appliedVoucher->increment('used_count');
                 } else {
                     $discountAmount = max($voucherDiscount, $promotionDiscount);
-                    $voucherWins = $appliedVoucher && $voucherDiscount > 0 && $voucherDiscount >= $promotionDiscount;
+                    // TESTER duyệt spec 3 — điểm hòa (2026-10-21, PM chốt): HÒA → KM thắng.
+                    // Voucher chỉ thắng khi LỚN HƠN HẲN (>); hòa thì voucher/coupon GIỮ NGUYÊN
+                    // không bị trừ lượt (coupon là tài sản của khách, KM theo thời gian dùng trước).
+                    // Phía KM giữ >= ở $promoWins bên dưới để nhất quán.
+                    $voucherWins = $appliedVoucher && $voucherDiscount > 0 && $voucherDiscount > $promotionDiscount;
                     if ($voucherWins) {
                         $appliedVoucher->increment('used_count');
                     } else {
@@ -725,6 +923,12 @@ class OnlineOrderController extends Controller
                     if (!$promoWins) {
                         $appliedPromotion = null;
                         $promotionDiscount = 0;
+                        // Phần C3.5: coupon ví thua chồng mã → KHÔNG đánh dấu đã dùng,
+                        // coupon ở lại trong ví của khách (chỉ áp cho coupon giảm tiền hàng;
+                        // coupon tặng món/phí ship không tham gia so sánh nên vẫn áp bình thường).
+                        if ($appliedCoupon && $couponIsMoney) {
+                            $appliedCoupon = null;
+                        }
                     }
                 }
                 if ($giftLinePending) {
@@ -734,20 +938,11 @@ class OnlineOrderController extends Controller
                     $discountAmount = min($discountAmount, $subtotal * $maxDiscountPct / 100);
                 }
 
-                // 6. Đổi điểm (loyalty — tiền KH đã tích, không bị trần KM)
+                // 6. Loyalty 2.0 (2026-10-21): trừ điểm trực tiếp vào đơn ĐÃ GỠ
+                // (spec mục 4.2) — điểm chỉ còn đường ra là đổi coupon ở Cửa hàng
+                // điểm. Client cũ còn gửi points_redeem → bỏ qua im lặng (không
+                // trừ điểm, không lỗi) để tương thích app chưa cập nhật.
                 $pointsUsed = 0;
-                if (!empty($validated['points_redeem']) && (int) $validated['points_redeem'] > 0) {
-                    $preview = $loyaltyService->previewRedeem(
-                        $customer,
-                        (int) $validated['points_redeem'],
-                        $subtotal + $shippingFee - $discountAmount
-                    );
-                    if ($preview['points_used'] <= 0) {
-                        throw new Exception('Điểm không đủ để đổi.');
-                    }
-                    $pointsUsed = $preview['points_used'];
-                    $discountAmount += $preview['discount'];
-                }
 
                 $discountAmount = min($discountAmount, $subtotal + $shippingFee);
                 $finalAmount = $subtotal + $shippingFee - $discountAmount;
@@ -771,10 +966,12 @@ class OnlineOrderController extends Controller
                 }
 
                 // 7. Tạo đơn — CHỜ XÁC NHẬN (chưa trừ kho, chưa tích điểm)
-                // Gói 57: snapshot phí sàn kênh zalo lúc tạo đơn
-                $zaloPriceList = \App\Models\PriceList::whereRaw('LOWER(code) = ?', ['zalo'])->first();
+                // Gói 57: snapshot phí sàn kênh online lúc tạo đơn
+                // Spec kênh bán hàng (2026-10-19): dùng mã chuẩn 'online' (kênh Zalo Mini App)
+                $zaloPriceList = \App\Models\PriceList::whereRaw('LOWER(code) = ?', ['online'])->first();
                 $zaloCommissionRate = $zaloPriceList ? (float) $zaloPriceList->commission_rate : 0;
                 $zaloCommissionAmount = $zaloCommissionRate > 0 ? (int) round($finalAmount * $zaloCommissionRate / 100) : 0;
+                $orderCode = Order::nextCode();
                 $order = Order::create([
                     'user_id' => null,
                     'branch_id' => $validated['branch_id'],
@@ -782,8 +979,10 @@ class OnlineOrderController extends Controller
                     'online_channel' => 'zalo',
                     'commission_rate' => $zaloCommissionRate,
                     'commission_amount' => $zaloCommissionAmount,
-                    'order_number' => 'ONL-' . date('Ymd') . '-' . strtoupper(Str::random(6)),
-                    'code' => 'ZL-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
+                    // Fix rà mã 2026-10-20: dùng chung Order::nextCode() (quy tắc Thiết lập)
+                    // thay hardcode ONL-/ZL-; order_number = mã đơn như luồng import.
+                    'order_number' => $orderCode,
+                    'code' => $orderCode,
                     'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                     'customer_id' => $customer->id,
                     'customer_name' => $validated['customer_name'],
@@ -809,12 +1008,12 @@ class OnlineOrderController extends Controller
                     'status' => 'pending',
                     'stock_deducted' => false,
                     'note' => $validated['note'] ?? null,
-                    // Gói 48: VAT + địa chỉ chi tiết
-                    'need_vat_invoice' => (bool) ($validated['need_vat_invoice'] ?? false),
-                    'vat_tax_code' => $validated['vat_tax_code'] ?? null,
-                    'vat_company_name' => $validated['vat_company_name'] ?? null,
-                    'vat_company_address' => $validated['vat_company_address'] ?? null,
-                    'vat_email' => $validated['vat_email'] ?? null,
+                    // Gói 64: bỏ xuất VAT trên đơn online (giữ cột DB, luôn false)
+                    'need_vat_invoice' => false,
+                    'vat_tax_code' => null,
+                    'vat_company_name' => null,
+                    'vat_company_address' => null,
+                    'vat_email' => null,
                     'delivery_note' => $validated['delivery_note'] ?? null,
                     'province' => $validated['province'] ?? null,
                     'ward' => $validated['ward'] ?? null,
@@ -833,10 +1032,7 @@ class OnlineOrderController extends Controller
                     $order->items()->create($itemData);
                 }
 
-                // Trừ điểm đổi ngay (hoàn lại nếu đơn bị hủy)
-                if ($pointsUsed > 0) {
-                    $loyaltyService->applyRedeem($customer, $order, $pointsUsed);
-                }
+                // Loyalty 2.0: không còn trừ điểm tại đơn (applyRedeem đã ngừng gọi)
 
                 // Gói 55 p11af (P0-12): ghi log lượt dùng voucher theo khách
                 if ($appliedVoucher && $customer) {
@@ -845,6 +1041,15 @@ class OnlineOrderController extends Controller
                         'customer_id' => $customer->id,
                         'order_id' => $order->id,
                         'used_at' => now(),
+                    ]);
+                }
+
+                // SPEC-02: đánh dấu coupon đã dùng (trong cùng transaction)
+                if ($appliedCoupon) {
+                    $appliedCoupon->update([
+                        'status' => 'used',
+                        'used_at' => now(),
+                        'used_order_id' => $order->id,
                     ]);
                 }
 
@@ -890,12 +1095,28 @@ class OnlineOrderController extends Controller
         return $doneAt && $doneAt->lt(now()->subHours(24));
     }
 
-    public function track(string $code): JsonResponse
+    public function track(Request $request, string $code): JsonResponse
     {
         $order = Order::with(['items.product'])
             ->where('code', $code)
             ->where('online_channel', 'zalo')
             ->firstOrFail();
+
+        // Audit 2026-10-23 BM-03: mã đơn liệt kê được theo ngày — tra cứu bắt buộc
+        // SĐT khớp SĐT đặt đơn (như cancel), chuẩn hóa +84/84 -> 0, so hash_equals.
+        // Sai/thiếu SĐT trả 404 chung để không lộ đơn có tồn tại hay không.
+        $norm = function ($p) {
+            $d = preg_replace('/[^0-9]/', '', (string) $p);
+            if (str_starts_with($d, '84') && strlen($d) >= 11) {
+                $d = '0' . substr($d, 2);
+            }
+            return $d;
+        };
+        $reqPhone = $norm($request->query('phone', ''));
+        $orderPhone = $norm($order->customer_phone);
+        if ($reqPhone === '' || $orderPhone === '' || !hash_equals($orderPhone, $reqPhone)) {
+            return response()->json(['success' => false, 'message' => 'Không tìm thấy đơn hoặc SĐT không khớp.'], 404);
+        }
 
         // Gói 12a: đơn hoàn thành quá 24h thì ẩn khỏi Mini App
         // (server vẫn giữ đủ để tính điểm và hạng thành viên).
@@ -903,11 +1124,22 @@ class OnlineOrderController extends Controller
             return response()->json(['success' => false, 'message' => 'Đơn đã quá hạn tra cứu.'], 404);
         }
 
+        // Spec QR 2026-10-21: đơn BANK chưa được xác nhận tiền → trả kèm thông tin CK
+        // để trang Theo dõi hiện lại khối thanh toán (QR + STK + nội dung CK).
+        $awaitingPayment = $order->pay_channel === 'BANK'
+            && in_array($order->payment_status, ['pending_payment', 'transfer_notified'], true)
+            && $order->status !== 'cancelled';
+
         return response()->json(['success' => true, 'data' => [
             'code' => $order->code,
             'status' => $order->status,
             'payment_status' => $order->payment_status,
             'payment_method' => $order->payment_method,
+            'pay_channel' => $order->pay_channel,
+            'customer_notified_at' => $order->customer_notified_at,
+            'transfer' => $awaitingPayment
+                ? app(\App\Services\ZaloPaymentService::class)->transferInfoForOrder($order)
+                : null,
             'order_type' => $order->order_type,
             'total_amount' => (float) $order->total_amount,
             'shipping_fee' => (float) $order->shipping_fee,
@@ -936,6 +1168,54 @@ class OnlineOrderController extends Controller
         ]]);
     }
 
+    // Spec QR 2026-10-21 — phương án A: khách bấm "Tôi đã chuyển khoản" trên Mini App.
+    // Chỉ ĐÁNH DẤU đã báo CK (customer_notified_at + transfer_notified) — tiền vẫn do NV
+    // đối chiếu sao kê rồi bấm "Xác nhận đã nhận tiền" ở Admin/KDS. Yêu cầu SĐT khớp đơn
+    // (giống cơ chế hủy đơn SEC2) để người lạ không gắn cờ bừa.
+    public function transferNotified(Request $request, string $code): JsonResponse
+    {
+        $validated = $request->validate([
+            'phone' => 'required|string|max:20',
+        ]);
+        $order = Order::where('code', $code)->where('online_channel', 'zalo')->firstOrFail();
+
+        $norm = function ($p) {
+            $d = preg_replace('/[^0-9]/', '', (string) $p);
+            if (str_starts_with($d, '84') && strlen($d) >= 11) {
+                $d = '0' . substr($d, 2);
+            }
+            return $d;
+        };
+        if ($norm($validated['phone']) !== $norm($order->customer_phone)) {
+            return response()->json(['success' => false, 'message' => 'Số điện thoại không khớp với đơn hàng.'], 403);
+        }
+        // Audit bổ sung F17 (2026-10-21): IDEMPOTENT — đơn đã ghi nhận báo CK rồi thì
+        // bấm lại (kể cả sau khi NV đã xác nhận tiền) vẫn trả success, không lỗi 422;
+        // khách bấm lặp vô hại, không cần biết trạng thái nội bộ.
+        if ($order->customer_notified_at) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Đã ghi nhận bạn báo chuyển khoản. Quán sẽ đối chiếu và xác nhận trong ít phút.',
+                'data' => ['code' => $order->code, 'customer_notified_at' => $order->customer_notified_at, 'already' => true],
+            ]);
+        }
+        if ($order->pay_channel !== 'BANK' || !in_array($order->payment_status, ['pending_payment', 'transfer_notified'], true)
+            || in_array($order->status, ['cancelled', 'completed'], true)) {
+            return response()->json(['success' => false, 'message' => 'Đơn không còn ở trạng thái chờ chuyển khoản.'], 422);
+        }
+
+        $order->update([
+            'customer_notified_at' => $order->customer_notified_at ?? now(),
+            'payment_status' => 'transfer_notified',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã ghi nhận bạn báo chuyển khoản. Quán sẽ đối chiếu và xác nhận trong ít phút.',
+            'data' => ['code' => $order->code, 'customer_notified_at' => $order->customer_notified_at],
+        ]);
+    }
+
     // KH hủy đơn đang chờ xác nhận — Gói SEC2: yêu cầu SĐT khớp với đơn để chống hủy đơn người khác
     public function cancel(Request $request, string $code, LoyaltyService $loyaltyService): JsonResponse
     {
@@ -958,7 +1238,14 @@ class OnlineOrderController extends Controller
                 if ($reqPhone === '' || $orderPhone === '' || !hash_equals($orderPhone, $reqPhone)) {
                     throw new Exception('Số điện thoại không khớp với đơn hàng.');
                 }
-                if ($order->status !== 'pending' || $order->payment_status !== 'pending') {
+                // Audit toàn diện 2026-10-21 🟠12: nới cho đơn chờ thanh toán qua
+                // Checkout SDK — BANK đang chờ CK (pending_payment/transfer_notified)
+                // và COD đã được kênh xác nhận (payment 'confirmed', gồm cả đơn cũ
+                // kẹt status 'confirmed') vẫn hủy online được: các trạng thái này đều
+                // CHƯA vào pha chế và CHƯA trừ kho/thu tiền (NV xác nhận mới trừ kho).
+                // Đơn đã trả tiền (paid) hoặc đã sang pha chế → vẫn chặn, gọi quán.
+                $awaitingPay = in_array($order->payment_status, ['pending', 'pending_payment', 'transfer_notified', 'confirmed'], true);
+                if (!in_array($order->status, ['pending', 'confirmed'], true) || !$awaitingPay) {
                     throw new Exception('Đơn đang được chuẩn bị, không thể hủy online. Vui lòng gọi quán.');
                 }
                 $order->status = 'cancelled';
@@ -981,11 +1268,18 @@ class OnlineOrderController extends Controller
                     // Gói 55 p11af (P0-12): xóa log lượt dùng để hoàn lại lượt cho khách
                     VoucherUsage::where('order_id', $order->id)->delete();
                 }
+
+                // 🟠12 (bổ sung cùng gốc): hoàn COUPON VÍ đã tiêu cho đơn bị hủy —
+                // tra ngược qua used_order_id, trả coupon về trạng thái chưa dùng.
+                \App\Models\CustomerCoupon::where('used_order_id', $order->id)
+                    ->where('status', 'used')
+                    ->update(['status' => 'active', 'used_at' => null, 'used_order_id' => null]);
+
                 return $order;
             });
             return response()->json(['success' => true, 'message' => 'Đã hủy đơn hàng.']);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -1059,7 +1353,7 @@ class OnlineOrderController extends Controller
                 ],
             ]]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
@@ -1067,8 +1361,16 @@ class OnlineOrderController extends Controller
      * Nhân viên XÁC NHẬN đơn online (đã nhận tiền / đồng ý làm):
      * trừ kho, vào KDS, tích điểm. Cần đăng nhập.
      */
-    public function confirmPayment(int $id, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
+    public function confirmPayment(Request $request, int $id, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
     {
+        // Audit 2026-10-23 B-2/B-5: NV chỉ xác nhận thanh toán đơn thuộc CN phân công
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $orderBranch = Order::where('id', $id)->value('branch_id');
+            if ($orderBranch !== null && !in_array((int) $orderBranch, $actor->allBranchIds(), true)) {
+                return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
+            }
+        }
         try {
             $order = DB::transaction(function () use ($id, $inventoryService, $loyaltyService) {
                 $order = Order::with('items')->lockForUpdate()->findOrFail($id);
@@ -1135,6 +1437,28 @@ class OnlineOrderController extends Controller
                     }
                 }
 
+                // SPEC-02: trigger coupon tự động sau khi xác nhận thanh toán
+                if ($order->customer_id) {
+                    try {
+                        $couponService = app(\App\Services\AutoIssueCouponService::class);
+                        $customer = $order->customer;
+                        if ($customer) {
+                            // CP-01: đơn đầu tiên
+                            $couponService->onFirstOrder($customer);
+                            // CP-02: referral (cả 2 bên)
+                            $couponService->onReferralFirstOrder($order);
+                            // CP-03: tích tem
+                            $couponService->onOrderStamp($customer, $order);
+                            // CP-10: coupon đơn tiếp theo (chỉ Mini App)
+                            $couponService->onNextOrderCoupon($customer, $order);
+                        }
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning('[Coupon] Auto-issue failed', [
+                            'order' => $order->code, 'msg' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
                 return $order->load(['items.product', 'customer']);
             });
 
@@ -1147,7 +1471,9 @@ class OnlineOrderController extends Controller
                     if ($service->isConfigured()) {
                         $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
                         $order->delivery_cod_amount = $cod;
-                        $order->delivery_quoted_fee = $order->delivery_fee_charged ?? $order->shipping_fee;
+                        // Audit 2026-10-21 🔴1: GIỮ phí gốc đã lưu lúc tạo đơn (đối soát hãng);
+                        // chỉ fallback khi chưa có (đơn cũ) — không ghi đè bằng phí khách chịu nữa.
+                        $order->delivery_quoted_fee = $order->delivery_quoted_fee ?? $order->delivery_fee_charged ?? $order->shipping_fee;
                         $order->save();
                         $service->createForOrder($order->fresh(), []);
                     }
@@ -1164,14 +1490,18 @@ class OnlineOrderController extends Controller
                 'data' => $order,
             ]);
         } catch (Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
     }
 
     private function generateMemberCode(): string
     {
+        // Rà mã 2026-10-20: giống CustomerController — tiền tố + độ dài từ Thiết lập
+        // (CodeGenerator 'member'), giữ hậu tố ngẫu nhiên vì mã = mã giới thiệu công khai.
+        $prefix = \App\Helpers\CodeGenerator::prefix('member');
+        $len = max(4, \App\Helpers\CodeGenerator::digits('member'));
         do {
-            $code = 'TV' . strtoupper(Str::random(6));
+            $code = $prefix . strtoupper(Str::random($len));
         } while (Customer::where('member_code', $code)->exists());
         return $code;
     }

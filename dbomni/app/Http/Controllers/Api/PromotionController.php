@@ -29,9 +29,11 @@ class PromotionController extends Controller
     {
         return [
             'name' => 'required|string|max:150',
-            'type' => 'required|in:percent,fixed,fixed_price,gift,shipping', // Gói 10c: shipping = giảm/miễn phí ship
+            'code' => 'nullable|string|max:20|unique:promotions,code', // SPEC-02: mã CP-xx
+            'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('promotion_types'))], // Spec danh mục dùng chung: validate động
+            'coupon_type' => 'nullable|in:bogo,stamp,gift', // SPEC-02: loại coupon mở rộng
             'value' => 'nullable|numeric|min:0',
-            'scope' => 'required|in:order,category,product,menu', // Gói 10: thêm phạm vi Thực đơn
+            'scope' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('promotion_scopes'))], // Spec danh mục dùng chung: validate động
             'scope_ids' => 'nullable|array',
             'min_order_amount' => 'nullable|numeric|min:0',
             'max_discount_amount' => 'nullable|numeric|min:0',
@@ -45,18 +47,57 @@ class PromotionController extends Controller
             'days_of_week.*' => 'integer|min:0|max:6',
             'time_from' => 'nullable|date_format:H:i',
             'time_to' => 'nullable|date_format:H:i|after:time_from',
+            // Spec kênh bán hàng (2026-10-19): channels = mảng ID price_lists (null = mọi kênh)
             'channels' => 'nullable|array',
+            'channels.*' => 'integer|exists:price_lists,id',
             'is_active' => 'nullable|boolean',
+            // Mô hình cộng dồn 2026-10-21 ~22:45: phía KM chỉ còn 1 cờ — cộng dồn với coupon.
+            // (Cờ KM+KM đã bỏ hẳn: mỗi đơn tối đa 1 KM tiền hàng.)
+            'stack_with_coupon' => 'nullable|boolean',
             'banner_url' => 'nullable|string|max:500', // Gói 48: ảnh banner cho Mini App
+            'auto_config' => 'nullable|array', // SPEC-02: cấu hình trigger tự động
+        ];
+    }
+
+    // SPEC-02b: thông báo lỗi tiếng Việt để admin không chuyên đọc hiểu được.
+    private function messages(): array
+    {
+        return [
+            'name.required' => 'Vui lòng nhập tên khuyến mại.',
+            'name.max' => 'Tên khuyến mại tối đa 150 ký tự.',
+            'code.unique' => 'Mã coupon này đã được dùng cho khuyến mại khác. Hãy nhập mã khác.',
+            'code.max' => 'Mã coupon tối đa 20 ký tự.',
+            'type.required' => 'Vui lòng chọn loại khuyến mại.',
+            'type.in' => 'Loại khuyến mại không hợp lệ.',
+            'value.numeric' => 'Giá trị khuyến mại phải là số.',
+            'value.min' => 'Giá trị khuyến mại không được âm.',
+            'scope.required' => 'Vui lòng chọn phạm vi áp dụng.',
+            'scope.in' => 'Phạm vi áp dụng không hợp lệ.',
+            'gift_product_id.exists' => 'Món tặng không tồn tại. Hãy tải lại trang rồi chọn lại.',
+            'gift_quantity.min' => 'Số lượng tặng ít nhất là 1.',
+            'min_order_amount.numeric' => 'Đơn tối thiểu phải là số.',
+            'max_discount_amount.numeric' => 'Giảm giá tối đa phải là số.',
+            'target.required' => 'Vui lòng chọn đối tượng áp dụng.',
+            'starts_at.date' => 'Ngày bắt đầu không hợp lệ.',
+            'expires_at.date' => 'Ngày kết thúc không hợp lệ.',
+            'expires_at.after_or_equal' => 'Ngày kết thúc phải từ ngày bắt đầu trở đi.',
+            'time_from.date_format' => 'Giờ bắt đầu phải đúng dạng HH:MM.',
+            'time_to.date_format' => 'Giờ kết thúc phải đúng dạng HH:MM.',
+            'time_to.after' => 'Giờ kết thúc phải sau giờ bắt đầu.',
+            'auto_config.array' => 'Tham số trigger tự động không hợp lệ.',
         ];
     }
 
     public function store(Request $request): JsonResponse
     {
-        $validated = $request->validate($this->rules());
+        $validated = $request->validate($this->rules(), $this->messages());
 
         if ($validated['type'] === 'gift' && empty($validated['gift_product_id'])) {
-            return response()->json(['success' => false, 'message' => 'Khuyến mại tặng món cần chọn sản phẩm tặng.'], 422);
+            return response()->json([
+                'success' => false,
+                'message' => 'Coupon tặng món: vui lòng chọn "Món tặng" trước khi bấm Lưu.',
+                'errors' => ['gift_product_id' => ['Vui lòng chọn món sẽ tặng cho khách.']],
+            ], 422);
         }
         if (in_array($validated['type'], ['percent', 'fixed', 'fixed_price']) && empty($validated['value'])) {
             return response()->json(['success' => false, 'message' => 'Nhập giá trị khuyến mại.'], 422);
@@ -70,10 +111,26 @@ class PromotionController extends Controller
     {
         $promo = Promotion::findOrFail($id);
         $oldBanner = $promo->banner_url;
-        $validated = $request->validate(array_map(
-            fn($r) => str_replace('required|', 'sometimes|', $r),
+        $rules = array_map(
+            // Spec danh mục dùng chung: rules() có cả dạng mảng (Rule::in động) — đổi required->sometimes cho cả 2 dạng
+            fn($r) => is_array($r)
+                ? array_map(fn($x) => $x === 'required' ? 'sometimes' : $x, $r)
+                : str_replace('required|', 'sometimes|', $r),
             $this->rules()
-        ));
+        );
+        // SPEC-02: unique code bỏ qua bản ghi hiện tại
+        $rules['code'] = 'nullable|string|max:20|unique:promotions,code,' . $id;
+        $validated = $request->validate($rules, $this->messages());
+        // SPEC-02b: kiểm tra gift cả khi sửa (gộp với dữ liệu cũ của bản ghi)
+        $type = $validated['type'] ?? $promo->type;
+        $giftId = array_key_exists('gift_product_id', $validated) ? $validated['gift_product_id'] : $promo->gift_product_id;
+        if ($type === 'gift' && empty($giftId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Coupon tặng món: vui lòng chọn "Món tặng" trước khi bấm Lưu.',
+                'errors' => ['gift_product_id' => ['Vui lòng chọn món sẽ tặng cho khách.']],
+            ], 422);
+        }
         $promo->update($validated);
         // Gói 50: xóa ảnh banner cũ khi thay bằng ảnh mới (tránh đầy bộ nhớ)
         if (array_key_exists('banner_url', $validated) && $oldBanner && $oldBanner !== $validated['banner_url']) {
@@ -118,7 +175,7 @@ class PromotionController extends Controller
             'items.*.line_total' => 'required|numeric|min:0',
             'items.*.unit_price' => 'required|numeric|min:0',
             'customer_id' => 'nullable|exists:customers,id',
-            'channel' => 'nullable|in:pos,online',
+            'channel' => 'nullable|in:pos,online,nha_hang,zalo', // Spec kênh bán hàng: chấp nhận cả mã chuẩn lẫn mã cũ (service tự map)
             'shipping_fee' => 'nullable|numeric|min:0', // Gói 10c: để tính KM phí ship
         ]);
 

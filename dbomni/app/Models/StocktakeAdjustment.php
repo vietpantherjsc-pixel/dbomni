@@ -14,7 +14,7 @@ class StocktakeAdjustment extends Model
         'stocktake_id', 'branch_id', 'material_id',
         'system_qty', 'counted_qty', 'diff_qty', 'diff_value',
         'status', 'requested_by_employee_id',
-        'approved_by_user_id', 'approved_at', 'note',
+        'approved_by_user_id', 'approved_by_employee_id', 'approved_at', 'note',
     ];
 
     protected $casts = [

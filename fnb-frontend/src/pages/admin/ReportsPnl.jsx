@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateInput from '../../components/DateInput';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { API } from '../../utils/api';
 import {
     REPORT_CSS, kpi, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
@@ -17,10 +18,16 @@ import {
 
 export default function ReportsPnl() {
     const [branches, setBranches] = useState([]);
+    // C3 (2026-10-21): CN của báo cáo = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
+    // với dropdown sidebar ('0' = Tất cả ở cả hai nơi).
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
     const [f, setF] = useState({
-        branch_id: '0', period: 'week', date: todayStr(),
+        branch_id: ctxBranchId, period: 'week', date: todayStr(),
         compare: 'previous', compare_from: '', compare_to: '', tax_included: '1',
     });
+    useEffect(() => {
+        setF((prev) => (prev.branch_id === ctxBranchId ? prev : { ...prev, branch_id: ctxBranchId }));
+    }, [ctxBranchId]);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errMsg, setErrMsg] = useState('');
@@ -55,7 +62,10 @@ export default function ReportsPnl() {
 
     useEffect(() => { load(); }, [load]);
 
-    const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
+    const set = (k, v) => {
+        if (k === 'branch_id') setCtxBranchId(v); // C3: đổi CN trong trang = đổi trạng thái chung
+        setF((prev) => ({ ...prev, [k]: v }));
+    };
     const meta = data?.meta;
     const rev = data?.revenue;
     const rangeTxt = meta
@@ -125,6 +135,12 @@ export default function ReportsPnl() {
                 {meta && (
                     <div className="period-line">
                         <b>{meta.branch_name}</b> · Kỳ {PERIOD_NAMES[meta.period]}: <b>{rangeTxt}</b> · So sánh với: <b>{cmpTxt}</b>
+                        {/* C5 (2026-10-21): ghi chú phạm vi chi phí chung khi xem 1 CN */}
+                        {f.branch_id !== '0' && (
+                            <div style={{ marginTop: 4, color: '#92400E' }}>
+                                Lưu ý: số của chi nhánh này <b>chưa gồm chi phí chung toàn chuỗi</b> (phiếu không gắn chi nhánh + chi phí trả trước chung) — các khoản đó chỉ tính ở view "Tất cả chi nhánh".
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -180,7 +196,7 @@ export default function ReportsPnl() {
                                     {data.costs.map((c, i) => (
                                         <li key={i}>
                                             <span className="dot" style={{ background: c.color }} />
-                                            <span className="nm">{c.name}</span>
+                                            <span className="nm">{c.name}{c.note ? <span style={{ color: '#999', fontSize: 11 }}> ({c.note})</span> : null}</span>
                                             <span className="pc">{trimN(data.cost_total > 0 ? c.value / data.cost_total * 100 : 0)}%</span>
                                             <span className="am">{fmtVND(c.value)}</span>
                                         </li>

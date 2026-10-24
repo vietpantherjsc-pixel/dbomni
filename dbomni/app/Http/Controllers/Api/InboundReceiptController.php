@@ -20,10 +20,24 @@ class InboundReceiptController extends Controller
 {
     use \App\Traits\ValidatesEmployeeBranch;
 
+    // Audit 2026-10-23 B-5: NV chỉ xem/thao tác phiếu nhập thuộc CN phân công.
+    protected function denyReceiptBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
+        }
+        return null;
+    }
+
     public function index(Request $request): JsonResponse
     {
         $q = InboundReceipt::with(['branch', 'partner'])
             ->orderByDesc('id');
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $q->whereIn('branch_id', $actor->allBranchIds());
+        }
         if ($request->filled('branch_id')) $q->where('branch_id', $request->input('branch_id'));
         if ($request->filled('partner_id')) $q->where('partner_id', $request->input('partner_id'));
         if ($request->filled('status')) $q->where('status', $request->input('status'));
@@ -32,9 +46,10 @@ class InboundReceiptController extends Controller
         return response()->json(['success' => true, 'data' => $q->paginate($per)]);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $r = InboundReceipt::with(['branch', 'partner', 'items.material', 'items.batch'])->findOrFail($id);
+        if ($deny = $this->denyReceiptBranch($request, $r->branch_id)) return $deny;
         return response()->json(['success' => true, 'data' => $r]);
     }
 
@@ -107,7 +122,8 @@ class InboundReceiptController extends Controller
                             'material_id' => $material->id,
                             'branch_id' => $branchId,
                             'receipt_id' => $receipt->id,
-                            'batch_code' => $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8))),
+                            // Luật bỏ gạch mở rộng (2026-10-21 ~23:09): mã lô tự sinh nối liền không '-'
+                            'batch_code' => $item['batch_code'] ?? ('BATCH' . strtoupper(Str::random(8))),
                             'initial_quantity' => $baseQty,
                             'current_quantity' => $baseQty,
                             'unit_cost' => $batchUnitCost,
@@ -134,7 +150,7 @@ class InboundReceiptController extends Controller
                 return $receipt;
             });
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
         return response()->json([
             'success' => true,
@@ -201,6 +217,7 @@ class InboundReceiptController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
+        if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
         // K-R1: cho phép sửa cả phiếu draft (chưa có batch, chưa sinh phiếu chi)
         if (!in_array($receipt->status, ['confirmed', 'draft'], true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã hủy, không sửa được.'], 422);
@@ -249,7 +266,10 @@ class InboundReceiptController extends Controller
                         $batch->update([
                             'initial_quantity' => $baseQty,
                             'current_quantity' => $touched ? $batch->current_quantity : $baseQty,
-                            'unit_cost' => $newCost,
+                            // Audit 2026-10-23 KHO-04: batch.unit_cost là giá theo
+                            // ĐƠN VỊ CƠ SỞ — phải chia rate như store()/approve(),
+                            // không ghi thẳng giá theo đơn vị mua.
+                            'unit_cost' => $rate > 0 ? $newCost / $rate : $newCost,
                             'expired_at' => $ri['expired_at'] ?? $line->expired_at,
                         ]);
                         $line->update([
@@ -284,15 +304,16 @@ class InboundReceiptController extends Controller
                 }
             });
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
         return response()->json(['success' => true, 'message' => 'Đã cập nhật phiếu nhập.', 'data' => $receipt->fresh()->load(['items.material', 'partner'])]);
     }
 
     // Hủy phiếu: chỉ khi tất cả batch chưa xuất dùng
-    public function cancel(int $id): JsonResponse
+    public function cancel(Request $request, int $id): JsonResponse
     {
         $receipt = InboundReceipt::with('items.batch')->findOrFail($id);
+        if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
         // K-R1: cho phép hủy cả phiếu draft (chưa động kho/tiền)
         if (!in_array($receipt->status, ['confirmed', 'draft'], true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái đã nhập hoặc nháp.'], 422);
@@ -302,12 +323,21 @@ class InboundReceiptController extends Controller
                 return response()->json(['success' => false, 'message' => 'Nguyên liệu "' . ($line->material?->name ?? '') . '" đã xuất dùng, không hủy được.'], 422);
             }
         }
+        // Audit 2026-10-23 KHO-12: hủy phiếu cũng phải kiểm thanh toán như sửa
+        // phiếu — phiếu chi liên kết đã phát sinh thanh toán thì không hủy
+        // (tránh mồ côi bản ghi thanh toán khi xóa phiếu chi).
+        $txn = Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->first();
+        if ($txn && $txn->payments()->exists()) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã phát sinh thanh toán, không hủy được. Hãy xử lý thanh toán trước.'], 422);
+        }
         DB::transaction(function () use ($receipt) {
             foreach ($receipt->items as $line) {
                 if ($line->batch) $line->batch->delete();
             }
             Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->delete();
-            $receipt->update(['status' => 'cancelled']);
+            // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
+            [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
+            $receipt->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
         });
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu nhập.']);
     }
@@ -316,8 +346,10 @@ class InboundReceiptController extends Controller
      * K-R1: Quản lý duyệt phiếu nhập nháp của NV.
      * Khi duyệt: tạo Batch (cộng kho) + sinh phiếu chi. Dùng lockForUpdate chống duyệt 2 lần.
      */
-    public function approve(int $id): JsonResponse
+    public function approve(Request $request, int $id): JsonResponse
     {
+        $apprBranch = InboundReceipt::where('id', $id)->value('branch_id');
+        if ($apprBranch !== null && ($deny = $this->denyReceiptBranch($request, $apprBranch))) return $deny;
         try {
             $receipt = DB::transaction(function () use ($id) {
                 $receipt = InboundReceipt::with('items.material')->lockForUpdate()->findOrFail($id);
@@ -334,7 +366,8 @@ class InboundReceiptController extends Controller
                         'material_id' => $material->id,
                         'branch_id' => $receipt->branch_id,
                         'receipt_id' => $receipt->id,
-                        'batch_code' => $line->batch_code ?? ('BATCH-' . strtoupper(Str::random(8))),
+                        // Luật bỏ gạch mở rộng (2026-10-21 ~23:09): mã lô tự sinh nối liền không '-'
+                        'batch_code' => $line->batch_code ?? ('BATCH' . strtoupper(Str::random(8))),
                         'initial_quantity' => $baseQty,
                         'current_quantity' => $baseQty,
                         'unit_cost' => $batchUnitCost,
@@ -343,12 +376,24 @@ class InboundReceiptController extends Controller
                     ]);
                     $line->update(['batch_id' => $batch->id, 'batch_code' => $batch->batch_code]);
                 }
-                $receipt->update(['status' => 'confirmed']);
+                // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người duyệt (User hoặc Employee).
+                // TESTER fix: chỉ fallback auth()->id() khi CẢ 2 đều null — ở Hub,
+                // auth()->id() trả mã NV, ghi vào cột FK users sẽ vi phạm FK/sai người.
+                [$approveUserId, $approveEmployeeId] = \App\Support\ApprovalActor::ids();
+                if ($approveUserId === null && $approveEmployeeId === null) {
+                    $approveUserId = auth()->id();
+                }
+                $receipt->update([
+                    'status' => 'confirmed',
+                    'approved_by_user_id' => $approveUserId,
+                    'approved_by_employee_id' => $approveEmployeeId,
+                    'approved_at' => now(),
+                ]);
                 $this->createExpense($receipt);
                 return $receipt;
             });
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
         return response()->json([
             'success' => true,

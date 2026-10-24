@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Helpers\CodeGenerator;
+use App\Models\Employee;
+use App\Models\User;
 
 // Gói 43: phiếu nhập hàng theo hóa đơn nhà cung cấp.
 class InboundReceipt extends Model
@@ -30,6 +32,17 @@ class InboundReceipt extends Model
     public function partner(): BelongsTo
     {
         return $this->belongsTo(Partner::class);
+    }
+
+    // Gói "Chờ duyệt trên Hub" (2026-10-21): người tạo phiếu
+    public function createdByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    public function createdByEmployee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'created_by_employee_id');
     }
 
     public static function nextCode(): string

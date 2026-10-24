@@ -160,6 +160,7 @@ class EmployeeInventoryController extends Controller
         }
         $st = DB::transaction(function () use ($emp, $v, $branchId, $catIds) {
             $st = Stocktake::create([
+                'code' => Stocktake::nextCode(), // Rà mã 2026-10-20
                 'branch_id' => $branchId,
                 'employee_id' => $emp->id,
                 'type' => $v['type'] ?? 'daily',
@@ -420,7 +421,15 @@ class EmployeeInventoryController extends Controller
                     'type' => 'production',
                     'note' => 'Chế biến ' . $material->name,
                 ], $movementIds);
-                $inv->addStock((int) $emp->branch_id, (int) $material->id, (float) $v['quantity']);
+                // Audit 2026-10-23 KHO-08: giá vốn BTP = tổng giá NL vào / sản lượng
+                $inputCost = 0;
+                foreach ($deducted as $lines) {
+                    foreach ($lines as $ln) {
+                        $inputCost += (float) $ln['quantity'] * (float) $ln['unit_cost'];
+                    }
+                }
+                $btpUnitCost = (float) $v['quantity'] > 0 ? $inputCost / (float) $v['quantity'] : 0;
+                $inv->addStock((int) $emp->branch_id, (int) $material->id, (float) $v['quantity'], null, null, $btpUnitCost);
                 $production = Production::create([
                     'branch_id' => $emp->branch_id,
                     'material_id' => $material->id,
@@ -443,7 +452,7 @@ class EmployeeInventoryController extends Controller
                 return $production;
             });
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
         return response()->json(['success' => true, 'message' => 'Chế biến thành công.', 'data' => $production->load(['material', 'items.material'])], 201);
     }

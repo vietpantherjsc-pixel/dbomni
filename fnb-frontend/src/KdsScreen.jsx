@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { fmtDateTime } from './utils/format';
+import { useBranch } from './contexts/BranchContext'; // C4: CN của KDS = trạng thái CN dùng chung (lưu theo tài khoản)
 import {
   ChefHat, Clock, CheckCircle2, RefreshCw,
   Volume2, VolumeX, Check, Store, ShoppingCart, Eye, X, Printer, Receipt
@@ -223,8 +224,15 @@ export default function KdsScreen({ onBackToClient }) {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [selectedBranch, setSelectedBranch] = useState(1);
   const [branches, setBranches] = useState([]);
+  const [branchesLoaded, setBranchesLoaded] = useState(false); // guard C4 (2026-10-21): chưa tải xong DS chi nhánh thì chưa gọi đơn
+  // C4 (2026-10-21): BỎ mặc định cứng CN1 — CN của KDS lấy từ BranchContext dùng chung:
+  // lựa chọn được lưu theo tài khoản (F5/lần sau giữ nguyên); đổi CN tại KDS = đổi trạng
+  // thái chung. Lần đầu chưa chọn CN cụ thể (context = '0' Tất cả) thì tạm xem CN đầu
+  // tiên trong danh sách — tên CN luôn hiện rõ ở ô chọn trên đầu màn hình.
+  const { branchId, setBranchId } = useBranch();
+  const selectedBranch = branchId !== '0' ? Number(branchId) : (branches[0]?.id || 1);
+  const setSelectedBranch = (id) => setBranchId(String(id));
   const [detailOrd, setDetailOrd] = useState(null);
   const [reprintOrd, setReprintOrd] = useState(null);
   const [printedTem, setPrintedTem] = useState({}); // orderId -> true
@@ -264,18 +272,22 @@ export default function KdsScreen({ onBackToClient }) {
   };
 
   useEffect(() => {
+    // Guard lần tải đầu: selectedBranch chỉ đáng tin sau khi DS chi nhánh về
+    // (trước đó nó tạm rơi về CN1) — chờ branchesLoaded mới gọi đơn + chạy nhịp 3s.
+    if (!branchesLoaded) return;
     fetchKdsOrders();
     const timer = setInterval(fetchKdsOrders, 3000);
     return () => clearInterval(timer);
-  }, [selectedBranch]);
+  }, [selectedBranch, branchesLoaded]);
 
   useEffect(() => {
     axios.get(`${API_BASE}/branches`)
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : (res.data?.data || []);
         setBranches(list);
+        setBranchesLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => setBranchesLoaded(true)); // lỗi tải DS: vẫn mở guard, selectedBranch rơi về mặc định như cũ — không treo trang
   }, []);
 
   const handleUpdateStatus = async (orderCode, nextStatus) => {
@@ -316,7 +328,7 @@ export default function KdsScreen({ onBackToClient }) {
     setPrintedBill((s) => ({ ...s, [ord.id]: true }));
   };
 
-  const pendingOrders = orders.filter((o) => o.status === 'pending');
+  const pendingOrders = orders.filter((o) => o.status === 'pending' || o.status === 'confirmed'); // SPEC-01: đơn COD (confirmed) hiện ở cột chờ
   const processingOrders = orders.filter((o) => o.status === 'processing');
   const readyOrders = orders.filter((o) => o.status === 'ready');
 
@@ -388,6 +400,10 @@ export default function KdsScreen({ onBackToClient }) {
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
               <h2 className="font-extrabold text-sm text-amber-400 tracking-wider uppercase">Nhận Đơn</h2>
+              {/* Spec QR 2026-10-21: badge hàng đợi chờ thanh toán */}
+              {pendingOrders.filter((o) => o.needs_confirm).length > 0 && (
+                <span className="text-xs font-mono font-bold bg-sky-500/20 text-sky-300 px-2.5 py-0.5 rounded-full">Chờ thanh toán ({pendingOrders.filter((o) => o.needs_confirm).length})</span>
+              )}
             </div>
             <span className="text-xs font-mono font-bold bg-amber-500/20 text-amber-300 px-2.5 py-0.5 rounded-full">{pendingOrders.length}</span>
           </div>
@@ -395,6 +411,17 @@ export default function KdsScreen({ onBackToClient }) {
             {pendingOrders.length === 0 && <p className="text-xs text-slate-500 text-center py-10">Không có đơn hàng nào chờ</p>}
             {pendingOrders.map((ord) => (
               <KdsOrderRow key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)} typeLabel={orderTypeLabel(ord)}>
+                {/* Spec QR 2026-10-21: cờ đối chiếu tiền cho đơn chờ thanh toán */}
+                {ord.needs_confirm && (ord.customer_notified_at || ord.pay_overdue) && (
+                  <div className="w-full space-y-1">
+                    {ord.customer_notified_at && (
+                      <div className="text-[11px] px-2 py-1 rounded bg-emerald-500/15 text-emerald-300 font-semibold">💳 Khách đã báo chuyển khoản — đối chiếu sao kê rồi xác nhận</div>
+                    )}
+                    {ord.pay_overdue && (
+                      <div className="text-[11px] px-2 py-1 rounded bg-red-500/15 text-red-300 font-semibold">⚠️ Chờ thanh toán quá lâu — kiểm tra ngay</div>
+                    )}
+                  </div>
+                )}
                 <button onClick={() => setDetailOrd(ord)} className={`${btnBase} bg-slate-700 hover:bg-slate-600 text-white`}>
                   <Eye className="w-3.5 h-3.5" /> Xem đơn hàng
                 </button>

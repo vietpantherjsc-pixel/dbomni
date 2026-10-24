@@ -15,10 +15,28 @@ use Illuminate\Support\Facades\DB;
 class StockTransferController extends Controller
 {
     use \App\Traits\ValidatesEmployeeBranch;
+
+    // Audit 2026-10-23 B-5: NV chỉ xem/thao tác phiếu chuyển khi CN nguồn hoặc đích thuộc phân công.
+    protected function denyTransferBranch(Request $request, $fromBranchId, $toBranchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $allowed = $actor->allBranchIds();
+            if (!in_array((int) $fromBranchId, $allowed, true) && !in_array((int) $toBranchId, $allowed, true)) {
+                return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
+            }
+        }
+        return null;
+    }
     public function index(Request $request): JsonResponse
     {
         $q = StockTransfer::with(['fromBranch', 'toBranch', 'items.material'])
             ->orderByDesc('id');
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $allowed = $actor->allBranchIds();
+            $q->where(fn($w) => $w->whereIn('from_branch_id', $allowed)->orWhereIn('to_branch_id', $allowed));
+        }
         if ($request->filled('from_branch_id')) $q->where('from_branch_id', $request->input('from_branch_id'));
         if ($request->filled('to_branch_id')) $q->where('to_branch_id', $request->input('to_branch_id'));
         if ($request->filled('status')) $q->where('status', $request->input('status'));
@@ -26,10 +44,11 @@ class StockTransferController extends Controller
         return response()->json(['success' => true, 'data' => $q->paginate($per)]);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $t = StockTransfer::with(['fromBranch', 'toBranch', 'items.material', 'items.fromBatch', 'items.toBatch'])
             ->findOrFail($id);
+        if ($deny = $this->denyTransferBranch($request, $t->from_branch_id, $t->to_branch_id)) return $deny;
         return response()->json(['success' => true, 'data' => $t]);
     }
 
@@ -77,6 +96,8 @@ class StockTransferController extends Controller
     public function confirm(int $id, Request $request, InventoryService $inv): JsonResponse
     {
         $actor = $request->user();
+        $tRow = StockTransfer::where('id', $id)->first(['from_branch_id', 'to_branch_id']);
+        if ($tRow && ($deny = $this->denyTransferBranch($request, $tRow->from_branch_id, $tRow->to_branch_id))) return $deny;
         try {
             $totalCost = DB::transaction(function () use ($id, $actor, $inv) {
                 // Gói 55: lock row trong transaction trước khi check status (chống race condition)
@@ -112,7 +133,10 @@ class StockTransferController extends Controller
                         $toBatch = Batch::create([
                             'material_id' => $mid,
                             'branch_id' => $t->to_branch_id,
-                            'batch_code' => $t->code, // Gói 55 p11w: $t->code đã có prefix CK-, không thêm nữa
+                            // Audit 2026-10-23 KHO-11: mã lô đích phân biệt TỪNG lô
+                            // (mã phiếu + id lô nguồn; '-' là mốc phân đoạn giữa 2
+                            // đoạn có độ dài thay đổi — đúng ngoại lệ luật mã 23:14).
+                            'batch_code' => $t->code . '-' . $ln['batch_id'],
                             'initial_quantity' => $ln['quantity'],
                             'current_quantity' => $ln['quantity'],
                             'unit_cost' => $ln['unit_cost'],
@@ -147,24 +171,29 @@ class StockTransferController extends Controller
                 $t->update([
                     'status' => 'confirmed',
                     'confirmed_by' => $actor && $actor instanceof \App\Models\User ? $actor->id : null,
+                    // Gói "Chờ duyệt trên Hub" (2026-10-21): người chốt là Employee
+                    'confirmed_by_employee_id' => \App\Support\ApprovalActor::ids($actor)[1],
                     'confirmed_at' => now(),
                     'total_cost' => $total,
                 ]);
                 return $total;
             });
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
         }
         return response()->json(['success' => true, 'message' => 'Đã chuyển kho.', 'data' => ['total_cost' => $totalCost]]);
     }
 
-    public function cancel(int $id): JsonResponse
+    public function cancel(Request $request, int $id): JsonResponse
     {
         $t = StockTransfer::findOrFail($id);
+        if ($deny = $this->denyTransferBranch($request, $t->from_branch_id, $t->to_branch_id)) return $deny;
         if ($t->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Chỉ hủy được phiếu nháp.'], 422);
         }
-        $t->update(['status' => 'cancelled']);
+        // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
+        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
+        $t->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu chuyển kho.']);
     }
 
@@ -175,6 +204,10 @@ class StockTransferController extends Controller
             'branch_id' => 'required|exists:branches,id',
             'material_id' => 'required|exists:materials,id',
         ]);
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $v['branch_id'], $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
+        }
         $qty = Batch::where('branch_id', $v['branch_id'])
             ->where('material_id', $v['material_id'])
             ->where('status', 'active')

@@ -17,8 +17,12 @@ class LeaveRequestController extends Controller
     {
         /** @var Employee $emp */
         $emp = $request->user();
+        // Spec danh mục dùng chung: chuẩn hóa mã cũ 'khac' -> 'other' trước khi validate
+        if ($request->input('type') === 'khac') {
+            $request->merge(['type' => 'other']);
+        }
         $v = $request->validate([
-            'type' => 'required|in:nghi,doica,khac',
+            'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('leave_types'))],
             'date_from' => 'required|date',
             'date_to' => 'nullable|date|after_or_equal:date_from',
             'reason' => 'nullable|string|max:500',
@@ -41,24 +45,64 @@ class LeaveRequestController extends Controller
     {
         $q = LeaveRequest::with('employee:id,full_name,branch_id')->orderBy('created_at', 'desc');
         if ($request->filled('status')) $q->where('status', $request->string('status'));
+        // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thấy yêu cầu của CN mình
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
+        }
         return response()->json(['success' => true, 'data' => $q->get()]);
+    }
+
+    // Audit 2026-10-23 A1-2: kiểm phạm vi CN trước khi duyệt/từ chối
+    private function denyLeaveBranch(Request $request, LeaveRequest $lr): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof Employee) {
+            $empBranch = (int) (Employee::where('id', $lr->employee_id)->value('branch_id') ?? 0);
+            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+                return response()->json(['success' => false, 'message' => 'Yêu cầu thuộc chi nhánh bạn không được phân công.'], 403);
+            }
+        }
+        return null;
     }
 
     public function approve(Request $request, int $id): JsonResponse
     {
         $lr = LeaveRequest::findOrFail($id);
+        if ($deny = $this->denyLeaveBranch($request, $lr)) return $deny;
+        // Audit 2026-10-23 A1-3: chỉ duyệt yêu cầu đang chờ (trước đây duyệt lại
+        // được cả yêu cầu đã từ chối)
+        if ($lr->status !== 'pending') {
+            return response()->json(['success' => false, 'message' => 'Yêu cầu đã được xử lý trước đó.'], 422);
+        }
         // Gói 38: handled_by chỉ set khi người duyệt là User (admin); Employee duyệt thì null (tránh lỗi FK)
         $actor = $request->user();
-        $lr->update(['status' => 'approved', 'handled_by' => $actor instanceof User ? $actor->id : null]);
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): Employee duyệt → ghi handled_by_employee_id (tránh lỗi FK users)
+        [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($actor);
+        $lr->update(['status' => 'approved', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
+        // Audit 2026-10-23 A1-9: đồng bộ với cơ chế nghỉ theo ca — duyệt nghỉ
+        // thì gỡ lịch đã xếp trong khoảng ngày nghỉ (trước đây lịch vẫn còn,
+        // 2 cơ chế cho kết quả khác nhau trên cùng 1 ngày nghỉ).
+        $from = $lr->date_from->toDateString();
+        $to = $lr->date_to ? $lr->date_to->toDateString() : $from;
+        \App\Models\WorkSchedule::where('employee_id', $lr->employee_id)
+            ->whereBetween('date', [$from, $to])->delete();
         return response()->json(['success' => true, 'message' => 'Đã duyệt yêu cầu.']);
     }
 
     public function reject(Request $request, int $id): JsonResponse
     {
         $lr = LeaveRequest::findOrFail($id);
+        if ($deny = $this->denyLeaveBranch($request, $lr)) return $deny;
+        // Audit 2026-10-23 A1-3: chỉ từ chối yêu cầu đang chờ
+        if ($lr->status !== 'pending') {
+            return response()->json(['success' => false, 'message' => 'Yêu cầu đã được xử lý trước đó.'], 422);
+        }
         // Gói 38: handled_by chỉ set khi người duyệt là User (admin); Employee duyệt thì null (tránh lỗi FK)
         $actor = $request->user();
-        $lr->update(['status' => 'rejected', 'handled_by' => $actor instanceof User ? $actor->id : null]);
+        // Gói "Chờ duyệt trên Hub" (2026-10-21): Employee từ chối → ghi handled_by_employee_id
+        [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($actor);
+        $lr->update(['status' => 'rejected', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

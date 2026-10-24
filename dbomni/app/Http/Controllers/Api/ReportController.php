@@ -30,9 +30,11 @@ use Illuminate\Support\Facades\Schema;
 // - VAT: orders không lưu tax_amount nên tính theo từng dòng món:
 //   vat = line_total * r/(1+r), với r = products.tax_rate ?? settings.default_tax_rate.
 //   Toggle tax_included chỉ đổi cách HIỂN THỊ (gồm/chưa gồm thuế), số gốc không đổi.
-// - Kênh bán (Gói 56): động theo online_channel thực tế của đơn
-//   (chuẩn hóa lowercase; rỗng -> 'pos'). Tên hiển thị: 'pos' -> Tại quầy,
-//   'zalo' -> Zalo Mini App, còn lại lấy name từ price_lists theo code.
+// - Kênh bán (Gói 56, chuẩn hóa Spec kênh 2026-10-19): động theo online_channel thực tế của đơn
+//   (chuẩn hóa lowercase; rỗng -> 'pos'). Mã chuẩn: 'nha_hang' (tại quán), 'online' (Zalo Mini App);
+//   đơn cũ import trước đây có thể còn mã 'pos'/'zalo' — giữ map tương thích.
+//   Tên hiển thị: 'pos' -> Tại quầy, 'zalo' -> Zalo Mini App, còn lại lấy name từ price_lists theo code.
+//   Phân loại kênh (store/online/partner) lấy từ price_lists.category.
 //   Lãi gộp/kênh = doanh thu - phí sàn (commission_rate của price_lists)
 //   - giá vốn (SUM unit_cost × SL).
 // - Chi phí gồm 2 phần: (1) vốn nguyên liệu ước tính từ BOM (recipes × SL bán
@@ -49,9 +51,27 @@ use Illuminate\Support\Facades\Schema;
 // =====================================================================
 class ReportController extends Controller
 {
+    // Audit 2026-10-23 B-5: NV có reports.view chỉ xem báo cáo trong phạm vi CN
+    // phân công — chọn CN ngoài phạm vi -> 403; không chọn CN -> ép về CN chính.
+    protected function guardReportBranch(Request $request): ?JsonResponse
+    {
+        $actor = $request->user();
+        if (!$actor instanceof \App\Models\Employee) return null;
+        $allowed = $actor->allBranchIds();
+        $bid = (int) $request->query('branch_id', 0);
+        if ($bid > 0) {
+            if (!in_array($bid, $allowed, true)) {
+                return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
+            }
+            return null;
+        }
+        $request->query->set('branch_id', (int) ($allowed[0] ?? $actor->branch_id));
+        return null;
+    }
     public function overview(Request $request): JsonResponse
     {
         $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = (int) $request->query('branch_id', 0);
         $period = $request->query('period', 'week');
         if (!in_array($period, ['day', 'week', 'month', 'year'], true)) {
@@ -128,6 +148,9 @@ class ReportController extends Controller
             // Gói 17: thêm 2 block chi tiết (cộng thêm, frontend cũ bỏ qua)
             'by_payment' => $this->byPayment($branchId, $from, $to, $cFrom, $cTo, $taxRatio),
             'by_category' => $this->byCategory($branchId, $from, $to, $cFrom, $cTo, $taxRatio),
+            // Spec P4-C1/C2: doanh thu theo ca / theo nhân viên (đơn, doanh thu, AOV)
+            'by_shift' => $this->byShift($branchId, $from, $to, $taxRatio),
+            'by_staff' => $this->byStaff($branchId, $from, $to, $taxRatio),
             // Gói 55 p11af (P0-14): KPI Food cost % = giá vốn NL / doanh thu thuần
             'food_cost_pct' => $foodCostPct,
             'food_cost_value' => $this->r2($foodCostValue),
@@ -251,12 +274,14 @@ class ReportController extends Controller
 
     private function baseOrders(int $branchId, Carbon $from, Carbon $to)
     {
+        // Fix runtime zip tổng: tiền tố orders. cho mọi cột — tránh ambiguous khi các
+        // truy vấn breakdown join thêm shifts/users (cùng có status/created_at/branch_id).
         $q = Order::query()
-            ->where('payment_status', 'paid')
-            ->where('status', '!=', 'cancelled')
-            ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
+            ->where('orders.payment_status', 'paid')
+            ->where('orders.status', '!=', 'cancelled')
+            ->whereBetween('orders.created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
         if ($branchId > 0) {
-            $q->where('branch_id', $branchId);
+            $q->where('orders.branch_id', $branchId);
         }
         return $q;
     }
@@ -420,6 +445,7 @@ class ReportController extends Controller
     {
         $labels = $this->channelLabelMap();
         $rates = $this->commissionRates();
+        $categories = $this->channelCategoryMap();
         $orderChannels = $cur['order_channels'] ?? [];
 
         // Giá vốn theo kênh từ snapshot unit_cost lúc trừ kho
@@ -452,6 +478,8 @@ class ReportController extends Controller
             $out[] = [
                 'key' => $key,
                 'name' => $labels[$key] ?? ucfirst($key),
+                // Spec kênh bán hàng (2026-10-19): phân loại kênh lấy từ price_lists
+                'category' => $categories[$key] ?? 'partner',
                 'value' => $this->r2($v * $taxRatio),
                 'share' => $cur['gross'] > 0 ? $this->r2($v / $cur['gross'] * 100) : 0,
                 'delta' => $this->pct($v, $rv),
@@ -492,6 +520,24 @@ class ReportController extends Controller
                 $code = strtolower(trim((string) $pl->code));
                 if ($code !== '' && !isset($map[$code])) {
                     $map[$code] = $pl->name ?: $code;
+                }
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Spec kênh bán hàng (2026-10-19): phân loại kênh theo price_lists.category.
+     * Mã cũ 'pos'/'zalo' (đơn import trước đây) map tương thích: pos -> store, zalo -> online.
+     */
+    private function channelCategoryMap(): array
+    {
+        $map = ['pos' => 'store', 'zalo' => 'online'];
+        if (Schema::hasTable('price_lists') && Schema::hasColumn('price_lists', 'category')) {
+            foreach (DB::table('price_lists')->select('code', 'category')->get() as $pl) {
+                $code = strtolower(trim((string) $pl->code));
+                if ($code !== '' && !isset($map[$code])) {
+                    $map[$code] = $pl->category ?: 'partner';
                 }
             }
         }
@@ -598,7 +644,8 @@ class ReportController extends Controller
         return [
             ['name' => 'Nguyên liệu', 'value' => $bom, 'color' => '#F5A623',
              'note' => 'Giá vốn ước tính theo định mức, chưa gồm tiền nhập hàng thực tế đã chi'],
-            ['name' => 'Lương', 'value' => $exp['salary'], 'color' => '#24305E'],
+            ['name' => 'Lương', 'value' => $exp['salary'], 'color' => '#24305E',
+             'note' => ($exp['salary_locked'] ?? false) ? 'Số đã chốt lương' : 'Ước tính — chưa chốt lương'], 
             ['name' => 'Chi khác', 'value' => $exp['other'], 'color' => '#7C8DB0'],
         ];
     }
@@ -694,18 +741,24 @@ class ReportController extends Controller
             }
         }
         // Gói 55 p11ad: kỳ = trọn 1 tháng DL → lấy lương từ bảng chấm công (chính xác hơn dò chuỗi)
+        // Spec P4-C4: kỳ đã chốt → lấy số chốt; chưa chốt → ước tính đầy đủ + nhãn
         $payroll = $this->payrollSalaryForMonth($p);
+        $salaryLocked = false;
         if ($payroll !== null) {
-            $salary = $payroll;
+            $salary = $payroll['value'];
+            $salaryLocked = $payroll['locked'];
         }
-        return ['salary' => $salary, 'other' => $other];
+        return ['salary' => $salary, 'other' => $other, 'salary_locked' => $salaryLocked];
     }
 
     /**
-     * Gói 55 p11ad: tổng lương gross của 1 tháng = SUM(giờ công × đơn giá giờ).
+     * Gói 55 p11ad: tổng lương của 1 tháng.
+     * Spec P4-C4: kỳ đã chốt → lấy số chốt (payroll_locks.net_total);
+     * kỳ chưa chốt → ước tính đầy đủ thành phần + nhãn "ước tính".
      * Trả về null nếu kỳ báo cáo không phải trọn 1 tháng DL → dùng fallback dò chuỗi cũ.
+     * @return array{value: float, locked: bool}|null
      */
-    private function payrollSalaryForMonth(array $p): ?float
+    private function payrollSalaryForMonth(array $p): ?array
     {
         $from = $p['from'] ?? null;
         $to = $p['to'] ?? null;
@@ -717,19 +770,42 @@ class ReportController extends Controller
             || $toDate === $monthEnd->copy()->addDay()->format('Y-m-d');
         if (!$isFullMonth) return null;
 
+        $month = $from->format('Y-m');
         $start = $from->format('Y-m-d');
         $end = $monthEnd->format('Y-m-d');
         $branchId = (int) ($p['branch_id'] ?? 0);
 
+        // Kỳ đã chốt → dùng số chốt (P&L toàn hệ thống, không lọc CN vì chốt theo tháng)
+        if ($branchId === 0 && \Illuminate\Support\Facades\Schema::hasTable('payroll_locks')) {
+            $lock = \App\Models\PayrollLock::where('month', $month)->first();
+            if ($lock) {
+                return ['value' => (float) $lock->net_total, 'locked' => true];
+            }
+        }
+
+        // Chưa chốt → ước tính đầy đủ: giờ × đơn giá + ăn + thưởng − trừ khác − ứng − BHXH
         $hoursMap = DB::table('salary_days')
             ->whereBetween('date', [$start, $end])
             ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
-            ->selectRaw('employee_id, SUM(hours) as total_hours')
+            ->selectRaw('employee_id, SUM(hours) as total_hours, SUM(meal_count) as total_meals')
             ->groupBy('employee_id')
             ->get()->keyBy('employee_id');
         if ($hoursMap->isEmpty()) return null; // chưa có dữ liệu chấm công → fallback
 
-        $employees = \App\Models\Employee::whereIn('id', $hoursMap->keys()->all())->get()->keyBy('id');
+        $empIds = $hoursMap->keys()->all();
+        $employees = \App\Models\Employee::whereIn('id', $empIds)->get()->keyBy('id');
+        $mealPrice = (float) \App\Models\Setting::get('meal_price', \App\Models\Setting::get('meal_allowance_amount', 25000));
+        $bonuses = DB::table('bonuses')->whereIn('employee_id', $empIds)
+            ->whereBetween('date', [$start, $end])->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
+        $advances = DB::table('salary_advances')->whereIn('employee_id', $empIds)
+            ->whereBetween('date', [$start, $end])->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
+        $deducts = DB::table('salary_deductions')->whereIn('employee_id', $empIds)
+            ->where('month', $month)->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
+        $insMap = \App\Models\EmployeeInsurance::whereIn('employee_id', $empIds)->where('is_active', true)->get()->keyBy('employee_id');
+        $rBhxh = (float) \App\Models\Setting::get('bhxh_emp_bhxh', 8)
+            + (float) \App\Models\Setting::get('bhxh_emp_bhyt', 1.5)
+            + (float) \App\Models\Setting::get('bhxh_emp_bhtn', 1);
+
         $total = 0.0;
         foreach ($hoursMap as $empId => $h) {
             $emp = $employees->get($empId);
@@ -741,9 +817,18 @@ class ReportController extends Controller
                     ->orderBy('start_date', 'desc')->first();
                 $rate = $lv ? (float) $lv->hourly_rate : 0;
             }
-            $total += (float) $h->total_hours * $rate;
+            $net = (float) $h->total_hours * $rate
+                + (float) ($h->total_meals ?? 0) * $mealPrice
+                + (float) ($bonuses[$empId] ?? 0)
+                - (float) ($deducts[$empId] ?? 0)
+                - (float) ($advances[$empId] ?? 0);
+            $ins = $insMap->get($empId);
+            if ($ins && !$ins->employer_pays_all) {
+                $net -= (float) $ins->base_amount * $rBhxh / 100;
+            }
+            $total += $net;
         }
-        return round($total);
+        return ['value' => round($total), 'locked' => false];
     }
 
     /** Cột kép Thu/Chi/Lợi nhuận theo từng bucket của kỳ. */
@@ -1034,6 +1119,50 @@ class ReportController extends Controller
         return $out;
     }
 
+    // Spec P4-C1: breakdown doanh thu theo ca thu ngân (đơn, doanh thu, AOV)
+    private function byShift(int $branchId, Carbon $from, Carbon $to, float $taxRatio): array
+    {
+        // HOTFIX 2026-10-20: bảng shifts KHÔNG có user_id (migration 20/09 tạo lại bảng,
+        // người mở ca lưu dạng text ở cashier_name / opened_by_name — Gói 55). Bỏ join users,
+        // lấy thẳng tên người mở ca từ shifts.
+        $rows = $this->baseOrders($branchId, $from, $to)
+            ->leftJoin('shifts', 'shifts.id', '=', 'orders.shift_id')
+            ->selectRaw('COALESCE(shifts.id, 0) as sid, shifts.opened_at as opened, COALESCE(shifts.opened_by_name, shifts.cashier_name) as cashier, COUNT(*) as c, SUM(orders.total_amount) as v')
+            ->groupBy('sid', 'opened', 'cashier')->orderByDesc('v')->get();
+        $total = (float) $rows->sum('v');
+        return $rows->map(function ($r) {
+            $label = $r->sid
+                ? ('Ca #' . $r->sid . ($r->opened ? ' — ' . Carbon::parse($r->opened)->format('d/m H:i') : '') . ($r->cashier ? ' (' . $r->cashier . ')' : ''))
+                : 'Không rõ ca';
+            return [
+                'key' => (int) $r->sid,
+                'name' => $label,
+                'value' => $this->r2((float) $r->v * $taxRatio),
+                'orders' => (int) $r->c,
+                'avg' => $r->c > 0 ? $this->r2((float) $r->v * $taxRatio / (int) $r->c) : 0,
+                'share' => $total > 0 ? $this->r2((float) $r->v / $total * 100) : 0,
+            ];
+        })->values()->all();
+    }
+
+    // Spec P4-C2: breakdown doanh thu theo nhân viên (đơn, doanh thu, AOV/NV)
+    private function byStaff(int $branchId, Carbon $from, Carbon $to, float $taxRatio): array
+    {
+        $rows = $this->baseOrders($branchId, $from, $to)
+            ->leftJoin('users', 'users.id', '=', 'orders.user_id')
+            ->selectRaw('COALESCE(users.id, 0) as uid, COALESCE(users.name, ?) as uname, COUNT(*) as c, SUM(orders.total_amount) as v', ['Không rõ NV'])
+            ->groupBy('uid', 'uname')->orderByDesc('v')->get();
+        $total = (float) $rows->sum('v');
+        return $rows->map(fn ($r) => [
+            'key' => (int) $r->uid,
+            'name' => $r->uname,
+            'value' => $this->r2((float) $r->v * $taxRatio),
+            'orders' => (int) $r->c,
+            'avg' => $r->c > 0 ? $this->r2((float) $r->v * $taxRatio / (int) $r->c) : 0,
+            'share' => $total > 0 ? $this->r2((float) $r->v / $total * 100) : 0,
+        ])->values()->all();
+    }
+
     private function categoryAgg(int $branchId, Carbon $from, Carbon $to): array
     {
         $ids = $this->baseOrders($branchId, $from, $to)->pluck('id');
@@ -1099,9 +1228,10 @@ class ReportController extends Controller
         }
         $q = DB::table('prepaid_expenses')->where('is_active', true);
         if ($branchId > 0) {
-            $q->where(function ($w) use ($branchId) {
-                $w->whereNull('branch_id')->orWhere('branch_id', $branchId);
-            });
+            // C5 (2026-10-21): chi phí trả trước KHÔNG gắn CN (chung toàn chuỗi) chỉ tính ở
+            // view "Tất cả chi nhánh" (branchId = 0, không lọc). P&L từng CN chỉ tính khoản
+            // gắn đúng CN đó — hết lỗi cộng P&L 2 CN > P&L tổng.
+            $q->where('branch_id', $branchId);
         }
         foreach ($q->get() as $e) {
             $months = max(1, (int) $e->months);
@@ -1200,6 +1330,7 @@ class ReportController extends Controller
     public function inventory(Request $request): JsonResponse
     {
         $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = (int) $request->query('branch_id', 0);
         $period = $request->query('period', 'week');
         if (!in_array($period, ['day', 'week', 'month', 'year'], true)) {
@@ -1254,10 +1385,166 @@ class ReportController extends Controller
                 ],
                 'materials' => $materials,
                 'expiry' => $this->expiryBatches($branchId),
+                // Spec P4-C3: giá trị tồn kho = tồn hiện tại × giá vốn lô (FIFO)
+                'stock_value' => $this->stockValue($branchId),
                 // Gói 55 p11ag: false = chưa có số kiểm kê nào → số liệu chỉ là ước tính
                 'has_stocktake' => $hasAnyStocktake,
             ],
         ]);
+    }
+
+    // Spec P4-C3: giá trị tồn kho theo nhóm NL/BTP/chi nhánh (tồn × giá vốn lô)
+    private function stockValue(int $branchId): array
+    {
+        $btpIds = \App\Models\ProductionRecipe::distinct()->pluck('material_id')->all();
+        $rows = \App\Models\Batch::with('material:id,name')
+            ->where('status', 'active')->where('current_quantity', '>', 0)
+            ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+            ->get();
+        $byGroup = ['raw' => 0.0, 'btp' => 0.0];
+        $byBranch = [];
+        foreach ($rows as $b) {
+            $val = (float) $b->current_quantity * (float) ($b->unit_cost ?? 0);
+            $isBtp = in_array($b->material_id, $btpIds, true);
+            $byGroup[$isBtp ? 'btp' : 'raw'] += $val;
+            $bid = (int) $b->branch_id;
+            $byBranch[$bid] = ($byBranch[$bid] ?? 0) + $val;
+        }
+        $branchNames = Branch::whereIn('id', array_keys($byBranch))->pluck('name', 'id');
+        arsort($byBranch);
+        return [
+            'total' => round(array_sum($byGroup), 0),
+            'by_group' => [
+                ['key' => 'raw', 'name' => 'Nguyên liệu thô', 'value' => round($byGroup['raw'], 0)],
+                ['key' => 'btp', 'name' => 'Bán thành phẩm', 'value' => round($byGroup['btp'], 0)],
+            ],
+            'by_branch' => array_map(
+                fn ($bid, $v) => ['branch_id' => $bid, 'branch_name' => $branchNames[$bid] ?? ('#' . $bid), 'value' => round($v, 0)],
+                array_keys($byBranch), array_values($byBranch)
+            ),
+        ];
+    }
+
+    // Spec P4-C6: báo cáo nhân sự tổng hợp — giờ công, lương thực nhận theo NV/CN/kỳ;
+    // top NV giờ cao; cảnh báo NV vượt giờ (ngưỡng cấu hình được, mặc định 200h/tháng)
+    // GET /api/reports/hr-summary?month=YYYY-MM&branch_id=
+    public function hrSummary(Request $request): JsonResponse
+    {
+        $month = $request->query('month', Carbon::now()->format('Y-m'));
+        if (!preg_match('/^\\d{4}-\\d{2}$/', $month)) {
+            return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ.'], 422);
+        }
+        if ($deny = $this->guardReportBranch($request)) return $deny;
+        $branchId = (int) $request->query('branch_id', 0);
+        $start = Carbon::createFromFormat('Y-m-d', $month . '-01')->startOfDay();
+        $end = $start->copy()->endOfMonth();
+        $overHours = (float) \App\Models\Setting::get('hr_over_hours_threshold', 200);
+
+        $days = \App\Models\SalaryDay::whereBetween('date', [$start->toDateString(), $end->toDateString()])
+            ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+            ->selectRaw('employee_id, branch_id, SUM(hours) as hours, COUNT(DISTINCT date) as workdays')
+            ->groupBy('employee_id', 'branch_id')->get();
+
+        $empIds = $days->pluck('employee_id')->unique()->all();
+        $emps = \App\Models\Employee::with('branch:id,name')->whereIn('id', $empIds)->get()->keyBy('id');
+
+        // Lương thực nhận: dùng số chốt nếu có, không thì ước tính từ controller lương
+        $locked = \App\Models\PayrollLock::get($month);
+        $netMap = [];
+        if ($locked) {
+            [$rows] = (new \App\Http\Controllers\Api\SalaryController())->buildPayrollData($month, $branchId ?: null);
+            foreach ($rows as $r) {
+                $netMap[$r['employee_id']] = ($netMap[$r['employee_id']] ?? 0) + $r['net'];
+            }
+        }
+
+        $rows = [];
+        foreach ($days as $d) {
+            $emp = $emps->get($d->employee_id);
+            if (!$emp) continue;
+            $hours = (float) $d->hours;
+            $rows[] = [
+                'employee_id' => $d->employee_id,
+                'full_name' => $emp->full_name,
+                'branch_name' => $emp->branch?->name ?? '',
+                'hours' => round($hours, 1),
+                'workdays' => (int) $d->workdays,
+                'net' => isset($netMap[$d->employee_id]) ? (int) $netMap[$d->employee_id] : null,
+                'over_hours' => $hours > $overHours,
+            ];
+        }
+        usort($rows, fn ($a, $b) => $b['hours'] <=> $a['hours']);
+
+        return response()->json(['success' => true, 'data' => [
+            'month' => $month,
+            'locked' => (bool) $locked,
+            'over_hours_threshold' => $overHours,
+            'rows' => $rows,
+            'top_hours' => array_slice($rows, 0, 5),
+            'warnings' => array_values(array_filter($rows, fn ($r) => $r['over_hours'])),
+            'total_hours' => round(array_sum(array_column($rows, 'hours')), 1),
+            'total_net' => array_sum(array_filter(array_column($rows, 'net'), fn ($v) => $v !== null)),
+        ]]);
+    }
+
+    // Spec P4-C5: tổng hợp thu/chi theo danh mục + kỳ (ngày/tuần/tháng) + cơ cấu
+    // GET /api/reports/cash-summary?branch_id=&period=&date=
+    public function cashSummary(Request $request): JsonResponse
+    {
+        $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
+        $branchId = (int) $request->query('branch_id', 0);
+        $period = $request->query('period', 'month');
+        if (!in_array($period, ['day', 'week', 'month'], true)) $period = 'month';
+        try {
+            $anchor = $request->query('date')
+                ? Carbon::parse($request->query('date'), $tz)->startOfDay()
+                : Carbon::now($tz)->startOfDay();
+        } catch (\Exception $e) {
+            $anchor = Carbon::now($tz)->startOfDay();
+        }
+        [$from, $to] = $this->window($period, $anchor);
+
+        $txs = Transaction::with('category:id,name')
+            ->where('status', 'paid')
+            ->whereNull('rejected_at') // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu bị từ chối không tính vào báo cáo
+            ->whereBetween('occurred_at', [$from->toDateString(), $to->toDateString()])
+            ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+            ->get(['id', 'type', 'category_id', 'amount', 'occurred_at']);
+
+        // Theo danh mục
+        $byCat = [];
+        foreach ($txs as $t) {
+            $k = $t->type . '|' . ($t->category?->name ?? 'Khác');
+            if (!isset($byCat[$k])) $byCat[$k] = ['type' => $t->type, 'name' => $t->category?->name ?? 'Khác', 'value' => 0];
+            $byCat[$k]['value'] += (float) $t->amount;
+        }
+        $byCat = array_values($byCat);
+        usort($byCat, fn ($a, $b) => $b['value'] <=> $a['value']);
+        $totIn = array_sum(array_column(array_filter($byCat, fn ($x) => $x['type'] === 'income'), 'value'));
+        $totOut = array_sum(array_column(array_filter($byCat, fn ($x) => $x['type'] === 'expense'), 'value'));
+
+        // Theo kỳ (bucket ngày)
+        $buckets = [];
+        $d = $from->copy();
+        while ($d->lte($to)) {
+            $key = $d->toDateString();
+            $buckets[$key] = ['label' => $d->format('d/m'), 'income' => 0, 'expense' => 0];
+            $d->addDay();
+        }
+        foreach ($txs as $t) {
+            $key = Carbon::parse($t->occurred_at)->toDateString();
+            if (isset($buckets[$key])) $buckets[$key][$t->type] += (float) $t->amount;
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'from' => $from->toDateString(), 'to' => $to->toDateString(),
+            'total_income' => round($totIn), 'total_expense' => round($totOut),
+            'net' => round($totIn - $totOut),
+            'by_category' => array_map(fn ($x) => $x + ['share' => ($x['type'] === 'income' ? $totIn : $totOut) > 0
+                ? round($x['value'] / ($x['type'] === 'income' ? $totIn : $totOut) * 100, 1) : 0], $byCat),
+            'buckets' => array_values($buckets),
+        ]]);
     }
 
     /**
@@ -1270,6 +1557,7 @@ class ReportController extends Controller
     public function cancelledByStaff(Request $request): JsonResponse
     {
         $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = (int) $request->query('branch_id', 0);
         $period = $request->query('period', 'week');
         if (!in_array($period, ['day', 'week', 'month', 'year'], true)) {
@@ -1436,6 +1724,7 @@ class ReportController extends Controller
     public function pnl(Request $request): JsonResponse
     {
         $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = (int) $request->query('branch_id', 0);
         $period = $request->query('period', 'week');
         if (!in_array($period, ['day', 'week', 'month', 'year'], true)) {
@@ -1474,6 +1763,7 @@ class ReportController extends Controller
             return (float) Transaction::query()
                 ->where('type', 'income')
                 ->where('status', 'paid')
+                ->whereNull('rejected_at') // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu bị từ chối không tính vào báo cáo
                 ->whereBetween('paid_at', [$f->toDateTimeString(), $t->toDateTimeString()])
                 ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
                 ->sum('amount');
@@ -1569,6 +1859,7 @@ class ReportController extends Controller
     public function operations(Request $request): JsonResponse
     {
         $tz = 'Asia/Ho_Chi_Minh';
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = (int) $request->query('branch_id', 0);
         $dateStr = $request->query('date');
         try {
@@ -1727,6 +2018,7 @@ class ReportController extends Controller
     {
         $from = $request->query('from', now()->startOfMonth()->toDateString());
         $to = $request->query('to', now()->toDateString());
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = $request->query('branch_id');
 
         $rows = DB::table('order_items as oi')
@@ -1801,6 +2093,7 @@ class ReportController extends Controller
     {
         $from = $request->query('from', now()->startOfMonth()->toDateString());
         $to = $request->query('to', now()->toDateString());
+        if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = $request->query('branch_id');
 
         $orders = Order::with(['items.product:id,name'])

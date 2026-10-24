@@ -11,10 +11,21 @@ use Illuminate\Support\Facades\DB;
 
 class ShiftController extends Controller
 {
+    // Audit 2026-10-23 B-8: NV chỉ thao tác/xem ca thuộc CN phân công.
+    protected function denyShiftBranch(Request $request, $branchId): ?\Illuminate\Http\JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
+        }
+        return null;
+    }
+
     // Lấy thông tin ca đang mở hiện tại
     public function currentShift(Request $request)
     {
         $branchId = $request->query('branch_id', 1);
+        if ($deny = $this->denyShiftBranch($request, $branchId)) return $deny;
         $shift = Shift::with('expenses')
             ->where('branch_id', $branchId)
             ->where('status', 'open')
@@ -72,6 +83,7 @@ class ShiftController extends Controller
         ]);
 
         $branchId = $request->branch_id ?? 1;
+        if ($deny = $this->denyShiftBranch($request, $branchId)) return $deny;
 
         // Nếu ca trước chưa đóng thì không cho mở ca mới
         $existing = Shift::where('branch_id', $branchId)->where('status', 'open')->first();

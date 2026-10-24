@@ -1,5 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
-import axios from 'axios';
+import React, { createContext, useState, useContext } from 'react';
 
 // Khởi tạo Context
 const AuthContext = createContext();
@@ -9,14 +8,9 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user')) || null);
     const [token, setToken] = useState(() => localStorage.getItem('access_token') || null);
 
-    // Cấu hình axios mặc định để luôn đính kèm Token vào Header nếu có
-    useEffect(() => {
-        if (token) {
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        } else {
-            delete axios.defaults.headers.common['Authorization'];
-        }
-    }, [token]);
+    // Audit toàn diện 2026-10-21 🟠6: token KHÔNG còn gắn qua axios.defaults ở đây —
+    // request interceptor trong utils/api.js đọc localStorage tại thời điểm request
+    // (hết race "Unauthenticated." khi F5/deep-link; phủ mọi file dùng axios).
 
     // Hàm xử lý khi đăng nhập thành công
     const login = (userData, authToken) => {

@@ -27,6 +27,8 @@ class PriceListController extends Controller
             'name' => 'required|string|max:100',
             'code' => 'nullable|string|max:50|unique:price_lists,code',
             'is_active' => 'boolean',
+            // Spec kênh bán hàng (2026-10-19): phân loại kênh
+            'category' => 'nullable|in:store,online,partner',
             // Gói 17: chiết khấu kênh
             'commission_rate' => 'nullable|numeric|min:0|max:100',
             'commission_tax_included' => 'nullable|boolean',
@@ -45,6 +47,8 @@ class PriceListController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|string|max:100',
             'is_active' => 'sometimes|boolean',
+            // Spec kênh bán hàng (2026-10-19): phân loại kênh
+            'category' => 'sometimes|in:store,online,partner',
             // Gói 17: chiết khấu kênh
             'commission_rate' => 'sometimes|numeric|min:0|max:100',
             'commission_tax_included' => 'sometimes|boolean',

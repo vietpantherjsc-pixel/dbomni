@@ -7,7 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 // Gói 5 (2026-10-05): Cấu hình key/value (quy đổi điểm...).
 class Setting extends Model
 {
-    protected $guarded = [];
+    // Audit 2026-10-23 BM-13: fillable tường minh thay $guarded = []
+    protected $fillable = ['key', 'value'];
     protected $primaryKey = 'key';
     public $incrementing = false;
     protected $keyType = 'string';

@@ -25,6 +25,12 @@ class GroupOrder extends Model
         return $this->hasMany(GroupOrderItem::class);
     }
 
+    // Spec đơn nhóm đồng bộ (2026-10-21): đơn online đã chốt từ nhóm này
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Order::class);
+    }
+
     public function isOpen(): bool
     {
         return $this->status === 'open'

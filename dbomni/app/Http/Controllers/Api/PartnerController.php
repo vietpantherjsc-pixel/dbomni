@@ -79,7 +79,7 @@ class PartnerController extends Controller
         $v = $request->validate([
             'code' => 'nullable|string|max:30|unique:partners,code',
             'name' => 'required|string|max:150',
-            'type' => 'required|in:supplier,customer,other',
+            'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('partner_types'))], // Spec danh mục dùng chung
             'phone' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:150',
             'address' => 'nullable|string|max:255',
@@ -89,7 +89,8 @@ class PartnerController extends Controller
         ]);
 
         if (empty($v['code'])) {
-            $v['code'] = 'DT-' . str_pad((int) (Partner::max('id') ?? 0) + 1, 4, '0', STR_PAD_LEFT);
+            // Luật bỏ gạch mở rộng (2026-10-21 ~23:09): mã đối tác tự cấp nối liền không '-'
+            $v['code'] = 'DT' . str_pad((int) (Partner::max('id') ?? 0) + 1, 4, '0', STR_PAD_LEFT);
         }
 
         $partner = Partner::create($v);
@@ -143,7 +144,7 @@ class PartnerController extends Controller
         $v = $request->validate([
             'code' => 'nullable|string|max:30|unique:partners,code,' . $id,
             'name' => 'sometimes|string|max:150',
-            'type' => 'sometimes|in:supplier,customer,other',
+            'type' => ['sometimes', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('partner_types'))], // Spec danh mục dùng chung
             'phone' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:150',
             'address' => 'nullable|string|max:255',

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import DateInput from '../../components/DateInput';
+import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { API } from '../../utils/api';
 import {
     REPORT_CSS, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
@@ -17,8 +18,8 @@ import {
 
 const EXP_STATUS = {
     expired: { label: 'Đã hết hạn', cls: 'r' },
-    expiring_7: { label: 'Sắp hết (≤7 ngày)', cls: 'y' },
-    expiring_30: { label: 'Sắp hết (≤30 ngày)', cls: 'g' },
+    expiring_7: { label: 'Sắp hết (≤7 ngày)', cls: 'r' }, // TESTER P4: đúng spec — đỏ
+    expiring_30: { label: 'Sắp hết (≤30 ngày)', cls: 'o' }, // TESTER P4: đúng spec — cam
 };
 
 const wastePill = (pct, threshold, overThreshold) => {
@@ -31,7 +32,13 @@ const wastePill = (pct, threshold, overThreshold) => {
 
 export default function ReportsInventory() {
     const [branches, setBranches] = useState([]);
-    const [f, setF] = useState({ branch_id: '0', period: 'week', date: todayStr() });
+    // C3 (2026-10-21): CN của báo cáo = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
+    // với dropdown sidebar ('0' = Tất cả ở cả hai nơi).
+    const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
+    const [f, setF] = useState({ branch_id: ctxBranchId, period: 'week', date: todayStr() });
+    useEffect(() => {
+        setF((prev) => (prev.branch_id === ctxBranchId ? prev : { ...prev, branch_id: ctxBranchId }));
+    }, [ctxBranchId]);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errMsg, setErrMsg] = useState('');
@@ -60,7 +67,10 @@ export default function ReportsInventory() {
 
     useEffect(() => { load(); }, [load]);
 
-    const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
+    const set = (k, v) => {
+        if (k === 'branch_id') setCtxBranchId(v); // C3: đổi CN trong trang = đổi trạng thái chung
+        setF((prev) => ({ ...prev, [k]: v }));
+    };
     const meta = data?.meta;
     const mats = data?.materials || [];
     const expiry = data?.expiry || [];
@@ -120,6 +130,34 @@ export default function ReportsInventory() {
                         </div>
                     )}
                     {data && (<>
+
+                    {/* Spec P4-C3: GIÁ TRỊ TỒN KHO */}
+                    {sv && (
+                    <div className="card">
+                        <h3>Giá trị tồn kho</h3>
+                        <div className="explain"><b>Cách tính:</b> tồn hiện tại × giá vốn từng lô (nhập trước tính trước). Đối chiếu với số kiểm kê gần nhất.</div>
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+                            <div style={{ background: '#f8fafc', borderRadius: 8, padding: '12px 18px' }}>
+                                <div style={{ fontSize: 12, color: 'var(--muted)' }}>Tổng giá trị tồn</div>
+                                <div style={{ fontSize: 22, fontWeight: 800, color: '#24305E' }}>{fmtVND(sv.total)}</div>
+                            </div>
+                            {(sv.by_group || []).map((g) => (
+                                <div key={g.key} style={{ background: '#f8fafc', borderRadius: 8, padding: '12px 18px' }}>
+                                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{g.name}</div>
+                                    <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtVND(g.value)}</div>
+                                </div>
+                            ))}
+                        </div>
+                        {(sv.by_branch || []).length > 0 && (
+                        <div className="tbl-wrap"><table className="tbl"><tbody>
+                            <tr><th>Chi nhánh</th><th className="num">Giá trị tồn</th></tr>
+                            {(sv.by_branch || []).map((b) => (
+                                <tr key={b.branch_id}><td className="prod">{b.branch_name}</td><td className="num"><b>{fmtVND(b.value)}</b></td></tr>
+                            ))}
+                        </tbody></table></div>
+                        )}
+                    </div>
+                    )}
 
                     {/* 1. XUẤT – NHẬP */}
                     <div className="card">

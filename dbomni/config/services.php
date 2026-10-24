@@ -18,6 +18,12 @@ return [
         'key' => env('POSTMARK_API_KEY'),
     ],
 
+    // SPEC-01: Zalo Checkout SDK (thanh toán Mini App)
+    'zalo_payment' => [
+        'app_id' => env('ZALO_PAYMENT_APP_ID'),
+        'private_key' => env('ZALO_PAYMENT_PRIVATE_KEY'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],
@@ -26,6 +32,11 @@ return [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
+    ],
+
+    // Spec P4-P5: Zalo Mini App — App Secret CHỈ trong .env (ZALO_APP_SECRET), không commit
+    'zalo' => [
+        'app_id' => env('ZALO_APP_ID', '222133330488026054'),
     ],
 
     'slack' => [

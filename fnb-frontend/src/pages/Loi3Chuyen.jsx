@@ -228,9 +228,9 @@ export default function Loi3Chuyen() {
       <div className="l3c-wrap">
         <style>{CSS}</style>
         <div className="l3c-login">
-          <div className="l3c-hd" style={{ borderRadius: 18, position: 'relative' }}>
+          <div className="l3c-hd" style={{ borderRadius: 18 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>
             <div className="l3c-sub">Đăng nhập để tiếp tục</div>
           </div>

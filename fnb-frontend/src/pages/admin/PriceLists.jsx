@@ -10,6 +10,15 @@ export default function PriceLists() {
   const [name, setName] = useState('');
   const [editing, setEditing] = useState(null);
   const [editName, setEditName] = useState('');
+  // Spec kênh bán hàng (2026-10-19): phân loại kênh
+  const CATS = [
+    { code: 'store', label: 'Tại cửa hàng' },
+    { code: 'online', label: 'Online' },
+    { code: 'partner', label: 'Đối tác' },
+  ];
+  const catLabel = (c) => (CATS.find((x) => x.code === c) || {}).label || c || '—';
+  const [newCat, setNewCat] = useState('store');
+  const [editCat, setEditCat] = useState('store');
   // Gói 17: chiết khấu kênh
   const [editRate, setEditRate] = useState('');
   const [editTaxIncluded, setEditTaxIncluded] = useState(true);
@@ -25,7 +34,7 @@ export default function PriceLists() {
   const create = async () => {
     if (!name.trim()) { alert('Nhập tên kênh.'); return; }
     try {
-      await axios.post(`${BASE}/price-lists`, { name: name.trim() });
+      await axios.post(`${BASE}/price-lists`, { name: name.trim(), category: newCat });
       setName('');
       load();
     } catch (e) { alert(e.response?.data?.message || e.message); }
@@ -43,6 +52,7 @@ export default function PriceLists() {
     if (!editName.trim()) { setEditing(null); return; }
     const payload = {
       name: editName.trim(),
+      category: editCat,
       commission_rate: editRate === '' ? 0 : Math.max(0, Math.min(100, Number(editRate) || 0)),
       commission_tax_included: !!editTaxIncluded,
       commission_tax_rate: editTaxIncluded ? null : (editTaxRate === '' ? null : Math.max(0, Math.min(100, Number(editTaxRate) || 0))),
@@ -69,6 +79,7 @@ export default function PriceLists() {
   const startEdit = (pl) => {
     setEditing(pl.id);
     setEditName(pl.name);
+    setEditCat(pl.category || 'store');
     setEditRate(pl.commission_rate != null ? String(pl.commission_rate) : '');
     setEditTaxIncluded(!(pl.commission_tax_included === false || pl.commission_tax_included === 0));
     setEditTaxRate(pl.commission_tax_rate != null ? String(pl.commission_tax_rate) : '');
@@ -104,14 +115,27 @@ export default function PriceLists() {
           Thêm/bớt kênh, bật/tắt, kéo-thả sắp xếp. Mỗi món có thể đặt giá riêng cho từng kênh tại form Mặt hàng.
         </p>
 
-        <div className="m-card p-4 mb-4 flex gap-2">
-          <input className="m-input flex-1" placeholder="Tên kênh mới… VD: ShopeeFood, Sự kiện" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && create()} />
-          <button className="m-btn m-btn-primary" onClick={create}>+ Thêm kênh</button>
+        {/* Fix runtime zip tổng: dựng lại form thêm kênh đúng pattern (nhãn + ô nhập + nút) —
+            bản cũ select không đặt width nên render thừa ô trống lệch hàng */}
+        <div className="m-card p-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_220px_auto] gap-3 items-end">
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--m-ink-soft)' }}>Tên kênh mới</label>
+              <input className="m-input w-full" placeholder="VD: ShopeeFood, Sự kiện" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && create()} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--m-ink-soft)' }}>Phân loại kênh</label>
+              <select className="m-input w-full" value={newCat} onChange={(e) => setNewCat(e.target.value)}>
+                {CATS.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+              </select>
+            </div>
+            <button className="m-btn m-btn-primary whitespace-nowrap" onClick={create}>+ Thêm kênh</button>
+          </div>
         </div>
 
         <div className="m-card overflow-hidden">
           <table className="m-table">
-            <thead><tr><th style={{width:36}}></th><th>Tên kênh</th><th>Mã</th><th>Chiết khấu kênh</th><th className="text-center">Món đang bán</th><th className="text-center">Trạng thái</th><th className="text-right">Thao tác</th></tr></thead>
+            <thead><tr><th style={{width:36}}></th><th>Tên kênh</th><th>Mã</th><th>Phân loại</th><th>Chiết khấu kênh</th><th className="text-center">Món đang bán</th><th className="text-center">Trạng thái</th><th className="text-right">Thao tác</th></tr></thead>
             <tbody>
               {lists.map((pl) => (
                 <React.Fragment key={pl.id}>
@@ -130,6 +154,15 @@ export default function PriceLists() {
                     ) : pl.name}
                   </td>
                   <td><code className="text-xs" style={{color:'var(--m-ink-faint)'}}>{pl.code}</code></td>
+                  <td>
+                    {editing === pl.id ? (
+                      <select className="m-input" value={editCat} onChange={(e) => setEditCat(e.target.value)} style={{ fontSize: 12, padding: '4px 6px' }}>
+                        {CATS.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                      </select>
+                    ) : (
+                      <span className="m-badge m-badge-gray">{catLabel(pl.category)}</span>
+                    )}
+                  </td>
                   <td className="text-sm">{ckText(pl)}</td>
                   <td className="text-center m-num">{pl.product_count ?? '—'}</td>
                   <td className="text-center">
@@ -150,7 +183,7 @@ export default function PriceLists() {
                 {editing === pl.id && (
                   <tr key={pl.id + '-ck'}>
                     <td></td>
-                    <td colSpan={6}>
+                    <td colSpan={7}>
                       <div className="flex flex-wrap items-end gap-3 p-3 rounded-lg" style={{ background: '#F6F8FD' }}>
                         <label className="text-xs font-semibold">Chiết khấu kênh (%)
                           <input type="number" min="0" max="100" step="0.1" className="m-input ml-2" style={{ width: 90 }}
@@ -175,7 +208,7 @@ export default function PriceLists() {
                 )}
                 </React.Fragment>
               ))}
-              {lists.length === 0 && <tr><td colSpan={7} className="p-8 text-center" style={{color:'var(--m-ink-faint)'}}>Chưa có kênh nào.</td></tr>}
+              {lists.length === 0 && <tr><td colSpan={8} className="p-8 text-center" style={{color:'var(--m-ink-faint)'}}>Chưa có kênh nào.</td></tr>}
             </tbody>
           </table>
         </div>

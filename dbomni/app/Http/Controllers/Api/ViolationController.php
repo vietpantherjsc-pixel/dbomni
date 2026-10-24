@@ -142,7 +142,7 @@ class ViolationController extends Controller
     public function typesStore(Request $request): JsonResponse
     {
         $v = $request->validate([
-            'category' => 'required|in:chuyen_can,chuyen_mon,chuyen_nghiep',
+            'category' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('violation_groups'))], // Spec danh mục dùng chung
             'name' => 'required|string|max:255',
             'default_points' => 'required|integer|min:1|max:100',
             'sort_order' => 'nullable|integer|min:0',

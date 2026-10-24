@@ -17,6 +17,7 @@ const Switch = ({ checked, onChange, disabled }) => (
 export default function VisibilityMatrix({
     title, desc, matrixUrl, toggleUrl, syncUrl,
     rowsKey, rowKey, syncIdsKey, countKey,
+    embedded = false, // Fix runtime zip tổng: nhúng trong tab cha thì KHÔNG render lại AdminLayout
 }) {
     const [branches, setBranches] = useState([]);
     const [rows, setRows] = useState([]);
@@ -86,8 +87,8 @@ export default function VisibilityMatrix({
     const hiddenNames = (row) =>
         branches.filter((b) => isHidden(b.id, row.id)).map((b) => b.name);
 
-    return (
-        <AdminLayout>
+    const content = (
+        <>
             <style>{`
                 .visw-switch { position: relative; width: 40px; height: 22px; display: inline-block; vertical-align: middle; }
                 .visw-switch input { opacity: 0; width: 0; height: 0; }
@@ -187,6 +188,8 @@ export default function VisibilityMatrix({
                     </div>
                 </div>
             </div>
-        </AdminLayout>
+        </>
     );
+    if (embedded) return content;
+    return <AdminLayout>{content}</AdminLayout>;
 }

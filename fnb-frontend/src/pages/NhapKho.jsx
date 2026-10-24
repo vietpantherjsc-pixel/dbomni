@@ -374,9 +374,9 @@ export default function NhapKho({ embed } = {}) {
       <div className="nk-wrap">
         <style>{CSS}</style>
         <div className="nk-login">
-          <div className="nk-hd" style={{ borderRadius: 18, position: 'relative' }}>
+          <div className="nk-hd" style={{ borderRadius: 18 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="nk-title">📦 Nhập hàng</div>
             <div className="nk-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -471,6 +471,7 @@ export default function NhapKho({ embed } = {}) {
             <div className="nk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="nk-sub">{curBranchName}</div>
           </div>
+          {!(embed && embed.onBack) && <button className="nk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>}
           <button className="nk-logout" onClick={embed && embed.onBack ? embed.onBack : logout} aria-label={embed && embed.onBack ? 'Quay lại' : 'Đăng xuất'}>{embed && embed.onBack ? '‹ Quay lại' : 'Đăng xuất'}</button>
         </div>
         <div className="nk-title">📦 Phiếu nhập hàng</div>
@@ -592,7 +593,7 @@ export default function NhapKho({ embed } = {}) {
                         />
                       </div>
                       <div>
-                        <label className="nk-label">Đơn vị mua</label>
+                        <label className="nk-label" style={{ marginTop: 0 }}>Đơn vị mua</label>
                         <select
                           className="nk-field"
                           value={it.purchaseUnit}

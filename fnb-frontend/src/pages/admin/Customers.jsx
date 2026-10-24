@@ -71,6 +71,16 @@ export default function Customers() {
         } catch (err) { alert(err.response?.data?.message || 'Điều chỉnh thất bại'); }
     };
 
+    // Loyalty 2.0: thu hồi coupon trong ví (coupon đổi điểm → hoàn điểm về lô gốc)
+    const handleRevokeCoupon = async (cp) => {
+        if (!window.confirm(`Thu hồi coupon ${cp.code}?${cp.issue_trigger === 'points_exchange' ? ' Điểm đã đổi sẽ được hoàn về các lô gốc.' : ''}`)) return;
+        try {
+            const res = await axios.post(`${API}/customers/${detail.id}/coupons/${cp.id}/revoke`);
+            if (res.data?.success) { alert(res.data.message); openDetail(detail.id); }
+            else alert(res.data?.message || 'Thu hồi thất bại');
+        } catch (err) { alert(err.response?.data?.message || 'Thu hồi thất bại'); }
+    };
+
     return (
         <AdminLayout>
             <div className="p-5">
@@ -199,6 +209,43 @@ export default function Customers() {
                                     </div>
                                 ))}
                                 {(detail.pointTransactions || []).length === 0 && <p className="text-xs text-gray-400">Chưa có giao dịch điểm.</p>}
+                            </div>
+
+                            {/* Loyalty 2.0: lô điểm còn hạn + lịch sử hạng + coupon ví */}
+                            <div className="border-t pt-4 mb-4">
+                                <h4 className="font-medium text-[14px] mb-2">Lô điểm (còn hạn dùng)</h4>
+                                {(detail.point_lots || []).map((l) => (
+                                    <div key={l.id} className="flex justify-between text-[13px] border-b border-gray-50 py-1.5">
+                                        <span className="text-gray-600">Lô #{l.id} · {l.source_type === 'migration' ? 'Ân hạn chuyển đổi' : l.source_type === 'earn' ? 'Tích từ đơn' : l.source_type === 'referral' ? 'Giới thiệu' : 'Điều chỉnh'} <span className="text-gray-400 text-xs">· HSD {fmtDate(l.expires_at)}</span></span>
+                                        <span className="font-bold text-amber-600">{Number(l.points_remaining).toLocaleString('vi-VN')} điểm</span>
+                                    </div>
+                                ))}
+                                {(detail.point_lots || []).length === 0 && <p className="text-xs text-gray-400">Không có lô điểm nào còn điểm.</p>}
+                            </div>
+
+                            <div className="border-t pt-4 mb-4">
+                                <h4 className="font-medium text-[14px] mb-2">Lịch sử hạng</h4>
+                                {(detail.tier_logs || []).map((g) => (
+                                    <div key={g.id} className="flex justify-between text-[13px] border-b border-gray-50 py-1.5">
+                                        <span className="text-gray-600">{g.from_tier?.name || '—'} → <b>{g.to_tier?.name || '—'}</b> <span className="text-gray-400 text-xs">· {g.reason === 'earn_threshold' ? 'Đủ chi tiêu cửa sổ' : g.reason === 'window_drop' ? 'Tụt theo cửa sổ' : g.reason === 'manual' ? 'Admin gán tay' : 'Khởi tạo'} · {fmtDateTime(g.created_at)}</span></span>
+                                        {g.window_spent != null && <span className="text-gray-500">{Number(g.window_spent).toLocaleString('vi-VN')}đ</span>}
+                                    </div>
+                                ))}
+                                {(detail.tier_logs || []).length === 0 && <p className="text-xs text-gray-400">Chưa có biến động hạng.</p>}
+                                {detail.tier_warning_at && <p className="text-xs text-red-600 mt-1">⚠ Đang trong diện nguy cơ tụt hạng từ {fmtDate(detail.tier_warning_at)}.</p>}
+                            </div>
+
+                            <div className="border-t pt-4 mb-4">
+                                <h4 className="font-medium text-[14px] mb-2">Coupon trong ví</h4>
+                                {(detail.coupons || []).map((cp) => (
+                                    <div key={cp.id} className="flex justify-between items-center text-[13px] border-b border-gray-50 py-1.5">
+                                        <span className="text-gray-600"><span className="font-mono font-medium">{cp.code}</span> <span className="text-gray-400 text-xs">· {cp.promotion?.name || ''} · {cp.status}{cp.issue_trigger === 'points_exchange' ? ' · đổi điểm' : ''}</span></span>
+                                        {(cp.status === 'active' || cp.status === 'expired') && (
+                                            <button onClick={() => handleRevokeCoupon(cp)} className="text-red-500 hover:underline text-xs">Thu hồi{cp.issue_trigger === 'points_exchange' ? ' + hoàn điểm' : ''}</button>
+                                        )}
+                                    </div>
+                                ))}
+                                {(detail.coupons || []).length === 0 && <p className="text-xs text-gray-400">Chưa có coupon nào.</p>}
                             </div>
 
                             <div className="border-t pt-4">

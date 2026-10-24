@@ -6,11 +6,17 @@ import { fmtDateTime, fmtTime } from './format.js';
 import { API } from './api.js';
 
 // Gói SEC: đọc cấu hình mẫu in từ settings (cache để không fetch mỗi lần in)
+// Audit toàn diện 2026-10-21 🟠7: fetch PHẢI kèm token — GET /settings nằm trong
+// nhóm auth; trước đây fetch trần → 401 lặng lẽ → mọi công tắc mẫu in bị bỏ qua
+// (mặc định bật hết). fetch không qua axios nên interceptor 🟠6 không phủ — gắn tay.
 let _printCfg = null;
 async function getPrintCfg() {
   if (_printCfg) return _printCfg;
   try {
-    const res = await fetch(`${API}/settings`);
+    const token = (() => { try { return localStorage.getItem('access_token'); } catch { return null; } })();
+    const res = await fetch(`${API}/settings`, {
+      headers: token ? { Authorization: `Bearer ${token}`, Accept: 'application/json' } : { Accept: 'application/json' },
+    });
     const data = await res.json();
     _printCfg = data || {};
   } catch { _printCfg = {}; }

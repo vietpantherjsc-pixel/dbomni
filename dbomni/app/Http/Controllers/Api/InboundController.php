@@ -41,7 +41,8 @@ class InboundController extends Controller
         }
         $baseQuantity = (float) $item['purchase_quantity'] * $rate;
 
-        $batchCode = $item['batch_code'] ?? ('BATCH-' . strtoupper(Str::random(8)));
+        // Luật bỏ gạch mở rộng (2026-10-21 ~23:09): mã lô tự sinh nối liền không '-'
+        $batchCode = $item['batch_code'] ?? ('BATCH' . strtoupper(Str::random(8)));
 
         // Gói 55 p11ae: batch.unit_cost phải là giá theo ĐƠN VỊ CƠ SỞ
         // (trừ kho tính theo baseQuantity), nên chia cho rate.

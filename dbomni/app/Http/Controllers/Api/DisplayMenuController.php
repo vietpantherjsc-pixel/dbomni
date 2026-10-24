@@ -44,7 +44,7 @@ class DisplayMenuController extends Controller
                     ->when(!empty($hiddenProductIds), fn($qq) => $qq->whereNotIn('products.id', $hiddenProductIds))
                     ->orderBy('menu_product.sort_order')
                     ->orderBy('products.name')
-                    ->with(['options', 'prices.priceList', 'optionGroups' => function ($qq) {
+                    ->with(['options', 'prices.priceList', 'categoryPrices', 'optionGroups' => function ($qq) {
                         // Gói 34e: sắp xếp nhóm tùy chọn theo sort_order của admin
                         $qq->where('is_active', true)->orderBy('sort_order')->orderBy('id')
                             ->with(['options' => fn($qqq) => $qqq->orderBy('sort_order')->orderBy('id')]);

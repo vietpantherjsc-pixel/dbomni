@@ -5,6 +5,7 @@ import DateInput from '../components/DateInput';
 import NhapKho from './NhapKho';
 import XuatKho from './XuatKho';
 import ChuyenKho from './ChuyenKho';
+import { ApprovalCluster, ApprovalsFlow } from './hub/Approvals'; // Gói "Chờ duyệt trên Hub" (2026-10-21)
 
 // Gói 59: Hub nhân viên (/nhan-vien) — 1 link + QR chung cho NV.
 // - Đăng nhập PIN 1 lần (lưu localStorage['staff_token'] / ['staff_emp'])
@@ -205,7 +206,8 @@ export default function StaffHub() {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
-  const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi
+  const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi | choduyet
+  const [approvalType, setApprovalType] = useState('inbound'); // loại phiếu mở từ cụm Chờ duyệt
 
   const doLogin = async (e) => {
     e.preventDefault();
@@ -329,6 +331,8 @@ export default function StaffHub() {
   if (screen === 'chuyen') return <ChuyenKho embed={embed} />;
   if (screen === 'thu') return <TxnForm token={token} hubT={hubT} emp={emp} kind="income" onBack={back} onExpired={onExpired} branchId={branchId} />;
   if (screen === 'chi') return <TxnForm token={token} hubT={hubT} emp={emp} kind="expense" onBack={back} onExpired={onExpired} branchId={branchId} />;
+  // Gói "Chờ duyệt trên Hub" (2026-10-21): luồng duyệt phiếu chờ
+  if (screen === 'choduyet') return <ApprovalsFlow token={token} hubT={hubT} emp={emp} branchId={branchId} branchName={branchName} initialType={approvalType} onBack={back} />;
 
   // ---- Trang hub ----
   return (
@@ -354,6 +358,10 @@ export default function StaffHub() {
         </div>
         <div className="sh-title">👥 Cổng nhân viên</div>
       </header>
+
+      {/* Gói "Chờ duyệt trên Hub" (2026-10-21): cụm Chờ duyệt ngay dưới header, trên 4 cụm cũ */}
+      <ApprovalCluster token={token} hubT={hubT} branchId={branchId}
+        onOpen={(t) => { setApprovalType(t); setScreen('choduyet'); }} />
 
       {BTNS.map((g) => (
         <div className="sh-group" key={g.group}>
