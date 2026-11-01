@@ -3,7 +3,11 @@
 // hoặc cùng host lúc production). Build cho server riêng:
 // VITE_API_BASE=https://ten-mien.com/api/online npm run build
 import { storage } from './utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk) — TESTER P5: thiếu import gây ReferenceError
+import appConfig from '../app-config.json'; // Gói Đón Bình Minh: app_id lấy từ file cấu hình, không ghi cứng rải rác
 export const API = import.meta.env.VITE_API_BASE || '/api/online';
+// Link mở Mini App chính thức của Zalo (deep-link chia sẻ kèm mã mời)
+export const MINI_APP_ID = appConfig?.app?.id || '';
+export const miniAppLink = (refCode) => `https://zalo.me/s/${MINI_APP_ID}${refCode ? `?ref=${encodeURIComponent(refCode)}` : ''}`;
 export const GREEN = '#24305E'; // fallback; màu thật lấy từ /theme qua loadTheme()
 
 async function req(path, opts = {}) {
@@ -141,11 +145,33 @@ export const imgUrl = (u) => {
 export const getRef = () => {
   return storage.get('zm_ref') || '';
 };
+// Gói Đón Bình Minh (2026-10-28): ghi/gỡ mã mời từ ô nhập tay ở Checkout —
+// đi cùng 1 kho zm_ref với đường link để payload đặt đơn không đổi.
+export const setRef = (code) => {
+  const v = (code || '').trim().toUpperCase();
+  if (v) storage.set('zm_ref', v);
+  else storage.remove('zm_ref');
+};
 export const captureRef = () => {
+  // Nguồn 1: tham số trên URL hiện tại (mở qua link web / trình duyệt)
   try {
     const m = new URLSearchParams(window.location.search).get('ref');
-    if (m) storage.set('zm_ref', m.trim().toUpperCase());
+    if (m) { storage.set('zm_ref', m.trim().toUpperCase()); return; }
   } catch { /* ignore */ }
+  // Nguồn 2: tham số khởi động do SDK Zalo cấp khi mở app qua deep-link
+  // zalo.me/s/<app_id>?ref=... — getRouteParams() của zmp-sdk.
+  // LƯU Ý KIỂM CHỨNG: Zalo có chuyển nguyên tham số của link mở app vào
+  // getRouteParams hay không phải xác nhận trên THIẾT BỊ THẬT (checklist
+  // nghiệm thu gói Đón Bình Minh mục 6). Nếu nguồn này không mang được mã,
+  // đường dự phòng là ô nhập tay ở Checkout + mã dạng chữ trong text chia sẻ.
+  import('zmp-sdk/apis')
+    .then(({ getRouteParams }) => {
+      try {
+        const ref = getRouteParams()?.ref;
+        if (ref) storage.set('zm_ref', String(ref).trim().toUpperCase());
+      } catch { /* ngoài môi trường Zalo thì bỏ qua */ }
+    })
+    .catch(() => { /* zmp-sdk không sẵn sàng (dev browser) — bỏ qua */ });
 };
 // Nhóm đơn của tôi đã tạo/tham gia: {code: {role, name}}
 export const getMyGroups = () => {

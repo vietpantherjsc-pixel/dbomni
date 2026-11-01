@@ -6,6 +6,7 @@ import { API } from '../../utils/api';
 const Categories = () => {
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState(null);
@@ -23,9 +24,10 @@ const Categories = () => {
     const fetchCategories = async () => {
         try {
             const response = await axios.get(API + '/categories');
-            setCategories(response.data);
+            setCategories(response.data); setLoadErr(false);
         } catch (error) {
             console.error("Lỗi khi tải danh mục:", error);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -105,7 +107,7 @@ const Categories = () => {
             </div>
 
             {/* Gói 7o: layout giống trang Mặt hàng */}
-            <div className="m-card overflow-hidden">
+            <div className="m-card overflow-x-auto">
                 <table className="m-table">
                     <thead>
                         <tr>
@@ -120,7 +122,7 @@ const Categories = () => {
                         {loading ? (
                             <tr><td colSpan="5" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
                         ) : categories.length === 0 ? (
-                            <tr><td colSpan="5" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có danh mục nào.</td></tr>
+                            <tr><td colSpan="5" className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách danh mục.<button onClick={fetchCategories} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có danh mục nào.'}</td></tr>
                         ) : (
                             categories.map(cat => (
                                 <tr key={cat.id} onClick={() => openEdit(cat)} className="cursor-pointer">

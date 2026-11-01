@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import DateInput from '../components/DateInput';
 
 // Trang nhân viên xin nghỉ theo ca (public, KHÔNG cần đăng nhập admin)
 // Token riêng: localStorage['xinnghi_token'] / ['xinnghi_emp']
@@ -17,13 +18,13 @@ const ORANGE = '#F5A623';
 const CSS = `
 .xn-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .xn-wrap button{font-family:inherit;}
-.xn-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.xn-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .xn-hd-user{display:flex;align-items:center;gap:10px;}
 .xn-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .xn-name{font-size:15px;font-weight:700;line-height:1.25;}
 .xn-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .xn-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.xn-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.xn-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .xn-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .xn-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
 .xn-bigbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:56px;border:none;border-radius:14px;background:${NAVY};color:#fff;font-size:16px;font-weight:800;}
@@ -35,12 +36,15 @@ const CSS = `
 .xn-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
 .xn-ok{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;}
 .xn-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
-.xn-login{padding:40px 24px;}
+.xn-login{padding:0 16px 24px;}
+.xn-login-hd{background:${NAVY};color:#fff;margin:0 -16px 16px;padding:22px 20px 26px;border-radius:0 0 12px 12px;}
+.xn-login-card{background:#fff;border-radius:12px;padding:18px 16px;box-shadow:0 1px 3px rgba(16,24,40,.08);}
 .xn-send{background:${NAVY};color:#fff;width:100%;min-height:50px;border:none;border-radius:12px;font-size:15px;font-weight:700;margin-top:16px;}
 .xn-send:disabled{opacity:.4;}
 .xn-row{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid #e8e9ee;border-radius:10px;padding:11px 12px;margin-bottom:8px;}
 .xn-badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;}
 .xn-b-pending{background:#fef3c7;color:#b45309;}
+.xn-b-confirmed{background:#eef0f8;color:#24305E;}
 .xn-b-approved{background:#dcfce7;color:#15803d;}
 .xn-b-rejected{background:#fee2e2;color:#b91c1c;}
 .xn-empty{text-align:center;color:#6b7280;font-size:13.5px;padding:18px 8px;line-height:1.6;}
@@ -66,6 +70,17 @@ export default function XinNghi() {
 
     const api = (path, opts = {}) => axios({ url: API + path, headers: { Authorization: 'Bearer ' + token }, ...opts });
 
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
+    // UX 2026-10-26 (🟠23): hết phiên 401 -> đăng xuất + báo, như các trang Hub chị em (trước đây trang này nuốt mọi lỗi kể cả 401, NV kẹt ở màn hình cũ)
+    const expired = (e) => {
+        if (e && e.response && e.response.status === 401) {
+            logout();
+            setLoginErr('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+            return true;
+        }
+        return false;
+    };
+
     const loadAll = async () => {
         try {
             const [s, r] = await Promise.all([
@@ -74,7 +89,8 @@ export default function XinNghi() {
             ]);
             setShifts(s.data?.data || []);
             setMyReqs(r.data?.data || []);
-        } catch (e) { /* bỏ qua */ }
+            setLoadErr(false);
+        } catch (e) { if (!expired(e)) setLoadErr(true); }
     };
     useEffect(() => { if (token) loadAll(); }, [token]); // eslint-disable-line
 
@@ -96,18 +112,21 @@ export default function XinNghi() {
         setToken(''); setEmp(null);
     };
 
+    const [sending, setSending] = useState(false); // UX 2026-10-26 (🟠24): khóa nút khi đang gửi, chống gửi trùng
     const submit = async () => {
+        if (sending) return;
         setMsg(null);
         if (!sel) return setMsg({ ok: false, text: 'Hãy chọn ca muốn xin nghỉ.' });
         const [date, wsid] = sel.split('|');
+        setSending(true);
         try {
             const r = await api('/employee/shift-leaves', { method: 'post', data: { date, work_shift_id: Number(wsid), reason: reason.trim() || undefined } });
             setMsg({ ok: true, text: r.data?.message || 'Đã gửi yêu cầu.' });
             setSel(''); setReason('');
             loadAll();
         } catch (e) {
-            setMsg({ ok: false, text: e.response?.data?.message || 'Gửi thất bại' });
-        }
+            if (!expired(e)) setMsg({ ok: false, text: e.response?.data?.message || 'Gửi thất bại' });
+        } finally { setSending(false); }
     };
 
     return (
@@ -115,16 +134,20 @@ export default function XinNghi() {
             <style>{CSS}</style>
             {!token ? (
                 <div className="xn-login">
-                    <button onClick={goHub} aria-label="Quay lại hub"
-                      style={{ background: '#eef0f6', border: 'none', color: NAVY, fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 12 }}>‹ Về Cổng nhân viên</button>
-                    <h2 style={{ color: NAVY, fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Xin nghỉ theo ca</h2>
-                    <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 20 }}>Đăng nhập bằng SĐT + PIN để gửi yêu cầu nghỉ cho ca đã đăng ký.</p>
-                    <label className="xn-label">Số điện thoại</label>
-                    <input className="xn-field" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="VD: 0901234567" />
-                    <label className="xn-label">Mã PIN</label>
-                    <input className="xn-field" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN của bạn" />
-                    {loginErr && <div className="xn-msg" style={{ margin: '12px 0 0' }}>{loginErr}</div>}
-                    <button className="xn-send" onClick={doLogin} disabled={!phone.trim() || !pin.trim()}>Đăng nhập</button>
+                    <div className="xn-login-hd">
+                        <button onClick={goHub} aria-label="Quay lại hub"
+                          style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 12 }}>‹ Về Cổng nhân viên</button>
+                        <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Xin nghỉ theo ca</h2>
+                        <p style={{ opacity: .8, fontSize: 14 }}>Đăng nhập bằng SĐT + PIN để gửi yêu cầu nghỉ cho ca đã đăng ký.</p>
+                    </div>
+                    <div className="xn-login-card">
+                        <label className="xn-label">Số điện thoại</label>
+                        <input className="xn-field" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="VD: 0901234567" />
+                        <label className="xn-label">Mã PIN</label>
+                        <input className="xn-field" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN của bạn" />
+                        {loginErr && <div className="xn-msg" style={{ margin: '12px 0 0' }}>{loginErr}</div>}
+                        <button className="xn-send" onClick={doLogin} disabled={!phone.trim() || !pin.trim()}>Đăng nhập</button>
+                    </div>
                 </div>
             ) : (
                 <>
@@ -148,6 +171,13 @@ export default function XinNghi() {
                         ))}
                     </div>
 
+                    {loadErr && (
+                        <div className="xn-card" style={{ color: '#b42318' }}>
+                            ⚠ Không tải được dữ liệu. Kiểm tra kết nối rồi thử lại.
+                            <button onClick={loadAll} style={{ display: 'block', marginTop: 10, minHeight: 44, padding: '0 18px', borderRadius: 12, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+                        </div>
+                    )}
+
                     {tab === 'leave' ? (<>
                     <div className="xn-card">
                         <h3>📝 Tạo yêu cầu nghỉ</h3>
@@ -163,7 +193,7 @@ export default function XinNghi() {
                         {shifts.length === 0 && <div className="xn-empty">Không có ca nào sắp tới.</div>}
                         <label className="xn-label">Lý do</label>
                         <input className="xn-field" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: việc gia đình" />
-                        <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!sel}>Gửi yêu cầu nghỉ</button>
+                        <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!sel || sending}>{sending ? 'Đang gửi…' : 'Gửi yêu cầu nghỉ'}</button>
                     </div>
 
                     {msg && <div className={msg.ok ? 'xn-ok' : 'xn-msg'}>{msg.text}</div>}
@@ -180,7 +210,7 @@ export default function XinNghi() {
                             </div>
                         ))}
                     </div>
-                    </>) : <SwapTab api={api} shifts={shifts} fmtD={fmtD} />}
+                    </>) : <SwapTab api={api} shifts={shifts} fmtD={fmtD} onExpired={expired} />}
                 </>
             )}
         </div>
@@ -188,7 +218,9 @@ export default function XinNghi() {
 }
 
 // Spec P4-B5: tab đổi ca — A tạo yêu cầu → B xác nhận → quản lý duyệt
-function SwapTab({ api, shifts, fmtD }) {
+function SwapTab({ api, shifts, fmtD, onExpired }) {
+    const [sending, setSending] = useState(false); // UX 2026-10-26 (🟠24)
+    const [actingId, setActingId] = useState(null); // UX 2026-10-26 (🟠24): khóa nút xác nhận của yêu cầu đang xử lý
     const [mySched, setMySched] = useState('');
     const [date, setDate] = useState('');
     const [cols, setCols] = useState([]);
@@ -205,7 +237,7 @@ function SwapTab({ api, shifts, fmtD }) {
             ]);
             setPending(p.data?.data || []);
             setMine(m.data?.data || []);
-        } catch (e) { /* bỏ qua */ }
+        } catch (e) { if (onExpired && onExpired(e)) return; setMsg({ ok: false, text: 'Không tải được danh sách đổi ca. Kiểm tra kết nối rồi mở lại tab.' }); } // UX 2026-10-26 (🟠T1 + 🟠23)
     };
     useEffect(() => { loadLists(); }, []); // eslint-disable-line
 
@@ -219,9 +251,11 @@ function SwapTab({ api, shifts, fmtD }) {
     };
 
     const submit = async () => {
+        if (sending) return;
         setMsg(null);
         if (!mySched || !theirSched) return setMsg({ ok: false, text: 'Chọn ca của bạn và ca muốn đổi.' });
         const col = cols.find((c) => String(c.work_schedule_id) === theirSched);
+        setSending(true);
         try {
             const r = await api('/employee/shift-swaps', { method: 'post', data: {
                 requester_schedule_id: Number(mySched),
@@ -231,18 +265,23 @@ function SwapTab({ api, shifts, fmtD }) {
             setMsg({ ok: true, text: r.data?.message || 'Đã gửi yêu cầu.' });
             setMySched(''); setTheirSched(''); setDate(''); setCols([]);
             loadLists();
-        } catch (e) { setMsg({ ok: false, text: e.response?.data?.message || 'Gửi thất bại' }); }
+        } catch (e) { if (!(onExpired && onExpired(e))) setMsg({ ok: false, text: e.response?.data?.message || 'Gửi thất bại' }); }
+        finally { setSending(false); }
     };
 
     const confirm = async (id, accept) => {
+        if (actingId) return;
+        setActingId(id);
         try {
             const r = await api(`/employee/shift-swaps/${id}/confirm`, { method: 'post', data: { accept } });
             setMsg({ ok: true, text: r.data?.message || 'Đã xử lý.' });
             loadLists();
-        } catch (e) { setMsg({ ok: false, text: e.response?.data?.message || 'Thất bại' }); }
+        } catch (e) { if (!(onExpired && onExpired(e))) setMsg({ ok: false, text: e.response?.data?.message || 'Thất bại' }); }
+        finally { setActingId(null); }
     };
 
     const ST = { pending: 'Chờ B xác nhận', target_confirmed: 'Chờ quản lý duyệt', approved: 'Đã duyệt', rejected: 'Đã từ chối' };
+    const STC = { pending: 'xn-b-pending', target_confirmed: 'xn-b-confirmed', approved: 'xn-b-approved', rejected: 'xn-b-rejected' }; // UX 2026-10-26 (🟡): trước đây badge luôn vàng bất kể trạng thái
     return (
         <div>
             <div className="xn-card">
@@ -257,7 +296,7 @@ function SwapTab({ api, shifts, fmtD }) {
                     ))}
                 </select>
                 <label className="xn-label">Ngày muốn đổi (ca của đồng nghiệp)</label>
-                <input className="xn-field" type="date" value={date} onChange={(e) => loadCols(e.target.value)} />
+                <DateInput className="xn-field" value={date} onChange={(v) => loadCols(v)} />
                 {cols.length > 0 && (<>
                     <label className="xn-label">Ca của đồng nghiệp</label>
                     <select className="xn-field" value={theirSched} onChange={(e) => setTheirSched(e.target.value)}>
@@ -269,7 +308,7 @@ function SwapTab({ api, shifts, fmtD }) {
                         ))}
                     </select>
                 </>)}
-                <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!mySched || !theirSched}>Gửi yêu cầu đổi ca</button>
+                <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!mySched || !theirSched || sending}>{sending ? 'Đang gửi…' : 'Gửi yêu cầu đổi ca'}</button>
             </div>
 
             {msg && <div className={msg.ok ? 'xn-ok' : 'xn-msg'}>{msg.text}</div>}
@@ -286,8 +325,8 @@ function SwapTab({ api, shifts, fmtD }) {
                                 </div>
                             </div>
                             <div style={{ display: 'flex', gap: 6 }}>
-                                <button onClick={() => confirm(r.id, true)} style={{ background: '#dcfce7', color: '#15803d', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700 }}>Đồng ý</button>
-                                <button onClick={() => confirm(r.id, false)} style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700 }}>Từ chối</button>
+                                <button onClick={() => confirm(r.id, true)} disabled={actingId === r.id} style={{ background: '#dcfce7', color: '#15803d', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700, minHeight: 44 }}>Đồng ý</button>
+                                <button onClick={() => confirm(r.id, false)} disabled={actingId === r.id} style={{ background: '#fee2e2', color: '#b91c1c', border: 'none', borderRadius: 8, padding: '8px 12px', fontWeight: 700, minHeight: 44 }}>Từ chối</button>
                             </div>
                         </div>
                     ))}
@@ -302,7 +341,7 @@ function SwapTab({ api, shifts, fmtD }) {
                             <div style={{ fontWeight: 700, fontSize: 14 }}>Đổi với {r.target?.full_name}</div>
                             <div style={{ fontSize: 12, color: '#6b7280' }}>{r.requester_schedule?.work_shift?.name} ↔ {r.target_schedule?.work_shift?.name}</div>
                         </div>
-                        <span className="xn-badge xn-b-pending">{ST[r.status] || r.status}</span>
+                        <span className={`xn-badge ${STC[r.status] || 'xn-b-pending'}`}>{ST[r.status] || r.status}</span>
                     </div>
                 ))}
             </div>

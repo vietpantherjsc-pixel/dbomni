@@ -16,6 +16,7 @@ export default function AccountManager() {
     const TYPE_LABEL = labelMap(useSharedCategories('account_types', []), TYPE_LABEL_FB);
     const typeItems = useSharedCategories('account_types', Object.entries(TYPE_LABEL_FB).map(([code, name]) => ({ code, name })));
     const [items, setItems] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1): phân biệt tải lỗi với thật sự trống
     const [branches, setBranches] = useState([]);
     // C3 (2026-10-21): bộ lọc CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều với
     // dropdown sidebar ('' tại trang này = '0' — Tất cả — ở context).
@@ -30,7 +31,7 @@ export default function AccountManager() {
         try {
             const res = await axios.get(`${API}/accounts`, { params: branchFilter ? { branch_id: branchFilter } : {} });
             if (res.data?.success) setItems(res.data.data || []);
-        } catch { /* bỏ qua */ }
+        } catch { setLoadErr(true); }
     };
     useEffect(() => { load(); }, [branchFilter]);
     useEffect(() => {
@@ -94,7 +95,7 @@ export default function AccountManager() {
                     </thead>
                     <tbody>
                         {items.length === 0 ? (
-                            <tr><td colSpan={6} className="py-4 text-center text-gray-400">Chưa có quỹ nào.</td></tr>
+                            <tr><td colSpan={6} className="py-4 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách quỹ.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có quỹ nào.'}</td></tr>
                         ) : items.map((a) => (
                             <tr key={a.id} className="border-b border-gray-50">
                                 <td className="py-2.5 pr-3 font-medium">{a.name}

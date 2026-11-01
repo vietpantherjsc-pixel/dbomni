@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub)
 import SearchIcon from '../components/SearchIcon'; // Gói 55 p11x
 
 // Trang nhân viên kiểm kê kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
@@ -20,20 +21,20 @@ const ORANGE = '#F5A623';
 const CSS = `
 .kk-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .kk-wrap button{font-family:inherit;}
-.kk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.kk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .kk-hd-user{display:flex;align-items:center;gap:10px;}
 .kk-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .kk-name{font-size:15px;font-weight:700;line-height:1.25;}
 .kk-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .kk-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.kk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.kk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .kk-logout:active{transform:scale(.95);}
 .kk-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .kk-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
 .kk-bigbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:60px;border:none;border-radius:14px;background:${NAVY};color:#fff;font-size:17px;font-weight:800;}
 .kk-bigbtn:active{transform:scale(.97);}
 .kk-bigbtn:disabled{opacity:.45;}
-.kk-green{background:#16a34a;}
+.kk-green{background:#24305E;}
 .kk-orange{background:${ORANGE};}
 .kk-outline{background:#fff;border:1.5px solid #e8e9ee;color:${NAVY};}
 .kk-srow{display:flex;justify-content:space-between;align-items:center;gap:8px;border:1px solid #e8e9ee;border-radius:10px;padding:11px 12px;margin-bottom:8px;min-height:48px;}
@@ -53,7 +54,7 @@ const CSS = `
 .kk-send{background:${NAVY};color:#fff;width:100%;min-height:50px;border:none;border-radius:12px;font-size:15px;font-weight:700;margin-top:16px;}
 .kk-send:active{transform:scale(.97);}
 .kk-send:disabled{opacity:.4;}
-.kk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;max-width:92vw;}
+.kk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;border-radius:16px;}
 .kk-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .kk-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
 .kk-searchbar{position:sticky;top:0;z-index:10;background:#f4f5f7;padding:12px 16px 8px;}
@@ -139,10 +140,14 @@ export default function KiemKe() {
   const [showAddPicker, setShowAddPicker] = useState(false);
   const [addSearch, setAddSearch] = useState('');
 
-  const toast = (m) => {
-    setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2400);
+  const toastTimer = React.useRef(null); // UX 2026-10-26 (🟡L29): toast lỗi hiện lâu hơn toast thường
+  const toast = (m, isErr) => {
+    setToastMsg(m);
+    setToastOn(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2400);
   };
+  const toastErr = (m) => toast(m, true);
 
   const logout = () => {
     localStorage.removeItem('kiemke_token');
@@ -189,7 +194,7 @@ export default function KiemKe() {
       setSheets((r.data && r.data.data) || []);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được danh sách phiếu.'));
+      toastErr(errMsg(e, 'Không tải được danh sách phiếu.'));
     } finally { setLoading(false); }
   };
 
@@ -242,7 +247,7 @@ export default function KiemKe() {
       setScreen('count');
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không mở được phiếu.'));
+      toastErr(errMsg(e, 'Không mở được phiếu.'));
     } finally { setBusy(false); }
   };
 
@@ -260,15 +265,21 @@ export default function KiemKe() {
       await openSheet(d.id, token);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tạo được phiếu.'));
+      toastErr(errMsg(e, 'Không tạo được phiếu.'));
     } finally { setBusy(false); }
   };
 
   // Gói 55 p11w: xóa dòng khỏi phiếu
   const removeItem = async (itemId) => {
     // Gói 55 p11ac: chặn xóa dòng cuối — phiếu phải có ít nhất 1 nguyên liệu
-    if (items.length <= 1) { alert('Phiếu phải có ít nhất 1 nguyên liệu. Muốn bỏ hết thì dùng nút "Hủy phiếu".'); return; }
-    if (!window.confirm('Xóa nguyên liệu này khỏi phiếu?')) return;
+    if (items.length <= 1) { toast('Phiếu phải có ít nhất 1 nguyên liệu. Muốn bỏ hết thì dùng nút "Hủy phiếu".'); return; }
+    setAskRemove(itemId);
+  };
+  const [askRemove, setAskRemove] = useState(null); // UX 2026-10-26 (🟡 Hub)
+  const doRemoveItem = async () => {
+    const itemId = askRemove;
+    setAskRemove(null);
+    if (itemId == null) return;
     try {
       await axios.delete(API + '/employee/stocktakes/' + sheetId + '/items/' + itemId, auth(token));
       setItems(items.filter((it) => it.id !== itemId));
@@ -276,18 +287,19 @@ export default function KiemKe() {
       delete c[String(itemId)];
       setCounts(c);
       toast('Đã xóa khỏi phiếu.');
-    } catch (e) { toast(errMsg(e, 'Xóa thất bại.')); }
+    } catch (e) { toastErr(errMsg(e, 'Xóa thất bại.')); }
   };
 
   // Gói 55 p11w: hủy phiếu nháp
+  const [askCancel, setAskCancel] = useState(false); // UX 2026-10-26 (🟡 Hub)
   const cancelDraft = async () => {
-    if (!window.confirm('Hủy phiếu kiểm kê này? Dữ liệu đã nhập sẽ mất.')) return;
+    setAskCancel(false);
     try {
       await axios.delete(API + '/employee/stocktakes/' + sheetId, auth(token));
       toast('Đã hủy phiếu.');
       setScreen('home'); setSheetId(null); setItems([]); setCounts({});
       loadSheets(token);
-    } catch (e) { toast(errMsg(e, 'Hủy thất bại.')); }
+    } catch (e) { toastErr(errMsg(e, 'Hủy thất bại.')); }
   };
 
   // Gói 55 p11w: thêm nguyên liệu vào phiếu
@@ -302,7 +314,7 @@ export default function KiemKe() {
         setShowAddPicker(false); setAddSearch('');
         toast(r.data.message);
       }
-    } catch (e) { toast(errMsg(e, 'Thêm thất bại.')); }
+    } catch (e) { toastErr(errMsg(e, 'Thêm thất bại.')); }
   };
 
   const saveDraft = async () => {
@@ -319,7 +331,7 @@ export default function KiemKe() {
       toast('Đã lưu nháp ✓ (' + payload.length + ' dòng)');
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Lưu nháp thất bại.'));
+      toastErr(errMsg(e, 'Lưu nháp thất bại.'));
     } finally { setBusy(false); }
   };
 
@@ -339,7 +351,7 @@ export default function KiemKe() {
       loadSheets(token);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Chốt kiểm kê thất bại.'));
+      toastErr(errMsg(e, 'Chốt kiểm kê thất bại.'));
     } finally { setBusy(false); }
   };
 
@@ -366,6 +378,15 @@ export default function KiemKe() {
     return g;
   }, [items, search]);
 
+  const [filterText, setFilterText] = useState(''); // UX 2026-10-26 (🟠25)
+  const visibleGroups = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return groups;
+    return groups
+      .map((g) => ({ ...g, items: g.items.filter((it) => String((it.material || {}).name || '').toLowerCase().includes(q)) }))
+      .filter((g) => g.items.length > 0);
+  }, [groups, filterText]);
+
   const countedCount = useMemo(
     () => Object.keys(counts).filter((k) => parseQty(counts[k]) !== null).length,
     [counts]
@@ -376,9 +397,9 @@ export default function KiemKe() {
       <div className="kk-wrap">
         <style>{CSS}</style>
         <div className="kk-login">
-          <div className="kk-hd" style={{ borderRadius: 18 }}>
+          <div className="kk-hd" style={{ borderRadius: 12 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="kk-title">📦 Kiểm kê kho</div>
             <div className="kk-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -396,7 +417,7 @@ export default function KiemKe() {
             <label className="kk-label">Mã PIN 6 số</label>
             <input
               className="kk-field kk-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}
@@ -464,7 +485,7 @@ export default function KiemKe() {
                           setSelCats(next);
                         }}
                         style={{
-                          padding: '8px 14px', fontSize: 13, borderRadius: 20, border: '1px solid',
+                          padding: '10px 14px', minHeight: 44, fontSize: 13, borderRadius: 20, border: '1px solid',
                           borderColor: on ? '#24305E' : '#ddd',
                           background: on ? '#24305E' : '#fff',
                           color: on ? '#fff' : '#333',
@@ -530,13 +551,14 @@ export default function KiemKe() {
               style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: 10, background: '#fff', fontSize: 14 }}>
               ‹ Quay lại
             </button>
-            <button onClick={cancelDraft}
+            <button onClick={() => setAskCancel(true)}
               style={{ flex: 1, padding: '10px', border: '1px solid #dc3545', borderRadius: 10, background: '#fff', color: '#dc3545', fontSize: 14 }}>
               Hủy phiếu
             </button>
           </div>
           {/* Gói 55 p11x: ô tìm kiếm mở popup thêm NL khi chạm — không còn nút riêng */}
           <div className="kk-searchbar">
+            {/* UX 2026-10-26 (🟠25): tách riêng — ô lọc danh sách đếm (gõ là lọc ngay) và nút thêm nguyên liệu mở popup; trước đây 1 ô kiêm 2 việc gây nhầm */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div style={{ position: 'relative', flex: 1 }}>
                 <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
@@ -545,23 +567,25 @@ export default function KiemKe() {
                 <input
                   className="kk-field"
                   style={{ marginTop: 0, width: '100%', paddingLeft: 36 }}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onFocus={(e) => { e.target.blur(); setShowAddPicker(true); }}
-                  placeholder="Tìm & thêm nguyên liệu..."
-                  readOnly
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                  placeholder="Lọc nguyên liệu trong phiếu..."
                 />
               </div>
+              <button onClick={() => setShowAddPicker(true)}
+                style={{ minHeight: 48, padding: '0 14px', borderRadius: 12, border: 'none', background: '#24305E', color: '#fff', fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap' }}>
+                + Thêm NL
+              </button>
             </div>
             <div className="kk-sd" style={{ marginTop: 6 }}>
               Đã nhập {countedCount}/{items.length} dòng
             </div>
           </div>
 
-          {groups.length === 0 ? (
-            <div className="kk-card"><div className="kk-empty">Không tìm thấy nguyên liệu nào.</div></div>
+          {visibleGroups.length === 0 ? (
+            <div className="kk-card"><div className="kk-empty">{filterText ? 'Không có nguyên liệu nào khớp "' + filterText + '" trong phiếu.' : 'Không tìm thấy nguyên liệu nào.'}</div></div>
           ) : (
-            groups.map((g) => (
+            visibleGroups.map((g) => (
               <div className="kk-cat" key={g.name}>
                 <div className="kk-cat-t">{g.name} ({g.items.length})</div>
                 {g.items.map((it) => {
@@ -572,6 +596,7 @@ export default function KiemKe() {
                     <div className="kk-item" key={it.id}>
                       <div className="kk-item-n">
                         <div className="kk-item-name">{(it.material || {}).name}</div>
+                        <div className="kk-item-sub">Đơn vị: {(it.material || {}).unit || (allMaterials.find((m) => m.id === it.material_id) || {}).unit || '—'}</div>
                         {/* Gói 56: blind count — trang này chỉ dành cho NV (đăng nhập PIN),
                             luôn ẩn tồn hệ thống để NV đếm khách quan. Admin xem tồn ở trang kho. */}
                       </div>
@@ -589,7 +614,7 @@ export default function KiemKe() {
                       />
                       {/* Gói 55 p11w: nút xóa dòng */}
                       <button onClick={() => removeItem(it.id)}
-                        style={{ marginLeft: 8, color: '#dc3545', fontSize: 20, background: 'none', border: 'none', cursor: 'pointer' }}
+                        style={{ marginLeft: 4, color: '#dc3545', fontSize: 22, background: 'none', border: 'none', cursor: 'pointer', minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         title="Xóa khỏi phiếu">×</button>
                     </div>
                   );
@@ -650,6 +675,8 @@ export default function KiemKe() {
         </React.Fragment>
       )}
 
+      <HubConfirm open={askCancel} title="Hủy phiếu kiểm kê" message="Hủy phiếu kiểm kê này? Dữ liệu đã nhập sẽ mất." confirmLabel="Hủy phiếu" danger onCancel={() => setAskCancel(false)} onConfirm={cancelDraft} />
+      <HubConfirm open={askRemove != null} title="Xóa nguyên liệu" message="Xóa nguyên liệu này khỏi phiếu?" confirmLabel="Xóa" danger onCancel={() => setAskRemove(null)} onConfirm={doRemoveItem} />
       <div className={'kk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
     </div>
   );

@@ -89,10 +89,12 @@ export default function PosScreen({ onBackToApp }) {
 
   // ---- Menu & giỏ ----
   const [products, setProducts] = useState([]);
+  const [loadErrs, setLoadErrs] = useState({}); // UX 2026-10-26 (🟠T1): lỗi tải menu/bàn/đơn lưu phải hiện rõ thay vì danh sách trống giả
   const [categories, setCategories] = useState([]);
   const [activeCategory, setActiveCategory] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState([]);
+  const [cartOpen, setCartOpen] = useState(false); // UX 2026-10-26 (🔴): panel giỏ thành drawer trên mobile
   const searchRef = useRef(null);
 
   // ---- Modal tùy biến món (kiểu Sapo: 3 tabs) ----
@@ -326,7 +328,8 @@ export default function PosScreen({ onBackToApp }) {
           return true;
         }));
       }
-    } catch (err) { console.error('Lỗi tải menu:', err); }
+      if (data.success) setLoadErrs((e) => ({ ...e, menu: false }));
+    } catch (err) { console.error('Lỗi tải menu:', err); setLoadErrs((e) => ({ ...e, menu: true })); }
   };
 
   const fetchBranches = async () => {
@@ -355,8 +358,8 @@ export default function PosScreen({ onBackToApp }) {
     try {
       const res = await fetch(`${API_BASE}/tables?branch_id=${effBranchId}`, { headers: authHeaders() });
       const data = await res.json();
-      if (data.success) setTables(data.data);
-    } catch (err) { console.error('Lỗi tải bàn:', err); }
+      if (data.success) { setTables(data.data); setLoadErrs((e) => ({ ...e, tables: false })); }
+    } catch (err) { console.error('Lỗi tải bàn:', err); setLoadErrs((e) => ({ ...e, tables: true })); }
   };
 
   // Gói 24: đổi chi nhánh -> tải lại bàn + đơn lưu của CN đó
@@ -402,8 +405,8 @@ export default function PosScreen({ onBackToApp }) {
       if (!effBranchId) return;
       const res = await fetch(`${API_BASE}/orders/held?branch_id=${effBranchId}`, { headers: authHeaders() });
       const data = await res.json();
-      if (data.success) setHeldOrders(data.data);
-    } catch (err) { console.error('Lỗi tải đơn lưu:', err); }
+      if (data.success) { setHeldOrders(data.data); setLoadErrs((e) => ({ ...e, held: false })); }
+    } catch (err) { console.error('Lỗi tải đơn lưu:', err); setLoadErrs((e) => ({ ...e, held: true })); }
   };
 
   // ================= GÓI 5: CRM =================
@@ -1136,9 +1139,9 @@ export default function PosScreen({ onBackToApp }) {
         />
         <div className="flex items-center gap-1 text-slate-300 text-xs">
           <Users size={14} />
-          <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="w-6 h-6 rounded bg-white/10 hover:bg-white/20 font-bold">−</button>
+          <button onClick={() => setGuestCount(Math.max(1, guestCount - 1))} className="w-11 h-11 rounded bg-white/10 hover:bg-white/20 font-bold">−</button>
           <span className="w-12 text-center font-semibold">{guestCount} Khách</span>
-          <button onClick={() => setGuestCount(guestCount + 1)} className="w-6 h-6 rounded bg-white/10 hover:bg-white/20 font-bold">+</button>
+          <button onClick={() => setGuestCount(guestCount + 1)} className="w-11 h-11 rounded bg-white/10 hover:bg-white/20 font-bold">+</button>
         </div>
 
         <div className="flex-1 flex justify-center">
@@ -1259,7 +1262,7 @@ export default function PosScreen({ onBackToApp }) {
 
         {/* Lưới món */}
         <div className="pos-scroll flex-1 overflow-y-auto p-4">
-          <div className="grid grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
             {filteredProducts.map((p) => (
               <div
                 key={p.id}
@@ -1281,12 +1284,26 @@ export default function PosScreen({ onBackToApp }) {
             ))}
           </div>
           {filteredProducts.length === 0 && (
-            <div className="h-full flex items-center justify-center text-slate-500 text-sm">Không tìm thấy món nào</div>
+            <div className="h-full flex flex-col gap-3 items-center justify-center text-slate-500 text-sm">
+              {loadErrs.menu ? (
+                <>
+                  <span className="text-red-400">⚠ Không tải được thực đơn. Kiểm tra kết nối rồi thử lại.</span>
+                  <button onClick={() => fetchMenu(effBranchId)} className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-slate-100 text-sm font-medium min-h-[44px]">Thử lại</button>
+                </>
+              ) : 'Không tìm thấy món nào'}
+            </div>
           )}
         </div>
 
-        {/* Panel giỏ hàng */}
-        <div className="w-[380px] bg-[#1a2436] border-l border-white/10 flex flex-col shrink-0">
+        {/* Nút mở giỏ nổi trên mobile — UX 2026-10-26 (🔴) */}
+        <button onClick={() => setCartOpen(true)} className="md:hidden fixed bottom-4 right-4 z-30 flex items-center gap-2 px-4 min-h-[48px] rounded-full bg-[#F5A623] text-[#3a2a00] font-bold text-sm shadow-lg">
+          🧺 Giỏ ({cart.reduce((a, i) => a + (Number(i.quantity) || 0), 0)}) · {totalAmount.toLocaleString('vi-VN')}đ
+        </button>
+
+        {/* Panel giỏ hàng — UX 2026-10-26 (🔴): dưới md là drawer trượt từ phải (trước đây rail 76 + panel 380 cố định = 456px tràn màn 375, mất nút Thanh toán) */}
+        {cartOpen && <div className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setCartOpen(false)} />}
+        <div className={`fixed inset-y-0 right-0 z-40 w-[min(380px,92vw)] transform transition-transform duration-200 md:static md:z-auto md:w-[380px] md:translate-x-0 ${cartOpen ? 'translate-x-0' : 'translate-x-full'} bg-[#1a2436] border-l border-white/10 flex flex-col shrink-0`}>
+          <button onClick={() => setCartOpen(false)} className="md:hidden absolute top-2 right-2 z-10 w-11 h-11 flex items-center justify-center rounded-lg bg-white/10 text-white text-lg" title="Đóng giỏ">×</button>
           <button
             onClick={() => { resetCartState(); cancelResuming(); }}
             className="m-3 mb-0 py-2.5 bg-[#00b14f] hover:bg-[#00a346] text-white font-bold rounded-lg text-sm shadow"
@@ -1339,6 +1356,9 @@ export default function PosScreen({ onBackToApp }) {
                 ))}
               </select>
             )}
+            {orderType === 'dine_in' && loadErrs.tables && (
+              <p className="mt-1.5 text-[11px] text-red-400">⚠ Không tải được danh sách bàn. <button onClick={fetchTables} className="underline font-medium">Thử lại</button></p>
+            )}
           </div>
 
           {/* Banner đang sửa đơn lưu */}
@@ -1376,9 +1396,9 @@ export default function PosScreen({ onBackToApp }) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-7 h-7 rounded bg-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20"><Minus size={13} /></button>
+                    <button onClick={() => updateQuantity(item.cartItemId, -1)} className="w-11 h-11 rounded bg-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20"><Minus size={13} /></button>
                     <span className="text-xs font-bold w-5 text-center">{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-7 h-7 rounded bg-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20"><Plus size={13} /></button>
+                    <button onClick={() => updateQuantity(item.cartItemId, 1)} className="w-11 h-11 rounded bg-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20"><Plus size={13} /></button>
                   </div>
                 </div>
               ))
@@ -1478,7 +1498,7 @@ export default function PosScreen({ onBackToApp }) {
                 </button>
               </div>
             )}
-            {appliedVoucher && <div className="text-[10px] text-slate-500 mt-1">Khi thanh toán, hệ thống áp mức giảm cao nhất giữa voucher / KM / chiết khấu tay (trừ khi Cài đặt cho phép cộng dồn).</div>}
+            {appliedVoucher && <div className="text-[10px] text-slate-500 mt-1">Khi thanh toán, hệ thống áp mức giảm cao nhất giữa voucher / KM / chiết khấu tay. Chỉ cộng dồn voucher + KM khi cả hai cùng bật "cho phép cộng dồn".</div>}
           </div>
 
           {/* Tính tiền */}
@@ -1617,7 +1637,11 @@ export default function PosScreen({ onBackToApp }) {
             <p className="px-4 pt-2 text-[11px] text-slate-500">Bấm vào đơn để nạp vào giỏ chỉnh sửa rồi thanh toán như thường.</p>
             <div className="pos-scroll flex-1 overflow-y-auto p-3 space-y-2">
               {heldOrders.length === 0 ? (
-                <p className="text-center text-slate-500 text-xs py-10">Chưa có đơn lưu nào</p>
+                loadErrs.held ? (
+                  <p className="text-center text-red-400 text-xs py-10">⚠ Không tải được danh sách đơn lưu. <button onClick={fetchHeldOrders} className="underline font-medium">Thử lại</button></p>
+                ) : (
+                  <p className="text-center text-slate-500 text-xs py-10">Chưa có đơn lưu nào</p>
+                )
               ) : (
                 heldOrders.map((o) => (
                   <div key={o.id}
@@ -1727,8 +1751,8 @@ export default function PosScreen({ onBackToApp }) {
                   </div>
 
                   {/* Số lượng + Ghi chú */}
-                  <div className="flex gap-6">
-                    <div>
+                  <div className="flex flex-col sm:flex-row gap-4 sm:gap-6">
+                    <div className="shrink-0">
                       <label className="font-semibold text-[13px] text-slate-600 block mb-1.5">Số lượng - Ly</label>
                       <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden w-40">
                         <button onClick={() => setCustomQuantity(Math.max(1, customQuantity - 1))}
@@ -1738,7 +1762,7 @@ export default function PosScreen({ onBackToApp }) {
                           className="w-12 h-11 text-xl text-slate-400 hover:bg-slate-50">+</button>
                       </div>
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <label className="font-semibold text-[13px] text-slate-600 block mb-1.5">Ghi chú</label>
                       <div className="flex">
                         <input
@@ -1746,7 +1770,7 @@ export default function PosScreen({ onBackToApp }) {
                           value={customNote}
                           onChange={(e) => setCustomNote(e.target.value)}
                           placeholder="Ghi chú"
-                          className="flex-1 px-3 h-11 text-sm border border-slate-200 rounded-l-lg focus:outline-none focus:border-sky-500 placeholder-slate-300"
+                          className="flex-1 min-w-0 px-3 h-11 text-sm border border-slate-200 rounded-l-lg focus:outline-none focus:border-sky-500 placeholder-slate-300"
                         />
                         <button onClick={() => setCustomNote('')}
                           className="px-4 h-11 text-sm bg-slate-400 hover:bg-slate-500 text-white rounded-r-lg">Xoá</button>
@@ -1938,7 +1962,7 @@ export default function PosScreen({ onBackToApp }) {
             onMouseDown={() => { successTouchedRef.current = true; }}
             onTouchStart={() => { successTouchedRef.current = true; }}>
             <button onClick={() => setLastOrderCompleted(null)} title="Đóng"
-              className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-slate-200 text-sm font-bold">✕</button>
+              className="absolute top-2 right-2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-slate-200 text-sm font-bold">✕</button>
             <CheckCircle2 size={48} className="text-emerald-400 mx-auto" />
             <h3 className="font-bold text-base">Đơn Hàng {lastOrderCompleted.code}</h3>
             <p className="text-xs text-slate-400">Đã gửi dữ liệu sang màn hình KDS cho Barista</p>

@@ -5,6 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate, fmtTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import TimeInput, { valid24 } from '../../components/TimeInput'; // UX 2026-10-26 (🟠17): ô giờ vào/ra theo chuẩn 24h tự chế
+import MonthInput from '../../components/MonthInput';
 import { API } from '../../utils/api';
 import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
@@ -246,7 +248,7 @@ function TotalSalaryTab({ month }) {
                         </div>
                         <div className="bg-white border rounded-lg p-4">
                             <div className="text-[12px] text-gray-500">Tổng lương</div>
-                            <div className="text-[22px] font-bold text-[#0d6efd]">{fmtVnd(data.grand_total)}đ</div>
+                            <div className="text-[22px] font-bold text-[#24305E]">{fmtVnd(data.grand_total)}đ</div>
                         </div>
                     </div>
 
@@ -292,7 +294,7 @@ function TotalSalaryTab({ month }) {
                                         <td className="px-2 py-2 border text-right text-red-600">{dash(r.deduction_total)}</td>
                                         <td className="px-2 py-2 border text-right text-red-600">{dash(r.advance_total)}</td>
                                         <td className="px-2 py-2 border text-right text-red-600">{dash(r.bhxh_deduct)}</td>
-                                        <td className="px-2 py-2 border text-right font-bold text-[#0d6efd]">{fmtVnd(r.net)}đ</td>
+                                        <td className="px-2 py-2 border text-right font-bold text-[#24305E]">{fmtVnd(r.net)}đ</td>
                                         {!singleBranch && <td className="px-2 py-2 border text-right font-bold">{fmtVnd(r.grand_total)}đ</td>}
                                     </tr>
                                 ))}
@@ -442,6 +444,9 @@ export default function Salary() {
     const btn = 'px-3 py-1.5 rounded text-[13px] font-medium ';
 
     const saveDays = async () => {
+        // UX 2026-10-26 (🟠17): chặn lưu khi giờ vào/ra sai định dạng HH:MM 24h
+        const badDay = days.find((d) => (d.check_in && !valid24(d.check_in)) || (d.check_out && !valid24(d.check_out)));
+        if (badDay) { alert('Giờ vào/ra ngày ' + fmtDate(badDay.date) + ' chưa đúng định dạng HH:MM (24h). Kiểm tra lại trước khi lưu.'); return; }
         try {
             await axios.post(API + '/salary/' + empId + '/days', { days: days.map((d) => ({ date: d.date, check_in: d.check_in || null, check_out: d.check_out || null, hours: (d.hours === '' || d.hours == null) ? null : Number(d.hours), meal_count: Number(d.meal_count) || 0, meal_manual: !!d.meal_manual })) });
             alert('Đã lưu chi tiết ngày công.'); fetchPayroll();
@@ -536,17 +541,17 @@ export default function Salary() {
             <div className="p-5">
                 <div className="flex flex-wrap items-center gap-3 mb-4">
                     <h1 className="text-xl font-bold">Bảng lương</h1>
-                    <select value={empId} onChange={(e) => { if (guardSwitch()) setEmpId(e.target.value); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]">
+                    <select value={empId} onChange={(e) => { if (guardSwitch()) setEmpId(e.target.value); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]" style={{ maxWidth: 280, width: '100%' }}>
                         {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {e.branch?.name}</option>)}
                     </select>
-                    <input type="month" value={month} onChange={(e) => { if (e.target.value && guardSwitch()) setMonth(e.target.value); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]" />
+                    <MonthInput value={month} onChange={(v) => { if (v && guardSwitch()) setMonth(v); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]" style={{ width: 120 }} />
                     {payroll && editable && <button onClick={() => exportPayslipPNG(payroll)} className={btn + 'bg-[#24305E] text-white'}>⬇ Xuất ảnh</button>}
-                    {editable && <button onClick={openImport} className={btn + 'bg-[#0d6efd] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
+                    {editable && <button onClick={openImport} className={btn + 'bg-[#24305E] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
                     {[['sheet', 'Bảng lương'], ['days', 'Chi tiết ngày công'], ['other', 'Mức lương / Ứng / Thưởng / BHXH'], ['total', 'Tổng lương']].map(([k, l]) => (
-                        <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
+                        <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
 
@@ -575,7 +580,7 @@ export default function Salary() {
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtDate(d.date)}{d.is_holiday && <span className="inline-block ml-1 bg-red-50 text-red-600 border border-red-200 rounded-full px-1.5 text-[10px] font-bold" title={d.holiday_name}>x{d.multiplier}</span>}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtTime(d.check_in) || ''}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{fmtTime(d.check_out) || ''}</td>
-                                        <td className="px-3 py-1.5 border border-gray-300">{d.hours == null ? '' : fmtH(d.hours)}{d.hours_source === 'attendance' && <span className="inline-block ml-1 bg-blue-50 text-[#1d4ed8] border border-blue-200 rounded-full px-1.5 text-[10px] font-bold" title="Giờ từ chấm công">chấm công</span>}{d.hours_source === 'leave' && <span className="inline-block ml-1 bg-gray-100 text-gray-500 border border-gray-200 rounded-full px-1.5 text-[10px] font-bold" title="Nghỉ được duyệt">nghỉ</span>}</td>
+                                        <td className="px-3 py-1.5 border border-gray-300">{d.hours == null ? '' : fmtH(d.hours)}{d.hours_source === 'attendance' && <span className="inline-block ml-1 bg-[#eef0f8] text-[#24305E] border border-[#dbe1f5] rounded-full px-1.5 text-[10px] font-bold" title="Giờ từ chấm công">chấm công</span>}{d.hours_source === 'leave' && <span className="inline-block ml-1 bg-gray-100 text-gray-500 border border-gray-200 rounded-full px-1.5 text-[10px] font-bold" title="Nghỉ được duyệt">nghỉ</span>}</td>
                                         <td className="px-3 py-1.5 border border-gray-300">{d.meal_count > 1 ? 'X' + d.meal_count : (d.meal_count ? 'X' : '')}</td>
                                     </tr>
                                 ))}
@@ -641,13 +646,13 @@ export default function Salary() {
                                                 {d.branch_name ? <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full px-2 py-0.5 font-medium">{d.branch_name}</span> : <span className="text-gray-300">—</span>}
                                             </td>
                                             {['check_in', 'check_out'].map((k) => (
-                                                <td key={k} className="px-2 py-1"><input disabled={!editable} value={d[k] || ''} placeholder="HH:MM"
-                                                    onChange={(e) => { const nd = [...days]; nd[i][k] = e.target.value; setDays(nd); }} className={inp + ' !w-24'} /></td>
+                                                <td key={k} className="px-2 py-1"><TimeInput disabled={!editable} value={d[k] || ''}
+                                                    onChange={(v) => { const nd = [...days]; nd[i][k] = v; setDays(nd); }} className={inp + ' !w-24'} /></td>
                                             ))}
                                             <td className="px-2 py-1"><div className="flex items-center gap-1">
                                                 <input disabled={!editable} type="number" step="0.01" min="0" value={d.hours ?? ''}
                                                     onChange={(e) => { const nd = [...days]; nd[i].hours = e.target.value; if (!nd[i].meal_manual) nd[i].meal_count = (Number(e.target.value) || 0) >= Number(mealCfg.meal_min_hours || 14.5) ? 1 : 0; setDays(nd); }} className={inp + ' !w-24'} placeholder="tự tính" />
-                                                {d.hours_source === 'attendance' && <span className="text-[10px] font-bold text-[#1d4ed8] bg-blue-50 border border-blue-200 rounded-full px-1.5 py-0.5 whitespace-nowrap" title="Giờ đổ từ chấm công — sửa tay sẽ chuyển thành nhập tay">chấm công</span>}
+                                                {d.hours_source === 'attendance' && <span className="text-[10px] font-bold text-[#24305E] bg-[#eef0f8] border border-[#dbe1f5] rounded-full px-1.5 py-0.5 whitespace-nowrap" title="Giờ đổ từ chấm công — sửa tay sẽ chuyển thành nhập tay">chấm công</span>}
                                                 {d.hours_source === 'leave' && <span className="text-[10px] font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5 whitespace-nowrap" title="Nghỉ được duyệt = 0 giờ">nghỉ</span>}
                                             </div></td>
                                             <td className="px-2 py-1"><div className="flex items-center gap-1">
@@ -825,7 +830,7 @@ export default function Salary() {
                             <div className="grid grid-cols-2 gap-3 mb-4">
                                 <div>
                                     <label className="text-[12px] text-gray-500">Tháng</label>
-                                    <input type="month" value={impMonth} onChange={(e) => setImpMonth(e.target.value)} className={inp + ' mt-1'} />
+                                    <MonthInput value={impMonth} onChange={setImpMonth} className={inp + ' mt-1'} />
                                 </div>
                                 <div>
                                     <label className="text-[12px] text-gray-500">Chi nhánh</label>
@@ -837,7 +842,7 @@ export default function Salary() {
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={() => setImpOpen(false)} disabled={impLoading} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                                <button onClick={doImport} disabled={impLoading} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (impLoading ? 'bg-gray-400' : 'bg-[#0d6efd]')}>{impLoading ? 'Đang đổ...' : 'Xác nhận đổ'}</button>
+                                <button onClick={doImport} disabled={impLoading} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (impLoading ? 'bg-gray-400' : 'bg-[#24305E]')}>{impLoading ? 'Đang đổ...' : 'Xác nhận đổ'}</button>
                             </div>
                         </>) : (
                             <div className="text-[13px] leading-[1.9] mt-2">
@@ -935,7 +940,7 @@ function AllowanceManager({ empId, month, editable, btn, inp }) {
                     <label className="flex items-center gap-1 text-[13px] pb-2">
                         <input type="checkbox" checked={form.onlyMonth} onChange={(e) => setForm({ ...form, onlyMonth: e.target.checked })} /> Chỉ tháng
                     </label>
-                    {form.onlyMonth && <input type="month" value={form.month || month} onChange={(e) => setForm({ ...form, month: e.target.value })} className={inp + ' !w-36'} />}
+                    {form.onlyMonth && <MonthInput value={form.month || month} onChange={(v) => setForm({ ...form, month: v })} className={inp + ' !w-36'} />}
                     <button onClick={add} className={btn + 'bg-[#24305E] text-white'}>＋ Thêm</button>
                 </div>
             )}

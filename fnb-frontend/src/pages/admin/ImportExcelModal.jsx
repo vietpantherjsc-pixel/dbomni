@@ -108,6 +108,11 @@ function StepBar({ step }) {
 }
 
 export default function ImportExcelModal({ onClose, onDone }) {
+    // UX 2026-10-26 (🟡): từ bước map cột trở đi, đóng giữa chừng phải hỏi (đã tốn công map)
+    const guardClose = () => {
+        if (step >= 2 && !window.confirm('Đang ở bước ' + step + ' của quá trình nhập — đóng sẽ mất phần đã thiết lập. Đóng?')) return;
+        onClose();
+    };
     const [step, setStep] = useState(1);
     const [fileName, setFileName] = useState('');
     const [uploading, setUploading] = useState(false);
@@ -153,7 +158,8 @@ export default function ImportExcelModal({ onClose, onDone }) {
                 setError(res.data?.message || 'Tải file thất bại.');
             }
         } catch (e) {
-            setError(e.response?.data?.message || 'Tải file thất bại. Kiểm tra đã chạy "composer require phpoffice/phpspreadsheet" chưa.');
+            // UX 2026-10-26 (🟠T3): bỏ hướng dẫn kỹ thuật nội bộ khỏi thông báo cho người dùng
+            setError(e.response?.data?.message || 'Tải file thất bại. Kiểm tra lại định dạng file Excel rồi thử lại.');
         }
         setUploading(false);
     };
@@ -257,7 +263,7 @@ export default function ImportExcelModal({ onClose, onDone }) {
     };
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 sm:p-4" onClick={onClose}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 sm:p-4" onClick={guardClose}>
             <div
                 className="bg-white w-full h-full sm:h-auto sm:rounded-lg sm:max-w-5xl sm:max-h-[92vh] shadow-xl flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
@@ -265,7 +271,7 @@ export default function ImportExcelModal({ onClose, onDone }) {
                 {/* Header */}
                 <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-gray-100 shrink-0">
                     <h3 className="font-semibold text-gray-800 text-[15px]">Import đơn hàng từ Excel</h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-2xl leading-none px-2">×</button>
+                    <button onClick={guardClose} className="text-gray-400 hover:text-gray-700 text-2xl leading-none px-2">×</button>
                 </div>
 
                 {/* Body */}

@@ -29,7 +29,7 @@ export default function InviteFriends() {
     return (
         <AdminLayout>
             <div className="p-5">
-                <h1 className="text-xl font-bold mb-1">Mời bạn bè — Zalo Mini App</h1>
+                <h1 className="text-xl font-bold mb-1">Báo cáo Rủ Bạn Đón Bình Minh</h1>
                 <p className="text-sm text-gray-500 mb-4">Thống kê thành viên mời bạn bè (nhận coupon CP-02) và đơn hàng phát sinh từ lời mời.</p>
                 <div className="flex gap-2 mb-4">
                     <button onClick={() => setTab(0)} className={`px-4 py-2 rounded-lg text-[13px] font-medium border ${tab === 0 ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300'}`}>🏆 Top thành viên mời bạn</button>

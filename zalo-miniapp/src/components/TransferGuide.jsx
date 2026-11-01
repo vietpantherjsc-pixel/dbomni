@@ -11,6 +11,10 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
   const [copied, setCopied] = useState('');
   const [sending, setSending] = useState(false);
   const [notified, setNotified] = useState(!!notifiedAt);
+  // UX 2026-10-26 (🟠3): bỏ prompt() — nhập SĐT ngay trong khối CK + lỗi hiện tại chỗ
+  const [phoneForm, setPhoneForm] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [notifyErr, setNotifyErr] = useState('');
 
   useEffect(() => { setNotified(!!notifiedAt); }, [notifiedAt]);
 
@@ -37,11 +41,9 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
   };
 
   const markNotified = async () => {
-    let phone = getProfile()?.phone || '';
-    if (!phone) {
-      phone = (prompt('Nhập SĐT đã dùng để đặt đơn:') || '').trim();
-      if (!phone) return;
-    }
+    let phone = getProfile()?.phone || phoneInput.trim();
+    if (!phone) { setPhoneForm(true); setNotifyErr('Nhập SĐT đã dùng để đặt đơn để quán đối chiếu.'); return; }
+    setNotifyErr('');
     setSending(true);
     try {
       await api.transferNotified(code, phone);
@@ -60,13 +62,13 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
             setNotified(true);
             if (onNotified) onNotified();
           } else {
-            alert('Bạn thao tác hơi nhanh — vui lòng đợi ít giây rồi bấm lại.');
+            setNotifyErr('Bạn thao tác hơi nhanh — vui lòng đợi ít giây rồi bấm lại.');
           }
         } catch {
-          alert('Bạn thao tác hơi nhanh — vui lòng đợi ít giây rồi bấm lại.');
+          setNotifyErr('Bạn thao tác hơi nhanh — vui lòng đợi ít giây rồi bấm lại.');
         }
       } else {
-        alert(msg);
+        setNotifyErr(msg || 'Không gửi được thông báo. Vui lòng thử lại.');
       }
     }
     finally { setSending(false); }
@@ -78,7 +80,7 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <b style={{ fontSize: 14 }}>{value}</b>
         <button onClick={() => copy(key, value)}
-          style={{ border: '1px solid #ddd', background: '#fff', borderRadius: 6, fontSize: 11, padding: '3px 8px', cursor: 'pointer', color: 'var(--zm-primary)', fontWeight: 700 }}>
+          style={{ border: '1px solid #ddd', background: '#fff', borderRadius: 8, fontSize: 12, padding: '9px 12px', minHeight: 44, cursor: 'pointer', color: 'var(--zm-primary)', fontWeight: 700 }}>
           {copied === key ? '✓ Đã chép' : 'Sao chép'}
         </button>
       </span>
@@ -109,13 +111,21 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
         <li>Kiểm tra đúng <b>số tiền</b> và <b>giữ nguyên nội dung chuyển khoản</b>.</li>
         <li>Bấm nút <b>"Tôi đã chuyển khoản"</b> bên dưới để quán đối chiếu nhanh.</li>
       </ol>
+      {notifyErr && !notified && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>⚠ {notifyErr}</div>
+      )}
+      {phoneForm && !notified && (
+        <div className="zm-field" style={{ marginBottom: 10 }}>
+          <input type="tel" inputMode="tel" placeholder="SĐT đã dùng để đặt đơn" value={phoneInput} onChange={(e) => setPhoneInput(e.target.value)} />
+        </div>
+      )}
       {notified ? (
-        <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 10, padding: '10px 12px', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
+        <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
           ✅ Đã báo chuyển khoản — chờ quán đối chiếu. Đơn chỉ bắt đầu làm sau khi quán xác nhận thanh toán.
         </div>
       ) : (
         <button className="zm-btn-primary" onClick={markNotified} disabled={sending}>
-          {sending ? 'Đang gửi...' : 'Tôi đã chuyển khoản'}
+          {sending ? 'Đang gửi...' : (phoneForm ? 'Xác nhận đã chuyển khoản' : 'Tôi đã chuyển khoản')}
         </button>
       )}
     </div>

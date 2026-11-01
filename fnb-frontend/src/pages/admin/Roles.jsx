@@ -85,11 +85,13 @@ export default function Roles() {
                                             <tr key={m.key} className="border-b border-gray-50">
                                                 <td className="py-2.5 font-medium">{m.label}</td>
                                                 {['view', 'create', 'edit', 'delete'].map((a) => (
-                                                    <td key={a} className="py-2.5 text-center">
+                                                    <td key={a} className="text-center">
                                                         {m.actions.includes(a)
-                                                            ? <input type="checkbox" disabled={!editable} className="w-4 h-4 accent-[#24305E]"
-                                                                checked={perms.includes('*') || perms.includes(m.key + '.' + a)}
-                                                                onChange={() => togglePerm(m.key + '.' + a)} />
+                                                            ? <label className="flex items-center justify-center min-h-[44px] px-3 cursor-pointer" title={m.label + ' — ' + a}>
+                                                                <input type="checkbox" disabled={!editable} className="w-4 h-4 accent-[#24305E]"
+                                                                    checked={perms.includes('*') || perms.includes(m.key + '.' + a)}
+                                                                    onChange={() => togglePerm(m.key + '.' + a)} />
+                                                              </label>
                                                             : <span className="text-gray-200">—</span>}
                                                     </td>
                                                 ))}

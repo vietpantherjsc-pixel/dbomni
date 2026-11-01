@@ -9,7 +9,7 @@ class CustomerCoupon extends Model
 {
     protected $fillable = [
         'customer_id', 'promotion_id', 'code', 'status',
-        'issued_at', 'expires_at', 'used_at', 'used_order_id', 'issue_trigger',
+        'issued_at', 'expires_at', 'used_at', 'used_order_id', 'source_order_id', 'issue_trigger',
     ];
 
     protected $casts = [
@@ -31,6 +31,12 @@ class CustomerCoupon extends Model
     public function usedOrder()
     {
         return $this->belongsTo(Order::class, 'used_order_id');
+    }
+
+    // Đơn nguồn đã sinh ra coupon này (trigger CP-01/CP-02/CP-03) — căn cứ thu hồi khi quán hủy đơn nguồn
+    public function sourceOrder()
+    {
+        return $this->belongsTo(Order::class, 'source_order_id');
     }
 
     public function scopeActive($q)

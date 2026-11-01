@@ -83,20 +83,26 @@ class LoyaltyService
         $base = $perAmount > 0 ? floor($paidAmount / $perAmount) * $perPoints : 0;
         $multiplier = (float) ($tier->earn_multiplier ?? 1);
         $ddMult = $this->doubleDaysMultiplier($tier);
-        $earned = (int) floor($base * $multiplier * $ddMult);
+        // Chênh hệ số theo kênh (Đại Vương chốt 2026-10-28, spec BA): kênh riêng
+        // ×1, kênh sàn × hệ số cấu hình — nhân vào cùng phép nhân, floor 1 lần cuối.
+        $ch = $this->channelFactor($order);
+        $earned = (int) floor($base * $multiplier * $ch['factor'] * $ddMult);
 
         $customer->total_spent += $paidAmount;
         $customer->points += $earned;
 
         if ($earned > 0) {
             $lot = $this->createLot($customer, $earned, 'earn', $order->id);
+            $chNote = ($ch['is_platform'] && $ch['factor'] != 1.0)
+                ? ' · kênh sàn ×' . rtrim(rtrim(number_format($ch['factor'], 4, '.', ''), '0'), '.')
+                : '';
             PointTransaction::create([
                 'customer_id' => $customer->id,
                 'order_id' => $order->id,
                 'point_lot_id' => $lot->id,
                 'change' => $earned,
                 'type' => 'earn',
-                'note' => "Tích điểm đơn {$order->code}" . ($ddMult > 1 ? " · double_points ×{$ddMult}" : ''),
+                'note' => "Tích điểm đơn {$order->code}" . ($ddMult > 1 ? " · double_points ×{$ddMult}" : '') . $chNote,
             ]);
         }
         $customer->save();
@@ -561,6 +567,11 @@ class LoyaltyService
             'points_expire_next_date' => $expiring['next_date'],
             'point_value' => $cfg['point_value'],
             'points_event' => $this->activeDoubleDaysEvent($tier),
+            // Chênh hệ số kênh: Mini App hiện dòng chú thích theo cấu hình này
+            'points_channel' => [
+                'enabled' => self::channelPointsSettings()['enabled'],
+                'platform_multiplier' => self::channelPointsSettings()['platform_multiplier'],
+            ],
             'window_days' => $cfg['window_days'],
             'window_spent' => (int) round($spent),
             'next_tier' => $next ? [
@@ -586,6 +597,47 @@ class LoyaltyService
                 'is_current' => $tier && $t->id === $tier->id,
             ])->values(),
         ];
+    }
+
+    /**
+     * Chênh hệ số tích điểm theo kênh (Đại Vương chốt 2026-10-28: hệ số sàn
+     * ×0,5 + Hướng A chỉ làm cơ chế). 3 khóa settings, đọc kèm mặc định:
+     * công tắc tổng (mặc định BẬT) · hệ số kênh sàn (mặc định 0,5) · danh
+     * sách mã kênh RIÊNG (mặc định pos, zalo, online, nha_hang, dbomni).
+     * Phân loại theo luật loại trừ: mã không thuộc danh sách riêng = sàn,
+     * vì mã sàn sinh động theo đối tác khi import.
+     */
+    public static function channelPointsSettings(): array
+    {
+        $own = Setting::get('points_own_channels');
+        $channels = [];
+        foreach (explode(',', (string) ($own ?: 'pos,zalo,online,nha_hang,dbomni')) as $c) {
+            $c = strtolower(trim($c));
+            if ($c !== '' && !in_array($c, $channels, true)) {
+                $channels[] = $c;
+            }
+        }
+        $mult = Setting::get('points_platform_multiplier');
+        return [
+            'enabled' => filter_var(Setting::get('points_channel_multiplier_enabled', '1'), FILTER_VALIDATE_BOOLEAN),
+            'platform_multiplier' => ($mult === null || $mult === '') ? 0.5 : (float) $mult,
+            'own_channels' => $channels,
+        ];
+    }
+
+    /**
+     * Hệ số kênh của 1 đơn: kênh riêng → 1; kênh sàn → hệ số cấu hình.
+     * Tắt công tắc tổng hoặc đơn không mang mã kênh → 1 (không chênh).
+     * @return array{factor: float, is_platform: bool}
+     */
+    public function channelFactor(Order $order): array
+    {
+        $cfg = self::channelPointsSettings();
+        $channel = strtolower(trim((string) ($order->online_channel ?? '')));
+        if (!$cfg['enabled'] || $channel === '' || in_array($channel, $cfg['own_channels'], true)) {
+            return ['factor' => 1.0, 'is_platform' => false];
+        }
+        return ['factor' => (float) $cfg['platform_multiplier'], 'is_platform' => true];
     }
 
     /**

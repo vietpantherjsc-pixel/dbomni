@@ -59,7 +59,7 @@ export default function ScanClaim() {
   return (
     <div className="zm-page">
       <div className="zm-header">
-        <button className="zm-btn-outline" style={{ width: 'auto', padding: '8px 14px' }} onClick={() => nav(-1)}>←</button>
+        <button className="zm-btn-outline" style={{ width: 'auto', padding: '8px 14px', minWidth: 44, minHeight: 44, flexShrink: 0 }} onClick={() => nav(-1)}>←</button>
         <h1>Quét tích điểm</h1>
       </div>
       <div style={{ padding: 16 }}>

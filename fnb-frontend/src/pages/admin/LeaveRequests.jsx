@@ -66,7 +66,7 @@ function GeneralTab({ can }) {
     const decide = async (id, ok) => {
         // Audit UX 2026-10-21 (hạng 9): DUYỆT thì làm ngay, bỏ confirm thừa; từ chối giữ confirm
         if (!ok && !window.confirm('Từ chối yêu cầu nghỉ này?')) return;
-        try { await axios.post(API + '/leave-requests/' + id + (ok ? '/approve' : '/reject')); fetchAll(); }
+        try { const r = await axios.post(API + '/leave-requests/' + id + (ok ? '/approve' : '/reject')); alert(r.data?.message || 'Xong'); fetchAll(); } // UX 2026-10-26 (🟡): trước đây tab này xử lý xong im lặng, lệch 2 tab còn lại
         catch (e) { alert(e.response?.data?.message || 'Xử lý thất bại'); }
     };
     // Audit UX 2026-10-21 (hạng 9): duyệt hàng loạt các yêu cầu đang chờ đã tick chọn
@@ -97,7 +97,7 @@ function GeneralTab({ can }) {
         <>
             <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
                 {ST_TABS.map(([k, l]) => (
-                    <button key={k} onClick={() => setStatus(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (status === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
+                    <button key={k} onClick={() => setStatus(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (status === k ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                 ))}
             </div>
             {editable && pendingIds.length > 0 && (
@@ -113,9 +113,9 @@ function GeneralTab({ can }) {
                 <table className="w-full text-[13px] min-w-[760px]">
                     <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
                         {editable && <th className="pl-4 pr-1 py-3 font-medium w-10">
-                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
+                            <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
                                 checked={pendingIds.length > 0 && selIds.length === pendingIds.length}
-                                onChange={toggleAll} />
+                                onChange={toggleAll} /></label>
                         </th>}
                         <th className="px-4 py-3 font-medium">Nhân viên</th>
                         <th className="px-3 py-3 font-medium">Loại nghỉ</th>
@@ -129,8 +129,8 @@ function GeneralTab({ can }) {
                             <tr key={r.id} className="border-b border-gray-50">
                                 {editable && <td className="pl-4 pr-1 py-3 w-10">
                                     {r.status === 'pending' && (
-                                        <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
-                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                        <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} /></label>
                                     )}
                                 </td>}
                                 <td className="px-4 py-3 font-medium">{r.employee?.full_name || '—'}</td>
@@ -225,7 +225,7 @@ function ShiftTab({ can }) {
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200">
                     {ST_TABS.map(([k, l]) => (
-                        <button key={k} onClick={() => setStatus(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (status === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
+                        <button key={k} onClick={() => setStatus(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (status === k ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
                 {editable && <button onClick={() => setShowCreate(!showCreate)} className="m-btn m-btn-primary">+ Tạo yêu cầu (quản lý)</button>}
@@ -272,9 +272,9 @@ function ShiftTab({ can }) {
                 <table className="w-full text-[13px] min-w-[820px]">
                     <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
                         {editable && <th className="pl-4 pr-1 py-3 font-medium w-10">
-                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
+                            <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả đang chờ"
                                 checked={pendingIds.length > 0 && selIds.length === pendingIds.length}
-                                onChange={toggleAll} />
+                                onChange={toggleAll} /></label>
                         </th>}
                         <th className="px-4 py-3 font-medium">Nhân viên</th>
                         <th className="px-3 py-3 font-medium">Ca xin nghỉ</th>
@@ -288,8 +288,8 @@ function ShiftTab({ can }) {
                             <tr key={r.id} className="border-b border-gray-50">
                                 {editable && <td className="pl-4 pr-1 py-3 w-10">
                                     {r.status === 'pending' && (
-                                        <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
-                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                        <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                            checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} /></label>
                                     )}
                                 </td>}
                                 <td className="px-4 py-3 font-medium">{r.employee?.full_name || '—'}</td>
@@ -373,9 +373,9 @@ function SwapTab({ can }) {
                 <table className="w-full text-[13px] min-w-[760px]">
                     <thead><tr className="bg-gray-50 text-left text-gray-500">
                         {editable && <th className="pl-4 pr-1 py-2 font-medium w-10">
-                            <input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả"
+                            <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]" title="Chọn tất cả"
                                 checked={list.length > 0 && selIds.length === list.length}
-                                onChange={toggleAll} />
+                                onChange={toggleAll} /></label>
                         </th>}
                         <th className="px-4 py-2 font-medium">NV A</th>
                         <th className="px-4 py-2 font-medium">Ca của A</th>
@@ -388,8 +388,8 @@ function SwapTab({ can }) {
                         {list.map((r) => (
                             <tr key={r.id} className="border-t border-gray-100">
                                 {editable && <td className="pl-4 pr-1 py-3 w-10">
-                                    <input type="checkbox" className="w-4 h-4 accent-[#24305E]"
-                                        checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} />
+                                    <label className="inline-flex items-center justify-center min-w-[38px] min-h-[38px] cursor-pointer -m-1"><input type="checkbox" className="w-4 h-4 accent-[#24305E]"
+                                        checked={!!sel[r.id]} onChange={() => toggleSel(r.id)} /></label>
                                 </td>}
                                 <td className="px-4 py-3 font-medium">{r.requester?.full_name}</td>
                                 <td className="px-4 py-3">{r.requester_schedule?.work_shift?.name} ({fmtT(r.requester_schedule?.work_shift?.start_time)}–{fmtT(r.requester_schedule?.work_shift?.end_time)})</td>

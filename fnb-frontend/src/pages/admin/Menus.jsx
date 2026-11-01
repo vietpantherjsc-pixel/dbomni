@@ -39,7 +39,7 @@ export default function Menus() {
   };
   useEffect(() => { load().catch((e) => {
     if (e.response?.status === 401) return; // hết phiên: AuthContext tự chuyển về login
-    alert(e.response?.data?.message || e.message);
+    alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.');
   }); }, []);
 
   // --- Kéo-thả thực đơn ---
@@ -52,7 +52,7 @@ export default function Menus() {
     setMenus(arr);
     dragIdx.current = null;
     try { await axios.post(`${BASE}/menus/reorder`, { ordered_ids: arr.map((x) => x.id) }); }
-    catch (e) { alert(e.response?.data?.message || e.message); load(); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
   };
 
   // --- Kéo-thả món ---
@@ -65,12 +65,35 @@ export default function Menus() {
     setProducts(arr);
     dragIdx.current = null;
     try { await axios.post(`${BASE}/menus/${sel}/products/reorder`, { ordered_ids: arr.map((x) => x.id) }); }
-    catch (e) { alert(e.response?.data?.message || e.message); selectMenu(sel); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); selectMenu(sel); }
   };
+
+  // UX 2026-10-26 (🟠14): nút ↑/↓ dự phòng cho cảm ứng (kéo-thả HTML5 không chạy trên cảm ứng)
+  const moveMenu = async (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= menus.length) return;
+    const arr = [...menus];
+    const [m] = arr.splice(i, 1);
+    arr.splice(j, 0, m);
+    setMenus(arr);
+    try { await axios.post(`${BASE}/menus/reorder`, { ordered_ids: arr.map((x) => x.id) }); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
+  };
+  const moveProd = async (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= products.length) return;
+    const arr = [...products];
+    const [pp] = arr.splice(i, 1);
+    arr.splice(j, 0, pp);
+    setProducts(arr);
+    try { await axios.post(`${BASE}/menus/${sel}/products/reorder`, { ordered_ids: arr.map((x) => x.id) }); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); selectMenu(sel); }
+  };
+  const moveBtn = { minWidth: 36, minHeight: 36, fontSize: 13, lineHeight: 1, color: 'var(--m-ink-soft)' }; /* chuẩn 2 thước PM 2026-10-26: nút icon trong bảng Admin ≥36px */
 
   const createMenu = async () => {
     if (!newName.trim()) { alert('Nhập tên thực đơn.'); return; }
-    await axios.post(`${BASE}/menus`, { name: newName.trim() }).catch((e) => alert(e.response?.data?.message || e.message));
+    await axios.post(`${BASE}/menus`, { name: newName.trim() }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     setNewName(''); setShowAdd(false); load();
   };
   const saveRename = async (id) => {
@@ -80,12 +103,12 @@ export default function Menus() {
     try {
       await axios.patch(`${BASE}/menus/${id}`, { name: v });
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const delMenu = async (id) => {
     if (!confirm('Xóa thực đơn này? Món bên trong không bị xóa.')) return;
-    await axios.delete(`${BASE}/menus/${id}`).catch((e) => alert(e.message));
+    await axios.delete(`${BASE}/menus/${id}`).catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
     setSel(null); load();
   };
   const search = async (v) => {
@@ -95,11 +118,11 @@ export default function Menus() {
     if (r?.data?.success) setFound(r.data.data);
   };
   const addProduct = async (pid) => {
-    await axios.post(`${BASE}/menus/${sel}/products`, { product_id: pid }).catch((e) => alert(e.response?.data?.message || e.message));
+    await axios.post(`${BASE}/menus/${sel}/products`, { product_id: pid }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     setQ(''); setFound([]); selectMenu(sel);
   };
   const delProduct = async (pid) => {
-    await axios.delete(`${BASE}/menus/${sel}/products/${pid}`).catch((e) => alert(e.message));
+    await axios.delete(`${BASE}/menus/${sel}/products/${pid}`).catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
     selectMenu(sel);
   };
 
@@ -171,6 +194,8 @@ export default function Menus() {
                       onDoubleClick={(e) => { e.stopPropagation(); setRenaming(m.id); setRenameVal(m.name); }}>{m.name}</span>
                   )}
                   <span className="m-badge m-badge-gray m-num">{m.products_count}</span>
+                  <button onClick={(e) => { e.stopPropagation(); moveMenu(i, -1); }} disabled={i === 0} style={{ ...moveBtn, opacity: i === 0 ? 0.3 : 1 }} title="Lên">↑</button>
+                  <button onClick={(e) => { e.stopPropagation(); moveMenu(i, 1); }} disabled={i === menus.length - 1} style={{ ...moveBtn, opacity: i === menus.length - 1 ? 0.3 : 1 }} title="Xuống">↓</button>
                   <button
                     onClick={(e) => { e.stopPropagation(); delMenu(m.id); }}
                     className="text-xs hover:underline" style={{ color: 'var(--m-danger)' }}
@@ -186,7 +211,7 @@ export default function Menus() {
               <div className="text-center py-12 text-sm" style={{ color: 'var(--m-ink-faint)' }}>Chọn một thực đơn bên trái.</div>
             ) : (
               <>
-                <div className="m-kicker mb-2">Món trong thực đơn ({products.length}) — kéo-thả để sắp xếp</div>
+                <div className="m-kicker mb-2">Món trong thực đơn ({products.length}) — kéo-thả hoặc bấm ↑/↓ để sắp xếp</div>
                 <div className="flex gap-2 mb-3 relative">
                   <input className="m-input" placeholder="Tìm món để thêm…" value={q} onChange={(e) => search(e.target.value)} />
                   {found.length > 0 && (
@@ -213,6 +238,8 @@ export default function Menus() {
                       {p.image_url && <img src={p.image_url} alt="" className="w-9 h-9 rounded-lg object-cover" />}
                       <span className="flex-1 text-sm font-medium truncate">{p.name}</span>
                       <span className="text-sm m-num" style={{ color: 'var(--m-ink-soft)' }}>{fmt(p.base_price)}</span>
+                      <button onClick={() => moveProd(i, -1)} disabled={i === 0} style={{ ...moveBtn, opacity: i === 0 ? 0.3 : 1 }} title="Lên">↑</button>
+                      <button onClick={() => moveProd(i, 1)} disabled={i === products.length - 1} style={{ ...moveBtn, opacity: i === products.length - 1 ? 0.3 : 1 }} title="Xuống">↓</button>
                       <button onClick={() => delProduct(p.id)} className="text-xs hover:underline" style={{ color: 'var(--m-danger)' }}>Bớt</button>
                     </div>
                   ))}

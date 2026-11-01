@@ -5,9 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { API } from '../utils/api';
 
 const Login = () => {
-    // Điền sẵn thông tin tài khoản test để tiện phát triển
-    const [email, setEmail] = useState('admin@cafe.com');
-    const [password, setPassword] = useState('123456');
+    // UX 2026-10-26 (🟠29): KHÔNG điền sẵn tài khoản/mật khẩu test trong code production
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     

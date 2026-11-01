@@ -22,6 +22,7 @@ const normChArr = (arr) => [...new Set((arr || []).map(normCh))];
 // bỏ nút "Xóa tất cả". Kéo-thả sắp xếp giữ nguyên cơ chế cũ.
 export default function PaymentMethodManager() {
   const [items, setItems] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
   const [form, setForm] = useState({ name: '', type: 'transfer', channels: [], is_active: true });
   const [editing, setEditing] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -29,7 +30,7 @@ export default function PaymentMethodManager() {
   const TYPES = useSharedCategories('payment_types', TYPES_FB);
   const CHANNELS = useSharedCategories('payment_channels', []);
 
-  const load = () => axios.get(`${API}/payment-methods`).then((r) => setItems(r.data?.data || [])).catch(() => {});
+  const load = () => axios.get(`${API}/payment-methods`).then((r) => { setItems(r.data?.data || []); setLoadErr(false); }).catch(() => setLoadErr(true));
   useEffect(() => { load(); }, []);
 
   const emptyForm = () => ({ name: '', type: 'transfer', channels: [], is_active: true });
@@ -53,7 +54,7 @@ export default function PaymentMethodManager() {
     if (cur.length === 0) cur = [...all];
     cur = cur.includes(code) ? cur.filter((x) => x !== code) : [...cur, code];
     const nc = cur.length >= all.length ? [] : cur;
-    await axios.put(`${API}/payment-methods/${m.id}`, { channels: nc }).catch(() => {});
+    await axios.put(`${API}/payment-methods/${m.id}`, { channels: nc }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
@@ -77,12 +78,12 @@ export default function PaymentMethodManager() {
 
   const remove = async (id) => {
     if (!confirm('Xóa phương thức này?')) return;
-    await axios.delete(`${API}/payment-methods/${id}`).catch(() => {});
+    await axios.delete(`${API}/payment-methods/${id}`).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
   const toggleActive = async (m) => {
-    await axios.put(`${API}/payment-methods/${m.id}`, { is_active: !m.is_active }).catch(() => {});
+    await axios.put(`${API}/payment-methods/${m.id}`, { is_active: !m.is_active }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
@@ -101,7 +102,7 @@ export default function PaymentMethodManager() {
     setDragIdx(null);
     // Lưu sort_order theo thứ tự mới
     for (let i = 0; i < items.length; i++) {
-      await axios.put(`${API}/payment-methods/${items[i].id}`, { sort_order: i }).catch(() => {});
+      await axios.put(`${API}/payment-methods/${items[i].id}`, { sort_order: i }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     }
   };
 
@@ -126,6 +127,7 @@ export default function PaymentMethodManager() {
             {items.length === 0 && (
               <tr><td colSpan={6} className="py-4 text-center text-gray-400">Chưa có phương thức nào.</td></tr>
             )}
+            {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Không tải được danh sách. Kiểm tra kết nối rồi thử lại.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>)}
             {items.map((m, idx) => (
               <tr key={m.id}
                 draggable
@@ -139,7 +141,7 @@ export default function PaymentMethodManager() {
                 </td>
                 <td className="py-2.5 pr-3 font-medium">{m.name}</td>
                 <td className="py-2.5 pr-3">
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#eef0f8] text-[#24305E]">
                     {TYPES.find((t) => t.code === m.type)?.name || m.type}
                   </span>
                 </td>
@@ -181,10 +183,10 @@ export default function PaymentMethodManager() {
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="absolute inset-0 bg-black/40" onClick={closeModal} />
-          <div className="relative bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl p-5 max-h-[90vh] overflow-y-auto">
+          <div className="relative bg-white w-full sm:max-w-md rounded-t-xl sm:rounded-xl shadow-xl p-5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-[15px]">{editing ? 'Sửa phương thức thanh toán' : 'Thêm phương thức thanh toán'}</h3>
-              <button onClick={closeModal} className="w-8 h-8 rounded-full bg-gray-100 text-gray-500">✕</button>
+              <button onClick={closeModal} className="w-10 h-10 rounded-full bg-gray-100 text-gray-500">✕</button>
             </div>
             <div className="space-y-3">
               <div>

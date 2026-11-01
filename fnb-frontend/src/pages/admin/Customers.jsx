@@ -13,6 +13,7 @@ import { API } from '../../utils/api';
 // =====================================================================
 export default function Customers() {
     const [list, setList] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1) — vòng bổ sung B: bổ sung khai báo bị thiếu (TESTER bắt hỏng lan)
     const [page, setPage] = useState(1);
     const [lastPage, setLastPage] = useState(1);
     const [search, setSearch] = useState('');
@@ -25,11 +26,11 @@ export default function Customers() {
         try {
             const res = await axios.get(`${API}/customers`, { params: { page: p, search: s, per_page: 20 } });
             if (res.data?.success) {
-                setList(res.data.data.data || []);
+                setList(res.data.data.data || []); setLoadErr(false);
                 setPage(res.data.data.current_page || 1);
                 setLastPage(res.data.data.last_page || 1);
             }
-        } catch (err) { console.error('Lỗi tải khách hàng:', err); }
+        } catch (err) { console.error('Lỗi tải khách hàng:', err); setLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
     useEffect(() => { fetchList(1, ''); }, []);
 
@@ -89,7 +90,7 @@ export default function Customers() {
                         <h1 className="text-xl font-semibold text-gray-800">Khách hàng</h1>
                         <p className="text-[13px] text-[#6b7280] mt-0.5">SĐT là mã định danh. Mã TV dùng cho QR quét tích điểm.</p>
                     </div>
-                    <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                         + Khách hàng
                     </button>
                 </div>
@@ -97,8 +98,8 @@ export default function Customers() {
                 <form onSubmit={handleSearch} className="flex gap-2 mb-4">
                     <input value={search} onChange={(e) => setSearch(e.target.value)}
                         placeholder="Tìm theo SĐT / tên / mã TV..."
-                        className="w-80 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
-                    <button className="px-4 py-2 bg-gray-100 text-[13px] rounded hover:bg-gray-200">Tìm</button>
+                        className="flex-1 min-w-0 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
+                    <button className="px-4 py-2 bg-gray-100 text-[13px] rounded hover:bg-gray-200 shrink-0">Tìm</button>
                 </form>
 
                 <div className="bg-white rounded shadow-sm overflow-x-auto">
@@ -124,11 +125,11 @@ export default function Customers() {
                                     <td className="px-3 py-3 text-right font-bold text-amber-600">{Number(c.points).toLocaleString('vi-VN')}</td>
                                     <td className="px-3 py-3 text-right">{Number(c.total_spent).toLocaleString('vi-VN')}đ</td>
                                     <td className="px-4 py-3 text-right">
-                                        <button onClick={() => openDetail(c.id)} className="text-[#0d6efd] hover:underline">Chi tiết</button>
+                                        <button onClick={() => openDetail(c.id)} className="text-[#24305E] hover:underline">Chi tiết</button>
                                     </td>
                                 </tr>
                             ))}
-                            {list.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có khách hàng nào.</td></tr>}
+                            {list.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách khách hàng.<button onClick={() => fetchList(page)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có khách hàng nào.'}</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -143,21 +144,21 @@ export default function Customers() {
 
                 {/* Modal thêm */}
                 {showAdd && (
-                    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowAdd(false)}>
-                        <div className="bg-white rounded-lg p-6 w-[420px]" onClick={(e) => e.stopPropagation()}>
+                    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowAdd(false)}>
+                        <div className="bg-white rounded-lg p-6 w-full max-w-[420px]" onClick={(e) => e.stopPropagation()}>
                             <h3 className="font-semibold mb-4">Thêm khách hàng</h3>
                             <div className="space-y-3">
                                 <div><label className="text-xs text-gray-500">Tên *</label>
-                                    <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
+                                    <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
                                 <div><label className="text-xs text-gray-500">SĐT * (định danh)</label>
-                                    <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
+                                    <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
                                 <div><label className="text-xs text-gray-500">Sinh nhật</label>
-                                    <DateInput value={form.birthday} onChange={(v) => setForm({ ...form, birthday: v })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
+                                    <DateInput value={form.birthday} onChange={(v) => setForm({ ...form, birthday: v })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
                                 <div><label className="text-xs text-gray-500">Ghi chú</label>
-                                    <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" /></div>
+                                    <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
                             </div>
                             <div className="flex gap-2 mt-5">
-                                <button onClick={handleAdd} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">Lưu</button>
+                                <button onClick={handleAdd} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">Lưu</button>
                                 <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-[13px] text-gray-500">Hủy</button>
                             </div>
                         </div>
@@ -167,7 +168,7 @@ export default function Customers() {
                 {/* Modal chi tiết */}
                 {detail && (
                     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setDetail(null)}>
-                        <div className="bg-white rounded-lg p-6 w-[640px] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                        <div className="bg-white rounded-lg p-6 w-full max-w-[640px] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                             <div className="flex justify-between items-start mb-4">
                                 <div>
                                     <h3 className="font-semibold text-[16px]">{detail.name}</h3>
@@ -193,9 +194,9 @@ export default function Customers() {
                                 <h4 className="font-medium text-[14px] mb-2">Điều chỉnh điểm thủ công</h4>
                                 <div className="flex gap-2">
                                     <input type="number" value={adjust.change} onChange={(e) => setAdjust({ ...adjust, change: e.target.value })}
-                                        placeholder="+/- điểm" className="w-32 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" />
+                                        placeholder="+/- điểm" className="w-32 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
                                     <input value={adjust.note} onChange={(e) => setAdjust({ ...adjust, note: e.target.value })}
-                                        placeholder="Lý do" className="flex-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]" />
+                                        placeholder="Lý do" className="flex-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
                                     <button onClick={handleAdjust} className="px-4 py-2 bg-gray-800 text-white text-[13px] rounded hover:bg-gray-700">Áp dụng</button>
                                 </div>
                             </div>

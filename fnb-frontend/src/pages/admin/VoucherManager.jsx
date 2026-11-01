@@ -46,6 +46,13 @@ export default function VoucherManager() {
   const [loading, setLoading] = useState(true);
 
   const [modal, setModal] = useState(null); // {mode:'create'} | {mode:'edit', v}
+  // UX 2026-10-26 (🟡): đóng form khi đã sửa mà chưa lưu thì hỏi trước (chụp form lúc mở để so sánh)
+  const formSnap = React.useRef('');
+  const snapForm = (f) => { formSnap.current = JSON.stringify(f); };
+  const askClose = () => {
+    if (JSON.stringify(form) !== formSnap.current && !window.confirm('Form còn thay đổi chưa lưu. Đóng sẽ mất các thay đổi này?')) return;
+    setModal(null);
+  };
   const [form, setForm] = useState(emptyForm());
   const [saving, setSaving] = useState(false);
 
@@ -82,9 +89,9 @@ export default function VoucherManager() {
     } catch (e) { alert(e.response?.data?.message || 'Không tải được lượt dùng.'); }
   };
 
-  const openCreate = () => { setForm(emptyForm()); setModal({ mode: 'create' }); };
+  const openCreate = () => { const f = emptyForm(); setForm(f); snapForm(f); setModal({ mode: 'create' }); };
   const openEdit = (v) => {
-    setForm({
+    const f0 = {
       name: v.name || '', code: v.code || '', prefix: 'DB-', quantity: 1,
       type: v.type, value: v.value, max_discount_amount: v.max_discount_amount ?? '',
       min_order_amount: v.min_order_amount ?? '',
@@ -92,7 +99,8 @@ export default function VoucherManager() {
       starts_at: toInputDT(v.starts_at), expires_at: toInputDT(v.expires_at),
       stack_with_promotion: !!v.stack_with_promotion,
       is_active: !!v.is_active,
-    });
+    };
+    setForm(f0); snapForm(f0);
     setModal({ mode: 'edit', v });
   };
 
@@ -289,7 +297,7 @@ export default function VoucherManager() {
 
       {/* ================= MODAL TẠO/SỬA ================= */}
       {modal && (
-        <div className="m-modal-backdrop" onClick={() => setModal(null)}>
+        <div className="m-modal-backdrop" onClick={askClose}>
           <div className="m-modal m-modal--flex" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640 }}>
             <div className="m-modal-head">{modal.mode === 'create' ? 'Tạo voucher mới' : `Sửa voucher ${modal.v?.code || ''}`}</div>
             <div className="m-modal-body">
@@ -390,7 +398,7 @@ export default function VoucherManager() {
             </div>
             </div>
             <div className="m-modal-foot">
-              <button onClick={() => setModal(null)} className="m-btn m-btn-ghost">Hủy</button>
+              <button onClick={askClose} className="m-btn m-btn-ghost">Hủy</button>
               <button onClick={save} disabled={saving} className="m-btn m-btn-primary">
                 {saving ? 'Đang lưu...' : (modal.mode === 'create' ? 'Tạo voucher' : 'Lưu')}
               </button>

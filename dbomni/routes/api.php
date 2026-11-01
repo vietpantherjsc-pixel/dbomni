@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\CouponController; // SPEC-02: ví coupon
 use App\Http\Controllers\Api\ProductAliasController; // Gói 55
 use App\Http\Controllers\Api\UnitController; // Gói 52
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\ChannelAdjustmentController; // Gói PNL kênh sàn (2026-10-31): đối soát phí marketing sàn theo tháng
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\StocktakeController;
 use App\Http\Controllers\Api\MenuController;
@@ -269,6 +270,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/sapo/config', [SapoAdminController::class, 'updateConfig']);
         Route::get('/sapo/maps/{table}', [SapoAdminController::class, 'mapIndex']);
         Route::post('/sapo/maps/{table}', [SapoAdminController::class, 'mapStore']);
+        // Thu gọn map (2026-10-30): đăng ký TRƯỚC route {id} để 'redundant' không bị nuốt thành id
+        Route::get('/sapo/maps/{table}/redundant', [SapoAdminController::class, 'mapRedundant']);
+        Route::delete('/sapo/maps/{table}/redundant', [SapoAdminController::class, 'mapPruneRedundant']);
         Route::delete('/sapo/maps/{table}/{id}', [SapoAdminController::class, 'mapDestroy']);
         // Cầu nối Sapo — Phần C: hộp thư IMAP
         Route::get('/sapo/mail/config', [SapoMailController::class, 'config']);
@@ -280,6 +284,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/sapo/suspects/{id}/rerun', [SapoImportController::class, 'suspectRerun']);
         Route::post('/sapo/suspects/{id}/force-create', [SapoImportController::class, 'suspectForceCreate']);
         Route::post('/sapo/suspects/{id}/discard', [SapoImportController::class, 'suspectDiscard']);
+        Route::post('/sapo/suspects/{id}/resolve', [SapoImportController::class, 'suspectResolve']); // Gói 4 (2026-10-28): đánh dấu đã xử lý tay
     });
     // Gói 60: giao hàng — thử tạo lại đơn hãng, xem log, báo cáo failover
     Route::post('/orders/{order}/delivery/retry', [DeliveryController::class, 'retry'])->middleware('permission:orders.edit');
@@ -334,6 +339,13 @@ Route::middleware('auth:sanctum')->group(function () {
         // Gói 57: quỹ/tài khoản + chi phí trả trước
         Route::apiResource('accounts', AccountController::class);
         Route::apiResource('prepaid-expenses', PrepaidExpenseController::class);
+        // Gói PNL kênh sàn (2026-10-31): đối soát phí marketing sàn theo (kênh × CN × tháng)
+        // — cùng nhóm quyền finance.manage như thu-chi vì là số tài chính chốt kỳ.
+        Route::get('/channel-adjustments', [ChannelAdjustmentController::class, 'index']);
+        Route::post('/channel-adjustments', [ChannelAdjustmentController::class, 'store']);
+        Route::put('/channel-adjustments/{id}', [ChannelAdjustmentController::class, 'update']);
+        Route::post('/channel-adjustments/{id}/void', [ChannelAdjustmentController::class, 'voidAdjustment']);
+        Route::post('/channel-adjustments/{id}/reopen', [ChannelAdjustmentController::class, 'reopen']);
     });
     Route::get('/transaction-categories', [TransactionController::class, 'categories']);
 
@@ -694,6 +706,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/shift-leaves/{id}/approve', [ShiftLeaveController::class, 'approve']);
         // Audit 2026-10-23 A3-7: admin sửa giờ vào/ra kèm bảng vết sửa (attendance_edits)
         Route::patch('/attendances/{id}/times', [AttendanceController::class, 'updateTimes']);
+        // Spec nhập giờ từ lưới tuần (2026-10-31): tạo mới giờ cho ô trống trên lưới
+        Route::post('/attendances/manual', [AttendanceController::class, 'storeManual']);
         Route::post('/shift-leaves/{id}/reject', [ShiftLeaveController::class, 'reject']);
         // Spec P4-B5: quản lý duyệt/từ chối đổi ca
         Route::get('/shift-swaps', [ShiftSwapController::class, 'index']);

@@ -785,6 +785,22 @@ class OrderController extends Controller
         // không được trừ total_spent.
         $loyaltyService->revokeEarn($order, $wasPaid);
 
+        // Vá lỗ hổng thu hồi coupon (Đại Vương chốt 2026-10-28): coupon do CHÍNH
+        // đơn này sinh ra qua trigger CP-01/CP-02/CP-03 (ghi source_order_id) mà
+        // còn active → thu hồi (revoked); coupon đã dùng rồi giữ nguyên. Bản ghi
+        // Referral GIỮ completed, không reset — hủy thì mất thưởng, chặn vòng
+        // hủy → đặt lại để nhận thưởng tiếp.
+        \App\Models\CustomerCoupon::where('source_order_id', $order->id)
+            ->where('status', 'active')
+            ->update(['status' => 'revoked']);
+
+        // Điểm lệch với đường hủy online (bổ sung cùng gói vá): trả COUPON VÍ đã
+        // tiêu trên đơn này về active — đường hủy online vẫn có bước này, đường
+        // hủy phía quán trước đây thiếu.
+        \App\Models\CustomerCoupon::where('used_order_id', $order->id)
+            ->where('status', 'used')
+            ->update(['status' => 'active', 'used_at' => null, 'used_order_id' => null]);
+
         // Gói 55 p11ac: hoàn lượt dùng voucher khi hủy đơn
         if (!empty($order->voucher_code)) {
             \App\Models\Voucher::where('code', $order->voucher_code)

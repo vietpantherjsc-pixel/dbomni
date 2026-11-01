@@ -69,15 +69,20 @@ class SapoImportService
 
         $ctx = $this->loadContext();
         $tally = ['created' => 0, 'duplicate' => 0, 'dbomni' => 0, 'cancelled' => 0, 'suspect' => 0];
+        $missingRecipeOrders = 0;
 
         foreach ($invoices as $inv) {
             $res = $this->processInvoice($inv, $branchId, $ctx);
             $tally[$res['result']] = ($tally[$res['result']] ?? 0) + 1;
             if ($res['result'] === 'suspect') {
-                // Import lại cùng file: kết quả mới thay thế nghi ngờ pending cũ của đúng hóa đơn này
+                // Import lại cùng file: kết quả mới thay thế nghi ngờ pending cũ của đúng hóa đơn này.
+                // NGOẠI LỆ (vá 2026-10-28 theo phán PM/TESTER): cảnh báo missing_recipe KHÔNG bị
+                // thay-xóa — nó là vết của 1 đơn ĐÃ import thành công, chỉ đóng qua
+                // resolve/bỏ qua; xóa thầm ở đây là đúng bệnh "mất dấu vết âm thầm".
                 SapoImportSuspect::where('branch_id', $branchId)
                     ->where('sapo_invoice_code', $inv['code'])
                     ->where('status', 'pending')
+                    ->where('reason', '!=', 'missing_recipe')
                     ->delete();
                 SapoImportSuspect::create([
                     'run_id' => $run->id,
@@ -87,12 +92,26 @@ class SapoImportService
                     'detail' => $res['detail'] ?? null,
                     'payload' => $inv,
                     'status' => 'pending',
+                    // Vá L2-3: suspect hủy-sau-import trỏ sẵn vào đơn DBOMNI tương ứng
+                    'resolved_order_id' => $res['resolved_order_id'] ?? null,
                 ]);
+            }
+            // Vá L2-2: đơn tạo thành công nhưng có món chưa có định lượng cơ bản
+            // → để lại 1 cảnh báo truy vết (đơn và kho phần còn lại vẫn đúng).
+            if ($res['result'] === 'created' && !empty($res['order_id'])) {
+                if ($this->createMissingRecipeWarning((int) $res['order_id'], (int) $run->id, $branchId, $inv['code'])) {
+                    $missingRecipeOrders++;
+                }
             }
         }
 
         if ($tally['cancelled'] > 0) {
             Log::info('Sapo import: bỏ qua ' . $tally['cancelled'] . ' hóa đơn đã hủy', ['run_id' => $run->id, 'file' => $filename]);
+        }
+
+        $runWarnings = $parsed['warnings'];
+        if ($missingRecipeOrders > 0) {
+            $runWarnings[] = 'Cảnh báo định lượng: ' . $missingRecipeOrders . ' đơn có món chưa định lượng (xem tab Nghi ngờ — cảnh báo "missing_recipe").';
         }
 
         $run->update([
@@ -104,7 +123,7 @@ class SapoImportService
             'dbomni_skipped_count' => $tally['dbomni'],
             'cancelled_count' => $tally['cancelled'],
             'suspect_count' => $tally['suspect'],
-            'warnings' => $parsed['warnings'],
+            'warnings' => $runWarnings,
         ]);
 
         return $run->fresh();
@@ -122,23 +141,386 @@ class SapoImportService
         return $this->processInvoice($inv, $branchId, $ctx, $force);
     }
 
+    /**
+     * Vá L2-2 (2026-10-28): sau khi tạo đơn thành công, kiểm tra từng dòng món —
+     * món nào không có dòng recipes CƠ BẢN (product_option_id IS NULL) thì phần
+     * kho của món đó trong đơn chưa được trừ (trước đây âm thầm trừ 0). Tạo 1
+     * suspect 'missing_recipe' gắn đúng đơn (resolved_order_id) để vận hành bổ
+     * sung định lượng rồi đánh dấu đã xử lý. Trả true nếu có sinh cảnh báo.
+     * Không đi qua nhánh thay-xóa suspect của importFile: đơn đã tạo xong và
+     * kết quả hóa đơn vẫn tính là created.
+     */
+    private function createMissingRecipeWarning(int $orderId, int $runId, int $branchId, string $invoiceCode): bool
+    {
+        $order = Order::with('items')->find($orderId);
+        if (!$order) {
+            return false;
+        }
+        $missing = [];
+        foreach ($order->items as $item) {
+            $hasBase = DB::table('recipes')
+                ->where('product_id', $item->product_id)
+                ->whereNull('product_option_id')
+                ->exists();
+            if (!$hasBase) {
+                $pid = (int) $item->product_id;
+                if (isset($missing[$pid])) {
+                    $missing[$pid]['quantity'] += (int) $item->quantity;
+                } else {
+                    $missing[$pid] = [
+                        'product_id' => $pid,
+                        'product_name' => (string) $item->product_name,
+                        'quantity' => (int) $item->quantity,
+                    ];
+                }
+            }
+        }
+        if (!$missing) {
+            return false;
+        }
+        $missing = array_values($missing);
+        $list = collect($missing)->map(fn($m) => $m['product_name'] . ' ×' . $m['quantity'])->implode('; ');
+        SapoImportSuspect::create([
+            'run_id' => $runId,
+            'branch_id' => $branchId,
+            'sapo_invoice_code' => $invoiceCode,
+            'reason' => 'missing_recipe',
+            'detail' => 'Đơn ' . ($order->code ?? ('#' . $order->id)) . ' đã import nhưng các món sau chưa có định lượng cơ bản nên chưa trừ kho: '
+                . $list . '. Bổ sung định lượng cho món tại trang Định lượng, rồi đánh dấu đã xử lý. Kho của đơn này chưa được trừ cho các món trên.',
+            'payload' => ['order_id' => $order->id, 'order_code' => $order->code, 'items' => $missing],
+            'status' => 'pending',
+            'resolved_order_id' => $order->id,
+        ]);
+        return true;
+    }
+
     /** Nạp toàn bộ bảng map vào bộ nhớ cho 1 lần import */
     private function loadContext(): array
     {
+        // Tầng 2 — map NGOẠI LỆ món (2026-10-30, phương án 3 tầng đã chốt):
+        // sapo_name => [product_id, gift_product_id]; gift có giá trị = combo.
+        $productMaps = [];
+        foreach (SapoProductMap::whereNotNull('product_id')->get(['sapo_name', 'product_id', 'gift_product_id']) as $m) {
+            $productMaps[$m->sapo_name] = [
+                'product_id' => (int) $m->product_id,
+                'gift_product_id' => $m->gift_product_id ? (int) $m->gift_product_id : null,
+            ];
+        }
+        // Tầng 1 — danh mục đang sống: tên => [product_id...] (giữ mảng để phát
+        // hiện trùng tên mập mờ); tên món ngừng bán để gợi ý trong chi tiết nghi ngờ.
+        $activeByName = [];
+        $inactiveNames = [];
+        foreach (DB::table('products')->get(['id', 'name', 'is_active']) as $p) {
+            if ($p->is_active) {
+                $activeByName[$p->name][] = (int) $p->id;
+            } else {
+                $inactiveNames[$p->name] = true;
+            }
+        }
         return [
-            'products' => SapoProductMap::whereNotNull('product_id')->pluck('product_id', 'sapo_name')->all(),
+            'product_maps' => $productMaps,
+            'active_by_name' => $activeByName,
+            'inactive_names' => $inactiveNames,
             'options' => SapoOptionMap::whereNotNull('option_id')->pluck('option_id', 'sapo_option_text')->all(),
+            // Map GHI CHÚ (2026-10-28): dòng sapo_option_map có option_id = NULL —
+            // đoạn text chỉ hiện trên dòng món để nhân viên thấy, không trừ kho.
+            'note_options' => array_fill_keys(
+                SapoOptionMap::whereNull('option_id')->pluck('sapo_option_text')->all(),
+                true
+            ),
+            // Tầng 0: hậu tố kênh bán — đọc CÙNG danh mục dùng chung
+            // import_suffixes với luồng import Excel (1 nguồn sự thật duy nhất,
+            // không chép lại danh sách; danh mục trống thì không bóc).
+            'suffixes' => \App\Models\SharedCategory::activeCodes('import_suffixes'),
             'channels' => SapoChannelMap::pluck('channel_code', 'sapo_text')->all(),
             'payments' => SapoPaymentMap::pluck('payment_method', 'sapo_text')->all(),
             'sizes' => DB::table('sapo_size_map')->pluck('size_label', 'keyword')->all(),
             'window' => (int) Setting::get('sapo_suspect_window_minutes', 15),
             'required_groups' => [], // cache theo product_id trong lúc chạy
+            'product_options' => [], // cache cấu trúc nhóm/tùy chọn theo product_id
         ];
+    }
+
+    /** Tầng 0: bóc hậu tố kênh bán ở CUỐI tên (cùng luật với OrderImportController::stripChannelSuffix, đọc cùng danh mục dùng chung) */
+    private function stripSuffix(string $name, array $ctx): string
+    {
+        $name = trim($name);
+        foreach ($ctx['suffixes'] as $sfx) {
+            $escaped = str_replace(' ', '\\s+', preg_quote((string) $sfx, '/'));
+            $name = preg_replace('/\\s*-\\s*' . $escaped . '\\s*$/iu', '', $name) ?? $name;
+        }
+        return trim($name);
+    }
+
+    /**
+     * Cấu trúc nhóm + tùy chọn của 1 món (cache trong ctx):
+     * [group_id => ['name' =>, 'options' => [option_id => option_name]]]
+     */
+    private function productOptionGroups(int $productId, array &$ctx): array
+    {
+        if (isset($ctx['product_options'][$productId])) {
+            return $ctx['product_options'][$productId];
+        }
+        $rows = DB::table('product_option_group as pog')
+            ->join('option_groups as og', 'og.id', '=', 'pog.option_group_id')
+            ->leftJoin('product_options as po', 'po.option_group_id', '=', 'og.id')
+            ->where('pog.product_id', $productId)
+            ->get(['og.id as gid', 'og.name as gname', 'po.id as oid', 'po.name as oname']);
+        $groups = [];
+        foreach ($rows as $r) {
+            $groups[(int) $r->gid]['name'] = (string) $r->gname;
+            if ($r->oid) {
+                $groups[(int) $r->gid]['options'][(int) $r->oid] = (string) $r->oname;
+            }
+        }
+        return $ctx['product_options'][$productId] = $groups;
+    }
+
+    /**
+     * Phân giải 1 đoạn text lựa chọn TRONG PHẠM VI 1 món (thứ tự đã chốt):
+     * (1) map ngoại lệ → (2) tự khớp tên tùy chọn thuộc các nhóm của chính món
+     * (trùng tên ở 2 nhóm khác nhau = mập mờ) → (3) fallback size.
+     * Trả: ['kind' => 'option', 'option_id' =>, 'group_id' =>, 'group_name' =>]
+     *   | ['kind' => 'ambiguous', 'detail' =>] | ['kind' => 'none']
+     */
+    private function matchSegmentForProduct(string $seg, int $productId, array &$ctx): array
+    {
+        $groups = $this->productOptionGroups($productId, $ctx);
+        // (1) Map ngoại lệ: chỉ tính khi tùy chọn map thuộc 1 nhóm của món này
+        if (isset($ctx['options'][$seg])) {
+            $oid = (int) $ctx['options'][$seg];
+            foreach ($groups as $gid => $g) {
+                if (isset($g['options'][$oid])) {
+                    return ['kind' => 'option', 'option_id' => $oid, 'group_id' => (int) $gid, 'group_name' => $g['name']];
+                }
+            }
+            // Map trỏ sang tùy chọn không thuộc món này → không dùng (đi tiếp các tầng sau)
+        }
+        // (2) Tự khớp chính xác tên tùy chọn trong các nhóm của món
+        $hits = [];
+        foreach ($groups as $gid => $g) {
+            foreach (($g['options'] ?? []) as $oid => $oname) {
+                if ($oname === $seg) {
+                    $hits[] = ['option_id' => (int) $oid, 'group_id' => (int) $gid, 'group_name' => $g['name']];
+                }
+            }
+        }
+        if (count($hits) === 1) {
+            return ['kind' => 'option'] + $hits[0];
+        }
+        if (count($hits) > 1) {
+            return ['kind' => 'ambiguous',
+                'detail' => 'Text lựa chọn "' . $seg . '" khớp tùy chọn ở ' . count($hits) . ' nhóm khác nhau của cùng món — không tự đoán.'];
+        }
+        // (3) Fallback size theo sapo_size_map (giữ nguyên cơ chế cũ)
+        $oid = $this->resolveSizeOption($seg, $productId, $ctx);
+        if ($oid) {
+            $opt = ProductOption::with('group:id,name')->find($oid);
+            return ['kind' => 'option', 'option_id' => (int) $oid,
+                'group_id' => (int) ($opt->option_group_id ?? 0), 'group_name' => (string) ($opt->group->name ?? '')];
+        }
+        return ['kind' => 'none'];
+    }
+
+    /**
+     * Khớp 1 tên món Sapo (thứ tự đã chốt): map ngoại lệ theo tên gốc → map
+     * ngoại lệ theo tên đã bóc hậu tố → tự khớp chính xác danh mục ĐANG BÁN.
+     * Trả: ['kind' => 'single', 'product_id' =>]
+     *   | ['kind' => 'combo', 'product_id' => (chính), 'gift_product_id' =>]
+     *   | ['kind' => 'suspect', 'detail' =>]
+     */
+    private function resolveProduct(string $pname, array $ctx): array
+    {
+        $stripped = $this->stripSuffix($pname, $ctx);
+        foreach (array_unique([$pname, $stripped]) as $key) {
+            if (isset($ctx['product_maps'][$key])) {
+                $map = $ctx['product_maps'][$key];
+                if ($map['gift_product_id']) {
+                    return ['kind' => 'combo', 'product_id' => $map['product_id'], 'gift_product_id' => $map['gift_product_id']];
+                }
+                return ['kind' => 'single', 'product_id' => $map['product_id']];
+            }
+        }
+        // Tầng 1: khớp EXACT tên gốc trước, bóc hậu tố sau (luật đã chốt từ phân
+        // tích file thật — có món legacy tên thật chứa " - CH" ở cuối).
+        foreach (array_unique([$pname, $stripped]) as $key) {
+            $ids = $ctx['active_by_name'][$key] ?? [];
+            if (count($ids) === 1) {
+                return ['kind' => 'single', 'product_id' => $ids[0]];
+            }
+            if (count($ids) > 1) {
+                return ['kind' => 'suspect',
+                    'detail' => 'Tên món "' . $pname . '" trùng hệt ' . count($ids) . ' món đang bán trong danh mục — mập mờ, không tự chọn. Xử lý bằng cách đổi tên phân biệt hoặc thêm 1 dòng map ngoại lệ.'];
+            }
+        }
+        $detail = 'Tên món chưa khớp: "' . $pname . '"';
+        if (isset($ctx['inactive_names'][$pname]) || isset($ctx['inactive_names'][$stripped])) {
+            $detail .= ' Gợi ý: có món trùng tên đã NGỪNG BÁN — cân nhắc bán lại món đó hoặc thêm dòng map ngoại lệ trỏ sang món thay thế.';
+        }
+        return ['kind' => 'suspect', 'detail' => $detail];
+    }
+
+    /**
+     * Bung 1 dòng combo Mua 1 Tặng 1 thành 2 dòng đơn (spec A4 đã chốt):
+     * - Món chính mang toàn bộ tiền dòng combo; món tặng giá 0.
+     * - Mảnh thuộc nhóm có ở CẢ 2 thành phần (Đường/Đá/Độ ngọt…) → áp cả 2 dòng.
+     * - Topping → chỉ món chính (trừ kho theo số lượng combo ở dòng chính).
+     * - Size: 2 mảnh gán theo thứ tự cho [chính, tặng]; đúng 1 mảnh → áp cả 2
+     *   (giả định Đại Vương đã xác nhận khi chốt); số mảnh khác 0/1/2 → nghi ngờ.
+     * - Nhóm chỉ có ở 1 thành phần → áp thành phần đó. Mảnh lạ/mập mờ → nghi ngờ
+     *   TOÀN hóa đơn (không tạo nửa đơn).
+     * - LƯU VẾT (bổ sung PM 2026-10-30): cả 2 dòng đều ghi note "Combo Sapo:
+     *   <tên combo gốc> (món chính/món tặng)" vào cột note sẵn có của dòng đơn
+     *   để báo cáo đếm lại được số combo đã bán — không thêm bảng/cột.
+     */
+    private function buildComboLines(array $resolved, array $segments, array &$ctx, string $comboName, int $qty, float $price, float $lineTotal, float $lineDiscount): array
+    {
+        $mainId = (int) $resolved['product_id'];
+        $giftId = (int) $resolved['gift_product_id'];
+        $names = DB::table('products')->whereIn('id', [$mainId, $giftId])->pluck('name', 'id')->all();
+
+        $mainOpts = [];  // option_id => true
+        $giftOpts = [];
+        $mainNotes = [];
+        $giftNotes = [];
+        $sizePieces = []; // [['seg' =>, 'main' => match|null, 'gift' => match|null]]
+
+        foreach ($segments as $seg) {
+            if (isset($ctx['note_options'][$seg])) {
+                $mainNotes[] = $seg;
+                $giftNotes[] = $seg;
+                continue;
+            }
+            $mm = $this->matchSegmentForProduct($seg, $mainId, $ctx);
+            $mg = $this->matchSegmentForProduct($seg, $giftId, $ctx);
+            foreach (['chính' => $mm, 'tặng' => $mg] as $which => $m) {
+                if ($m['kind'] === 'ambiguous') {
+                    return ['kind' => 'suspect', 'reason' => 'unknown_option',
+                        'detail' => $m['detail'] . ' (combo "' . $comboName . '", phía món ' . $which . ')'];
+                }
+            }
+            $mMain = $mm['kind'] === 'option' ? $mm : null;
+            $mGift = $mg['kind'] === 'option' ? $mg : null;
+            if (!$mMain && !$mGift) {
+                return ['kind' => 'suspect', 'reason' => 'unknown_option',
+                    'detail' => 'Text lựa chọn chưa khớp: "' . $seg . '" (combo "' . $comboName . '")'];
+            }
+            $groupName = SapoText::normalize(($mMain ?? $mGift)['group_name'] ?? '');
+            $isSize = str_contains($groupName, 'size');
+            $isTopping = str_contains($groupName, 'topping');
+            if ($isSize) {
+                // Mảnh size trong file thật thường chứa tên thành phần ("<Món> -
+                // Size <X>"): ghi nhận chủ mảnh theo tên để phân phối đúng kể cả
+                // khi thứ tự mảnh bị xáo trộn (mục nghiệm thu A7-8); không chứa
+                // tên nào/cả hai → owner = null, quay về luật thứ tự xuất hiện.
+                $inMain = isset($names[$mainId]) && $names[$mainId] !== '' && str_contains($seg, $names[$mainId]);
+                $inGift = isset($names[$giftId]) && $names[$giftId] !== '' && str_contains($seg, $names[$giftId]);
+                $owner = ($inMain xor $inGift) ? ($inMain ? 'main' : 'gift') : null;
+                $sizePieces[] = ['seg' => $seg, 'main' => $mMain, 'gift' => $mGift, 'owner' => $owner];
+                continue;
+            }
+            if ($isTopping) {
+                if ($mMain) {
+                    $mainOpts[(int) $mMain['option_id']] = true;
+                }
+                continue;
+            }
+            if ($mMain && $mGift) {
+                $mainOpts[(int) $mMain['option_id']] = true;
+                $giftOpts[(int) $mGift['option_id']] = true;
+            } elseif ($mMain) {
+                $mainOpts[(int) $mMain['option_id']] = true;
+            } else {
+                $giftOpts[(int) $mGift['option_id']] = true;
+            }
+        }
+
+        // Phân phối mảnh size theo số lượng mảnh (luật đã chốt)
+        if (count($sizePieces) === 1) {
+            $p = $sizePieces[0];
+            if (!$p['main'] || !$p['gift']) {
+                return ['kind' => 'suspect', 'reason' => 'unknown_option',
+                    'detail' => 'Combo "' . $comboName . '" chỉ có 1 mảnh size "' . $p['seg'] . '" nhưng mảnh này không khớp được cho cả 2 thành phần — không tự đoán.'];
+            }
+            $mainOpts[(int) $p['main']['option_id']] = true;
+            $giftOpts[(int) $p['gift']['option_id']] = true;
+        } elseif (count($sizePieces) === 2) {
+            // Gán [chính, tặng]: ưu tiên mảnh ghi rõ tên thành phần (owner);
+            // 2 mảnh cùng owner hoặc không mảnh nào có owner → thứ tự xuất hiện
+            // như spec A4. 1 mảnh có owner → mảnh còn lại về thành phần còn lại.
+            [$a, $b] = $sizePieces;
+            $pMain = $a;
+            $pGift = $b;
+            if ($a['owner'] === 'gift' && $b['owner'] !== 'gift') {
+                $pMain = $b;
+                $pGift = $a;
+            } elseif ($a['owner'] === null && $b['owner'] === 'main') {
+                $pMain = $b;
+                $pGift = $a;
+            }
+            if (!$pMain['main'] || !$pGift['gift']) {
+                return ['kind' => 'suspect', 'reason' => 'unknown_option',
+                    'detail' => 'Combo "' . $comboName . '": mảnh size không khớp đúng thành phần (mảnh "' . $pMain['seg'] . '" cho món chính, mảnh "' . $pGift['seg'] . '" cho món tặng) — không tự đoán.'];
+            }
+            $mainOpts[(int) $pMain['main']['option_id']] = true;
+            $giftOpts[(int) $pGift['gift']['option_id']] = true;
+        } elseif (count($sizePieces) > 2) {
+            return ['kind' => 'suspect', 'reason' => 'unknown_option',
+                'detail' => 'Combo "' . $comboName . '" có ' . count($sizePieces) . ' mảnh size — chỉ xử lý được 1 hoặc 2 mảnh cho 2 thành phần.'];
+        }
+
+        // Kiểm tra nhóm bắt buộc cho TỪNG thành phần sau phân phối
+        foreach ([['chính', $mainId, array_keys($mainOpts)], ['tặng', $giftId, array_keys($giftOpts)]] as [$which, $pid, $oids]) {
+            $missing = $this->missingRequiredGroup($pid, $oids, $ctx);
+            if ($missing !== null) {
+                return ['kind' => 'suspect', 'reason' => 'missing_required_option',
+                    'detail' => 'Combo "' . $comboName . '": món ' . $which . ' bắt buộc nhóm "' . $missing . '" nhưng file không có lựa chọn khớp.'];
+            }
+        }
+
+        $mkNames = function (array $optSet, array $notes): array {
+            $ids = array_keys($optSet);
+            $n = $ids ? ProductOption::whereIn('id', $ids)->pluck('name')->all() : [];
+            return array_merge($n, $notes);
+        };
+        $mainIds = array_keys($mainOpts);
+        $giftIds = array_keys($giftOpts);
+        $trace = 'Combo Sapo: ' . $comboName;
+        return ['kind' => 'ok', 'lines' => [
+            [
+                'item' => [
+                    'product_id' => $mainId,
+                    'product_name' => $names[$mainId] ?? $comboName,
+                    'price' => $price,
+                    'quantity' => $qty,
+                    'subtotal' => $lineTotal,
+                    'discount_amount' => $lineDiscount,
+                    'option_ids' => $mainIds,
+                    'option_names' => $mkNames($mainOpts, $mainNotes),
+                    'note' => $trace . ' (món chính)',
+                ],
+                'deduct' => ['product_id' => $mainId, 'option_ids' => $mainIds, 'quantity' => $qty],
+            ],
+            [
+                'item' => [
+                    'product_id' => $giftId,
+                    'product_name' => $names[$giftId] ?? $comboName,
+                    'price' => 0,
+                    'quantity' => $qty,
+                    'subtotal' => 0,
+                    'discount_amount' => 0,
+                    'option_ids' => $giftIds,
+                    'option_names' => $mkNames($giftOpts, $giftNotes),
+                    'note' => $trace . ' (món tặng)',
+                ],
+                'deduct' => ['product_id' => $giftId, 'option_ids' => $giftIds, 'quantity' => $qty],
+            ],
+        ]];
     }
 
     /**
      * Xử lý 1 hóa đơn.
-     * @return array{result: 'created'|'duplicate'|'dbomni'|'cancelled'|'suspect', order_id?: int, reason?: string, detail?: string}
+     * @return array{result: 'created'|'duplicate'|'dbomni'|'cancelled'|'suspect', order_id?: int, reason?: string, detail?: string, resolved_order_id?: int}
      */
     private function processInvoice(array $inv, int $branchId, array &$ctx, bool $force = false): array
     {
@@ -167,6 +549,29 @@ class SapoImportService
         }
         if (!$paidRows) {
             if (isset($statuses['da huy']) && count($statuses) === 1) {
+                // Vá L2-3 (2026-10-28): hủy SAU khi đã import — hóa đơn đã có đơn
+                // DBOMNI chưa hủy → vào hàng nghi ngờ chờ xử lý tay, TUYỆT ĐỐI
+                // không tự hủy đơn / hoàn kho ở đây. Chưa có đơn, hoặc đơn đã
+                // hủy rồi, hoặc nhân viên đã xử lý suspect của hóa đơn này →
+                // kết quả cancelled như thường, không sinh suspect mới.
+                $existing = Order::where('sapo_invoice_code', $code)
+                    ->first(['id', 'code', 'status', 'total_amount', 'created_at']);
+                if ($existing && $existing->status !== 'cancelled') {
+                    $handled = SapoImportSuspect::where('branch_id', $branchId)
+                        ->where('sapo_invoice_code', $code)
+                        ->where('reason', 'cancelled_after_import')
+                        ->whereIn('status', ['resolved', 'discarded'])
+                        ->exists();
+                    if (!$handled) {
+                        return ['result' => 'suspect', 'reason' => 'cancelled_after_import',
+                            'resolved_order_id' => (int) $existing->id,
+                            'detail' => 'Hóa đơn Sapo ' . $code . ' đã bị hủy trên Sapo SAU khi import thành đơn DBOMNI '
+                                . ($existing->code ?? ('#' . $existing->id))
+                                . ' (tổng ' . number_format((float) $existing->total_amount) . 'đ, đơn tạo lúc '
+                                . ($existing->created_at ? $existing->created_at->format('d/m/Y H:i') : '—')
+                                . '). Hệ thống không tự hủy đơn/không tự hoàn kho — nhân viên đối chiếu rồi xử lý tay trên đơn.'];
+                    }
+                }
                 return ['result' => 'cancelled'];
             }
             return ['result' => 'suspect', 'reason' => 'unknown_status',
@@ -215,38 +620,72 @@ class SapoImportService
             }
         }
 
-        // 7) Map món + tùy chọn từng dòng; chưa map → nghi ngờ (không tự đoán)
+        // 7) Khớp món + tùy chọn từng dòng theo 3 tầng (2026-10-30, phương án
+        //    đầy đủ đã chốt): bóc hậu tố → map ngoại lệ (thắng tự khớp) → tự
+        //    khớp danh mục đang bán; combo Mua 1 Tặng 1 bung 2 dòng. Không
+        //    khớp/mập mờ → nghi ngờ, không tự đoán (luật an toàn giữ nguyên).
         $items = [];
         $deductLines = [];
         foreach ($paidRows as $r) {
             $pname = trim(self::strVal($r['product_name'] ?? null));
-            $productId = $ctx['products'][$pname] ?? null;
-            if (!$productId) {
-                return ['result' => 'suspect', 'reason' => 'unknown_product',
-                    'detail' => 'Tên món chưa map: "' . $pname . '"'];
+            $resolved = $this->resolveProduct($pname, $ctx);
+            if ($resolved['kind'] === 'suspect') {
+                return ['result' => 'suspect', 'reason' => 'unknown_product', 'detail' => $resolved['detail']];
             }
-
-            $optionIds = [];
-            $optionNames = [];
+            $segments = [];
             $optText = self::strVal($r['option_text'] ?? null);
             if ($optText !== '') {
                 foreach (explode(',', $optText) as $seg) {
                     $seg = trim($seg);
-                    if ($seg === '') {
-                        continue;
+                    if ($seg !== '') {
+                        $segments[] = $seg;
                     }
-                    $oid = $ctx['options'][$seg] ?? $this->resolveSizeOption($seg, (int) $productId, $ctx);
-                    if (!$oid) {
-                        return ['result' => 'suspect', 'reason' => 'unknown_option',
-                            'detail' => 'Text lựa chọn chưa map: "' . $seg . '" (món "' . $pname . '")'];
-                    }
-                    $optionIds[] = (int) $oid;
                 }
+            }
+            $qty = max(1, (int) self::num($r['quantity'] ?? 1));
+            $price = self::money($r['price'] ?? null);
+            $lineTotal = array_key_exists('line_amount', $r) && $r['line_amount'] !== null
+                ? self::money($r['line_amount']) : $price * $qty;
+            $lineDiscount = self::money($r['discount_line'] ?? null);
+
+            if ($resolved['kind'] === 'combo') {
+                $built = $this->buildComboLines($resolved, $segments, $ctx, $pname, $qty, $price, $lineTotal, $lineDiscount);
+                if ($built['kind'] === 'suspect') {
+                    return ['result' => 'suspect', 'reason' => $built['reason'], 'detail' => $built['detail']];
+                }
+                foreach ($built['lines'] as $line) {
+                    $items[] = $line['item'];
+                    $deductLines[] = $line['deduct'];
+                }
+                continue;
+            }
+
+            // Dòng đơn: phân giải từng mảnh trong phạm vi món
+            $productId = (int) $resolved['product_id'];
+            $optionIds = [];
+            $optionNames = [];
+            $noteNames = [];
+            foreach ($segments as $seg) {
+                $m = $this->matchSegmentForProduct($seg, $productId, $ctx);
+                if ($m['kind'] === 'option') {
+                    $optionIds[] = (int) $m['option_id'];
+                    continue;
+                }
+                if ($m['kind'] === 'ambiguous') {
+                    return ['result' => 'suspect', 'reason' => 'unknown_option', 'detail' => $m['detail'] . ' (món "' . $pname . '")'];
+                }
+                if (isset($ctx['note_options'][$seg])) {
+                    $noteNames[] = $seg;
+                    continue;
+                }
+                return ['result' => 'suspect', 'reason' => 'unknown_option',
+                    'detail' => 'Text lựa chọn chưa khớp: "' . $seg . '" (món "' . $pname . '")'];
             }
             $optionIds = array_values(array_unique($optionIds));
 
-            // Món có nhóm tùy chọn BẮT BUỘC (VD: Size) mà không map được tùy chọn nào thuộc nhóm → nghi ngờ
-            $missingGroup = $this->missingRequiredGroup((int) $productId, $optionIds, $ctx);
+            // Nhóm tùy chọn BẮT BUỘC mà không mảnh nào khớp thuộc nhóm → nghi ngờ
+            // (đoạn ghi chú không tính — chỉ optionIds thật mới đếm)
+            $missingGroup = $this->missingRequiredGroup($productId, $optionIds, $ctx);
             if ($missingGroup !== null) {
                 return ['result' => 'suspect', 'reason' => 'missing_required_option',
                     'detail' => 'Món "' . $pname . '" bắt buộc nhóm "' . $missingGroup . '" nhưng file không có lựa chọn khớp.'];
@@ -255,23 +694,21 @@ class SapoImportService
             if ($optionIds) {
                 $optionNames = ProductOption::whereIn('id', $optionIds)->pluck('name')->all();
             }
+            $optionNames = array_merge($optionNames, $noteNames);
 
-            $qty = max(1, (int) self::num($r['quantity'] ?? 1));
-            $price = self::money($r['price'] ?? null);
-            $lineTotal = array_key_exists('line_amount', $r) && $r['line_amount'] !== null
-                ? self::money($r['line_amount']) : $price * $qty;
             $items[] = [
-                'product_id' => (int) $productId,
+                'product_id' => $productId,
                 'product_name' => $pname,
                 'price' => $price,
                 'quantity' => $qty,
                 'subtotal' => $lineTotal,
-                'discount_amount' => self::money($r['discount_line'] ?? null),
+                'discount_amount' => $lineDiscount,
                 'option_ids' => $optionIds,
                 'option_names' => $optionNames,
+                'note' => null,
             ];
             $deductLines[] = [
-                'product_id' => (int) $productId,
+                'product_id' => $productId,
                 'option_ids' => $optionIds,
                 'quantity' => $qty,
             ];
@@ -377,6 +814,7 @@ class SapoImportService
                         'discount_amount' => $it['discount_amount'],
                         'options' => array_map(fn($n) => ['name' => $n, 'price' => 0], $it['option_names']),
                         'option_ids' => $it['option_ids'],
+                        'note' => $it['note'] ?? null, // dòng combo: vết tên combo gốc (2026-10-30)
                         'created_at' => $paidAt,
                         'updated_at' => $paidAt,
                     ]);

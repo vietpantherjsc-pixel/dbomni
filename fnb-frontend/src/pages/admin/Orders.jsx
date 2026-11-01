@@ -62,6 +62,7 @@ const Orders = () => {
     const [search, setSearch] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [orders, setOrders] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [pagination, setPagination] = useState(null);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
@@ -194,12 +195,13 @@ const Orders = () => {
             if (deliveryFailover) params.append('delivery_failover', '1');
             const res = await axios.get(`${API}/orders?${params}`);
             if (res.data?.success) {
-                setOrders(res.data.data.data || []);
+                setOrders(res.data.data.data || []); setLoadErr(false);
                 const { data: _d, ...pg } = res.data.data;
                 setPagination(pg);
             }
         } catch (err) {
             console.error('Lỗi tải hóa đơn:', err);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -211,7 +213,9 @@ const Orders = () => {
     const handleSearch = () => { setSearch(searchInput.trim()); setPage(1); };
 
     const exportCsv = () => {
-        const header = ['Ma', 'Thoi gian', 'Thu ngan', 'Khach hang', 'Thanh toan', 'Tong tien', 'Trang thai'];
+        // UX 2026-10-26 (🟠9): header có dấu + trạng thái tiếng Việt (trước đây không dấu + mã thô)
+        const header = ['Mã', 'Thời gian', 'Thu ngân', 'Khách hàng', 'Thanh toán', 'Tổng tiền', 'Trạng thái'];
+        const STATUS_VI = { completed: 'Hoàn thành', pending: 'Chờ xử lý', confirmed: 'Đã xác nhận', preparing: 'Đang làm', ready: 'Sẵn sàng', delivering: 'Đang giao', cancelled: 'Đã hủy', held: 'Đơn lưu' };
         const rows = orders.map((o) => [
             o.code,
             fmtDateTime(o.created_at),
@@ -219,7 +223,7 @@ const Orders = () => {
             o.customer_name || 'Khach le',
             PAYMENT_LABELS[o.payment_method] || o.payment_method,
             o.total_amount,
-            o.status,
+            STATUS_VI[o.status] || o.status,
         ]);
         const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
         const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
@@ -254,7 +258,7 @@ const Orders = () => {
                             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                                 <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
                             </svg>
-                            Xuất hóa đơn
+                            Xuất trang này (CSV)
                         </button>
                     </div>
                 </div>
@@ -269,7 +273,7 @@ const Orders = () => {
                                     onClick={() => handleTab(t.key)}
                                     className={`px-3 py-3 text-[13px] whitespace-nowrap border-b-2 -mb-px transition-colors ${
                                         tab === t.key
-                                            ? 'border-[#0d6efd] text-[#0d6efd] font-medium'
+                                            ? 'border-[#24305E] text-[#24305E] font-medium'
                                             : 'border-transparent text-gray-500 hover:text-gray-800'
                                     }`}
                                 >
@@ -277,9 +281,7 @@ const Orders = () => {
                                 </button>
                             ))}
                         </div>
-                        <button className="text-[13px] text-[#0d6efd] hover:underline whitespace-nowrap ml-4 hidden sm:block">
-                            Tùy chỉnh hiển thị
-                        </button>
+                        {/* UX 2026-10-26 (🟡L4): gỡ nút "Tùy chỉnh hiển thị" — nút chết không onClick từ đầu, không có chức năng ẩn/hiện cột nào sau nó (tiền lệ gỡ nút chuông ở AdminLayout) */}
                     </div>
 
                     {/* Bộ lọc */}
@@ -318,7 +320,7 @@ const Orders = () => {
                                 onChange={(e) => setSearchInput(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                                 placeholder="Tìm kiếm qua mã tham chiếu / tên đơn"
-                                className="w-full text-[13px] border border-gray-300 rounded pl-9 pr-3 py-2 focus:outline-none focus:border-[#0d6efd]"
+                                className="w-full text-[13px] border border-gray-300 rounded pl-9 pr-3 py-2 focus:outline-none focus:border-[#24305E]"
                             />
                         </div>
                         <button
@@ -331,7 +333,7 @@ const Orders = () => {
                         {checkedIds.length >= 2 && (
                             <button
                                 onClick={handleMerge}
-                                className="text-[13px] bg-[#7c3aed] text-white rounded px-4 py-2 font-medium hover:bg-[#6d28d9]"
+                                className="text-[13px] bg-[#24305E] text-white rounded px-4 py-2 font-medium hover:bg-[#1B2547]"
                             >
                                 Gộp {checkedIds.length} đơn
                             </button>
@@ -367,7 +369,7 @@ const Orders = () => {
                                     <th className="px-4 py-3 w-10">
                                         <input
                                             type="checkbox"
-                                            className="accent-[#0d6efd]"
+                                            className="accent-[#24305E]"
                                             checked={orders.length > 0 && orders.every((o) => checked[o.id])}
                                             onChange={(e) => {
                                                 const next = {};
@@ -390,7 +392,7 @@ const Orders = () => {
                                 {loading ? (
                                     <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : orders.length === 0 ? (
-                                    <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">Chưa có hóa đơn nào.</td></tr>
+                                    <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách hóa đơn. <button onClick={fetchOrders} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có hóa đơn nào.'}</td></tr>
                                 ) : (
                                     orders.map((o) => (
                                         <tr
@@ -401,13 +403,13 @@ const Orders = () => {
                                             <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                                                 <input
                                                     type="checkbox"
-                                                    className="accent-[#0d6efd]"
+                                                    className="accent-[#24305E]"
                                                     checked={!!checked[o.id]}
                                                     onChange={() => toggleCheck(o.id)}
                                                 />
                                             </td>
                                             <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtDateTime(o.created_at)}</td>
-                                            <td className="px-3 py-3 text-[#0d6efd] font-medium">
+                                            <td className="px-3 py-3 text-[#24305E] font-medium">
                                                 {o.code}
                                                 {o.online_channel === 'zalo' && (
                                                     <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded">ZALO</span>
@@ -477,10 +479,11 @@ const Orders = () => {
             {selected && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelected(null)}>
                     <div className="bg-white rounded-lg w-full max-w-lg shadow-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                        <div className="px-5 py-4 border-b border-gray-100">
+                        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
                             <h3 className="font-bold text-[15px] text-gray-800">
                                 #{selected.code} <span className="font-normal text-gray-500">· Doanh thu {Number(selected.total_amount).toLocaleString('vi-VN')}đ</span>
                             </h3>
+                            <button onClick={() => setSelected(null)} className="w-10 h-10 shrink-0 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200" title="Đóng">✕</button>
                         </div>
                         <div className="px-5 py-4 text-[13px]">
                             {/* Gói 60: thông tin giao hàng */}
@@ -618,7 +621,7 @@ const Orders = () => {
                             <div className="flex gap-2 pt-4">
                                 {!['cancelled', 'completed'].includes(selected.status) && (
                                     <button onClick={() => openSplit(selected)}
-                                        className="flex-1 py-2 bg-[#7c3aed] text-white rounded text-[13px] font-medium hover:bg-[#6d28d9]">Tách đơn</button>
+                                        className="flex-1 py-2 bg-[#24305E] text-white rounded text-[13px] font-medium hover:bg-[#1B2547]">Tách đơn</button>
                                 )}
                                 <button onClick={() => printBill({
                                         code: selected.code, date: fmtDateTime(selected.created_at),
@@ -661,7 +664,7 @@ const Orders = () => {
                             >Xóa hóa đơn</button>
                             <div className="flex-1" />
                             <button onClick={() => setSelected(null)}
-                                className="px-8 py-2.5 bg-[#0d6efd] text-white rounded text-[13px] font-medium hover:bg-[#0b5ed7]">Đóng</button>
+                                className="px-8 py-2.5 bg-[#24305E] text-white rounded text-[13px] font-medium hover:bg-[#1B2547]">Đóng</button>
                         </div>
                     </div>
                 </div>
@@ -672,7 +675,7 @@ const Orders = () => {
                     <div className="bg-white rounded-lg w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
                             <h3 className="font-semibold text-gray-800">
-                                Tách món từ đơn <span className="text-[#0d6efd]">{splitOrder.code}</span>
+                                Tách món từ đơn <span className="text-[#24305E]">{splitOrder.code}</span>
                             </h3>
                             <button onClick={() => setSplitOrder(null)} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
                         </div>
@@ -707,7 +710,7 @@ const Orders = () => {
                             </button>
                             <button
                                 onClick={handleSplit}
-                                className="flex-1 py-2 bg-[#7c3aed] text-white rounded text-[13px] font-medium hover:bg-[#6d28d9]"
+                                className="flex-1 py-2 bg-[#24305E] text-white rounded text-[13px] font-medium hover:bg-[#1B2547]"
                             >
                                 Xác nhận tách
                             </button>

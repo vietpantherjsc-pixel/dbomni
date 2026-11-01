@@ -127,7 +127,9 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
   if (!ord) return null;
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-slate-800 rounded-2xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto border border-slate-600" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-slate-800 rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col border border-slate-600" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-3 right-3 z-10 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-lg" title="Đóng">×</button>
+        <div className="overflow-y-auto p-5">
         <h3 className="font-extrabold mb-3">🧾 Chi tiết đơn #{ord.code}</h3>
         <div className="space-y-2 text-sm">
           {(ord.items || []).map((it) => {
@@ -170,6 +172,7 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
           {typeLabel && <p>Loại: {typeLabel}</p>}
         </div>
         <button onClick={onClose} className="w-full mt-4 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm font-bold">Đóng</button>
+        </div>
       </div>
     </div>
   );
@@ -192,7 +195,9 @@ function ReprintPop({ ord, onClose }) {
   const ids = Object.keys(sel).filter((k) => sel[k]).map(Number);
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-slate-800 rounded-2xl p-5 w-full max-w-md max-h-[85vh] overflow-y-auto border border-slate-600" onClick={(e) => e.stopPropagation()}>
+      <div className="relative bg-slate-800 rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col border border-slate-600" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-3 right-3 z-10 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-lg" title="Đóng">×</button>
+        <div className="overflow-y-auto p-5">
         <h3 className="font-extrabold mb-3">🖨 Chọn món in lại tem</h3>
         {labelItems.map((it) => {
           const { base, opts } = itemName(it);
@@ -214,6 +219,7 @@ function ReprintPop({ ord, onClose }) {
             <Printer className="w-4 h-4" /> In tem đã chọn
           </button>
           <button onClick={onClose} className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm font-bold">Đóng</button>
+        </div>
         </div>
       </div>
     </div>
@@ -257,10 +263,12 @@ export default function KdsScreen({ onBackToClient }) {
     } catch (e) { /* bỏ qua */ }
   };
 
+  const [pollFails, setPollFails] = useState(0); // UX 2026-10-26 (🟠8): trước đây poll lỗi bị nuốt im lặng — bếp không biết đang xem dữ liệu cũ
   const fetchKdsOrders = async () => {
     try {
       const res = await axios.get(`${API_BASE}/kds/orders?branch_id=${selectedBranch}`);
       if (res.data.success) {
+        setPollFails(0);
         const newOrders = res.data.data;
         if (newOrders.length > previousOrderCount.current && previousOrderCount.current !== 0) {
           playNotificationSound();
@@ -268,7 +276,7 @@ export default function KdsScreen({ onBackToClient }) {
         previousOrderCount.current = newOrders.length;
         setOrders(newOrders);
       }
-    } catch (error) { /* bỏ qua */ }
+    } catch (error) { setPollFails((n) => n + 1); }
   };
 
   useEffect(() => {
@@ -378,6 +386,11 @@ export default function KdsScreen({ onBackToClient }) {
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             <span className="hidden sm:inline">{soundEnabled ? 'Chuông Bật' : 'Chuông Tắt'}</span>
           </button>
+          {pollFails >= 2 ? (
+            <span className="px-3 py-2 rounded-xl bg-red-500/15 border border-red-500/50 text-red-300 text-xs font-bold">⚠ Mất kết nối — đang thử lại…</span>
+          ) : (
+            <span className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-400 text-xs">● Trực tuyến</span>
+          )}
           <button onClick={fetchKdsOrders} className="p-2 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 text-xs">
             <RefreshCw className="w-4 h-4" />
             <span className="hidden sm:inline">Làm mới</span>
@@ -393,9 +406,9 @@ export default function KdsScreen({ onBackToClient }) {
         </div>
       </header>
 
-      <main className="flex-1 p-6 grid grid-cols-1 md:grid-cols-3 gap-6 overflow-hidden">
+      <main className={`flex-1 p-6 grid grid-cols-1 md:grid-cols-3 gap-6 overflow-hidden ${pollFails >= 2 ? 'outline outline-2 outline-red-500/60 -outline-offset-2' : ''}`}>
         {/* CỘT 1: NHẬN ĐƠN */}
-        <section className="bg-slate-900/90 rounded-3xl border border-slate-800 flex flex-col overflow-hidden">
+        <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-amber-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
@@ -443,7 +456,7 @@ export default function KdsScreen({ onBackToClient }) {
         </section>
 
         {/* CỘT 2: ĐANG PHA CHẾ */}
-        <section className="bg-slate-900/90 rounded-3xl border border-slate-800 flex flex-col overflow-hidden">
+        <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-blue-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
@@ -473,7 +486,7 @@ export default function KdsScreen({ onBackToClient }) {
         </section>
 
         {/* CỘT 3: CHỜ KHÁCH NHẬN */}
-        <section className="bg-slate-900/90 rounded-3xl border border-slate-800 flex flex-col overflow-hidden">
+        <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-emerald-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>

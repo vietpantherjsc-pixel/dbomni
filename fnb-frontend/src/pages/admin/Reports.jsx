@@ -4,6 +4,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
+import MonthInput, { validMonth } from '../../components/MonthInput';
 import { API } from '../../utils/api';
 
 // =====================================================================
@@ -273,6 +274,7 @@ export default function Reports() {
     const [tab, setTab] = useState('overview');
     const [pFilter, setPFilter] = useState('top');
     const [page, setPage] = useState(1);
+    const [cashShown, setCashShown] = useState(30); // UX 2026-10-26: sổ dòng tiền hiện tăng dần (trước slice cứng 30 không ghi chú)
     const [data, setData] = useState(null);
     const [prodList, setProdList] = useState([]);
     const [prodMeta, setProdMeta] = useState({ total: 0, has_more: false });
@@ -320,8 +322,9 @@ export default function Reports() {
         } catch (e) {
             console.error('Lỗi tải báo cáo:', e);
             const detail = e?.response?.data?.message || e?.message || '';
-            setErrMsg('Không tải được số liệu báo cáo.' + (detail ? ' Chi tiết: ' + detail : '')
-                + ' Kiểm tra: đã giải nén file backend (ReportController.php, routes/api.php) vào D:\\WORK\\VIBE và restart backend chưa.');
+            // UX 2026-10-26 (🟠T3): KHÔNG lộ hướng dẫn nội bộ/đường dẫn máy cho người dùng cuối
+            console.error('Chi tiết lỗi báo cáo:', detail);
+            setErrMsg('Không tải được số liệu báo cáo. Kiểm tra kết nối mạng rồi bấm Thử tải lại.');
         }
         setLoading(false);
     }, [f, pFilter, branchId]);
@@ -413,7 +416,7 @@ export default function Reports() {
             window.URL.revokeObjectURL(url);
         } catch (e) {
             console.error('Lỗi xuất Excel:', e);
-            alert('Không xuất được file Excel. Backend chưa hỗ trợ (cần endpoint GET /api/reports/revenue/export).');
+            alert('Không xuất được file Excel. Tính năng xuất file đang tạm thời không khả dụng — vui lòng thử lại sau.');
         }
         setExporting(false);
     };
@@ -529,7 +532,7 @@ export default function Reports() {
                     {!loading && errMsg && !data && (
                         <div className="card" style={{ border: '1px solid #f5c2c7', background: '#fff5f5' }}>
                             <div style={{ color: '#b42318', fontWeight: 600, marginBottom: 6 }}>{errMsg}</div>
-                            <button onClick={() => load(1, false)} className="btn navy" style={{ marginTop: 4 }}>Thử tải lại</button>
+                            <button onClick={() => load(1, false)} className="m-btn m-btn-primary" style={{ marginTop: 4 }}>Thử tải lại</button>
                         </div>
                     )}
                     {data && (<>
@@ -605,15 +608,32 @@ export default function Reports() {
                                             <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4 }}>
                                                 Giá vốn: <b style={{ color: 'var(--text)' }}>{fmtVND(c.cogs)}</b>
                                                 {' · '}Phí sàn: <b style={{ color: 'var(--text)' }}>{fmtVND(c.commission)}</b>
-                                                {' · '}Lãi gộp: <b style={{ color: Number(c.gross_profit) >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                                                    {fmtVND(c.gross_profit)}{c.margin_pct !== undefined && c.margin_pct !== null ? ' (' + trimN(c.margin_pct) + '%)' : ''}
-                                                </b>
+                                                {c.marketing_fee !== undefined ? (<>
+                                                    {' · '}Lãi gộp (trước phí marketing): <b style={{ color: Number(c.gross_profit) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                                        {fmtVND(c.gross_profit)}{c.margin_pct !== undefined && c.margin_pct !== null ? ' (' + trimN(c.margin_pct) + '%)' : ''}
+                                                    </b>
+                                                    {' · '}Phí marketing: <b style={{ color: 'var(--text)' }}>{fmtVND(c.marketing_fee)}</b>
+                                                    {' · '}Lãi gộp (sau phí marketing): <b style={{ color: Number(c.gross_profit_after_marketing) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                                        {fmtVND(c.gross_profit_after_marketing)}{c.margin_after_pct !== undefined && c.margin_after_pct !== null ? ' (' + trimN(c.margin_after_pct) + '%)' : ''}
+                                                    </b>
+                                                </>) : (<>
+                                                    {' · '}Lãi gộp: <b style={{ color: Number(c.gross_profit) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                                                        {fmtVND(c.gross_profit)}{c.margin_pct !== undefined && c.margin_pct !== null ? ' (' + trimN(c.margin_pct) + '%)' : ''}
+                                                    </b>
+                                                </>)}
                                             </div>
                                         )}
                                     </div>
                                     <div className="ch-val"><b>{fmtVND(c.value)}</b><span dangerouslySetInnerHTML={{ __html: deltaBadge(c.delta) }} /></div>
                                 </div>
                             ))}
+                            {/* Gói PNL kênh sàn (2026-10-31): chú thích đối soát marketing của kỳ */}
+                            {data?.marketing && (data.marketing.missing_months || []).length > 0 && (
+                                <div className="sub" style={{ marginTop: 8 }}>⚠ Chưa nhập phí marketing sàn cho tháng {(data.marketing.missing_months).map((m) => `${String(m).slice(5)}/${String(m).slice(0, 4)}`).join(', ')} — lãi gộp sau marketing của tháng này chưa tính được (không phải bằng 0). Nhập tại Kênh bán hàng → Đối soát sàn theo tháng.</div>
+                            )}
+                            {data?.marketing && (data.marketing.partial_months || []).length > 0 && (
+                                <div className="sub" style={{ marginTop: 8 }}>Phí marketing sàn tính theo tháng trọn — kỳ đang xem cắt ngang tháng {(data.marketing.partial_months).map((m) => `${String(m).slice(5)}/${String(m).slice(0, 4)}`).join(', ')} nên chưa gồm phí marketing của tháng bị cắt.</div>
+                            )}
                         </div>
                         <div className="two">
                             <div className="card">
@@ -638,6 +658,29 @@ export default function Reports() {
                                     ))}
                                     </tbody>
                                 </table></div>
+                            </div>
+                            {/* UX 2026-10-26 (🟠28): danh sách mặt hàng ĐẦY ĐỦ theo luật "10/trang + Xem thêm"
+                                — trước đây dữ liệu prodList đã tải về nhưng không JSX nào render (code chết) */}
+                            <div className="card">
+                                <h3>Danh sách mặt hàng ({fmtInt(prodMeta.total)} món)</h3>
+                                <div className="sub">Toàn bộ mặt hàng có phát sinh trong kỳ, xếp theo doanh thu. Mỗi trang {10} món — bấm Xem thêm để tải tiếp.</div>
+                                <div className="tbl-wrap"><table className="tbl">
+                                    <tbody>
+                                    <tr><th className="num">#</th><th>Món</th><th className="num">SL bán</th><th className="num">Doanh thu</th></tr>
+                                    {prodList.map((t, i) => (
+                                        <tr key={i}>
+                                            <td className="num">{i + 1}</td>
+                                            <td className="prod">{t.name}</td>
+                                            <td className="num">{fmtInt(t.quantity)}</td>
+                                            <td className="num"><b>{fmtVND(t.revenue)}</b></td>
+                                        </tr>
+                                    ))}
+                                    {prodList.length === 0 && (<tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)' }}>Chưa có mặt hàng nào phát sinh trong kỳ.</td></tr>)}
+                                    </tbody>
+                                </table></div>
+                                {prodMeta.has_more && (
+                                    <button className="m-btn m-btn-ghost" style={{ marginTop: 10 }} onClick={moreProducts}>Xem thêm ({fmtInt(prodMeta.total - prodList.length)} món nữa)</button>
+                                )}
                             </div>
                             <div className="card">
                                 <h3>Theo phương thức thanh toán</h3>
@@ -686,7 +729,7 @@ export default function Reports() {
                             {(r.by_staff || []).map((m) => (
                                 <div className="ch-row" key={m.key}>
                                     <div className="nm">{m.name}</div>
-                                    <div className="ch-bar"><div className="ch-fill" style={{ width: m.share + '%', background: '#0d6efd' }} /></div>
+                                    <div className="ch-bar"><div className="ch-fill" style={{ width: m.share + '%', background: '#24305E' }} /></div>
                                     <div className="ch-val"><b>{fmtVND(m.value)}</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{fmtInt(m.orders)} đơn · AOV {fmtVND(m.avg)}</div></div>
                                 </div>
                             ))}
@@ -746,7 +789,7 @@ export default function Reports() {
                             <div className="tbl-wrap"><table className="tbl">
                                 <tbody>
                                 <tr><th>Mã GD</th><th>Ngày</th><th>Loại</th><th>Hạng mục</th><th>Diễn giải</th><th>Quỹ / TK</th><th className="num">Thu (+)</th><th className="num">Chi (−)</th><th className="num">Số dư lũy kế</th></tr>
-                                {cashData.items.slice(0, 30).map((t) => (
+                                {cashData.items.slice(0, cashShown).map((t) => (
                                     <tr key={t.id}>
                                         <td><b>{t.code || '—'}</b></td>
                                         <td>{fmtD(t.paid_at || t.created_at)}</td>
@@ -761,6 +804,14 @@ export default function Reports() {
                                 ))}
                                 </tbody>
                             </table></div>
+                            )}
+                            {cashData && cashData.items.length > 0 && (
+                                <div className="sub" style={{ marginTop: 8 }}>
+                                    Đang hiện {Math.min(cashShown, cashData.items.length)}/{cashData.items.length} giao dịch đã tải.
+                                    {cashShown < cashData.items.length && (
+                                        <button className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 10 }} onClick={() => setCashShown((v) => v + 30)}>Xem thêm</button>
+                                    )}
+                                </div>
                             )}
                             <div className="explain" style={{ marginTop: 12 }}><b>Nguyên tắc kế toán:</b> tách <b>ngày thực chi tiền</b> (lên sổ dòng tiền) khỏi <b>kỳ kế toán</b> (lên P&amp;L). VD: tiền nhà 6 tháng chi 1 lần → dòng tiền ghi 1 cục, P&amp;L phân bổ đều 6 tháng.</div>
                         </div>
@@ -844,7 +895,7 @@ export default function Reports() {
                         {!menuLoading && !menuData && (
                             <div className="card">
                                 <h3>Menu Engineering</h3>
-                                <div className="sub">Backend chưa hỗ trợ endpoint <b>GET /api/reports/menu-engineering</b>. Áp dụng gói backend mới rồi tải lại trang.</div>
+                                <div className="sub">Chưa tải được dữ liệu phân tích thực đơn. Kiểm tra kết nối rồi bấm "Thử lại" ở đầu trang báo cáo.</div>
                             </div>
                         )}
                         {menuData && (<>
@@ -1099,11 +1150,14 @@ export default function Reports() {
 // Spec P4-C5: tổng hợp thu/chi theo danh mục + kỳ (dùng trong tab Thu-chi)
 export function CashSummary({ branchId }) {
     const [data, setData] = useState(null);
+    const [err, setErr] = useState(false); // UX 2026-10-26 (🟠T1): trước đây lỗi tải làm cả thẻ biến mất không dấu vết
     const [period, setPeriod] = useState('month');
-    useEffect(() => {
+    const loadCash = () => {
         axios.get(API + '/reports/cash-summary', { params: { branch_id: branchId, period } })
-            .then((r) => setData(r.data?.data)).catch(() => {});
-    }, [branchId, period]);
+            .then((r) => { setData(r.data?.data); setErr(false); }).catch(() => setErr(true));
+    };
+    useEffect(() => { loadCash(); }, [branchId, period]);
+    if (err) return (<div className="card"><h3>Tổng hợp thu/chi theo danh mục</h3><p style={{ color: 'var(--m-danger)', fontSize: 13 }}>⚠ Không tải được dữ liệu thu/chi. <button onClick={loadCash} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></p></div>);
     if (!data) return null;
     const maxV = Math.max(1, ...data.buckets.map((b) => Math.max(b.income, b.expense)));
     return (
@@ -1162,18 +1216,21 @@ export function CashSummary({ branchId }) {
 // Spec P4-C6: báo cáo nhân sự tổng hợp
 function HrTab({ branchId }) {
     const [data, setData] = useState(null);
+    const [hrErr, setHrErr] = useState(false); // UX 2026-10-26 (🟠T1): trước đây lỗi tải kẹt ở "Đang tải…" mãi
+    const [hrTick, setHrTick] = useState(0);
     const [month, setMonth] = useState(() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); });
     useEffect(() => {
         axios.get(API + '/reports/hr-summary', { params: { month, branch_id: branchId } })
-            .then((r) => setData(r.data?.data)).catch(() => {});
-    }, [month, branchId]);
+            .then((r) => { setData(r.data?.data); setHrErr(false); }).catch(() => setHrErr(true));
+    }, [month, branchId, hrTick]);
+    if (hrErr) return <section><div className="card"><div className="sub" style={{ color: 'var(--m-danger)' }}>⚠ Không tải được báo cáo nhân sự. <button onClick={() => setHrTick((t) => t + 1)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div></div></section>;
     if (!data) return <section><div className="card"><div className="sub">Đang tải…</div></div></section>;
     return (
         <section>
             <div className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <h3>Báo cáo nhân sự — tháng {month}</h3>
-                    <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="m-select" style={{ width: 'auto' }} />
+                    <MonthInput value={month} onChange={(v) => { if (validMonth(v)) setMonth(v); }} className="m-select" style={{ width: 120 }} />
                 </div>
                 {!data.locked && <div className="sub" style={{ color: '#b45309', marginBottom: 8 }}>⚠ Kỳ lương chưa chốt — cột lương thực nhận chưa có số liệu.</div>}
                 <div className="kpis" style={{ marginBottom: 12 }}>

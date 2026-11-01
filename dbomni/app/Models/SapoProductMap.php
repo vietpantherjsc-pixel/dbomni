@@ -18,4 +18,10 @@ class SapoProductMap extends Model
     {
         return $this->belongsTo(Product::class);
     }
+
+    /** Món tặng của combo Mua 1 Tặng 1 (2026-10-30): có giá trị = dòng map này là combo */
+    public function giftProduct(): BelongsTo
+    {
+        return $this->belongsTo(Product::class, 'gift_product_id');
+    }
 }

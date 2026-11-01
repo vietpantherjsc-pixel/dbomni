@@ -13,13 +13,13 @@ const ORANGE = '#F5A623';
 const CSS = `
 .cb-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .cb-wrap button{font-family:inherit;}
-.cb-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.cb-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .cb-hd-user{display:flex;align-items:center;gap:10px;}
 .cb-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .cb-name{font-size:15px;font-weight:700;line-height:1.25;}
 .cb-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .cb-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.cb-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.cb-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .cb-logout:active{transform:scale(.95);}
 .cb-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .cb-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
@@ -31,7 +31,7 @@ const CSS = `
 .cb-confirm:active{transform:scale(.97);}
 .cb-confirm:disabled{opacity:.45;}
 .cb-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
-.cb-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;max-width:92vw;}
+.cb-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;border-radius:16px;}
 .cb-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .cb-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
 .cb-login{padding:40px 24px;}
@@ -115,10 +115,14 @@ export default function CheBien() {
     } catch (e) {}
   }, [materials]); // eslint-disable-line
 
-  const toast = (m) => {
-    setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2600);
+  const toastTimer = React.useRef(null); // UX 2026-10-26 (🟡L29): toast lỗi hiện lâu hơn toast thường
+  const toast = (m, isErr) => {
+    setToastMsg(m);
+    setToastOn(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2600);
   };
+  const toastErr = (m) => toast(m, true);
 
   const logout = () => {
     localStorage.removeItem('chebien_token');
@@ -149,7 +153,7 @@ export default function CheBien() {
       setHist((h.data && h.data.data) || []);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được dữ liệu.'));
+      toastErr(errMsg(e, 'Không tải được dữ liệu.'));
     } finally { setLoading(false); }
   };
 
@@ -188,7 +192,7 @@ export default function CheBien() {
       setRecipe((r.data && r.data.data) || null);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được định mức.'));
+      toastErr(errMsg(e, 'Không tải được định mức.'));
     } finally { setRecipeLoading(false); }
   };
 
@@ -204,6 +208,7 @@ export default function CheBien() {
   const anyShort = rows.some((r) => r.short);
   const canConfirm = materialId && qtyNum > 0 && rows.length > 0 && !anyShort && !saving;
 
+  const [confirming, setConfirming] = useState(false); // UX 2026-10-26 (🟠27): bước xác nhận riêng trước khi trừ kho FIFO thật (trước đây bấm 1 nút là trừ ngay)
   const submit = async () => {
     if (!canConfirm) return;
     setSaving(true);
@@ -214,11 +219,12 @@ export default function CheBien() {
         note: note.trim() || undefined,
       }, auth(token));
       toast((r.data && r.data.message) || 'Đã tạo phiếu chế biến ✓');
+      setConfirming(false);
       setMaterialId(''); setRecipe(null); setQty(''); setNote('');
       loadBase(token);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Tạo phiếu thất bại.'));
+      toastErr(errMsg(e, 'Tạo phiếu thất bại.'));
     } finally { setSaving(false); }
   };
 
@@ -230,9 +236,9 @@ export default function CheBien() {
       <div className="cb-wrap">
         <style>{CSS}</style>
         <div className="cb-login">
-          <div className="cb-hd" style={{ borderRadius: 18 }}>
+          <div className="cb-hd" style={{ borderRadius: 12 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="cb-title">🍳 Chế biến</div>
             <div className="cb-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -250,7 +256,7 @@ export default function CheBien() {
             <label className="cb-label">Mã PIN 6 số</label>
             <input
               className="cb-field cb-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}
@@ -365,9 +371,22 @@ export default function CheBien() {
               onChange={(e) => setNote(e.target.value)}
               placeholder="VD: chế biến ca sáng..."
             />
-            <button className="cb-confirm" onClick={submit} disabled={!canConfirm}>
-              {saving ? 'Đang xử lý...' : '✓ Xác nhận chế biến'}
-            </button>
+            {!confirming ? (
+              <button className="cb-confirm" onClick={() => setConfirming(true)} disabled={!canConfirm}>
+                ✓ Xác nhận chế biến
+              </button>
+            ) : (
+              <div style={{ marginTop: 14, border: '1.5px solid #F5A623', background: '#fffbeb', borderRadius: 12, padding: '12px 14px' }}>
+                <div style={{ fontWeight: 800, fontSize: 14.5, color: '#92400e', marginBottom: 6 }}>⚠ Chế biến là trừ kho ngay — kiểm tra lần cuối</div>
+                <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+                  Tạo <b>{fmtQty(qtyNum)} {recipe?.material?.unit || ''}</b> bán thành phẩm, trừ {rows.length} nguyên liệu theo định mức (FIFO). Thao tác này ghi phiếu ngay, muốn sửa phải qua quản lý.
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                  <button onClick={() => setConfirming(false)} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700, fontSize: 14.5 }}>Kiểm tra lại</button>
+                  <button onClick={submit} disabled={saving} style={{ flex: 1.4, minHeight: 48, borderRadius: 12, border: 'none', background: '#F5A623', color: '#24305E', fontWeight: 800, fontSize: 14.5, opacity: saving ? 0.5 : 1 }}>{saving ? 'Đang trừ kho…' : 'Trừ kho & chế biến'}</button>
+                </div>
+              </div>
+            )}
           </React.Fragment>
         )}
       </section>
@@ -385,7 +404,7 @@ export default function CheBien() {
                 <div className="cb-hn">{h.material_name}</div>
                 <div className="cb-hd2">{fmtHM(h.created_at)} · {h.employee_name || ''}</div>
               </div>
-              <div className="cb-hq">{fmtQty(h.quantity)}</div>
+              <div className="cb-hq">{fmtQty(h.quantity)}{h.unit ? ' ' + h.unit : ''}</div>
             </div>
           ))
         )}

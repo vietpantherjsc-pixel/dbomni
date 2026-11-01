@@ -14,7 +14,7 @@ const GREEN = '#157f3d';
 
 const CSS = `
 .cc-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;}
-.cc-hd{background:${NAVY};color:#fff;padding:16px 16px 20px;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.cc-hd{background:${NAVY};color:#fff;padding:16px 16px 20px;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .cc-name{font-size:17px;font-weight:800;}
 .cc-branch{font-size:13px;opacity:.75;margin-top:2px;}
 .cc-title{font-size:19px;font-weight:800;margin-top:12px;}
@@ -78,6 +78,7 @@ export default function ChamCong() {
   });
   const [pin, setPin] = useState('');
   const [tab, setTab] = useState('today');
+  const [todayErr, setTodayErr] = useState(false); // UX 2026-10-26 (🟠T1 Hub)
   const [today, setToday] = useState(null);
   const [msg, setMsg] = useState(null); // {ok:true,text}
   const [busy, setBusy] = useState(false);
@@ -103,7 +104,8 @@ export default function ChamCong() {
         params: { branch_id: (emp && emp.branch_id) || params.b || undefined },
       });
       setToday(r.data && r.data.data ? r.data.data : null);
-    } catch (e) { if (!expired(e)) { /* giữ nguyên trạng thái cũ */ } }
+      setTodayErr(false);
+    } catch (e) { if (!expired(e)) setTodayErr(true); } // UX 2026-10-26 (🟠T1 Hub): trước đây nuốt lỗi, trạng thái chấm công hiện sai mà không dấu vết
   };
 
   const loadMe = async (tk) => {
@@ -251,8 +253,8 @@ export default function ChamCong() {
         <div className="cc-body" style={{ paddingTop: 40 }}>
           {/* Gói 68: nút về Hub ở màn hình nhập PIN */}
           <button onClick={goHub} aria-label="Quay lại hub"
-            style={{ background: '#eef0f6', border: 'none', color: NAVY, fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 12 }}>‹ Hub</button>
-          <div className="cc-hd" style={{ borderRadius: 18 }}>
+            style={{ background: '#eef0f6', border: 'none', color: NAVY, fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 12 }}>‹ Hub</button>
+          <div className="cc-hd" style={{ borderRadius: 12 }}>
             <div className="cc-title">Chấm công nhân viên</div>
             <div className="cc-branch">Quét QR tại quán để mở trang này</div>
           </div>
@@ -260,7 +262,7 @@ export default function ChamCong() {
             <label className="cc-label" style={{ marginTop: 0 }}>Nhập mã PIN 6 số của bạn</label>
             <input
               className="cc-field cc-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}
@@ -284,7 +286,7 @@ export default function ChamCong() {
           <header className="cc-hd">
             {/* Gói 68: nút về Hub ở header chính, nằm trong flow (không absolute) */}
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>‹ Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>‹ Hub</button>
             <div className="cc-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="cc-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
             <div className="cc-title">Chấm công</div>
@@ -300,6 +302,12 @@ export default function ChamCong() {
             {tab === 'today' && (
               <div className="cc-card">
                 <div style={{ fontSize: 15, fontWeight: 700, color: NAVY, marginBottom: 8 }}>Trạng thái hôm nay</div>
+                {todayErr && (
+                  <div style={{ color: '#b42318', fontSize: 13, marginBottom: 8 }}>
+                    ⚠ Không tải được trạng thái hôm nay — thông tin dưới đây có thể chưa đúng.
+                    <button onClick={() => loadToday(token)} style={{ marginLeft: 8, minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+                  </div>
+                )}
                 {today && today.check_in ? (
                   <div style={{ fontSize: 14.5 }}>
                     <span className="cc-status-dot" style={{ background: today.check_out ? GREEN : ORANGE }} />

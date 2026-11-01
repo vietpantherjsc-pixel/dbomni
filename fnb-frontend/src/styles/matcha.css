@@ -2,7 +2,7 @@
    MATCHA DESIGN SYSTEM — Gói 7d (2026-10-05)
    Gói 7o: đổi chủ đạo sang XANH DƯƠNG theo logo (navy + cam).
    - Font: Inter (subset vietnamese đầy đủ)
-   - Bo góc nhỏ: 8px toàn hệ thống
+   - Thang bo góc (UX 2026-10-26, chốt theo luật ~12px): 8px nút/ô nhập · 12px thẻ/modal · 16px sheet lớn
    ========================================================================== */
 
 :root {
@@ -69,6 +69,7 @@ body.m-theme {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border-radius: var(--m-radius);
   font-size: 13px; font-weight: 600;
+  min-height: 40px; /* UX 2026-10-26: vùng chạm tối thiểu (trước ~35px) */
   padding: 8px 16px;
   border: 1px solid transparent;
   cursor: pointer;
@@ -80,12 +81,25 @@ body.m-theme {
 .m-btn-ghost { background: transparent; border-color: var(--m-line); color: var(--m-ink); }
 .m-btn-ghost:hover { background: var(--m-bg-soft); }
 .m-btn-danger { background: var(--m-danger); color: #fff; }
-.m-btn-sm { padding: 5px 12px; font-size: 12px; }
+.m-btn-sm { padding: 5px 12px; font-size: 12px; min-height: 36px; } /* UX 2026-10-26 + chuẩn 2 thước Admin: nút nhỏ ≥36px */
+
+/* UX 2026-10-26 (🟠12): dòng chọn nguyên liệu trong modal — desktop 3 cột
+   (select · SL+đơn vị · nút xóa); mobile select full-width 1 hàng riêng,
+   SL + nút xóa xuống hàng 2 (trước đây select bị bóp còn ~55-70px ở 375px) */
+.m-line-grid { display: grid; gap: 8px; margin-bottom: 8px; align-items: center; grid-template-columns: 1fr 175px 40px; }
+.m-line-grid--190 { grid-template-columns: 1fr 190px 40px; }
+@media (max-width: 640px) {
+  .m-line-grid, .m-line-grid--190 { grid-template-columns: 1fr 40px; }
+  .m-line-grid > select, .m-line-grid--190 > select { grid-column: 1 / -1; }
+  /* iOS Safari tự phóng to khi focus ô nhập < 16px — mobile dùng 16px */
+  .m-input, .m-select, .m-textarea { font-size: 16px; }
+}
 
 /* ---- Form ---- */
 .m-input, .m-select, .m-textarea {
   border: 1px solid var(--m-line);
   border-radius: var(--m-radius);
+  min-height: 40px; /* UX 2026-10-26: chuẩn Admin — control chính ≥40px */
   padding: 8px 12px;
   font-size: 13px;
   background: #fff;
@@ -130,6 +144,8 @@ body.m-theme {
 .m-badge-amber { background: #FBF3E2; color: var(--m-warning); }
 .m-badge-red { background: #FBEDEB; color: var(--m-danger); }
 .m-badge-gray { background: #F0EFE9; color: var(--m-ink-soft); }
+.m-badge-blue { background: var(--m-accent-soft); color: var(--m-primary-deep); } /* UX 2026-10-26: trước đây dùng mà chưa định nghĩa */
+.m-badge-yellow { background: #FBF3E2; color: var(--m-warning); }
 
 /* ---- Tabs ---- */
 .m-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--m-line); }
@@ -171,7 +187,7 @@ body.m-theme {
 }
 .m-modal {
   background: var(--m-surface);
-  border-radius: var(--m-radius);
+  border-radius: 12px; /* UX 2026-10-26 (🟡T3): modal nấc 12px theo thang đã chốt (trước dùng chung --m-radius 8px của nút/ô nhập) */
   box-shadow: var(--m-shadow-lg);
   max-width: 560px; width: calc(100% - 32px);
   max-height: 90vh; overflow: auto;
@@ -198,3 +214,26 @@ body.m-theme {
 .m-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .m-scroll::-webkit-scrollbar-thumb { background: #C6CFE2; border-radius: 3px; }
 .m-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- Trang Mặt hàng: Phương án A (2026-10-31) — segmented chế độ xem + chip lọc có nhãn ----
+   Chế độ xem = khối segmented đặc (nền chìm #E8ECF4, mục chọn = ô navy đặc);
+   trạng thái = hàng chip nhẹ có nhãn "Trạng thái:", chấm màu + badge số đếm riêng.
+   Chỉ trình bày — logic lọc/tab không đổi. */
+.m-seg { display: inline-flex; background: #E8ECF4; border-radius: 12px; padding: 4px; gap: 4px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.m-seg::-webkit-scrollbar { display: none; }
+.m-seg button { height: 40px; padding: 0 18px; border: none; border-radius: 9px; background: transparent; font-size: 14px; font-weight: 600; color: var(--m-ink-soft); white-space: nowrap; cursor: pointer; transition: all .15s ease; }
+.m-seg button:hover { color: #24305E; }
+.m-seg button.on { background: #24305E; color: #fff; box-shadow: 0 1px 3px rgba(36,48,94,.35); }
+.m-seg button:focus-visible, .m-fchip:focus-visible { outline: 2.5px solid #F5A623; outline-offset: 2px; }
+.m-filterrow { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.m-filterrow::-webkit-scrollbar { display: none; }
+.m-filter-label { font-size: 13px; font-weight: 700; color: var(--m-ink-soft); white-space: nowrap; }
+.m-fchip { height: 36px; padding: 0 13px; border-radius: 999px; border: 1.5px solid var(--m-line, #E2E6EF); background: #fff; font-size: 13px; font-weight: 600; color: var(--m-ink); display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; cursor: pointer; transition: all .15s ease; }
+.m-fchip:hover { border-color: #B9C3D9; }
+.m-fchip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.m-fchip .dot.g { background: #1E9E62; }
+.m-fchip .dot.gr { background: #A7B0BF; }
+.m-fchip .dot.n { background: #24305E; }
+.m-fchip .cnt { background: #EEF1F6; color: var(--m-ink-soft); font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.m-fchip.on { border-color: #24305E; background: #EDF0F8; color: #24305E; }
+.m-fchip.on .cnt { background: #24305E; color: #fff; }

@@ -20,6 +20,7 @@ import { API } from '../../utils/api';
 // Gói 22 (2026-10-09): Quản lý chi nhánh ngay trong Thiết lập.
 const BranchManager = () => {
     const [list, setList] = useState([]);
+    const [branchLoadErr, setBranchLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [form, setForm] = useState({ code: '', name: '', phone: '', address: '', latitude: '', longitude: '' });
     const [editingId, setEditingId] = useState(null);
     const [msg, setMsg] = useState('');
@@ -34,7 +35,7 @@ const BranchManager = () => {
         try {
             const res = await axios.get(API + '/branches');
             if (res.data?.success) setList(res.data.data || []);
-        } catch (e) { /* bỏ qua */ }
+        } catch (e) { setBranchLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
     useEffect(() => { fetchList(); }, []);
 
@@ -101,7 +102,7 @@ const BranchManager = () => {
     const inp = 'm-input';
     return (
         <div>
-            {msg && <div className="text-sm mb-3" style={{ color: 'var(--m-success)' }}>{msg}</div>}
+            {msg && <div className="text-sm mb-3" style={{ color: (/thất bại|lỗi/i.test(msg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{msg}</div>}
             <div className="overflow-x-auto border border-gray-100 rounded-lg mb-4">
                 <table className="w-full text-[13px] min-w-[640px]">
                     <thead>
@@ -127,7 +128,7 @@ const BranchManager = () => {
                                         : <span className="text-gray-400 text-xs">Đã tắt</span>}
                                 </td>
                                 <td className="px-4 py-3 text-right whitespace-nowrap">
-                                    <button onClick={() => startEdit(b)} className="text-xs font-semibold mr-2 text-[#0d6efd] hover:underline">Sửa</button>
+                                    <button onClick={() => startEdit(b)} className="text-xs font-semibold mr-2 text-[#24305E] hover:underline">Sửa</button>
                                     <button onClick={() => toggleActive(b)}
                                         className={'text-xs font-semibold hover:underline ' + (b.is_active ? 'text-red-600' : 'text-emerald-600')}>
                                         {b.is_active ? 'Tắt' : 'Bật'}
@@ -136,7 +137,7 @@ const BranchManager = () => {
                             </tr>
                         ))}
                         {list.length === 0 && (
-                            <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Chưa có chi nhánh nào.</td></tr>
+                            <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">{branchLoadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách chi nhánh. <button onClick={fetchList} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có chi nhánh nào.'}</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -257,7 +258,23 @@ const Settings = () => {
         if (!anyDirty) return;
         const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
         window.addEventListener('beforeunload', handler);
-        return () => window.removeEventListener('beforeunload', handler);
+        // UX 2026-10-26 (🟡): beforeunload không chặn được điều hướng SPA (đổi trang trong app) —
+        // chặn click vào link nội bộ khi còn thay đổi chưa lưu
+        const clickGuard = (e) => {
+            const a = e.target.closest && e.target.closest('a[href]');
+            if (!a) return;
+            const url = new URL(a.href, window.location.origin);
+            if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+            if (!window.confirm('Trang Thiết lập còn thay đổi chưa lưu. Rời trang sẽ mất các thay đổi này. Vẫn rời trang?')) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        };
+        document.addEventListener('click', clickGuard, true);
+        return () => {
+            window.removeEventListener('beforeunload', handler);
+            document.removeEventListener('click', clickGuard, true);
+        };
     }, [anyDirty]);
 
     const [primary, setPrimary] = useState(DEFAULT_PRIMARY);
@@ -548,7 +565,7 @@ const Settings = () => {
                         <button onClick={save} disabled={saving} className="m-btn m-btn-primary" style={saving ? { opacity: 0.5 } : {}}>
                             {saving ? 'Đang lưu...' : 'Lưu màu chủ đạo'}
                         </button>
-                        {msg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{msg}</span>}
+                        {msg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(msg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{msg}</span>}
                     </div>
                 </CollapsibleCard>
 
@@ -585,7 +602,7 @@ const Settings = () => {
                             </span>
                         </div>
                     </div>
-                    {logoMsg && <div className="text-sm mt-3" style={{ color: 'var(--m-success)' }}>{logoMsg}</div>}
+                    {logoMsg && <div className="text-sm mt-3" style={{ color: (/thất bại|lỗi|chỉ nhận|tối đa/i.test(logoMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{logoMsg}</div>}
                 </CollapsibleCard>
 
                 {/* Gói 47: Font chữ */}
@@ -613,7 +630,7 @@ const Settings = () => {
                         <button onClick={saveFont} disabled={savingFont} className="m-btn m-btn-primary" style={savingFont ? { opacity: 0.5 } : {}}>
                             {savingFont ? 'Đang lưu...' : 'Lưu font chữ'}
                         </button>
-                        {fontMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{fontMsg}</span>}
+                        {fontMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(fontMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{fontMsg}</span>}
                     </div>
                 </CollapsibleCard>
 
@@ -657,7 +674,7 @@ const Settings = () => {
                                 clearDirty('p4');
                             } catch (e) { setP4msg('Lưu thất bại.'); }
                         }} className="m-btn m-btn-primary">Lưu</button>
-                        {p4msg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{p4msg}</span>}
+                        {p4msg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(p4msg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{p4msg}</span>}
                     </div>
                 </CollapsibleCard>
 
@@ -699,7 +716,7 @@ const Settings = () => {
                             }} disabled={savingPromo} className="m-btn m-btn-primary" style={savingPromo ? { opacity: 0.5 } : {}}>
                                 {savingPromo ? 'Đang lưu...' : 'Lưu chính sách'}
                             </button>
-                            {promoMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{promoMsg}</span>}
+                            {promoMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(promoMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{promoMsg}</span>}
                         </div>
                     </div>
                 </CollapsibleCard>
@@ -747,7 +764,7 @@ const Settings = () => {
                             }} disabled={savingInv} className="m-btn m-btn-primary" style={savingInv ? { opacity: 0.5 } : {}}>
                                 {savingInv ? 'Đang lưu...' : 'Lưu ngưỡng kho'}
                             </button>
-                            {invMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{invMsg}</span>}
+                            {invMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(invMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{invMsg}</span>}
                         </div>
                     </div>
                 </CollapsibleCard>
@@ -783,7 +800,7 @@ const Settings = () => {
                             disabled={savingTax} className="m-btn m-btn-primary" style={savingTax ? { opacity: 0.5 } : {}}>
                             {savingTax ? 'Đang lưu...' : 'Lưu cấu hình thuế'}
                         </button>
-                        {taxMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{taxMsg}</span>}
+                        {taxMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(taxMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{taxMsg}</span>}
                     </div>
                 </CollapsibleCard>
 
@@ -829,7 +846,7 @@ const Settings = () => {
                             disabled={savingDec} className="m-btn m-btn-primary" style={savingDec ? { opacity: 0.5 } : {}}>
                             {savingDec ? 'Đang lưu...' : 'Lưu số thập phân'}
                         </button>
-                        {decMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{decMsg}</span>}
+                        {decMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(decMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{decMsg}</span>}
                     </div>
                 </CollapsibleCard>
 
@@ -909,7 +926,7 @@ const Settings = () => {
                             disabled={savingCode} className="m-btn m-btn-primary" style={savingCode ? { opacity: 0.5 } : {}}>
                             {savingCode ? 'Đang lưu...' : 'Lưu quy tắc sinh mã'}
                         </button>
-                        {codeMsg && <span className="text-sm" style={{ color: 'var(--m-success)' }}>{codeMsg}</span>}
+                        {codeMsg && <span className="text-sm" style={{ color: (/thất bại|lỗi/i.test(codeMsg)) ? 'var(--m-danger)' : 'var(--m-success)' }}>{codeMsg}</span>}
                     </div>
                 </CollapsibleCard>
 

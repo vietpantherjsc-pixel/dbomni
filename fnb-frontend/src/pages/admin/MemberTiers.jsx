@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Fix L1: ô giờ 24h tự chế (quy ước nhà)
+import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 
 
@@ -34,6 +35,7 @@ const timePart = (v, dflt) => {
 
 export default function MemberTiers() {
     const [tiers, setTiers] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [promotions, setPromotions] = useState([]);
     const [cfg, setCfg] = useState(null);
     const [showForm, setShowForm] = useState(false);
@@ -44,12 +46,12 @@ export default function MemberTiers() {
         try {
             const res = await axios.get(`${API}/membership-tiers`);
             if (res.data?.success) {
-                setTiers(res.data.data);
+                setTiers(res.data.data); setLoadErr(false);
                 if (res.data.loyalty_config) setCfg(res.data.loyalty_config);
             }
             const rp = await axios.get(`${API}/promotions`, { params: { per_page: 200 } });
             if (rp.data?.success) setPromotions(rp.data.data.data || rp.data.data || []);
-        } catch (err) { console.error('Lỗi tải hạng:', err); }
+        } catch (err) { console.error('Lỗi tải hạng:', err); setLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
     useEffect(() => { fetchData(); }, []);
 
@@ -118,12 +120,16 @@ export default function MemberTiers() {
                 double_points_start: datePart(cfg.double_points_start) ? `${datePart(cfg.double_points_start)} ${tStart}` : null,
                 double_points_end: datePart(cfg.double_points_end) ? `${datePart(cfg.double_points_end)} ${tEnd}` : null,
                 double_points_multiplier: cfg.double_points_multiplier === '' || cfg.double_points_multiplier === null || cfg.double_points_multiplier === undefined ? null : Number(cfg.double_points_multiplier),
+                // Chênh hệ số kênh (2026-10-28)
+                points_channel_multiplier_enabled: !!cfg.points_channel_multiplier_enabled,
+                points_platform_multiplier: cfg.points_platform_multiplier === '' || cfg.points_platform_multiplier === null || cfg.points_platform_multiplier === undefined ? null : Number(cfg.points_platform_multiplier),
+                points_own_channels: cfg.points_own_channels ?? '',
             });
             if (res.data?.success) { alert(res.data.message); if (res.data.loyalty_config) setCfg(res.data.loyalty_config); }
         } catch (err) { alert(err.response?.data?.message || 'Lưu thất bại'); }
     };
 
-    const inp = 'w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]';
     const num = (v) => Number(v || 0).toLocaleString('vi-VN');
 
     return (
@@ -131,7 +137,7 @@ export default function MemberTiers() {
             <div className="p-5">
                 <div className="flex items-center justify-between mb-1">
                     <h1 className="text-xl font-semibold text-gray-800">Thẻ thành viên</h1>
-                    <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                         + Hạng mới
                     </button>
                 </div>
@@ -158,27 +164,27 @@ export default function MemberTiers() {
                                     {promotions.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
                                 </select></div>
                             <div className="flex items-end pb-2"><label className="flex items-center gap-2 text-[13px]">
-                                <input type="checkbox" checked={!!cfg.tier_grace_first_cycle} onChange={(e) => setCfg({ ...cfg, tier_grace_first_cycle: e.target.checked })} className="accent-[#0d6efd]" />
+                                <input type="checkbox" checked={!!cfg.tier_grace_first_cycle} onChange={(e) => setCfg({ ...cfg, tier_grace_first_cycle: e.target.checked })} className="accent-[#24305E]" />
                                 Ân hạn chu kỳ đầu (không tụt hạng)</label></div>
                         </div>
                         <div className="mt-4 pt-3 border-t border-gray-100">
                             <div className="flex flex-wrap items-center gap-3 mb-2">
                                 <div className="text-[13px] font-medium text-gray-700">Ngày nhân đôi điểm (Double Days) — áp cho hạng có quyền lợi "Ngày nhân đôi điểm"</div>
                                 <label className="flex items-center gap-2 text-[13px] font-medium">
-                                    <input type="checkbox" checked={!!cfg.double_points_enabled} onChange={(e) => setCfg({ ...cfg, double_points_enabled: e.target.checked })} className="accent-[#0d6efd] w-4 h-4" />
+                                    <input type="checkbox" checked={!!cfg.double_points_enabled} onChange={(e) => setCfg({ ...cfg, double_points_enabled: e.target.checked })} className="accent-[#24305E] w-4 h-4" />
                                     Bật sự kiện
                                 </label>
                             </div>
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                                 <div><label className="text-xs text-gray-500">Ngày bắt đầu</label>
-                                    <input type="date" value={datePart(cfg.double_points_start)} disabled={!cfg.double_points_enabled}
-                                        onChange={(e) => setCfg({ ...cfg, double_points_start: e.target.value ? `${e.target.value} ${timePart(cfg.double_points_start, '00:00')}` : '' })} className={inp} /></div>
+                                    <DateInput value={datePart(cfg.double_points_start)} disabled={!cfg.double_points_enabled}
+                                        onChange={(v) => setCfg({ ...cfg, double_points_start: v ? `${v} ${timePart(cfg.double_points_start, '00:00')}` : '' })} className={inp} /></div>
                                 <div><label className="text-xs text-gray-500">Giờ bắt đầu (24h)</label>
                                     <TimeInput value={timePart(cfg.double_points_start, '00:00')} disabled={!cfg.double_points_enabled}
                                         onChange={(v) => setCfg({ ...cfg, double_points_start: datePart(cfg.double_points_start) ? `${datePart(cfg.double_points_start)} ${v}` : cfg.double_points_start })} className={inp} /></div>
                                 <div><label className="text-xs text-gray-500">Ngày kết thúc</label>
-                                    <input type="date" value={datePart(cfg.double_points_end)} disabled={!cfg.double_points_enabled}
-                                        onChange={(e) => setCfg({ ...cfg, double_points_end: e.target.value ? `${e.target.value} ${timePart(cfg.double_points_end, '23:59')}` : '' })} className={inp} /></div>
+                                    <DateInput value={datePart(cfg.double_points_end)} disabled={!cfg.double_points_enabled}
+                                        onChange={(v) => setCfg({ ...cfg, double_points_end: v ? `${v} ${timePart(cfg.double_points_end, '23:59')}` : '' })} className={inp} /></div>
                                 <div><label className="text-xs text-gray-500">Giờ kết thúc (24h)</label>
                                     <TimeInput value={timePart(cfg.double_points_end, '23:59')} disabled={!cfg.double_points_enabled}
                                         onChange={(v) => setCfg({ ...cfg, double_points_end: datePart(cfg.double_points_end) ? `${datePart(cfg.double_points_end)} ${v}` : cfg.double_points_end })} className={inp} /></div>
@@ -186,6 +192,22 @@ export default function MemberTiers() {
                                     <input type="number" min="1" step="0.5" value={cfg.double_points_multiplier ?? ''} disabled={!cfg.double_points_enabled} onChange={(e) => setCfg({ ...cfg, double_points_multiplier: e.target.value })} className={inp} /></div>
                             </div>
                             <p className="text-[11px] text-gray-400 mt-2">Tắt công tắc = sự kiện ngưng ngay dù còn trong khoảng ngày. Giờ để mặc định: bắt đầu 00:00, kết thúc 23:59.</p>
+                        </div>
+                        <div className="mt-4 pt-3 border-t border-gray-100">
+                            <div className="flex flex-wrap items-center gap-3 mb-2">
+                                <div className="text-[13px] font-medium text-gray-700">Chênh tích điểm theo kênh — đơn qua sàn tích chậm hơn kênh riêng</div>
+                                <label className="flex items-center gap-2 text-[13px] font-medium">
+                                    <input type="checkbox" checked={!!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_channel_multiplier_enabled: e.target.checked })} className="accent-[#24305E] w-4 h-4" />
+                                    Bật chính sách
+                                </label>
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <div><label className="text-xs text-gray-500">Hệ số kênh sàn (0–1, VD: 0,5)</label>
+                                    <input type="number" min="0" max="1" step="0.05" value={cfg.points_platform_multiplier ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_platform_multiplier: e.target.value })} className={inp} /></div>
+                                <div className="col-span-2 md:col-span-3"><label className="text-xs text-gray-500">Mã kênh riêng (cách nhau dấu phẩy) — mã không có trong danh sách này tính là kênh sàn</label>
+                                    <input type="text" value={cfg.points_own_channels ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_own_channels: e.target.value })} className={inp} /></div>
+                            </div>
+                            <p className="text-[11px] text-gray-400 mt-2">Kênh riêng tích nguyên tốc độ hiện tại; tổng chi tiêu xét hạng vẫn tính đủ ở mọi kênh. Cấu hình áp cho đơn tích điểm từ lúc lưu trở đi, không tính lại đơn cũ.</p>
                         </div>
                         <button onClick={handleSaveCfg} className="mt-4 px-4 py-2 bg-gray-800 text-white text-[13px] rounded hover:bg-gray-700">Lưu cấu hình</button>
                     </div>
@@ -216,7 +238,7 @@ export default function MemberTiers() {
                             <div><label className="text-xs text-gray-500">Giảm giá đổi điểm (%)</label>
                                 <input type="number" min="0" max="100" value={form.points_discount_pct} onChange={(e) => setForm({ ...form, points_discount_pct: e.target.value })} className={inp} /></div>
                             <div className="flex items-end pb-2"><label className="flex items-center gap-2 text-[13px]">
-                                <input type="checkbox" checked={form.is_default} onChange={(e) => setForm({ ...form, is_default: e.target.checked })} className="accent-[#0d6efd]" />
+                                <input type="checkbox" checked={form.is_default} onChange={(e) => setForm({ ...form, is_default: e.target.checked })} className="accent-[#24305E]" />
                                 Hạng mặc định (khách mới)</label></div>
                         </div>
                         <div className="mt-3">
@@ -226,14 +248,14 @@ export default function MemberTiers() {
                                     <label key={key} className="flex items-center gap-2 text-[13px]">
                                         <input type="checkbox" checked={!!form.benefits[key]}
                                             onChange={(e) => setForm({ ...form, benefits: { ...form.benefits, [key]: e.target.checked } })}
-                                            className="accent-[#0d6efd]" />
+                                            className="accent-[#24305E]" />
                                         {label}
                                     </label>
                                 ))}
                             </div>
                         </div>
                         <div className="flex gap-2 mt-3">
-                            <button onClick={handleSave} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">{editing ? 'Cập nhật' : 'Lưu'}</button>
+                            <button onClick={handleSave} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">{editing ? 'Cập nhật' : 'Lưu'}</button>
                             <button onClick={resetForm} className="px-4 py-2 text-[13px] text-gray-500">Hủy</button>
                         </div>
                     </div>
@@ -254,10 +276,11 @@ export default function MemberTiers() {
                             </tr>
                         </thead>
                         <tbody>
+                            {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Không tải được danh sách hạng thành viên.<button onClick={fetchData} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>)}
                             {tiers.map((t) => (
                                 <tr key={t.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                     <td className="px-4 py-3">
-                                        <span className="text-[#0d6efd] font-medium">{t.name}</span>
+                                        <span className="text-[#24305E] font-medium">{t.name}</span>
                                         {t.is_default && <span className="ml-2 px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-600">Mặc định</span>}
                                         {t.code && <div className="text-[11px] text-gray-400">{t.code}</div>}
                                     </td>
@@ -268,7 +291,7 @@ export default function MemberTiers() {
                                     <td className="px-3 py-3 text-right">{(t.points_discount_pct ?? 0) > 0 ? `−${t.points_discount_pct}%` : '—'}</td>
                                     <td className="px-3 py-3 text-right">{t.customers_count ?? 0}</td>
                                     <td className="px-4 py-3 text-right">
-                                        <button onClick={() => startEdit(t)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
+                                        <button onClick={() => startEdit(t)} className="text-[#24305E] hover:underline mr-3">Sửa</button>
                                         <button onClick={() => handleDelete(t.id)} className="text-red-500 hover:underline">Xóa</button>
                                     </td>
                                 </tr>

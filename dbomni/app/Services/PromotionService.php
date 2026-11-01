@@ -81,6 +81,13 @@ class PromotionService
 
         $result = [];
         foreach ($promotions as $promo) {
+            // Hotfix 2026-11-01: mẫu chiến dịch coupon (auto_config có trigger) KHÔNG
+            // phải KM chung — chúng chỉ là khuôn phát coupon vào ví. Loại khỏi tập
+            // eligible để không áp thẳng bằng promotion_id được (thất thoát tiền).
+            // KM chung thật do Admin tạo luôn có auto_config = null nên không bị đụng.
+            if (!empty($promo->auto_config['trigger'])) {
+                continue;
+            }
             // Spec KM chống mã (2026-10-21) Phần A: điều kiện dùng CHUNG 1 hàm cho cả 3
             // đường (promotion_id / voucher / coupon ví) — xem checkConditions().
             $chk = $this->checkConditions($promo, [

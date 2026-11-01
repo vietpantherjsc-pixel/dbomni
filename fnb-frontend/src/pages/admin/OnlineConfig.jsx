@@ -20,7 +20,8 @@ const imgSrc = (u) => {
 };
 
 export default function OnlineConfig() {
-  const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '6000' });
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
+    const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '6000' });
   // Gói 9: cover trang chủ Mini App + điểm thưởng giới thiệu
   const [cover, setCover] = useState('');
   const [refPoints, setRefPoints] = useState('100');
@@ -30,6 +31,10 @@ export default function OnlineConfig() {
   const [slideMsg, setSlideMsg] = useState('');
   const [oaCfg, setOaCfg] = useState({ oa_card_enabled: '1', oa_card_headline: 'Quan tâm để nhận các chương trình ưu đãi đặc quyền !' });
   const [oaMsg, setOaMsg] = useState('');
+  // Gói Mini App 2026-10-30: công tắc mục "Quét QR tích điểm" ở trang Tài khoản
+  // Mini App — mặc định TẮT theo phán của Đại Vương (luồng POS đang hoãn).
+  const [qrClaim, setQrClaim] = useState('0');
+  const [qrClaimMsg, setQrClaimMsg] = useState('');
   const [savingCover, setSavingCover] = useState(false);
   const [uploading, setUploading] = useState(null); // Gói 10f: 'common' | branchId | null
   const [branches, setBranches] = useState([]);
@@ -41,7 +46,7 @@ export default function OnlineConfig() {
     try {
       const cfg = await axios.get(API + '/online/ship-config');
       if (cfg.data?.success) setShip({ ship_base_fee: String(cfg.data.data.base_fee), ship_base_km: String(cfg.data.data.base_km), ship_per_km: String(cfg.data.data.per_km) });
-    } catch (e) { /* bỏ qua */ }
+    } catch (e) { setLoadErr(true); }
     try {
       setBranches(await api('/branches'));
     } catch (e) {
@@ -58,8 +63,9 @@ export default function OnlineConfig() {
           oa_card_enabled: s.data.oa_card_enabled ?? '1',
           oa_card_headline: s.data.oa_card_headline ?? 'Quan tâm để nhận các chương trình ưu đãi đặc quyền !',
         });
+        setQrClaim(s.data.miniapp_qr_claim_entry ?? '0');
       }
-    } catch (e) { /* bỏ qua */ }
+    } catch (e) { setLoadErr(true); }
   };
   useEffect(() => { load(); }, []);
 
@@ -68,7 +74,7 @@ export default function OnlineConfig() {
     try {
       await api('/settings', { method: 'post', data: { settings: ship } });
       alert('Đã lưu cấu hình phí ship.');
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSaving(false); }
   };
 
@@ -77,7 +83,7 @@ export default function OnlineConfig() {
     try {
       await api('/settings', { method: 'post', data: { settings: { shop_cover_url: cover, ref_bonus_points: refPoints } } });
       alert('Đã lưu.');
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSavingCover(false); }
   };
 
@@ -105,7 +111,7 @@ export default function OnlineConfig() {
         setCover(url);
         alert('Đã tải cover chung.');
       }
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setUploading(null); }
   };
 
@@ -115,7 +121,7 @@ export default function OnlineConfig() {
     try {
       await api(`/branches/${b.id}`, { method: 'patch', data: { cover_url: null } });
       setB(b.id, 'cover_url', null);
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const saveBranch = async (b) => {
@@ -125,7 +131,7 @@ export default function OnlineConfig() {
         data: { address: b.address || '', latitude: b.latitude || null, longitude: b.longitude || null },
       });
       alert(`Đã lưu tọa độ ${b.name}.`);
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const setB = (id, k, v) => setBranches((prev) => prev.map((b) => (b.id === id ? { ...b, [k]: v } : b)));
@@ -141,7 +147,7 @@ export default function OnlineConfig() {
       setNewB({ code: '', name: '', phone: '', address: '', latitude: '', longitude: '' });
       setShowAdd(false);
       setBranches(await api('/branches'));
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500';
@@ -151,6 +157,7 @@ export default function OnlineConfig() {
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-xl font-bold mb-1">Zalo Mini App</h1>
       <p className="text-sm text-gray-500 mb-6">Ảnh cover trang chủ cho từng chi nhánh. Thông tin chi nhánh quản lý trong Thiết lập → Chi nhánh.</p>
+      {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 16 }}>⚠ Một phần cấu hình chưa tải được — số đang hiện có thể không đúng. <button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Tải lại</button></div>)}
 
       {/* Gói SEC: khôi phục cấu hình phí ship (Gói 52 đã xóa JSX) */}
       <div className="bg-white rounded-xl border p-5 mb-6">
@@ -176,7 +183,7 @@ export default function OnlineConfig() {
               className="w-full px-3 py-2 border rounded-lg text-sm" />
           </div>
         </div>
-        <button onClick={saveShip} disabled={saving} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+        <button onClick={saveShip} disabled={saving} className="px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547] disabled:opacity-50">
           {saving ? 'Đang lưu...' : 'Lưu phí ship'}
         </button>
       </div>
@@ -193,7 +200,7 @@ export default function OnlineConfig() {
           </label>
         </div>
         {cover && <img src={imgSrc(cover)} alt="cover preview" className="mt-3 rounded-lg w-full max-h-40 object-cover" onError={(e) => { e.target.style.display = 'none'; }} />}
-        <button onClick={saveCover} disabled={savingCover} className="mt-4 px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+        <button onClick={saveCover} disabled={savingCover} className="mt-4 px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547] disabled:opacity-50">
           {savingCover ? 'Đang lưu...' : 'Lưu'}
         </button>
       </div>
@@ -236,7 +243,7 @@ export default function OnlineConfig() {
               setSlideMsg('Đã lưu.');
             } catch (e) { setSlideMsg('Lưu thất bại.'); }
             finally { setSavingSlide(false); }
-          }} disabled={savingSlide} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+          }} disabled={savingSlide} className="px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547] disabled:opacity-50">
             {savingSlide ? 'Đang lưu...' : 'Lưu'}
           </button>
           {slideMsg && <span className="text-sm text-green-600">{slideMsg}</span>}
@@ -268,8 +275,32 @@ export default function OnlineConfig() {
               await api('/settings', { method: 'post', data: { settings: oaCfg } });
               setOaMsg('Đã lưu.');
             } catch (e) { setOaMsg('Lưu thất bại.'); }
-          }} className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">Lưu</button>
+          }} className="px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547]">Lưu</button>
           {oaMsg && <span className="text-sm text-green-600">{oaMsg}</span>}
+        </div>
+      </div>
+
+      {/* Gói Mini App 2026-10-30: công tắc mục Quét QR tích điểm (trang Tài khoản) */}
+      <div className="bg-white rounded-xl border p-5 mt-6">
+        <h2 className="font-bold mb-2">📷 Mục "Quét QR tích điểm" (Zalo Mini App)</h2>
+        <p className="text-xs text-gray-500 mb-3">Nút quét QR ở trang Tài khoản của Mini App để khách claim điểm tại quầy. Đang tạm ẩn theo chủ trương hoãn luồng bán POS — bật lại tại đây khi đưa vào dùng, không cần sửa code. Tính năng claim và API không thay đổi.</p>
+        <div className="flex flex-col gap-4 mb-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={qrClaim === '1'}
+              onChange={(e) => setQrClaim(e.target.checked ? '1' : '0')}
+              className="w-5 h-5" />
+            <span className="text-sm font-medium">Hiện mục "Quét QR tích điểm tại quầy" ở trang Tài khoản</span>
+          </label>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={async () => {
+            setQrClaimMsg('');
+            try {
+              await api('/settings', { method: 'post', data: { settings: { miniapp_qr_claim_entry: qrClaim } } });
+              setQrClaimMsg('Đã lưu.');
+            } catch (e) { setQrClaimMsg('Lưu thất bại.'); }
+          }} className="px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547]">Lưu</button>
+          {qrClaimMsg && <span className="text-sm text-green-600">{qrClaimMsg}</span>}
         </div>
       </div>
     </div>

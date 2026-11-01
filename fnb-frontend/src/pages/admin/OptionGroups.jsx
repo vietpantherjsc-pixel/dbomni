@@ -32,7 +32,7 @@ export default function OptionGroups() {
   };
   useEffect(() => { load().catch((e) => {
     if (e.response?.status === 401) return;
-    alert(e.response?.data?.message || e.message);
+    alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.');
   }); }, []);
 
   const toggle = (id) => setOpen((p) => ({ ...p, [id]: !p[id] }));
@@ -49,7 +49,7 @@ export default function OptionGroups() {
     arr.splice(ti, 0, mv);
     setGroups(arr);
     try { await axios.post(`${BASE}/option-groups/reorder`, { ids: arr.map((g) => g.id) }); }
-    catch (e) { alert(e.response?.data?.message || e.message); load(); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
   };
 
   // ---- kéo-thả tùy chọn trong nhóm ----
@@ -67,14 +67,37 @@ export default function OptionGroups() {
     arr[gi] = { ...arr[gi], options: opts };
     setGroups(arr);
     try { await axios.post(`${BASE}/option-groups/${gid}/options/reorder`, { ids: opts.map((o) => o.id) }); }
-    catch (e) { alert(e.response?.data?.message || e.message); load(); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
   };
+
+  // UX 2026-10-26 (🟠14): nút ↑/↓ dự phòng cảm ứng cho cả 2 cấp kéo-thả
+  const moveGroup = async (gi, dir) => {
+    const j = gi + dir;
+    if (j < 0 || j >= groups.length) return;
+    const arr = [...groups];
+    const [mv] = arr.splice(gi, 1);
+    arr.splice(j, 0, mv);
+    setGroups(arr);
+    try { await axios.post(`${BASE}/option-groups/reorder`, { ids: arr.map((g) => g.id) }); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
+  };
+  const moveOption = async (g, oi, dir) => {
+    const opts = [...(g.options || [])];
+    const j = oi + dir;
+    if (j < 0 || j >= opts.length) return;
+    const [mv] = opts.splice(oi, 1);
+    opts.splice(j, 0, mv);
+    setGroups((gs) => gs.map((x) => (x.id === g.id ? { ...x, options: opts } : x)));
+    try { await axios.post(`${BASE}/option-groups/${g.id}/options/reorder`, { ids: opts.map((o) => o.id) }); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
+  };
+  const mvBtn = { minWidth: 36, minHeight: 36, fontSize: 13, lineHeight: 1, color: 'var(--m-ink-soft)' };
 
   const savePrice = async (opt, price) => {
     try {
       await axios.patch(`${BASE}/options/${opt.id}`, { additional_price: Number(price) || 0 });
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); load(); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); load(); }
   };
 
   // Gói 8f: hiển thị số gọn ("10000.00" -> "10000"), nút Lưu hiện khi có thay đổi
@@ -95,12 +118,12 @@ export default function OptionGroups() {
       await axios.post(`${BASE}/option-groups/${gid}/options`, { name: v.name.trim(), additional_price: Number(v.price) || 0 });
       setNewOpt((p) => ({ ...p, [gid]: {} }));
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const delOption = async (id) => {
     if (!confirm('Xóa tùy chọn này?')) return;
-    await axios.delete(`${BASE}/options/${id}`).catch((e) => alert(e.message));
+    await axios.delete(`${BASE}/options/${id}`).catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
@@ -111,12 +134,12 @@ export default function OptionGroups() {
       setForm({ name: '', type: 'single', is_required: false, quantity_mode: 'fixed' });
       setShowAdd(false);
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
 
   const delGroup = async (id) => {
     if (!confirm('Xóa nhóm này? Tùy chọn sẽ được giữ lại.')) return;
-    await axios.delete(`${BASE}/option-groups/${id}`).catch((e) => alert(e.message));
+    await axios.delete(`${BASE}/option-groups/${id}`).catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
@@ -155,7 +178,7 @@ export default function OptionGroups() {
         </div>
       )}
 
-      {groups.map((g) => (
+      {groups.map((g, gi) => (
         <div key={g.id} className="m-card mb-3"
           draggable
           onDragStart={(e) => { dragG.current = g.id; e.dataTransfer.effectAllowed = 'move'; }}
@@ -179,16 +202,18 @@ export default function OptionGroups() {
                 {g.type === 'single' ? 'Chọn 1' : 'Chọn nhiều'} · {g.is_required ? 'Bắt buộc' : 'Không bắt buộc'} · {g.options?.length || 0} tùy chọn · {g.products_count || 0} món dùng
               </div>
             </div>
+            <button onClick={(e) => { e.stopPropagation(); moveGroup(gi, -1); }} disabled={gi === 0} style={{ ...mvBtn, opacity: gi === 0 ? 0.3 : 1 }} title="Lên">↑</button>
+            <button onClick={(e) => { e.stopPropagation(); moveGroup(gi, 1); }} disabled={gi === groups.length - 1} style={{ ...mvBtn, opacity: gi === groups.length - 1 ? 0.3 : 1 }} title="Xuống">↓</button>
             <button onClick={(e) => { e.stopPropagation(); setAssignGroup(g); }} className="m-btn m-btn-sm m-btn-ghost">Gán mặt hàng</button>
             <button onClick={(e) => { e.stopPropagation(); setEditingGroup(g); }} className="text-xs font-semibold hover:underline" style={{color:'var(--m-primary)'}}>Sửa</button>
             <button onClick={(e) => { e.stopPropagation(); delGroup(g.id); }} className="text-xs text-red-600 hover:underline">Xóa</button>
           </div>
           {open[g.id] && (
-            <div className="border-t px-4 py-3">
-              <table className="w-full text-sm">
+            <div className="border-t px-4 py-3 overflow-x-auto">
+              <table className="w-full text-sm" style={{ minWidth: 560 }}>
                 <thead><tr className="text-left text-xs text-gray-500"><th className="py-2 w-8"></th><th className="py-2">Tùy chọn</th><th className="w-52">Giá thêm (đ)</th><th className="w-48"></th></tr></thead>
                 <tbody>
-                  {(g.options || []).map((o) => (
+                  {(g.options || []).map((o, oi) => (
                     <tr key={o.id} className="border-t border-gray-100"
                       draggable
                       onDragStart={(e) => { e.stopPropagation(); dragO.current = o.id; e.dataTransfer.effectAllowed = 'move'; }}
@@ -211,6 +236,8 @@ export default function OptionGroups() {
                         </div>
                       </td>
                       <td className="text-right whitespace-nowrap">
+                        <button style={{ ...mvBtn, opacity: oi === 0 ? 0.3 : 1 }} disabled={oi === 0} onClick={() => moveOption(g, oi, -1)} title="Lên">↑</button>
+                        <button style={{ ...mvBtn, opacity: oi === (g.options || []).length - 1 ? 0.3 : 1, marginRight: 6 }} disabled={oi === (g.options || []).length - 1} onClick={() => moveOption(g, oi, 1)} title="Xuống">↓</button>
                         {/* Gói 8c: nhóm theo món -> cấu hình trong form món */}
                         {g.quantity_mode === 'per_product' ? (
                           <span className="text-xs" style={{color:'var(--m-ink-faint)'}} title="Mở form Mặt hàng để set định mức cho từng món">Set trong món</span>
@@ -220,7 +247,7 @@ export default function OptionGroups() {
                         {editing === o.id ? (
                           <button className="text-xs text-green-700 font-bold mr-2" onClick={async () => {
                             const nm = document.getElementById(`nm-${o.id}`).value;
-                            await axios.patch(`${BASE}/options/${o.id}`, { name: nm }).catch((e) => alert(e.message));
+                            await axios.patch(`${BASE}/options/${o.id}`, { name: nm }).catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
                             setEditing(null); load();
                           }}>Lưu</button>
                         ) : (
@@ -232,11 +259,13 @@ export default function OptionGroups() {
                   ))}
                 </tbody>
               </table>
-              <div className="flex gap-2 mt-3 items-center">
-                <div style={{width: 32, flexShrink: 0}}></div>
-                <input className={input} style={{flex: 1, minWidth: 0, width: 'auto'}} placeholder="Tên tùy chọn mới…" value={newOpt[g.id]?.name || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], name: e.target.value } }))} />
+              {/* 🔴 UX 2026-10-26: hàng wrap — mobile tên full-width dòng 1, giá + nút dòng 2
+                  (trước đây tổng cố định ~392px > 375px, ô tên bị ép về ~0px) */}
+              <div className="flex gap-2 mt-3 items-center" style={{ flexWrap: 'wrap' }}>
+                <div className="hidden sm:block" style={{width: 32, flexShrink: 0}}></div>
+                <input className={input} style={{flex: '1 1 150px', minWidth: 0, width: 'auto'}} placeholder="Tên tùy chọn mới…" value={newOpt[g.id]?.name || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], name: e.target.value } }))} />
                 <input type="number" min="0" step="500" className={input} style={{width: 112, flexShrink: 0}} placeholder="Giá thêm" value={newOpt[g.id]?.price || ''} onChange={(e) => setNewOpt((p) => ({ ...p, [g.id]: { ...p[g.id], price: e.target.value } }))} />
-                <div style={{width: 192, flexShrink: 0, textAlign: 'right'}}>
+                <div style={{flexShrink: 0, textAlign: 'right'}}>
                   <button onClick={() => addOption(g.id)} className="m-btn m-btn-primary m-btn-sm">+ Thêm</button>
                 </div>
               </div>
@@ -277,7 +306,7 @@ function EditGroupModal({ group, onClose }) {
         name: name.trim(), type, quantity_mode: quantityMode, is_required: isRequired,
       });
       onClose();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSaving(false); }
   };
 
@@ -344,7 +373,7 @@ function AssignModal({ group, onClose }) {
       ]);
       setProducts(Array.isArray(p.data) ? p.data : (p.data.data || []));
       setChecked(a.data?.data || []);
-    })().catch((e) => alert(e.message));
+    })().catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
   }, [group.id]);
 
   const toggleCk = (id) => setChecked((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
@@ -355,7 +384,7 @@ function AssignModal({ group, onClose }) {
       const r = await axios.post(`${BASE}/option-groups/${group.id}/products`, { product_ids: checked });
       alert(r.data?.message || 'Đã lưu.');
       onClose();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSaving(false); }
   };
 
@@ -406,7 +435,7 @@ function RecipeModal({ option, onClose }) {
       const pack = recs.filter((x) => x.kind === 'packaging');
       setIngredients(ing.length ? ing.map((x) => ({ material_id: String(x.material_id), quantity: x.quantity })) : [{ material_id: '', quantity: '' }]);
       setPackaging(pack.length ? pack.map((x) => ({ material_id: String(x.material_id), quantity: x.quantity })) : [{ material_id: '', quantity: '' }]);
-    })().catch((e) => alert(e.message));
+    })().catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
   }, [option.id]);
 
   const packMats = materials.filter((m) => (m.type || '').toLowerCase().includes('pack') || (m.type || '').includes('bao') || (m.name || '').toLowerCase().includes('ly') || (m.name || '').toLowerCase().includes('hũ') || (m.name || '').toLowerCase().includes('hộp'));
@@ -414,7 +443,7 @@ function RecipeModal({ option, onClose }) {
   const LineEditor = ({ lines, setLines, materialList, placeholder }) => (
     <>
       {lines.map((l, i) => (
-        <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 175px 40px' }}>
+        <div key={i} className="m-line-grid">
           <select className="m-input" value={l.material_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, material_id: e.target.value } : x))}>
             <option value="">{placeholder}</option>
             {materialList.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
@@ -442,7 +471,7 @@ function RecipeModal({ option, onClose }) {
       });
       alert('Đã lưu định mức.');
       onClose();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSaving(false); }
   };
 

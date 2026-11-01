@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
+import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
 
@@ -67,7 +68,7 @@ export default function SapoConfig() {
 function PickModal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center justify-center" onClick={onClose}>
-      <div className="bg-white w-full md:max-w-lg md:rounded-2xl rounded-t-2xl p-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white w-full md:max-w-lg md:rounded-xl rounded-t-xl p-4 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold">{title}</h3>
           <button className={btnGhost} onClick={onClose}>Đóng</button>
@@ -78,22 +79,78 @@ function PickModal({ title, onClose, children }) {
   );
 }
 
+// ---------------- Thu gọn map (2026-10-30) ----------------
+// Liệt kê các dòng map "trùng danh mục" (tên Sapo trùng hệt tên món/tùy chọn
+// được trỏ tới — import tự khớp được ở tầng 1) để xem trước rồi xóa 1 lần.
+// Dòng ngoại lệ thật, dòng combo và dòng ghi chú không bao giờ nằm trong này.
+function PruneMaps({ table, onPruned }) {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const loadPreview = async () => {
+    try { setData(await api(`/sapo/maps/${table}/redundant`)); setOpen(true); }
+    catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
+  };
+  const prune = async () => {
+    if (!confirm(`Xóa ${data.count} dòng map trùng danh mục? Các dòng này import vẫn tự khớp được theo tên danh mục. Dòng ngoại lệ/combo/ghi chú không bị đụng.`)) return;
+    setBusy(true);
+    try {
+      const r = await api(`/sapo/maps/${table}/redundant`, { method: 'delete' });
+      alert(r.message || 'Đã thu gọn.');
+      setData(null); setOpen(false);
+      if (onPruned) onPruned();
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
+    setBusy(false);
+  };
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-2 mb-3">
+        <button className={btnGhost} onClick={loadPreview}>Thu gọn map trùng danh mục</button>
+        <span className="text-xs text-gray-500">Xem trước các dòng map mà import đã tự khớp được theo tên — xóa để bảng map chỉ còn ngoại lệ thật.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-3">
+      <div className="text-sm font-medium mb-1">Dòng map trùng danh mục: {data ? data.count : '…'}</div>
+      {data && data.count === 0 && <p className="text-xs text-gray-500">Không có dòng nào trùng — bảng map đã gọn.</p>}
+      {data && data.count > 0 && (
+        <>
+          <div className="max-h-40 overflow-y-auto text-xs text-gray-600 mb-2">
+            {data.items.map((it) => <div key={it.id} className="py-0.5 break-words">{it.sapo_text} → {it.target_name}</div>)}
+          </div>
+          <div className="flex gap-2">
+            <button className={btnPrimary} disabled={busy} onClick={prune}>{busy ? 'Đang xóa...' : `Xóa ${data.count} dòng trùng`}</button>
+            <button className={btnGhost} onClick={() => setOpen(false)}>Đóng</button>
+          </div>
+        </>
+      )}
+      {data && data.count === 0 && <button className={btnGhost} onClick={() => setOpen(false)}>Đóng</button>}
+    </div>
+  );
+}
+
 // ---------------- Tab 1: Map món ----------------
 function MapProducts() {
   const [unmapped, setUnmapped] = useState([]);
   const [mapped, setMapped] = useState([]);
   const [q1, setQ1] = useState('');
   const [q2, setQ2] = useState('');
-  const [picking, setPicking] = useState(null); // {sapoName, id?} hoặc null
+  const [picking, setPicking] = useState(null); // {sapoName, giftId?, giftName?} hoặc null
   const [candidates, setCandidates] = useState([]);
   const [cq, setCq] = useState('');
+  // Combo (2026-10-30): chọn món theo 2 bước — món chính rồi món tặng (có thể bỏ qua)
+  const [pickStep, setPickStep] = useState('main');
+  const [mainPick, setMainPick] = useState(null);
 
   const load = async () => {
     try {
       const u = await api('/sapo/unmapped');
       setUnmapped(u.products || []);
       setMapped(await api('/sapo/maps/products'));
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   useEffect(() => { load(); }, []);
 
@@ -102,14 +159,14 @@ function MapProducts() {
     try { setCandidates(await api('/sapo/products-catalog?q=' + encodeURIComponent(v))); }
     catch (e) { /* bỏ qua */ }
   };
-  useEffect(() => { if (picking) searchCandidates(''); }, [picking]);
+  useEffect(() => { if (picking) { setPickStep('main'); setMainPick(null); searchCandidates(''); } }, [picking]);
 
-  const save = async (productId) => {
+  const save = async (productId, giftProductId) => {
     try {
-      await api('/sapo/maps/products', { method: 'post', data: { sapo_name: picking.sapoName, product_id: productId } });
+      await api('/sapo/maps/products', { method: 'post', data: { sapo_name: picking.sapoName, product_id: productId, gift_product_id: giftProductId ?? null } });
       setPicking(null);
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   const remove = async (id) => {
     if (!confirm('Xóa map này?')) return;
@@ -124,7 +181,7 @@ function MapProducts() {
     <div className="space-y-4">
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-1">Tên chưa map <span className="text-sm font-normal text-gray-500">(từ lần import gần nhất)</span></h2>
-        <p className="text-xs text-gray-500 mb-3">Map 1 lần, các lần import sau tự khớp. Tên món so khớp chính xác tuyệt đối, không tự đoán.</p>
+        <p className="text-xs text-gray-500 mb-3">Import tự khớp món có tên trùng hệt danh mục đang bán (kể cả sau khi bóc hậu tố kênh). Chỉ cần thêm dòng ở bảng map khi: tên hai hệ thống khác nhau, cần trỏ tay sang món khác, định nghĩa combo Mua 1 Tặng 1, hoặc xử lý ngoại lệ. Khớp luôn chính xác từng ký tự, không tự đoán.</p>
         <input className={inputCls + ' mb-3'} placeholder="Tìm tên Sapo..." value={q1} onChange={(e) => setQ1(e.target.value)} />
         {f1.length === 0 && <p className="text-sm text-gray-400">Không còn tên nào chưa map.</p>}
         <div className="divide-y">
@@ -142,15 +199,19 @@ function MapProducts() {
 
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-3">Đã map ({mapped.length})</h2>
+        <PruneMaps table="products" onPruned={load} />
         <input className={inputCls + ' mb-3'} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} />
         <div className="divide-y">
           {f2.map((m) => (
             <div key={m.id} className="py-2.5 flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium break-words">{m.sapo_name}</div>
-                <div className="text-xs text-gray-500">→ {m.product?.name || '(món đã bị xóa)'}</div>
+                <div className="text-xs text-gray-500">
+                  → {m.product?.name || '(món đã bị xóa)'}
+                  {m.gift_product && <span className="ml-1 px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-medium">Combo Mua 1 Tặng 1: tặng {m.gift_product.name}</span>}
+                </div>
               </div>
-              <button className={btnGhost} onClick={() => setPicking({ sapoName: m.sapo_name })}>Sửa</button>
+              <button className={btnGhost} onClick={() => setPicking({ sapoName: m.sapo_name, giftId: m.gift_product_id || null, giftName: m.gift_product?.name || null })}>Sửa</button>
               <button className={btnGhost + ' text-red-600'} onClick={() => remove(m.id)}>Xóa</button>
             </div>
           ))}
@@ -159,19 +220,43 @@ function MapProducts() {
 
       {picking && (
         <PickModal title={'Map món: ' + picking.sapoName} onClose={() => setPicking(null)}>
-          <input className={inputCls + ' mb-3'} placeholder="Tìm món DBOMNI theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
-          <div className="divide-y max-h-80 overflow-y-auto">
-            {candidates.map((c) => (
-              <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(c.id)}>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">{c.name}</div>
-                  {c.sku && <div className="text-xs text-gray-500">SKU: {c.sku}</div>}
-                </div>
-                <span className="text-xs text-[#24305E] font-medium">Chọn</span>
-              </button>
-            ))}
-            {candidates.length === 0 && <p className="text-sm text-gray-400 py-3">Không tìm thấy món nào.</p>}
-          </div>
+          {pickStep === 'main' ? (
+            <>
+              <p className="text-xs text-gray-500 mb-2">Bước 1/2 — chọn <b>món chính</b> (nếu đây là combo Mua 1 Tặng 1 thì đây là món khách trả tiền).</p>
+              <input className={inputCls + ' mb-3'} placeholder="Tìm món DBOMNI theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <div className="divide-y max-h-80 overflow-y-auto">
+                {candidates.map((c) => (
+                  <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => { setMainPick(c); setPickStep('gift'); setCq(''); searchCandidates(''); }}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{c.name}</div>
+                      {c.sku && <div className="text-xs text-gray-500">SKU: {c.sku}</div>}
+                    </div>
+                    <span className="text-xs text-[#24305E] font-medium">Chọn</span>
+                  </button>
+                ))}
+                {candidates.length === 0 && <p className="text-sm text-gray-400 py-3">Không tìm thấy món nào.</p>}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500 mb-2">Bước 2/2 — món chính: <b>{mainPick?.name}</b>. Nếu tên Sapo này là <b>combo Mua 1 Tặng 1</b>, chọn thêm món tặng kèm; import sẽ bung thành 2 dòng (chính có tiền, tặng 0đ). Không phải combo thì bỏ qua bước này.</p>
+              {picking.giftName && <p className="text-xs text-orange-600 mb-2">Hiện đang đặt món tặng: <b>{picking.giftName}</b> — chọn món khác để thay, hoặc bấm nút bỏ qua để gỡ combo.</p>}
+              <input className={inputCls + ' mb-3'} placeholder="Tìm món tặng theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <div className="divide-y max-h-64 overflow-y-auto mb-3">
+                {candidates.map((c) => (
+                  <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(mainPick.id, c.id)}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{c.name}</div>
+                      {c.sku && <div className="text-xs text-gray-500">SKU: {c.sku}</div>}
+                    </div>
+                    <span className="text-xs text-[#24305E] font-medium">Chọn làm món tặng</span>
+                  </button>
+                ))}
+                {candidates.length === 0 && <p className="text-sm text-gray-400 py-3">Không tìm thấy món nào.</p>}
+              </div>
+              <button className={btnPrimary + ' w-full'} onClick={() => save(mainPick.id, null)}>{picking.giftId ? 'Gỡ món tặng — lưu thành món đơn' : 'Bỏ qua — không phải combo, lưu món đơn'}</button>
+            </>
+          )}
         </PickModal>
       )}
     </div>
@@ -187,13 +272,15 @@ function MapOptions() {
   const [picking, setPicking] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [cq, setCq] = useState('');
+  // Gói 4 (2026-10-28): đích map có 2 dạng — tùy chọn thật (trừ kho) hoặc ghi chú (không trừ kho)
+  const [pickMode, setPickMode] = useState('option');
 
   const load = async () => {
     try {
       const u = await api('/sapo/unmapped');
       setUnmapped(u.options || []);
       setMapped(await api('/sapo/maps/options'));
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   useEffect(() => { load(); }, []);
 
@@ -202,14 +289,14 @@ function MapOptions() {
     try { setCandidates(await api('/sapo/options-catalog?q=' + encodeURIComponent(v))); }
     catch (e) { /* bỏ qua */ }
   };
-  useEffect(() => { if (picking) searchCandidates(''); }, [picking]);
+  useEffect(() => { if (picking) { setPickMode('option'); searchCandidates(''); } }, [picking]);
 
   const save = async (optionId) => {
     try {
       await api('/sapo/maps/options', { method: 'post', data: { sapo_option_text: picking.sapoText, option_id: optionId } });
       setPicking(null);
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   const remove = async (id) => {
     if (!confirm('Xóa map này?')) return;
@@ -224,7 +311,7 @@ function MapOptions() {
     <div className="space-y-4">
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-1">Text lựa chọn chưa map <span className="text-sm font-normal text-gray-500">(từng đoạn trong cột "Tên lựa chọn")</span></h2>
-        <p className="text-xs text-gray-500 mb-3">Mỗi đoạn text map vào đúng 1 tùy chọn thuộc nhóm của nó (gồm size). Kho trừ theo định mức của tùy chọn đã map.</p>
+        <p className="text-xs text-gray-500 mb-3">Import tự khớp đoạn text trùng hệt tên tùy chọn thuộc các nhóm của chính món đó (gồm size). Chỉ cần thêm dòng ở bảng map khi: đoạn text viết khác tên tùy chọn trong danh mục, cần trỏ tay, hoặc là text ghi chú thuần (không trừ kho).</p>
         <input className={inputCls + ' mb-3'} placeholder="Tìm text lựa chọn..." value={q1} onChange={(e) => setQ1(e.target.value)} />
         {f1.length === 0 && <p className="text-sm text-gray-400">Không còn text nào chưa map.</p>}
         <div className="divide-y">
@@ -242,13 +329,18 @@ function MapOptions() {
 
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-3">Đã map ({mapped.length})</h2>
+        <PruneMaps table="options" onPruned={load} />
         <input className={inputCls + ' mb-3'} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} />
         <div className="divide-y">
           {f2.map((m) => (
             <div key={m.id} className="py-2.5 flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium break-words">"{m.sapo_option_text}"</div>
-                <div className="text-xs text-gray-500">→ {m.option ? `${m.option.name}${m.option.group ? ` — ${m.option.group.name}` : ''}` : '(đã bị xóa)'}</div>
+                <div className="text-xs text-gray-500">
+                  {m.option_id == null
+                    ? <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 font-medium">Ghi chú — không trừ kho</span>
+                    : <>→ {m.option ? `${m.option.name}${m.option.group ? ` — ${m.option.group.name}` : ''}` : '(đã bị xóa)'}</>}
+                </div>
               </div>
               <button className={btnGhost} onClick={() => setPicking({ sapoText: m.sapo_option_text })}>Sửa</button>
               <button className={btnGhost + ' text-red-600'} onClick={() => remove(m.id)}>Xóa</button>
@@ -259,19 +351,35 @@ function MapOptions() {
 
       {picking && (
         <PickModal title={'Map tùy chọn: "' + picking.sapoText + '"'} onClose={() => setPicking(null)}>
-          <input className={inputCls + ' mb-3'} placeholder="Tìm tùy chọn theo tên hoặc tên nhóm..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
-          <div className="divide-y max-h-80 overflow-y-auto">
-            {candidates.map((c) => (
-              <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(c.id)}>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">{c.name}</div>
-                  <div className="text-xs text-gray-500">Nhóm: {c.group_name}</div>
-                </div>
-                <span className="text-xs text-[#24305E] font-medium">Chọn</span>
-              </button>
-            ))}
-            {candidates.length === 0 && <p className="text-sm text-gray-400 py-3">Không tìm thấy tùy chọn nào.</p>}
+          <div className="flex flex-col gap-2 mb-3">
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="radio" name="sapo-map-mode" className="mt-0.5 accent-[#24305E]" checked={pickMode === 'option'} onChange={() => setPickMode('option')} />
+              <span><b>Tùy chọn (trừ kho theo định lượng)</b> — chọn 1 tùy chọn DBOMNI bên dưới.</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="radio" name="sapo-map-mode" className="mt-0.5 accent-[#24305E]" checked={pickMode === 'note'} onChange={() => setPickMode('note')} />
+              <span><b>Ghi chú — không trừ kho</b> — đoạn text chỉ hiện trên dòng món cho nhân viên thấy (VD: text dịch vụ của sàn), không phải tùy chọn thật.</span>
+            </label>
           </div>
+          {pickMode === 'note' ? (
+            <button className={btnPrimary + ' w-full'} onClick={() => save(null)}>Lưu dạng ghi chú</button>
+          ) : (
+            <>
+              <input className={inputCls + ' mb-3'} placeholder="Tìm tùy chọn theo tên hoặc tên nhóm..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <div className="divide-y max-h-80 overflow-y-auto">
+                {candidates.map((c) => (
+                  <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(c.id)}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{c.name}</div>
+                      <div className="text-xs text-gray-500">Nhóm: {c.group_name}</div>
+                    </div>
+                    <span className="text-xs text-[#24305E] font-medium">Chọn</span>
+                  </button>
+                ))}
+                {candidates.length === 0 && <p className="text-sm text-gray-400 py-3">Không tìm thấy tùy chọn nào.</p>}
+              </div>
+            </>
+          )}
         </PickModal>
       )}
     </div>
@@ -284,11 +392,12 @@ function SapoSettings({ meta }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [mailRefresh, setMailRefresh] = useState(0);
+  const [cfgLoaded, setCfgLoaded] = useState(false); // UX 2026-10-26 (🟠20): lỗi tải thì KHÓA Lưu tránh đè mặc định lên cấu hình thật
 
   useEffect(() => {
     (async () => {
-      try { setCfg(await api('/sapo/config')); }
-      catch (e) { /* giữ mặc định */ }
+      try { setCfg(await api('/sapo/config')); setCfgLoaded(true); }
+      catch (e) { setMsg('Không tải được cấu hình hiện tại — nút Lưu đang khóa để tránh ghi đè bằng giá trị mặc định. Tải lại trang để thử lại.'); }
     })();
   }, []);
 
@@ -318,7 +427,7 @@ function SapoSettings({ meta }) {
         <input className={inputCls + ' mb-3'} value={cfg.mail_subject_pattern}
           onChange={(e) => setCfg({ ...cfg, mail_subject_pattern: e.target.value })} />
         <div className="flex items-center gap-2">
-          <button className={btnPrimary} onClick={saveCfg} disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
+          <button className={btnPrimary} onClick={saveCfg} disabled={saving || !cfgLoaded}>{saving ? 'Đang lưu...' : 'Lưu cấu hình'}</button>
           {msg && <span className="text-sm text-gray-600">{msg}</span>}
         </div>
       </div>
@@ -365,7 +474,7 @@ function ImportReports({ goSuspects }) {
   useEffect(() => {
     (async () => {
       try { setRuns(await api('/sapo/import-runs?limit=30')); }
-      catch (e) { alert(e.response?.data?.message || e.message); }
+      catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     })();
   }, []);
 
@@ -433,14 +542,24 @@ const REASON_LABEL = {
   possible_duplicate: 'Nghi trùng đơn DBOMNI',
   insufficient_stock: 'Không đủ tồn kho',
   processing_error: 'Lỗi xử lý',
+  // Gói 4 (2026-10-28): 2 loại CHỈ XỬ LÝ TAY — không chạy lại/tạo đơn
+  missing_recipe: 'Cảnh báo — đơn đã import, món chưa có định lượng',
+  cancelled_after_import: 'Hủy sau import — chờ xử lý tay',
 };
+// Reason chỉ xử lý tay: ẩn Chạy lại (backend cũng chặn 422), chỉ Đánh dấu đã xử lý / Bỏ qua
+const MANUAL_ONLY_REASONS = ['missing_recipe', 'cancelled_after_import'];
+const reasonBadgeCls = (reason) => reason === 'missing_recipe'
+  ? 'bg-sky-100 text-sky-700'
+  : reason === 'cancelled_after_import'
+    ? 'bg-rose-100 text-rose-700'
+    : 'bg-amber-100 text-amber-700';
 
 function Suspects({ goTab }) {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('pending');
   const [reason, setReason] = useState('');
   const [q, setQ] = useState('');
-  const [discarding, setDiscarding] = useState(null);
+  const [closing, setClosing] = useState(null); // {s, mode: 'discard' | 'resolve'}
   const [note, setNote] = useState('');
   const [busyId, setBusyId] = useState(null);
 
@@ -448,7 +567,7 @@ function Suspects({ goTab }) {
     try {
       const params = new URLSearchParams({ status, reason, q });
       setRows(await api('/sapo/suspects?' + params.toString()));
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   useEffect(() => { load(); }, [status, reason]);
 
@@ -457,13 +576,18 @@ function Suspects({ goTab }) {
     try {
       const r = await axios({ url: `${API}/sapo/suspects/${id}/${action}`, method: 'post', data: body || {} });
       alert(r.data?.message || 'Đã xử lý.');
-      setDiscarding(null); setNote('');
+      setClosing(null); setNote('');
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setBusyId(null); }
   };
 
   const payloadSummary = (s) => {
+    // Cảnh báo missing_recipe: payload là {order_id, order_code, items} — không có rows hóa đơn
+    if (s.reason === 'missing_recipe' && Array.isArray(s.payload?.items)) {
+      const names = s.payload.items.map((it) => `${it.product_name} ×${it.quantity}`);
+      return { total: null, count: s.payload.items.length, names: names.slice(0, 3), more: names.length > 3 };
+    }
     const rowsP = s.payload?.rows || [];
     const first = rowsP[0] || {};
     const names = [...new Set(rowsP.map((r) => r.product_name).filter(Boolean))];
@@ -500,12 +624,17 @@ function Suspects({ goTab }) {
             <div key={s.id} className="bg-white rounded-xl border p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-bold text-sm">HĐ {s.sapo_invoice_code}</span>
-                <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${reasonBadgeCls(s.reason)}`}>
                   {REASON_LABEL[s.reason] || s.reason}
                 </span>
                 <span className="text-xs text-gray-500">
-                  {sum.count} dòng · Tổng {fmtMoney(sum.total)}{s.branch ? ` · CN: ${s.branch.name}` : ''} · {fmtTime(s.created_at)}
+                  {sum.count} dòng{sum.total != null ? ` · Tổng ${fmtMoney(sum.total)}` : ''}{s.branch ? ` · CN: ${s.branch.name}` : ''} · {fmtTime(s.created_at)}
                 </span>
+                {s.resolved_order?.code && (
+                  <Link to="/admin/orders" className="text-xs font-medium text-[#24305E] underline">
+                    Đơn DBOMNI {s.resolved_order.code}
+                  </Link>
+                )}
               </div>
               {sum.names.length > 0 && (
                 <p className="text-xs text-gray-600 mt-1.5 break-words">
@@ -528,10 +657,16 @@ function Suspects({ goTab }) {
                       Xác nhận đơn mới — tạo đơn
                     </button>
                   )}
-                  <button className={btnGhost + ' py-2.5'} disabled={busyId === s.id} onClick={() => act(s.id, 'rerun')}>
-                    {busyId === s.id ? 'Đang chạy...' : 'Chạy lại'}
-                  </button>
-                  <button className={btnGhost + ' py-2.5 text-red-600'} onClick={() => { setDiscarding(s); setNote(''); }}>
+                  {MANUAL_ONLY_REASONS.includes(s.reason) ? (
+                    <button className={btnPrimary} disabled={busyId === s.id} onClick={() => { setClosing({ s, mode: 'resolve' }); setNote(''); }}>
+                      Đánh dấu đã xử lý
+                    </button>
+                  ) : (
+                    <button className={btnGhost + ' py-2.5'} disabled={busyId === s.id} onClick={() => act(s.id, 'rerun')}>
+                      {busyId === s.id ? 'Đang chạy...' : 'Chạy lại'}
+                    </button>
+                  )}
+                  <button className={btnGhost + ' py-2.5 text-red-600'} onClick={() => { setClosing({ s, mode: 'discard' }); setNote(''); }}>
                     Bỏ qua
                   </button>
                 </div>
@@ -549,16 +684,22 @@ function Suspects({ goTab }) {
         })}
       </div>
 
-      {discarding && (
-        <PickModal title={'Bỏ qua hóa đơn ' + discarding.sapo_invoice_code} onClose={() => setDiscarding(null)}>
-          <p className="text-sm text-gray-600 mb-3">Hóa đơn này sẽ không được import. Ghi lý do để đối soát sau này.</p>
-          <input className={inputCls + ' mb-3'} placeholder="Lý do bỏ qua (VD: đúng là đơn trùng)..." value={note} onChange={(e) => setNote(e.target.value)} autoFocus />
+      {closing && (
+        <PickModal title={(closing.mode === 'resolve' ? 'Đánh dấu đã xử lý — hóa đơn ' : 'Bỏ qua hóa đơn ') + closing.s.sapo_invoice_code} onClose={() => setClosing(null)}>
+          <p className="text-sm text-gray-600 mb-3">
+            {closing.mode === 'resolve'
+              ? (closing.s.reason === 'cancelled_after_import'
+                ? 'Ghi lại hướng xử lý đã chọn (VD: đã hủy đơn tay trên trang Hóa đơn / giữ nguyên đơn vì đã giao). Hệ thống không tự hủy đơn hay hoàn kho.'
+                : 'Xác nhận đã xử lý xong (VD: đã bổ sung định lượng cho món). Ghi chú lại để đối soát sau này.')
+              : 'Hóa đơn này sẽ không được import. Ghi lý do để đối soát sau này.'}
+          </p>
+          <input className={inputCls + ' mb-3'} placeholder={closing.mode === 'resolve' ? 'Hướng xử lý đã chọn...' : 'Lý do bỏ qua (VD: đúng là đơn trùng)...'} value={note} onChange={(e) => setNote(e.target.value)} autoFocus />
           <div className="flex gap-2">
-            <button className={btnPrimary + ' flex-1'} disabled={busyId === discarding.id}
-              onClick={() => act(discarding.id, 'discard', { resolution: note || undefined })}>
-              Xác nhận bỏ qua
+            <button className={btnPrimary + ' flex-1'} disabled={busyId === closing.s.id}
+              onClick={() => act(closing.s.id, closing.mode === 'resolve' ? 'resolve' : 'discard', { resolution: note || undefined })}>
+              {closing.mode === 'resolve' ? 'Xác nhận đã xử lý' : 'Xác nhận bỏ qua'}
             </button>
-            <button className={btnGhost + ' py-2.5'} onClick={() => setDiscarding(null)}>Hủy</button>
+            <button className={btnGhost + ' py-2.5'} onClick={() => setClosing(null)}>Hủy</button>
           </div>
         </PickModal>
       )}
@@ -573,11 +714,12 @@ function ImapCard({ onChecked }) {
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
   const [msg, setMsg] = useState('');
+  const [imLoaded, setImLoaded] = useState(false); // UX 2026-10-26 (🟠20)
 
   useEffect(() => {
     (async () => {
-      try { setIm(await api('/sapo/mail/config')); }
-      catch (e) { /* giữ rỗng */ }
+      try { setIm(await api('/sapo/mail/config')); setImLoaded(true); }
+      catch (e) { setMsg('Không tải được cấu hình hộp thư hiện tại — nút Lưu đang khóa để tránh ghi đè. Tải lại trang để thử lại.'); }
     })();
   }, []);
 
@@ -638,7 +780,7 @@ function ImapCard({ onChecked }) {
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-4">
-        <button className={btnPrimary} onClick={save} disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu hộp thư'}</button>
+        <button className={btnPrimary} onClick={save} disabled={saving || !imLoaded}>{saving ? 'Đang lưu...' : 'Lưu hộp thư'}</button>
         <button className={btnGhost + ' py-2.5'} onClick={checkNow} disabled={checking}>{checking ? 'Đang quét mail...' : 'Kiểm tra mail ngay'}</button>
         {msg && <span className="text-sm text-gray-600">{msg}</span>}
       </div>
@@ -657,17 +799,18 @@ const MAIL_STATUS_LABEL = {
 
 function MailLogs({ refreshKey }) {
   const [logs, setLogs] = useState([]);
-  useEffect(() => {
-    (async () => {
-      try { setLogs(await api('/sapo/mail/logs')); }
-      catch (e) { /* bỏ qua */ }
-    })();
-  }, [refreshKey]);
+  const [logsErr, setLogsErr] = useState(false); // UX 2026-10-26 (🟠T1)
+  // UX 2026-10-26 (vòng bổ sung B, 🟠T1): hàm tải đặt tên để nút Thử lại gọi lại tại chỗ
+  const loadLogs = async () => {
+    try { setLogs(await api('/sapo/mail/logs')); setLogsErr(false); }
+    catch (e) { setLogsErr(true); }
+  };
+  useEffect(() => { loadLogs(); }, [refreshKey]);
 
   return (
     <div className="bg-white rounded-xl border p-4">
       <h2 className="font-bold mb-3">Nhật ký mail & cảnh báo</h2>
-      {logs.length === 0 && <p className="text-sm text-gray-400">Chưa có bản ghi nào.</p>}
+      {logsErr ? (<p className="text-sm" style={{ color: 'var(--m-danger)' }}>⚠ Không tải được nhật ký mail.<button onClick={loadLogs} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></p>) : (logs.length === 0 && <p className="text-sm text-gray-400">Chưa có bản ghi nào.</p>)}
       <div className="divide-y max-h-80 overflow-y-auto">
         {logs.map((l) => (
           <div key={l.id} className="py-2.5">
@@ -708,7 +851,7 @@ function MapRows({ table, title, hint, keyLabel, valueLabel, keyType = 'text', k
       await api(`/sapo/maps/${table}`, { method: 'post', data: { [keyField]: nk.trim(), [valField]: nv } });
       setNk(''); setNv(valueType === 'select' ? String(valueOptions[0]?.value ?? '') : '');
       load();
-    } catch (e) { alert(e.response?.data?.message || e.message); }
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
   const remove = async (id) => {
     if (!confirm('Xóa dòng này?')) return;

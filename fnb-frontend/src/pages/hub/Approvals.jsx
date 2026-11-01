@@ -31,7 +31,7 @@ const CSS = `
 .ap-meta span{color:#8a93a6;}
 .ap-creator{font-size:11.5px;color:#8a93a6;margin-top:2px;}
 .ap-head{display:flex;align-items:center;gap:10px;padding:12px;}
-.ap-back{border:1px solid #e3e8f2;background:#fff;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;color:#24305E;min-height:40px;}
+.ap-back{border:1px solid #e3e8f2;background:#fff;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;color:#24305E;min-height:44px;}
 .ap-hd-t{font-size:15px;font-weight:800;color:#24305E;flex:1;}
 .ap-branch{font-size:11.5px;color:#8a93a6;}
 .ap-kv{background:#fff;border:1px solid #eef1f6;border-radius:13px;padding:4px 13px;margin:0 12px 10px;}
@@ -50,7 +50,7 @@ const CSS = `
 .ap-btn.rej{background:#fff;color:#dc2626;border:1.5px solid #f3c2c2;}
 .ap-btn:disabled{opacity:.45;}
 .ap-modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:flex-end;justify-content:center;z-index:60;}
-.ap-box{background:#fff;border-radius:18px 18px 0 0;padding:18px 16px 22px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto;}
+.ap-box{background:#fff;border-radius:16px 16px 0 0;padding:18px 16px 22px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto;}
 .ap-box h4{margin:0 0 6px;color:#24305E;font-size:15px;}
 .ap-box p{margin:0 0 10px;font-size:13px;color:#1f2937;}
 .ap-pinbranch{background:#fff7e6;border:1.5px solid #F5A623;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:800;color:#7c4a03;margin-bottom:10px;}
@@ -135,6 +135,8 @@ export function ApprovalCluster({ token, hubT, branchId, onOpen }) {
   const [counts, setCounts] = useState(null);
   const [processedCount, setProcessedCount] = useState(0);
   const [hidden, setHidden] = useState(false);
+  const [countErr, setCountErr] = useState(false); // UX 2026-10-26 (🟠22): lỗi tải (không phải 403) trước đây làm cả cụm biến mất, mất lối vào duyệt
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -144,8 +146,10 @@ export function ApprovalCluster({ token, hubT, branchId, onOpen }) {
         if (!alive) return;
         setCounts(r.data && r.data.data ? r.data.data : { types: {}, total: 0 });
         setHidden(false);
+        setCountErr(false);
       } catch (e) {
         if (alive && e && e.response && e.response.status === 403) setHidden(true);
+        else if (alive) setCountErr(true);
       }
       try {
         const r2 = await axios.get(API + '/employee/approvals/processed-today', cfg(token, hubT, { branch_id: branchId }));
@@ -153,9 +157,19 @@ export function ApprovalCluster({ token, hubT, branchId, onOpen }) {
       } catch (e) { /* bỏ qua */ }
     })();
     return () => { alive = false; };
-  }, [branchId, token]);
+  }, [branchId, token, retryTick]);
 
-  if (hidden || !counts) return null;
+  if (hidden) return null;
+  if (countErr && !counts) return (
+    <div className="ap-sec">
+      <style>{CSS}</style>
+      <div style={{ padding: '14px 16px', color: '#b42318', fontSize: 13.5 }}>
+        ⚠ Không tải được mục Chờ duyệt. Kiểm tra kết nối rồi thử lại.
+        <button onClick={() => setRetryTick((t) => t + 1)} style={{ display: 'block', marginTop: 10, minHeight: 44, padding: '0 18px', borderRadius: 12, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+      </div>
+    </div>
+  );
+  if (!counts) return null;
   const types = counts.types || {};
   const keys = Object.keys(types);
   if (keys.length === 0) return null; // không có khóa quyền duyệt nào → không thấy cụm
@@ -218,6 +232,7 @@ export function ApprovalsFlow({ token, hubT, emp, branchId, branchName, initialT
 function ListView({ A, type, branchName, onBack, onOpen }) {
   const meta = TYPES_META[type] || {};
   const [items, setItems] = useState([]);
+  const [listErr, setListErr] = useState(false); // UX 2026-10-26 (🟠T1)
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -230,7 +245,8 @@ function ListView({ A, type, branchName, onBack, onOpen }) {
       setItems((prev) => (p === 1 ? d : [...prev, ...d]));
       setLastPage((r.data && r.data.pagination && r.data.pagination.last_page) || 1);
       setPage(p);
-    } catch (e) { /* giữ danh sách cũ */ }
+      setListErr(false);
+    } catch (e) { setListErr(true); } // UX 2026-10-26 (🟠T1): trước đây nuốt lỗi, danh sách trống/kẹt cũ mà không dấu vết
     finally { setLoading(false); }
   };
   useEffect(() => { load(1); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -242,6 +258,12 @@ function ListView({ A, type, branchName, onBack, onOpen }) {
         <div className="ap-hd-t">{meta.icon} {meta.label}</div>
       </div>
       <div className="ap-branch" style={{ padding: '0 12px 8px' }}>Chi nhánh: <b>{branchName}</b></div>
+      {listErr && (
+        <div style={{ margin: '0 12px 10px', padding: '10px 12px', borderRadius: 12, background: '#fef2f2', color: '#b42318', fontSize: 13 }}>
+          ⚠ Không tải được danh sách. {items.length === 0 ? 'Kiểm tra kết nối rồi thử lại.' : 'Đang hiện dữ liệu cũ.'}
+          <button onClick={() => load(1)} style={{ marginLeft: 8, minHeight: 44, padding: "0 14px", borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+        </div>
+      )}
       {items.map((it) => (
         <button key={it.id} className="ap-card" onClick={() => onOpen(it.id)}>
           <div className="r1"><span className="ap-code">{it.title}</span><span className="ap-wait">{waitLabel(it.created_at)}</span></div>

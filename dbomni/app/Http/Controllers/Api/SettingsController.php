@@ -26,6 +26,10 @@ class SettingsController extends Controller
             // Gói 9: cover Mini App + điểm thưởng giới thiệu
             'shop_cover_url' => Setting::get('shop_cover_url', ''),
             'ref_bonus_points' => Setting::get('ref_bonus_points', '100'),
+            // Gói Mini App 2026-10-30: công tắc hiện mục "Quét QR tích điểm" ở
+            // trang Tài khoản Mini App — mặc định TẮT (Đại Vương phán tạm ẩn vì
+            // luồng bán POS đang hoãn); bật lại ở trang Zalo Mini App (Admin).
+            'miniapp_qr_claim_entry' => Setting::get('miniapp_qr_claim_entry', '0'),
             // Gói 26: phụ cấp ăn + tỷ lệ BHXH
             'meal_allowance_min_hours' => Setting::get('meal_allowance_min_hours', '8'),
             'meal_allowance_amount' => Setting::get('meal_allowance_amount', '25000'),

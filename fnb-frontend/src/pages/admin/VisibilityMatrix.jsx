@@ -24,6 +24,7 @@ export default function VisibilityMatrix({
     const [hidden, setHidden] = useState(new Set()); // "branchId:rowId"
     const [q, setQ] = useState('');
     const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [busy, setBusy] = useState(false);
 
     const load = async () => {
@@ -36,6 +37,7 @@ export default function VisibilityMatrix({
             setHidden(new Set((d.hidden || []).map(([b, id]) => `${b}:${id}`)));
         } catch (e) {
             console.error('Lỗi tải ma trận hiển thị:', e);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -61,6 +63,7 @@ export default function VisibilityMatrix({
             await axios.post(`${BASE}${toggleUrl}`, { branch_id: b, [rowKey]: id, hidden: h });
         } catch (e) {
             console.error('Lỗi lưu hiển thị:', e);
+            alert(e.response?.data?.message || 'Lưu thay đổi hiển thị thất bại — đã hoàn lại trạng thái trước.'); // UX 2026-10-26 (🟠T2): trước đây nuốt im lặng, switch tự bật lại không lời giải thích
             load(); // rollback
         }
     };
@@ -78,6 +81,7 @@ export default function VisibilityMatrix({
             setHidden(nk);
         } catch (e) {
             console.error('Lỗi lưu hiển thị:', e);
+            alert(e.response?.data?.message || 'Lưu thay đổi hiển thị thất bại — đã hoàn lại trạng thái trước.'); // UX 2026-10-26 (🟠T2 bổ sung): trước đây nuốt lặng như đường lưu từng ô
             load();
         } finally {
             setBusy(false);
@@ -118,6 +122,8 @@ export default function VisibilityMatrix({
                     <div className="overflow-x-auto">
                         {loading ? (
                             <div className="p-8 text-center text-sm text-gray-400">Đang tải...</div>
+                        ) : loadErr ? (
+                            <div className="p-8 text-center text-sm" style={{ color: 'var(--m-danger)' }}>⚠ Không tải được dữ liệu hiển thị. <button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>
                         ) : (
                             <table className="w-full text-sm" style={{ minWidth: 200 + branches.length * 150 }}>
                                 <thead>

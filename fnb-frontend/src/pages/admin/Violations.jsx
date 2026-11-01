@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import MonthInput from '../../components/MonthInput';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { fmtDate } from '../../utils/format';
@@ -91,7 +92,7 @@ export default function Violations() {
             <div className="p-5">
                 <div className="flex flex-wrap items-center gap-3 mb-4">
                     <h1 className="text-xl font-bold">Lỗi 3 Chuyên</h1>
-                    <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]" title="Tháng" />
+                    <MonthInput value={month} onChange={setMonth} className="border border-gray-300 rounded px-3 py-2 text-[13px]" style={{ width: 120 }} title="Tháng" />
                     <select value={empFilter} onChange={(e) => setEmpFilter(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]">
                         <option value="">Tất cả nhân viên</option>
                         {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}
@@ -132,7 +133,7 @@ export default function Violations() {
                                             </span>
                                         </td>
                                         {editable && <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                                            <button onClick={() => openEdit(r)} className="text-[#0d6efd] text-[12px] mr-3">Sửa</button>
+                                            <button onClick={() => openEdit(r)} className="text-[#24305E] text-[12px] mr-3">Sửa</button>
                                             <button onClick={() => del(r.id)} className="text-red-500 text-[12px]">Xóa</button>
                                         </td>}
                                     </tr>
@@ -160,7 +161,7 @@ export default function Violations() {
                                     <select value={modal.violation_type_id} onChange={(e) => pickType(e.target.value)} className={inp + ' mt-1'}>
                                         <option value="">— Chọn —</option>
                                         {cats.map((c) => (
-                                            <optgroup key={c} label={CAT_META[c].name}>
+                                            <optgroup key={c} label={CAT_META_FB[c]?.name || violGroups.find((g) => g.code === c)?.name || c}>
                                                 {types.filter((t) => t.category === c).map((t) => (
                                                     <option key={t.id} value={t.id}>{t.name} ({t.default_points} lỗi)</option>
                                                 ))}

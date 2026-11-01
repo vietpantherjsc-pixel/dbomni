@@ -249,22 +249,12 @@ class SalaryController extends Controller
                     if (!$covered) $wageMissingDates[] = $ds;
                 }
             }
-            // Lễ fallback: dùng giờ lễ nhập tay cũ
-            // Bổ sung A4-12b: giờ lễ nhập tay là TỔNG cả tháng, không gắn theo
-            // ngày nên không thể tính đúng theo từng ngày lễ; khi tháng có
-            // nhiều ngày lễ với hệ số KHÁC nhau, hệ số trung bình chỉ là ước
-            // tính -> gắn cờ holiday_extra_approx để giao diện cảnh báo.
-            // (1 hệ số duy nhất thì trung bình = chính xác, không gắn cờ.)
-            $holidayHours = (float) ($record->holiday_hours ?? 0);
-            $avgRate = $totalHours > 0 ? $base / $totalHours : 0;
-            $avgMult = $holidays->count() > 0 ? (float) $holidays->avg('multiplier') : 2.0;
-            $holidayExtra = $holidayHours * $avgRate * max(0, $avgMult - 1);
-            if ($holidayHours > 0) {
-                $holidayDays[] = [
-                    'date' => '', 'name' => 'Giờ lễ (nhập tay)',
-                    'multiplier' => $avgMult, 'hours' => $holidayHours, 'extra' => round($holidayExtra),
-                ];
-            }
+            // Bỏ đường giờ lễ nhập tay (Đại Vương chốt 2026-10-28): nhánh
+            // fallback KHÔNG còn phụ cấp lễ — $holidayExtra giữ nguyên 0 và
+            // $holidayDays rỗng (khởi tạo trước rẽ nhánh); tiền lễ chỉ tính
+            // theo ngày công thật ở đường chính phía trên. Cột
+            // salary_records.holiday_hours giữ nguyên trong DB (không
+            // migration xóa cột) nhưng từ nay không còn được đọc/ghi.
         }
         // 2. trách nhiệm/h (chính sách chung) ; 3. cơ bản/h (bình quân gia quyền) ; 3b. cấp bậc/h ; 4. = 2+3+3b
         $w2 = $respEffective;
@@ -370,9 +360,8 @@ class SalaryController extends Controller
                 'meal_price' => $mealAmount,
                 'meal_amount' => $mealAmount,
                 'holiday_extra' => round($holidayExtra),
-                // A4-12b: true = tiền lễ đang là ƯỚC TÍNH (fallback giờ nhập tay + nhiều hệ số lễ khác nhau)
-                'holiday_extra_approx' => !$useDaily && $holidayHours > 0
-                    && $holidays->pluck('multiplier')->unique()->count() > 1,
+                // 'holiday_hours' ở nhánh fallback luôn 0 từ khi bỏ giờ lễ nhập tay (2026-10-28);
+                // ở đường chính là tổng giờ làm đúng ngày lễ, tính từ dữ liệu ngày công.
                 'holiday_hours' => $holidayHours,
                 'holiday_days' => $holidayDays,
                 'bonus_total' => round($bonusTotal),
@@ -407,7 +396,8 @@ class SalaryController extends Controller
             'month' => 'required|regex:/^\d{4}-\d{2}$/',
             'hours' => 'required|numeric|min:0|max:744',
             'work_days' => 'nullable|integer|min:0|max:31',
-            'holiday_hours' => 'nullable|numeric|min:0|max:744',
+            // Bỏ giờ lễ nhập tay (2026-10-28): API không nhận holiday_hours nữa —
+            // client cũ còn gửi kèm sẽ bị validate bỏ qua (không nằm trong $validated).
             'other_deduction' => 'nullable|numeric|min:0',
             'other_deduction_note' => 'nullable|string|max:255',
             'note' => 'nullable|string|max:255',
@@ -417,7 +407,8 @@ class SalaryController extends Controller
         $rec = SalaryRecord::updateOrCreate(
             ['employee_id' => $id, 'month' => $validated['month']],
             ['hours' => $validated['hours'], 'work_days' => $validated['work_days'] ?? 0,
-             'holiday_hours' => $validated['holiday_hours'] ?? 0,
+             // Không ghi holiday_hours nữa (2026-10-28): bản ghi cũ giữ giá trị đã lưu
+             // trong cột, bản ghi mới để mặc định DB — cột nằm im, không ai đọc.
              'other_deduction' => $validated['other_deduction'] ?? 0,
              'other_deduction_note' => $validated['other_deduction_note'] ?? null,
              'note' => $validated['note'] ?? null]

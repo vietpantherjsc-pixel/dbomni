@@ -23,6 +23,7 @@ export default function HolidayPolicy() {
     const VIOL_CATS = useSharedCategories('violation_groups', VIOL_CATS_FB);
     const getViolCatName = violCatName(VIOL_CATS);
     const [pol, setPol] = useState({ resp_base_per_hour: 2000, resp_deduction_per_violation: 500, resp_max_violations: 4, meal_price: 30000, meal_min_hours: 14.5, bhxh_emp_bhxh: 8, bhxh_emp_bhyt: 1.5, bhxh_emp_bhtn: 1, bhxh_employer_rate: 21.5 });
+    const [polSaved, setPolSaved] = useState(null); // UX 2026-10-26 (🟡L13): bản đã lưu gần nhất — đối chiếu bẩn theo từng thẻ
     const [holidays, setHolidays] = useState([]);
     const [form, setForm] = useState({ date: '', name: '', multiplier: 2 });
     const [editing, setEditing] = useState(null);
@@ -34,7 +35,7 @@ export default function HolidayPolicy() {
     const fetchAll = async () => {
         try {
             const [p, h, t] = await Promise.all([axios.get(API + '/salary-policies'), axios.get(API + '/holidays'), axios.get(API + '/violation-types')]);
-            if (p.data?.success) setPol(p.data.data);
+            if (p.data?.success) { setPol(p.data.data); setPolSaved(p.data.data); }
             if (h.data?.success) setHolidays(h.data.data || []);
             if (t.data?.success) setTypes(t.data.data || []);
         } catch (e) { alert(e.response?.data?.message || 'Tải dữ liệu thất bại'); }
@@ -60,6 +61,7 @@ export default function HolidayPolicy() {
                 bhxh_emp_bhtn: Number(pol.bhxh_emp_bhtn) || 0,
                 bhxh_employer_rate: Number(pol.bhxh_employer_rate) || 0,
             });
+            setPolSaved({ ...pol });
             alert('Đã lưu chính sách.');
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
     };
@@ -98,6 +100,22 @@ export default function HolidayPolicy() {
         catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); }
     };
 
+    // UX 2026-10-26 (🟡L13): endpoint PUT /salary-policies nhận TOÀN BỘ payload — nút ở thẻ nào
+    // cũng lưu cả 3 thẻ; trạng thái bẩn tính riêng theo từng nhóm trường của từng thẻ.
+    const GRP_RESP = ['resp_base_per_hour', 'resp_deduction_per_violation', 'resp_max_violations'];
+    const GRP_MEAL = ['meal_price', 'meal_min_hours'];
+    const GRP_BHXH = ['bhxh_emp_bhxh', 'bhxh_emp_bhyt', 'bhxh_emp_bhtn', 'bhxh_employer_rate'];
+    const dirtyOf = (keys) => !!polSaved && keys.some((k) => String(pol[k] ?? '') !== String(polSaved[k] ?? ''));
+    const dirtyResp = dirtyOf(GRP_RESP);
+    const dirtyMeal = dirtyOf(GRP_MEAL);
+    const dirtyBhxh = dirtyOf(GRP_BHXH);
+    const saveRow = (dirty) => (
+        <div className="flex items-center gap-3 mt-3">
+            <button onClick={savePol} disabled={!dirty} className={btn + 'bg-[#24305E] text-white'} style={!dirty ? { opacity: 0.45, cursor: 'not-allowed' } : {}}>Lưu toàn bộ chính sách</button>
+            <span className="text-[12px] font-semibold" style={{ color: dirty ? '#b45309' : '#059669' }}>{dirty ? '● Có thay đổi chưa lưu' : '✓ Đã lưu'}</span>
+        </div>
+    );
+
     const eff = Math.max(0, Number(pol.resp_base_per_hour) - Math.min(2, Number(pol.resp_max_violations)) * Number(pol.resp_deduction_per_violation));
 
     return (
@@ -120,7 +138,7 @@ export default function HolidayPolicy() {
                             VD: {fmt(pol.resp_base_per_hour)} − 2×{fmt(pol.resp_deduction_per_violation)} = <b>{fmt(eff)}đ/h</b> (NV vi phạm 2 lỗi).
                             Quá {pol.resp_max_violations} lỗi/tháng chỉ trừ tối đa {pol.resp_max_violations} lỗi.
                         </p>
-                        {editable && <button onClick={savePol} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu chính sách</button>}
+                        {editable && saveRow(dirtyResp)}
                     </div>
                     <div className="m-card p-4">
                         <h3 className="font-bold mb-1">Chính sách suất ăn</h3>
@@ -134,7 +152,7 @@ export default function HolidayPolicy() {
                         <p className="text-[12.5px] text-gray-600 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mt-3">
                             VD: {fmt(pol.meal_price)}đ/suất — ngày làm {pol.meal_min_hours}h trở lên tự cộng 1 suất vào phụ cấp tiền ăn.
                         </p>
-                        {editable && <button onClick={savePol} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu chính sách</button>}
+                        {editable && saveRow(dirtyMeal)}
                     </div>
                     {/* Gói 54: BHXH — chuyển từ Thiết lập sang đây */}
                     <div className="m-card p-4">
@@ -150,7 +168,7 @@ export default function HolidayPolicy() {
                             <label className="text-[12px] text-gray-500">DN đóng (%)
                                 <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_employer_rate} onChange={(e) => setPol({ ...pol, bhxh_employer_rate: e.target.value })} className={inp + ' mt-1'} /></label>
                         </div>
-                        {editable && <button onClick={savePol} className={btn + 'bg-[#24305E] text-white mt-3'}>Lưu chính sách</button>}
+                        {editable && saveRow(dirtyBhxh)}
                     </div>
                     <div className="m-card p-4">
                         <h3 className="font-bold mb-1">Ngày lễ, Tết</h3>
@@ -168,7 +186,7 @@ export default function HolidayPolicy() {
                                             <td className="py-2.5 font-medium">{h.name}</td>
                                             <td className="py-2.5 text-center"><span className="inline-block bg-red-50 text-red-600 border border-red-200 rounded-full px-2 py-0.5 text-[11px] font-bold">x{h.multiplier}</span></td>
                                             {editable && <td className="py-2.5 text-right whitespace-nowrap">
-                                                <button onClick={() => openEdit(h)} className="text-[#0d6efd] text-[12px] mr-3">Sửa</button>
+                                                <button onClick={() => openEdit(h)} className="text-[#24305E] text-[12px] mr-3">Sửa</button>
                                                 <button onClick={() => delHoliday(h.id)} className="text-red-500 text-[12px]">Xóa</button>
                                             </td>}
                                         </tr>
@@ -212,7 +230,7 @@ export default function HolidayPolicy() {
                                                     <td className="py-2 font-medium">{t.name}{t.is_active === false && <span className="ml-2 text-[11px] text-gray-400">(đã ẩn)</span>}</td>
                                                     <td className="py-2 text-center font-bold text-[#24305E]">{t.default_points}</td>
                                                     {canEditTypes && <td className="py-2 text-right whitespace-nowrap">
-                                                        <button onClick={() => openEditType(t)} className="text-[#0d6efd] text-[12px] mr-3">Sửa</button>
+                                                        <button onClick={() => openEditType(t)} className="text-[#24305E] text-[12px] mr-3">Sửa</button>
                                                         <button onClick={() => delType(t.id)} className="text-red-500 text-[12px]">Xóa</button>
                                                     </td>}
                                                 </tr>

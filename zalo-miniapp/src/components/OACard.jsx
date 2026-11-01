@@ -65,7 +65,7 @@ export default function OACard() {
                 .zoa-tx { flex: 1; min-width: 0; }
                 .zoa-t1 { font-weight: 800; font-size: 14px; color: #1f2937; }
                 .zoa-t2 { font-size: 12px; color: #8a93a6; }
-                .zoa-btn { border: 0; border-radius: 24px; font-weight: 800; font-size: 13px; padding: 11px 22px; cursor: pointer; flex-shrink: 0; text-decoration: none; display: inline-block; background: #F5A623; color: #3a2a00; }
+                .zoa-btn { border: 0; border-radius: 12px; font-weight: 800; font-size: 13px; padding: 11px 22px; cursor: pointer; flex-shrink: 0; text-decoration: none; display: inline-block; background: #F5A623; color: #3a2a00; }
             `}</style>
         </div>
     );

@@ -20,15 +20,15 @@ const ORANGE = '#F5A623';
 const CSS = `
 .sh-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .sh-wrap button{font-family:inherit;}
-.sh-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.sh-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .sh-hd-user{display:flex;align-items:center;gap:10px;}
 .sh-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .sh-name{font-size:15px;font-weight:700;line-height:1.25;}
 .sh-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .sh-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.sh-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.sh-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .sh-logout:active{transform:scale(.95);}
-.sh-branchsel{margin-top:4px;max-width:100%;background:#fff;border:none;color:${NAVY};font-size:13px;font-weight:700;padding:8px 28px 8px 12px;border-radius:10px;min-height:38px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2324305E' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;cursor:pointer;}
+.sh-branchsel{margin-top:4px;max-width:100%;background:#fff;border:none;color:${NAVY};font-size:13px;font-weight:700;padding:8px 28px 8px 12px;border-radius:10px;min-height:44px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2324305E' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;cursor:pointer;}
 .sh-branchsel option{color:#1a1d26;background:#fff;font-weight:400;}
 .sh-login{padding:40px 24px;}
 .sh-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
@@ -47,7 +47,7 @@ const CSS = `
 .sh-btn:active{transform:scale(.96);}
 .sh-btn .ic{font-size:28px;line-height:1;}
 .sh-btn small{font-size:11px;font-weight:600;color:#9ca3af;}
-.sh-back{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:13px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;}
+.sh-back{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:13px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;}
 .sh-back:active{transform:scale(.95);}
 .sh-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
 .sh-ok{margin:12px 16px 0;padding:14px;border-radius:12px;font-size:14px;background:#f0fdf4;border:1px solid #86efac;color:#15803d;line-height:1.6;}
@@ -90,13 +90,19 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
   const [err, setErr] = useState('');
   const [done, setDone] = useState(null);
 
+  const [catErr, setCatErr] = useState(false); // UX 2026-10-26 (🟠T1 Hub)
+  const loadCats = async () => {
+    try {
+      const r = await axios.get(API + '/transaction-categories', auth(token, hubT));
+      const list = r.data && r.data.data ? r.data.data : [];
+      setCats(list.filter((c) => c.type === (isIncome ? 'income' : 'expense')));
+      setCatErr(false);
+    } catch (e) { setCatErr(true); }
+  };
+
   useEffect(() => {
     (async () => {
-      try {
-        const r = await axios.get(API + '/transaction-categories', auth(token, hubT));
-        const list = r.data && r.data.data ? r.data.data : [];
-        setCats(list.filter((c) => c.type === (isIncome ? 'income' : 'expense')));
-      } catch (e) { /* bỏ qua */ }
+      await loadCats();
       try {
         const r2 = await axios.get(API + '/accounts', auth(token, hubT));
         const list2 = r2.data && r2.data.data ? r2.data.data : (Array.isArray(r2.data) ? r2.data : []);
@@ -152,6 +158,11 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
       ) : (
         <div className="sh-card">
           <label className="sh-label" style={{ marginTop: 0 }}>Danh mục *</label>
+          {catErr && (
+            <div style={{ color: '#b42318', fontSize: 13, marginBottom: 8 }}>
+              ⚠ Không tải được danh mục thu/chi. <button onClick={loadCats} style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+            </div>
+          )}
           <select className="sh-field" value={catId} onChange={(e) => setCatId(e.target.value)}>
             <option value="">— Chọn danh mục —</option>
             {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -305,7 +316,7 @@ export default function StaffHub() {
       <div className="sh-wrap">
         <style>{CSS}</style>
         <div className="sh-login">
-          <div className="sh-hd" style={{ borderRadius: 18 }}>
+          <div className="sh-hd" style={{ borderRadius: 12 }}>
             <div className="sh-title">👥 Cổng nhân viên</div>
             <div className="sh-sub">Quét QR tại quầy → nhập SĐT + PIN để làm việc</div>
           </div>

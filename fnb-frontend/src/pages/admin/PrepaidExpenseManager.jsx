@@ -17,6 +17,7 @@ const fmtMonth = (iso) => {
 // monthly_amount backend trả; thêm cột + chọn Chi nhánh (branch_id null = toàn hệ thống).
 export default function PrepaidExpenseManager() {
     const [items, setItems] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1): phân biệt tải lỗi với thật sự trống
     const [branches, setBranches] = useState([]);
     const [form, setForm] = useState({ name: '', category: 'rent', total_amount: '', start_date: '', months: '12', notes: '', branch_id: '' });
     const [editingId, setEditingId] = useState(null);
@@ -26,7 +27,7 @@ export default function PrepaidExpenseManager() {
         try {
             const res = await axios.get(`${API}/prepaid-expenses`);
             if (res.data?.success) setItems(res.data.data || []);
-        } catch { /* bỏ qua */ }
+        } catch { setLoadErr(true); }
     };
     useEffect(() => { load(); }, []);
     useEffect(() => {
@@ -101,7 +102,7 @@ export default function PrepaidExpenseManager() {
                     </thead>
                     <tbody>
                         {items.length === 0 ? (
-                            <tr><td colSpan={8} className="py-4 text-center text-gray-400">Chưa có khoản chi trả trước nào.</td></tr>
+                            <tr><td colSpan={8} className="py-4 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có khoản chi trả trước nào.'}</td></tr>
                         ) : items.map((p) => (
                             <tr key={p.id} className="border-b border-gray-50">
                                 <td className="py-2.5 pr-3 font-medium">{p.name}</td>

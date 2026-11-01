@@ -160,6 +160,29 @@ class CouponController extends Controller
 
         $completedCount = $referrals->where('status', 'completed')->count();
 
+        // Gói Đón Bình Minh (2026-10-28): khối `promo` — thông số chương trình
+        // CP-02 để trang Mời bạn RENDER ĐỘNG (chặn ghi cứng số trong Invite.jsx:
+        // đổi cấu hình ở Admin là nội dung tự khớp). CP-01 còn hiệu lực → trang
+        // hiện thêm dòng quà cốc 0đ đơn đầu cho bạn mới.
+        $cp02 = \App\Models\Promotion::where('code', 'CP-02')->where('is_active', true)->first();
+        $promo = null;
+        if ($cp02) {
+            $cfg02 = $cp02->auto_config ?? [];
+            $cp01 = \App\Models\Promotion::where('code', 'CP-01')->where('is_active', true)->first();
+            $giftActive = $cp01
+                && (!$cp01->starts_at || now()->gte($cp01->starts_at))
+                && (!$cp01->expires_at || now()->lte($cp01->expires_at));
+            $promo = [
+                'discount_percent' => $cp02->type === 'percent' ? (float) $cp02->value : null,
+                'max_discount_amount' => $cp02->max_discount_amount !== null ? (float) $cp02->max_discount_amount : null,
+                'min_order' => (float) ($cfg02['referral_min_order'] ?? 50000),
+                'valid_days' => (int) ($cfg02['valid_days'] ?? 7),
+                'max_per_customer' => (int) ($cfg02['max_per_customer'] ?? 1),
+                'max_per_month' => (int) ($cfg02['max_per_month'] ?? 0),
+                'first_order_gift_active' => (bool) $giftActive,
+            ];
+        }
+
         return response()->json(['success' => true, 'data' => [
             'referral_code' => $customer->referral_code,
             'total_invited' => $referrals->count(),
@@ -169,6 +192,7 @@ class CouponController extends Controller
                 'status' => $r->status,
                 'completed_at' => $r->completed_at,
             ]),
+            'promo' => $promo,
         ]]);
     }
 

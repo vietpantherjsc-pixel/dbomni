@@ -112,7 +112,7 @@ function exportSchedulePNG({ branchName, days, shifts, cellMap, capOf, note }) {
             let yy = y + 18;
             list.forEach((sc) => {
                 ctx.font = '600 12px Arial, "Segoe UI", sans-serif';
-                ctx.fillStyle = '#1d4ed8';
+                ctx.fillStyle = '#24305E';
                 ctx.fillText(sc.employee?.full_name || '', x + cwDay / 2, yy);
                 yy += 19;
                 if (sc.is_custom) {
@@ -486,11 +486,15 @@ export default function Scheduling() {
             fetchRegs();
         } catch (e) { alert(e.response?.data?.message || 'Duyệt thất bại'); }
     };
-    const rejectReg = async (id) => {
-        const note = window.prompt('Lý do từ chối (không bắt buộc):');
-        if (note === null) return; // bấm Hủy → thôi
+    // UX 2026-10-26 (🟡): thay window.prompt bằng modal tự chế theo mẫu modal của trang
+    const [rejecting, setRejecting] = useState(null);
+    const [rejectNote, setRejectNote] = useState('');
+    const rejectReg = (id) => { setRejecting(id); setRejectNote(''); };
+    const confirmReject = async () => {
+        const id = rejecting;
+        setRejecting(null);
         try {
-            await axios.post(API + '/shift-registrations/' + id + '/reject', { note: note.trim() || null });
+            await axios.post(API + '/shift-registrations/' + id + '/reject', { note: rejectNote.trim() || null });
             fetchRegs();
             if (tab === 'sched') fetchSched();
         } catch (e) { alert(e.response?.data?.message || 'Từ chối thất bại'); }
@@ -563,7 +567,7 @@ export default function Scheduling() {
 
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
                     {[['sched', 'Xếp ca'], ['reg', 'Đăng ký']].map(([k, l]) => (
-                        <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
+                        <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
 
@@ -622,7 +626,7 @@ export default function Scheduling() {
                                                             {list.length === 0
                                                                 ? <span className="text-gray-300 text-[12px]">—</span>
                                                                 : list.map((r) => (
-                                                                    <div key={r.id} className={'font-semibold text-[13px] leading-[1.55] ' + (r.status === 'approved' ? 'text-green-700' : r.status === 'rejected' ? 'text-red-400 line-through' : 'text-[#1d4ed8]')}>
+                                                                    <div key={r.id} className={'font-semibold text-[13px] leading-[1.55] ' + (r.status === 'approved' ? 'text-green-700' : r.status === 'rejected' ? 'text-red-400 line-through' : 'text-[#24305E]')}>
                                                                         <span>{r.employee?.full_name}</span>
                                                                         {editable && r.status === 'submitted' && (
                                                                             <span className="ml-1 whitespace-nowrap">
@@ -642,7 +646,7 @@ export default function Scheduling() {
                                 </tbody>
                             </table>
                         </div>
-                        <div className="mt-2 text-[11px] text-gray-500 px-1">Màu chữ: <span className="text-[#1d4ed8] font-semibold">xanh = chờ duyệt</span> · <span className="text-green-700 font-semibold">xanh lá = đã duyệt</span> · <span className="text-red-400 font-semibold line-through">gạch ngang = từ chối</span></div>
+                        <div className="mt-2 text-[11px] text-gray-500 px-1">Màu chữ: <span className="text-[#24305E] font-semibold">xanh navy = chờ duyệt</span> · <span className="text-green-700 font-semibold">xanh lá = đã duyệt</span> · <span className="text-red-400 font-semibold line-through">gạch ngang = từ chối</span></div>
                     </div>
                     );
                 })}
@@ -734,7 +738,7 @@ export default function Scheduling() {
                                                             onClick={() => editable && openAssignCell(sid, d, bid, bEmps, bCm)} title={editable ? 'Bấm để gán nhân viên' : ''}>
                                                             {shown.length === 0 && pend.length === 0 && <div className="text-gray-300 text-[12px]">+ Gán</div>}
                                                             {shown.map((sc) => (
-                                                                <div key={sc.id} className="text-[#1d4ed8] font-semibold text-[13px] leading-[1.55]">
+                                                                <div key={sc.id} className="text-[#24305E] font-semibold text-[13px] leading-[1.55]">
                                                                     {sc.employee?.full_name}
                                                                     {sc.is_custom && <div className="text-[11px] font-medium text-[#b45309]">✎ {hhmm(sc.start_time)}–{hhmm(sc.end_time)}</div>}
                                                                 </div>
@@ -888,6 +892,21 @@ export default function Scheduling() {
                         <div className="flex gap-2 mt-4">
                             <button onClick={() => setCapCell(null)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
                             <button onClick={saveCap} disabled={savingCap} className={'flex-1 h-11 rounded-xl text-white text-[14px] font-semibold ' + (savingCap ? 'bg-gray-400' : 'bg-[#24305E]')}>{savingCap ? 'Đang lưu...' : 'Lưu'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* UX 2026-10-26 (🟡): modal nhập lý do từ chối đăng ký ca */}
+            {rejecting && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={() => setRejecting(null)}>
+                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[380px] p-5" onClick={(e) => e.stopPropagation()}>
+                        <h2 className="font-bold text-[16px] text-[#24305E]">Từ chối đăng ký ca</h2>
+                        <p className="text-[12px] text-gray-500 mt-1 mb-3">Lý do từ chối (không bắt buộc) — nhân viên sẽ thấy lý do này.</p>
+                        <textarea value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} rows={3} className={inp} placeholder="VD: ca đã đủ người" />
+                        <div className="flex gap-2 mt-4">
+                            <button onClick={() => setRejecting(null)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
+                            <button onClick={confirmReject} className="flex-1 h-11 rounded-xl text-white text-[14px] font-semibold bg-[#b42318]">Từ chối</button>
                         </div>
                     </div>
                 </div>

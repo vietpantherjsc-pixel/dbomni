@@ -66,7 +66,7 @@ export default function WorkShifts() {
             if (editing) await axios.put(API + '/work-shifts/' + editing.id, payload);
             else await axios.post(API + '/work-shifts', payload);
             setShowForm(false); fetchAll();
-        } catch (e) { alert(e.response?.data?.message || JSON.stringify(e.response?.data?.errors) || 'Lưu thất bại'); }
+        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại. Kiểm tra lại các ô bắt buộc rồi thử lại.'); }
         setSaving(false);
     };
     const remove = async (id) => { if (!window.confirm('Xóa ca làm việc này?')) return; try { await axios.delete(API + '/work-shifts/' + id); fetchAll(); } catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); } };
@@ -81,6 +81,18 @@ export default function WorkShifts() {
         const [moved] = nl.splice(dragIdx, 1);
         nl.splice(toIdx, 0, moved);
         setDragIdx(null);
+        setList(nl);
+        try { await axios.post(API + '/work-shifts/reorder', { ids: nl.map((x) => x.id) }); }
+        catch (e) { alert(e.response?.data?.message || 'Lưu thứ tự thất bại'); fetchAll(); }
+    };
+
+    // UX 2026-10-26 (🟠14): nút ↑/↓ dự phòng cảm ứng
+    const moveShift = async (idx, dir) => {
+        const j = idx + dir;
+        if (j < 0 || j >= list.length) return;
+        const nl = [...list];
+        const [moved] = nl.splice(idx, 1);
+        nl.splice(j, 0, moved);
         setList(nl);
         try { await axios.post(API + '/work-shifts/reorder', { ids: nl.map((x) => x.id) }); }
         catch (e) { alert(e.response?.data?.message || 'Lưu thứ tự thất bại'); fetchAll(); }
@@ -127,7 +139,9 @@ export default function WorkShifts() {
                                         </button>
                                     </td>
                                     {editable && <td className="px-4 py-3 text-right whitespace-nowrap">
-                                        <button onClick={() => openEdit(s)} className="text-[#0d6efd] mr-3">Sửa</button>
+                                        <button onClick={() => moveShift(i, -1)} disabled={i === 0} style={{ minWidth: 36, minHeight: 36, opacity: i === 0 ? 0.3 : 1 }} title="Lên">↑</button>
+                                        <button onClick={() => moveShift(i, 1)} disabled={i === list.length - 1} style={{ minWidth: 36, minHeight: 36, opacity: i === list.length - 1 ? 0.3 : 1, marginRight: 8 }} title="Xuống">↓</button>
+                                        <button onClick={() => openEdit(s)} className="text-[#24305E] mr-3">Sửa</button>
                                         <button onClick={() => remove(s.id)} className="text-red-500">Xóa</button>
                                     </td>}
                                 </tr>

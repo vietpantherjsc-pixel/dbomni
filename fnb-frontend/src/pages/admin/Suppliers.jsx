@@ -17,6 +17,7 @@ const emptyForm = () => ({
 const Suppliers = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1) — vòng bổ sung B: bổ sung khai báo bị thiếu (TESTER bắt hỏng lan)
     const [search, setSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
@@ -29,9 +30,9 @@ const Suppliers = () => {
             const params = { type: 'supplier' };
             if (search.trim()) params.search = search.trim();
             const r = await axios.get(`${API}/partners`, { params });
-            setRows(r.data?.data || []);
+            setRows(r.data?.data || []); setLoadErr(false);
         } catch {
-            setRows([]);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1): lỗi tải không xóa danh sách đang có + không hiện "trống" giả
         } finally {
             setLoading(false);
         }
@@ -111,7 +112,7 @@ const Suppliers = () => {
                                 {loading ? (
                                     <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : rows.length === 0 ? (
-                                    <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Chưa có nhà cung cấp.</td></tr>
+                                    <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách.<button onClick={fetchList} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có nhà cung cấp.'}</td></tr>
                                 ) : rows.map((r) => (
                                     <tr key={r.id} className="border-t border-gray-100">
                                         <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.code || '—'}</td>

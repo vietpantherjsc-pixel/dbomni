@@ -18,6 +18,7 @@ const DeliverySettings = ({ onDirty, onSaved } = {}) => {
     });
     const [msg, setMsg] = useState('');
     const [saving, setSaving] = useState(false);
+        const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠20)
 
     const fetchCfg = async () => {
         try {
@@ -36,7 +37,7 @@ const DeliverySettings = ({ onDirty, onSaved } = {}) => {
                     delivery_support_amount: res.data.data.support_amount ?? 15000,
                 }));
             }
-        } catch (e) { /* bỏ qua */ }
+        } catch (e) { setLoadErr(true); }
     };
     useEffect(() => { fetchCfg(); }, []);
 
@@ -124,14 +125,15 @@ const DeliverySettings = ({ onDirty, onSaved } = {}) => {
             {row('Trần chênh failover (đ/đơn)', 'Quán chịu chênh trong trần; vượt trần báo khách xác nhận lại', num('delivery_failover_max_diff', 'đ'))}
             {row('Ngưỡng hỗ trợ phí ship (đ)', 'Đơn từ mức này → quán hỗ trợ phí ship', num('delivery_support_threshold', 'đ'))}
             {row('Mức hỗ trợ phí ship (đ)', 'Số tiền quán hỗ trợ mỗi đơn đạt ngưỡng', num('delivery_support_amount', 'đ'))}
+            {loadErr && (<div className="text-[13px] mt-3" style={{ color: 'var(--m-danger)' }}>⚠ Chưa tải được cấu hình hiện tại — nút Lưu đang KHÓA để tránh ghi đè cấu hình thật bằng giá trị mặc định. Tải lại trang để thử lại.</div>)}
             <div className="mt-4 flex items-center gap-3">
                 <button
-                    onClick={save} disabled={saving}
+                    onClick={save} disabled={saving || loadErr}
                     className="text-[13px] bg-[#24305E] text-white rounded px-5 py-2 font-medium disabled:opacity-50"
                 >
                     {saving ? 'Đang lưu...' : 'Lưu cấu hình'}
                 </button>
-                {msg && <span className="text-[13px] text-gray-600">{msg}</span>}
+                {msg && <span className="text-[13px]" style={{ color: /thất bại|lỗi/i.test(msg) ? 'var(--m-danger)' : 'var(--m-success)' }}>{msg}</span>}
             </div>
             <p className="text-[12px] text-gray-400 mt-3">
                 Lưu ý: cron <code>schedule:run</code> mỗi phút phải chạy trên server để failover tự động hoạt động.

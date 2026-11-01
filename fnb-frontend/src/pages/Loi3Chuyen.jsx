@@ -14,13 +14,13 @@ const ORANGE = '#F5A623';
 const CSS = `
 .l3c-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .l3c-wrap button{font-family:inherit;}
-.l3c-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.l3c-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .l3c-hd-user{display:flex;align-items:center;gap:10px;}
 .l3c-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .l3c-name{font-size:15px;font-weight:700;line-height:1.25;}
 .l3c-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .l3c-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.l3c-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.l3c-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .l3c-logout:active{transform:scale(.95);}
 .l3c-monthbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 0;}
 .l3c-mbtn{width:44px;height:44px;border-radius:12px;flex-shrink:0;background:#fff;border:1px solid #e8e9ee;font-size:20px;font-weight:700;color:${NAVY};display:flex;align-items:center;justify-content:center;}
@@ -50,7 +50,7 @@ const CSS = `
 .l3c-confirm:disabled{opacity:.45;}
 .l3c-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
 .l3c-privacy{margin:12px 16px 0;padding:10px 12px;background:#eef4ee;border:1px solid #cfe3cf;border-radius:12px;font-size:12.5px;color:#2c5f2d;font-weight:500;display:flex;align-items:center;gap:8px;line-height:1.45;}
-.l3c-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;max-width:92vw;}
+.l3c-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;border-radius:16px;}
 .l3c-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .l3c-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
 .l3c-login{padding:40px 24px;}
@@ -119,10 +119,14 @@ export default function Loi3Chuyen() {
   const [points, setPoints] = useState('');
   const [note, setNote] = useState('');
 
-  const toast = (m) => {
-    setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2400);
+  const toastTimer = React.useRef(null); // UX 2026-10-26 (🟡L29): toast lỗi hiện lâu hơn toast thường
+  const toast = (m, isErr) => {
+    setToastMsg(m);
+    setToastOn(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2400);
   };
+  const toastErr = (m) => toast(m, true);
 
   const logout = () => {
     localStorage.removeItem('viol_token');
@@ -153,7 +157,7 @@ export default function Loi3Chuyen() {
       setMine((m.data && m.data.data && m.data.data.items) || []);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được dữ liệu.'));
+      toastErr(errMsg(e, 'Không tải được dữ liệu.'));
     } finally { setLoading(false); }
   };
 
@@ -219,7 +223,7 @@ export default function Loi3Chuyen() {
       loadAll(token, monthStr);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Ghi nhận thất bại.'));
+      toastErr(errMsg(e, 'Ghi nhận thất bại.'));
     } finally { setSaving(false); }
   };
 
@@ -228,9 +232,9 @@ export default function Loi3Chuyen() {
       <div className="l3c-wrap">
         <style>{CSS}</style>
         <div className="l3c-login">
-          <div className="l3c-hd" style={{ borderRadius: 18 }}>
+          <div className="l3c-hd" style={{ borderRadius: 12 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>
             <div className="l3c-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -248,7 +252,7 @@ export default function Loi3Chuyen() {
             <label className="l3c-label">Mã PIN 6 số</label>
             <input
               className="l3c-field l3c-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}

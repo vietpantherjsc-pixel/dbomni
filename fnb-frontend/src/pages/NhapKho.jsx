@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api'; // base API tương đối — chạy được trên điện thoại (IP LAN)
 import DateInput from '../components/DateInput'; // ô ngày dd/mm/yyyy
+import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub): xác nhận tự chế thay window.confirm
 
 // Trang nhân viên nhập hàng bằng điện thoại (public, KHÔNG cần đăng nhập admin)
 // Token riêng: localStorage['nhapkho_token'] / ['nhapkho_emp']
@@ -15,13 +16,13 @@ const ORANGE = '#F5A623';
 const CSS = `
 .nk-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .nk-wrap button{font-family:inherit;}
-.nk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.nk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .nk-hd-user{display:flex;align-items:center;gap:10px;}
 .nk-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .nk-name{font-size:15px;font-weight:700;line-height:1.25;}
 .nk-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .nk-title{font-size:20px;font-weight:800;margin-top:12px;letter-spacing:-.2px;}
-.nk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.nk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .nk-logout:active{transform:scale(.95);}
 .nk-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .nk-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
@@ -58,7 +59,7 @@ const CSS = `
 .nk-empty{text-align:center;color:#6b7280;font-size:13.5px;padding:18px 8px;line-height:1.6;}
 .nk-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
 .nk-warn{margin-top:8px;padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.5;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
-.nk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;max-width:92vw;}
+.nk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;border-radius:16px;}
 .nk-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .nk-login{padding:40px 24px;}
 .nk-pin{font-size:30px;font-weight:800;letter-spacing:12px;text-align:center;}
@@ -171,12 +172,14 @@ export default function NhapKho({ embed } = {}) {
   const [myReceipts, setMyReceipts] = useState([]);
   const [myLoading, setMyLoading] = useState(false);
 
+  const [myErr, setMyErr] = useState(false); // UX 2026-10-26 (🔴 + 🟠T1): trước đây gọi authHeader() không tồn tại -> ReferenceError bị catch rỗng nuốt, tab "Phiếu của tôi" chết lặng không dấu vết
   const fetchMyReceipts = async () => {
     setMyLoading(true);
     try {
-      const r = await axios.get(API + '/employee/inbound-receipts', { headers: authHeader() });
+      const r = await axios.get(API + '/employee/inbound-receipts', auth(token, hubT));
       setMyReceipts(r.data?.data?.data || r.data?.data || []);
-    } catch { /* bỏ qua */ }
+      setMyErr(false);
+    } catch { setMyErr(true); }
     setMyLoading(false);
   };
   useEffect(() => {
@@ -184,10 +187,14 @@ export default function NhapKho({ embed } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  const toast = (m) => {
-    setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2400);
+  const toastTimer = React.useRef(null); // UX 2026-10-26 (🟡L29): toast lỗi hiện lâu hơn toast thường
+  const toast = (m, isErr) => {
+    setToastMsg(m);
+    setToastOn(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2400);
   };
+  const toastErr = (m) => toast(m, true);
 
   const logout = () => {
     localStorage.removeItem('nhapkho_token');
@@ -234,7 +241,7 @@ export default function NhapKho({ embed } = {}) {
       setCategories(((c.data && c.data.data) || {}).categories || []);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được dữ liệu.'));
+      toastErr(errMsg(e, 'Không tải được dữ liệu.'));
     } finally { setLoading(false); }
   };
 
@@ -326,10 +333,19 @@ export default function NhapKho({ embed } = {}) {
     const supName = supplierId
       ? (suppliers.find((s) => String(s.id) === String(supplierId)) || {}).name || ''
       : 'Mua lẻ';
-    if (!window.confirm(
-      'Tạo phiếu nhập ' + validItems.length + ' mặt hàng, tổng ' + fmtVND(grand) + '?\n' +
-      'NCC: ' + supName + ' · ' + (paymentType === 'paid' ? 'Trả ngay' : 'Công nợ')
-    )) return;
+    // UX 2026-10-26 (🟡 Hub): hỏi bằng hộp xác nhận tự chế thay window.confirm
+    setAskCreate({
+      message: 'Tạo phiếu nhập ' + validItems.length + ' mặt hàng, tổng ' + fmtVND(grand) + '?\n' +
+        'NCC: ' + supName + ' · ' + (paymentType === 'paid' ? 'Trả ngay' : 'Công nợ'),
+      validItems, supName,
+    });
+  };
+
+  const [askCreate, setAskCreate] = useState(null);
+  const doCreate = async () => {
+    const { validItems, supName } = askCreate || {};
+    setAskCreate(null);
+    if (!validItems) return;
     setSaving(true);
     try {
       const r = await axios.post(API + '/employee/inbound-receipts', {
@@ -363,7 +379,7 @@ export default function NhapKho({ embed } = {}) {
       resetForm(false);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Tạo phiếu thất bại.'));
+      toastErr(errMsg(e, 'Tạo phiếu thất bại.'));
     } finally { setSaving(false); }
   };
 
@@ -374,9 +390,9 @@ export default function NhapKho({ embed } = {}) {
       <div className="nk-wrap">
         <style>{CSS}</style>
         <div className="nk-login">
-          <div className="nk-hd" style={{ borderRadius: 18 }}>
+          <div className="nk-hd" style={{ borderRadius: 12 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="nk-title">📦 Nhập hàng</div>
             <div className="nk-sub">Đăng nhập để tiếp tục</div>
           </div>
@@ -394,7 +410,7 @@ export default function NhapKho({ embed } = {}) {
             <label className="nk-label">Mã PIN 6 số</label>
             <input
               className="nk-field nk-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}
@@ -498,6 +514,8 @@ export default function NhapKho({ embed } = {}) {
               </div>
               {myLoading ? (
                 <div className="nk-empty">Đang tải...</div>
+              ) : myErr ? (
+                <div className="nk-empty" style={{ color: '#b42318' }}>⚠ Không tải được danh sách phiếu. <button onClick={fetchMyReceipts} style={{ minHeight: 44, padding: '0 14px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 600 }}>Thử lại</button></div>
               ) : myReceipts.length === 0 ? (
                 <div className="nk-empty">Chưa có phiếu nào.</div>
               ) : (
@@ -514,7 +532,7 @@ export default function NhapKho({ embed } = {}) {
                       </span>
                     </div>
                     <div className="nk-idetail">
-                      {r.receipt_date} · {r.partner?.name || 'Mua lẻ'} · <b>{fmtVND(r.grand_total)}đ</b>
+                      {fmtDMY(r.receipt_date)} · {r.partner?.name || 'Mua lẻ'} · <b>{fmtVND(r.grand_total)}đ</b>
                     </div>
                   </div>
                 ))
@@ -743,7 +761,8 @@ export default function NhapKho({ embed } = {}) {
         />
       )}
 
-      <div className={'nk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
+<HubConfirm open={!!askCreate} title="Tạo phiếu nhập kho" message={askCreate ? askCreate.message : ''} confirmLabel="Tạo phiếu" onCancel={() => setAskCreate(null)} onConfirm={doCreate} />
+            <div className={'nk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
     </div>
   );
 }
@@ -820,7 +839,7 @@ function MaterialMultiPicker({ materials, categories, excludeIds, search, setSea
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #ddd', background: '#fff', fontSize: 15, fontWeight: 700 }}>Hủy</button>
           <button onClick={() => onConfirm([...picked])} disabled={picked.size === 0}
-            style={{ flex: 1, minHeight: 48, borderRadius: 12, border: 'none', background: '#16a34a', color: '#fff', fontSize: 15, fontWeight: 700, opacity: picked.size === 0 ? 0.45 : 1 }}>
+            style={{ flex: 1, minHeight: 48, borderRadius: 12, border: 'none', background: '#24305E', color: '#fff', fontSize: 15, fontWeight: 700, opacity: picked.size === 0 ? 0.45 : 1 }}>
             Thêm ({picked.size})
           </button>
         </div>

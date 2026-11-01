@@ -37,6 +37,7 @@ export default function Inventory() {
     // Tab con trong "Danh sách tồn kho": nguyên liệu | loại NL | định mức BTP | chế biến
     const [stockSubTab, setStockSubTab] = useState('materials');
     const [materials, setMaterials] = useState([]);
+    const [invLoadErr, setInvLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [stock, setStock] = useState([]);
     const [categories, setCategories] = useState([]); // Gói 22: loại danh mục NL
     // Gói 14: nút "+ Nguyên liệu" ở header trang kích hoạt form thêm mới trong tab Tồn kho
@@ -62,12 +63,12 @@ export default function Inventory() {
                 axios.get(`${API}/branches`),
                 axios.get(`${API}/material-categories`),
             ]);
-            if (mRes.data?.success) setMaterials(mRes.data.data);
+            if (mRes.data?.success) { setMaterials(mRes.data.data); setInvLoadErr(false); }
             if (sRes?.data?.success) setStock(sRes.data.data);
             else if (!bid) setStock([]);
             if (bRes.data?.success) setBranches(bRes.data.data || []);
             if (cRes.data?.success) setCategories(cRes.data.data || []);
-        } catch (err) { console.error('Lỗi tải kho:', err); }
+        } catch (err) { console.error('Lỗi tải kho:', err); setInvLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
 
     useEffect(() => { fetchAll(effBranchId); }, [effBranchId]);
@@ -124,7 +125,7 @@ export default function Inventory() {
                     </div>
                     {tab === 'stock' && stockSubTab === 'materials' && !isAllBranches && (
                         <button onClick={() => setAddMaterialSignal((s) => s + 1)}
-                            className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7] whitespace-nowrap self-start sm:self-auto shrink-0">
+                            className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] whitespace-nowrap self-start sm:self-auto shrink-0">
                             + Nguyên liệu
                         </button>
                     )}
@@ -132,6 +133,7 @@ export default function Inventory() {
 
                 <div className="mt-3 bg-white rounded shadow-sm">
                     {/* Gói 55 p11: Danh sách tồn kho có 4 tab con; các submenu khác render trực tiếp */}
+                    {invLoadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Không tải được dữ liệu kho. <button onClick={() => fetchAll(effBranchId)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>)}
                     {tab === 'stock' && (
                     <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-100 px-4">
                         {[
@@ -144,7 +146,7 @@ export default function Inventory() {
                                 key={key}
                                 onClick={() => setStockSubTab(key)}
                                 className={`px-3 py-3 text-[13px] whitespace-nowrap shrink-0 border-b-2 -mb-px transition-colors ${
-                                    stockSubTab === key ? 'border-[#0d6efd] text-[#0d6efd] font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'
+                                    stockSubTab === key ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'
                                 }`}
                             >
                                 {label}
@@ -453,6 +455,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
         if (importMap.name === undefined) return alert('Chưa map cột "Tên nguyên liệu"');
         setImporting(true);
         let ok = 0;
+        const failRows = [];
         // Map tên loại -> id
         const catByName = {};
         (categories || []).forEach((c) => { catByName[c.name.toLowerCase()] = c.id; });
@@ -469,11 +472,13 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                 }
                 await axios.post(`${API}/materials`, payload);
                 ok++;
-            } catch { /* bỏ qua dòng lỗi */ }
+            } catch { failRows.push(name); } // UX 2026-10-26 (🟠T2): không nuốt im lặng — tổng kết nêu rõ dòng nào lỗi
         }
         setImporting(false);
         setShowImport(false);
-        alert(`Đã nhập ${ok}/${importRows.length} nguyên liệu.`);
+        alert(failRows.length
+            ? `Đã nhập ${ok}/${importRows.length} nguyên liệu. ${failRows.length} dòng LỖI chưa nhập được: ${failRows.slice(0, 5).join(', ')}${failRows.length > 5 ? '…' : ''}`
+            : `Đã nhập ${ok}/${importRows.length} nguyên liệu.`);
         onChange();
     };
 
@@ -634,7 +639,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         </div>
                         <div className="flex-1 overflow-y-auto px-5 py-4">
                             <div className="text-[13px] text-gray-500 mb-3">
-                                Hệ thống đã <b>tự động nhận diện</b> cột (kể cả file CSV dấu chấm phẩy của Excel bản Việt). Đại Vương kiểm tra và điều chỉnh lại nếu cần. Cột không map sẽ được bỏ qua.
+                                Hệ thống đã <b>tự động nhận diện</b> cột (kể cả file CSV dấu chấm phẩy của Excel bản Việt). Bạn kiểm tra và điều chỉnh lại nếu cần. Cột không map sẽ được bỏ qua.
                             </div>
                             <div className="space-y-2 mb-4">
                                 {IMPORT_FIELDS.map((f) => (
@@ -649,7 +654,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                                                 ...importMap,
                                                 [f.key]: e.target.value === '' ? undefined : Number(e.target.value),
                                             })}
-                                            className="flex-1 px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]">
+                                            className="flex-1 px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]">
                                             <option value="">— Bỏ qua —</option>
                                             {importHeaders.map((h, i) => (
                                                 <option key={i} value={i}>Cột {i + 1}: {h || '(trống)'}</option>
@@ -667,7 +672,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                                                 <th key={i} className="px-2 py-2 font-medium text-left whitespace-nowrap border-b">
                                                     {h || `(Cột ${i + 1})`}
                                                     {Object.entries(importMap).map(([k, v]) => v === i ? (
-                                                        <span key={k} className="block text-[10px] text-[#0d6efd] font-bold">
+                                                        <span key={k} className="block text-[10px] text-[#24305E] font-bold">
                                                             → {IMPORT_FIELDS.find((f) => f.key === k)?.label}
                                                         </span>
                                                     ) : null)}
@@ -691,7 +696,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         <div className="flex gap-2 px-5 py-4 border-t border-gray-100 shrink-0">
                             <button onClick={() => setShowImport(false)} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
                             <button onClick={doImport} disabled={importing || importMap.name === undefined}
-                                className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                                className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold disabled:opacity-40">
                                 {importing ? 'Đang nhập...' : `Nhập ${importRows.length} dòng`}
                             </button>
                         </div>
@@ -714,7 +719,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                     <div>
                         <label className="text-xs text-gray-500">Tên nguyên liệu *</label>
                         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-                            placeholder="VD: Syrup đường" className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                            placeholder="VD: Syrup đường" className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                     </div>
                     <div>
                         <label className="text-xs text-gray-500">Đơn vị cơ sở *</label>
@@ -722,7 +727,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}
                             disabled={hasBatches}
                             title={hasBatches ? 'Đã có lô nhập — không thể đổi đơn vị cơ sở' : ''}
-                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd] disabled:bg-gray-100 bg-white">
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E] disabled:bg-gray-100 bg-white">
                             <option value="">— Chọn đơn vị —</option>
                             {sysUnits.map((u) => (
                                 <option key={u.id || u.name} value={u.name || u}>{u.name || u}</option>
@@ -733,7 +738,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                     <div>
                         <label className="text-xs text-gray-500">Loại nguyên liệu (nhóm kiểm kho)</label>
                         <select value={form.material_category_id} onChange={(e) => setForm({ ...form, material_category_id: e.target.value })}
-                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]">
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]">
                             <option value="">— Chưa phân loại —</option>
                             {(categories || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
@@ -741,13 +746,13 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                     <div>
                         <label className="text-xs text-gray-500">Tồn tối thiểu (báo hết)</label>
                         <input type="number" min="0" value={form.minimum_stock} onChange={(e) => setForm({ ...form, minimum_stock: e.target.value })}
-                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                     </div>
                     {/* Gói 55 p11b: ngưỡng hao hụt cho phép (%) — báo cáo đánh dấu đỏ khi vượt */}
                     <div>
                         <label className="text-xs text-gray-500">Ngưỡng hao hụt cho phép (%)</label>
                         <input type="number" min="0" max="100" step="0.5" value={form.waste_threshold_pct} onChange={(e) => setForm({ ...form, waste_threshold_pct: e.target.value })}
-                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                            className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                     </div>
                     {/* Gói 55 p11aa: trạng thái hoạt động/ngưng bán */}
                     <div className="flex items-end pb-1">
@@ -779,10 +784,10 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                             <input type="number" min="0" step="any" value={newUnit.conversion_rate}
                                 onChange={(e) => setNewUnit({ ...newUnit, conversion_rate: e.target.value })}
                                 placeholder="VD: 30 (1 Cuộn = 30 Cái)"
-                                className="w-40 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                                className="w-40 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                             {/* Gói 55 p11aa: chọn từ danh sách đơn vị trong Thiết lập */}
                             <select value={newUnit.unit_name} onChange={(e) => setNewUnit({ ...newUnit, unit_name: e.target.value })}
-                                className="w-36 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd] bg-white">
+                                className="w-36 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E] bg-white">
                                 <option value="">— Chọn ĐV —</option>
                                 {sysUnits.map((u) => (
                                     <option key={u.id || u.name} value={u.name || u}>{u.name || u}</option>
@@ -831,7 +836,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         </>
                     )}
                     <div className="flex gap-2 mt-2">
-                        <button onClick={handleSave} className="px-6 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7]">
+                        <button onClick={handleSave} className="px-6 py-2.5 bg-[#24305E] text-white text-[14px] font-medium rounded-lg hover:bg-[#1B2547]">
                             {editingId ? 'Cập nhật' : 'Lưu'}
                         </button>
                         <button onClick={resetForm} className="px-6 py-2.5 text-[14px] text-gray-500 border border-gray-300 rounded-lg hover:bg-gray-50">Hủy</button>
@@ -843,11 +848,11 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
 
             {/* Gói 55 p11i: nút import/export dưới tiêu đề, kiểu Sapo */}
             <div className="flex items-center gap-6 mb-4">
-                <button onClick={exportExcel} className="flex items-center gap-1.5 text-[#0d6efd] text-[14px] hover:underline">
+                <button onClick={exportExcel} className="flex items-center gap-1.5 text-[#24305E] text-[14px] hover:underline">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="#6c757d"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
                     Xuất danh sách
                 </button>
-                <label className="flex items-center gap-1.5 text-[#0d6efd] text-[14px] hover:underline cursor-pointer">
+                <label className="flex items-center gap-1.5 text-[#24305E] text-[14px] hover:underline cursor-pointer">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="#6c757d"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
                     Nhập danh sách
                     <input type="file" accept=".xlsx,.xls,.csv" title="Chọn file Excel/CSV" onChange={handleImportFile} className="hidden" />
@@ -915,7 +920,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         </select>
                     )}
                     <button onClick={doBulk} disabled={!bulkAction}
-                        className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded-lg hover:bg-[#0b5ed7] disabled:bg-gray-300">
+                        className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded-lg hover:bg-[#1B2547] disabled:bg-gray-300">
                         Áp dụng
                     </button>
                     <button onClick={() => setSelected(new Set())} className="text-[13px] text-gray-500 hover:underline">
@@ -950,7 +955,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                                         onChange={() => toggleSelect(s.material_id)} className="w-4 h-4 cursor-pointer" />
                                 </td>
                                 <td className="px-4 py-3 font-medium">
-                                    <span className="text-[#0d6efd] cursor-pointer hover:underline" onClick={() => startEdit(s.material_id)}>{s.name}</span>
+                                    <span className="text-[#24305E] cursor-pointer hover:underline" onClick={() => startEdit(s.material_id)}>{s.name}</span>
                                 </td>
                                 <td className="px-3 py-3">
                                     {(() => {
@@ -999,11 +1004,11 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                                 <td className="px-4 py-3 text-right whitespace-nowrap">
                                     {/* Gói 55 p11: thao tác kho nhanh −/+ */}
                                     <button onClick={() => quickAdjust(s, -1)} title="Xuất nhanh 1"
-                                        className="w-7 h-7 rounded-full border-[1.5px] border-red-500 text-red-500 font-bold mr-1 hover:bg-red-50">−</button>
+                                        className="w-10 h-10 rounded-full border-[1.5px] border-red-500 text-red-500 font-bold mr-1 hover:bg-red-50">−</button>
                                     <button onClick={() => quickAdjust(s, 1)} title="Nhập nhanh 1"
-                                        className="w-7 h-7 rounded-full border-[1.5px] border-[#0d6efd] text-[#0d6efd] font-bold mr-3 hover:bg-blue-50">+</button>
+                                        className="w-10 h-10 rounded-full border-[1.5px] border-[#24305E] text-[#24305E] font-bold mr-3 hover:bg-blue-50">+</button>
                                     <button onClick={() => startEdit(s.material_id)}
-                                        className="text-[#0d6efd] hover:underline text-[13px] mr-3">Sửa</button>
+                                        className="text-[#24305E] hover:underline text-[13px] mr-3">Sửa</button>
                                     <button onClick={() => delMaterial(s)}
                                         className="text-red-600 hover:underline text-[13px]">Xóa</button>
                                 </td>
@@ -1036,7 +1041,7 @@ function MaterialBulkEdit({ selectedIds, materials, categories, bulkFields, setB
 
     return (
         <div>
-            <button onClick={onBack} className="text-[13px] font-semibold text-[#0d6efd] hover:underline mb-2">
+            <button onClick={onBack} className="text-[13px] font-semibold text-[#24305E] hover:underline mb-2">
                 ‹ Quay lại danh sách nguyên liệu
             </button>
             <h2 className="text-[18px] font-bold">Chỉnh sửa nhanh nguyên liệu</h2>
@@ -1137,12 +1142,14 @@ function InboundTab({ materials, onDone, branchId, branches }) {
     const [detail, setDetail] = useState(null); // receipt chi tiết
     const [editing, setEditing] = useState(false);
 
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchReceipts = async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API}/inbound-receipts`, { params: { branch_id: branchId, per_page: 50 } });
             setReceipts(res.data?.data?.data || res.data?.data || []);
-        } catch { /* bỏ qua */ }
+            setLoadErr(false);
+        } catch { setLoadErr(true); }
         setLoading(false);
     };
     useEffect(() => {
@@ -1197,7 +1204,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
             <div className="flex items-center justify-between mb-3">
                 <div className="text-[13px] text-gray-500">Phiếu nhập hàng theo hóa đơn nhà cung cấp</div>
                 <button onClick={() => setShowForm(true)}
-                    className="px-5 py-2.5 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    className="px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                     ＋ Tạo phiếu nhập
                 </button>
             </div>
@@ -1218,7 +1225,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                         <tbody>
                             {receipts.map((r) => (
                                 <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                    <td className="px-4 py-2.5 font-semibold text-[#0d6efd]">{r.code}</td>
+                                    <td className="px-4 py-2.5 font-semibold text-[#24305E]">{r.code}</td>
                                     <td className="px-2 py-2.5">{fmtDate(r.receipt_date)}{r.invoice_no && <div className="text-[11px] text-gray-400">HĐ: {r.invoice_no}</div>}</td>
                                     <td className="px-2 py-2.5">{r.partner?.name || <span className="text-gray-400">Mua lẻ</span>}</td>
                                     <td className="px-2 py-2.5 text-right font-bold">{vnd(r.grand_total)}đ</td>
@@ -1233,7 +1240,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                                         </span>
                                     </td>
                                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                                        <button onClick={() => openDetail(r.id)} className="text-[#0d6efd] text-[12px] font-medium mr-3">Xem</button>
+                                        <button onClick={() => openDetail(r.id)} className="text-[#24305E] text-[12px] font-medium mr-3">Xem</button>
                                         {/* K-R1: duyệt/hủy phiếu nháp */}
                                         {r.status === 'draft' && (
                                             <>
@@ -1248,7 +1255,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                                 </tr>
                             ))}
                             {receipts.length === 0 && (
-                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu nhập nào.</td></tr>
+                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu nhập. <button onClick={fetchReceipts} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có phiếu nhập nào.'}</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -1344,7 +1351,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
         setSubmitting(false);
     };
 
-    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#24305E]';
     return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
             <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[640px] max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -1373,7 +1380,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                             <div className="flex gap-2">
                                 {[['paid', 'Trả ngay'], ['debt', 'Công nợ']].map(([v, l]) => (
                                     <button key={v} onClick={() => setPaymentType(v)}
-                                        className={`flex-1 py-2 rounded text-[13px] font-medium border ${paymentType === v ? 'bg-[#0d6efd] text-white border-[#0d6efd]' : 'border-gray-300 text-gray-600'}`}>{l}</button>
+                                        className={`flex-1 py-2 rounded text-[13px] font-medium border ${paymentType === v ? 'bg-[#24305E] text-white border-[#24305E]' : 'border-gray-300 text-gray-600'}`}>{l}</button>
                                 ))}
                             </div>
                         </div>
@@ -1382,7 +1389,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                         <div className="text-[12px] text-gray-500 mb-1">Nguyên liệu</div>
                         {/* Gói 55 p11aa: popup chọn NL thay dropdown inline */}
                         <button onClick={() => setShowPicker(true)}
-                            className="w-full px-3 py-2.5 border-[1.5px] border-dashed border-[#0d6efd] text-[#0d6efd] rounded-lg text-[13px] font-medium hover:bg-blue-50">
+                            className="w-full px-3 py-2.5 border-[1.5px] border-dashed border-[#24305E] text-[#24305E] rounded-lg text-[13px] font-medium hover:bg-blue-50">
                             ＋ Thêm nguyên liệu ({lines.length} dòng)
                         </button>
                         {showPicker && (
@@ -1428,7 +1435,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                             <div className="text-[12px] text-gray-500 mb-1">Thuế suất (%)</div>
                             <div className="flex gap-1">
                                 {[0, 8, 10].map((r) => (
-                                    <button key={r} onClick={() => setTaxRate(r)} className={`px-3 py-1.5 rounded text-[12px] border ${rate === r ? 'bg-[#0d6efd] text-white border-[#0d6efd]' : 'border-gray-300'}`}>{r}%</button>
+                                    <button key={r} onClick={() => setTaxRate(r)} className={`px-3 py-1.5 rounded text-[12px] border ${rate === r ? 'bg-[#24305E] text-white border-[#24305E]' : 'border-gray-300'}`}>{r}%</button>
                                 ))}
                                 <input type="number" min="0" max="100" value={taxRate} onChange={(e) => setTaxRate(e.target.value)} className={inp + ' w-16 text-right'} />
                             </div>
@@ -1451,13 +1458,13 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                         {rate > 0 && <div className="flex justify-between text-gray-500"><span>Trong đó VAT {rate}%</span><span>{vnd(vat)}đ</span></div>}
                         {Number(discount) > 0 && <div className="flex justify-between text-gray-500"><span>Chiết khấu</span><span>−{vnd(discount)}đ</span></div>}
                         {Number(shipping) > 0 && <div className="flex justify-between text-gray-500"><span>Phí vận chuyển</span><span>+{vnd(shipping)}đ</span></div>}
-                        <div className="flex justify-between text-[15px] pt-1 border-t"><span className="font-bold">Tổng thanh toán</span><b className="text-[#0d6efd]">{vnd(grand)}đ</b></div>
+                        <div className="flex justify-between text-[15px] pt-1 border-t"><span className="font-bold">Tổng thanh toán</span><b className="text-[#24305E]">{vnd(grand)}đ</b></div>
                     </div>
                 </div>
                 <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
                     <div className="flex gap-2">
                         <button onClick={onClose} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold disabled:opacity-40">
                             {submitting ? 'Đang tạo...' : 'Tạo phiếu nhập'}
                         </button>
                     </div>
@@ -1515,7 +1522,7 @@ function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDon
         setSaving(false);
     };
 
-    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#24305E]';
     const r = receipt;
     return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
@@ -1523,7 +1530,7 @@ function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDon
                 <div className="p-5 pb-3 shrink-0 flex items-center justify-between">
                     <h2 className="font-bold text-[16px]">Phiếu {r.code}</h2>
                     {r.status === 'confirmed' && !editing && (
-                        <button onClick={() => setEditing(true)} className="text-[#0d6efd] text-[13px] font-medium">✎ Sửa</button>
+                        <button onClick={() => setEditing(true)} className="text-[#24305E] text-[13px] font-medium">✎ Sửa</button>
                     )}
                 </div>
                 <div className="flex-1 overflow-y-auto px-5 pb-4">
@@ -1552,7 +1559,7 @@ function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDon
                                 {Number(r.vat_amount) > 0 && <div className="flex justify-between text-gray-500"><span>VAT</span><span>{vnd(r.vat_amount)}đ</span></div>}
                                 {Number(r.discount_amount) > 0 && <div className="flex justify-between text-gray-500"><span>Chiết khấu</span><span>−{vnd(r.discount_amount)}đ</span></div>}
                                 {Number(r.shipping_fee) > 0 && <div className="flex justify-between text-gray-500"><span>Phí VC</span><span>+{vnd(r.shipping_fee)}đ</span></div>}
-                                <div className="flex justify-between text-[15px] pt-1 border-t"><b>Tổng</b><b className="text-[#0d6efd]">{vnd(r.grand_total)}đ</b></div>
+                                <div className="flex justify-between text-[15px] pt-1 border-t"><b>Tổng</b><b className="text-[#24305E]">{vnd(r.grand_total)}đ</b></div>
                             </div>
                         </div>
                     ) : form && (
@@ -1625,7 +1632,7 @@ function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDon
                             {editing ? 'Quay lại' : 'Đóng'}
                         </button>
                         {editing && (
-                            <button onClick={save} disabled={saving} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                            <button onClick={save} disabled={saving} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold disabled:opacity-40">
                                 {saving ? 'Đang lưu...' : 'Lưu thay đổi'}
                             </button>
                         )}
@@ -1642,12 +1649,14 @@ function TransferTab({ materials, branches, branchId, onDone }) {
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
 
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchTransfers = async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API}/stock-transfers`, { params: { per_page: 50 } });
             setTransfers(res.data?.data?.data || res.data?.data || []);
-        } catch { /* bỏ qua */ }
+            setLoadErr(false);
+        } catch { setLoadErr(true); }
         setLoading(false);
     };
     useEffect(() => { fetchTransfers(); }, []);
@@ -1688,7 +1697,7 @@ function TransferTab({ materials, branches, branchId, onDone }) {
             <div className="flex items-center justify-between mb-3">
                 <div className="text-[13px] text-gray-500">Điều chuyển nguyên liệu giữa các chi nhánh (kèm giá vốn)</div>
                 <button onClick={() => setShowForm(true)}
-                    className="px-5 py-2.5 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    className="px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                     ＋ Tạo phiếu chuyển
                 </button>
             </div>
@@ -1709,7 +1718,7 @@ function TransferTab({ materials, branches, branchId, onDone }) {
                         <tbody>
                             {transfers.map((t) => (
                                 <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                    <td className="px-4 py-2.5 font-semibold text-[#0d6efd]">{t.code}</td>
+                                    <td className="px-4 py-2.5 font-semibold text-[#24305E]">{t.code}</td>
                                     <td className="px-2 py-2.5">{t.from_branch?.name}</td>
                                     <td className="px-2 py-2.5">{t.to_branch?.name}</td>
                                     <td className="px-2 py-2.5 text-[12px] text-gray-600">
@@ -1730,7 +1739,7 @@ function TransferTab({ materials, branches, branchId, onDone }) {
                                 </tr>
                             ))}
                             {transfers.length === 0 && (
-                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu chuyển kho nào.</td></tr>
+                                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu chuyển. <button onClick={fetchTransfers} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có phiếu chuyển kho nào.'}</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -1805,7 +1814,7 @@ function TransferForm({ materials, branches, defaultFrom, onClose, onDone }) {
         setSubmitting(false);
     };
 
-    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#24305E]';
     return (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={onClose}>
             <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[560px] max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -1833,9 +1842,9 @@ function TransferForm({ materials, branches, defaultFrom, onClose, onDone }) {
                     <div>
                         <div className="text-[12px] text-gray-500 mb-1">Nguyên liệu {!fromId && <span className="text-red-400">(chọn kho nguồn trước)</span>}</div>
                         <button onClick={() => fromId && setShowPicker(true)} disabled={!fromId}
-                            className="w-full flex items-center gap-2 px-3 py-2.5 text-[13px] border border-gray-300 rounded-lg text-gray-500 hover:border-[#0d6efd] disabled:bg-gray-100 disabled:cursor-not-allowed">
+                            className="w-full flex items-center gap-2 px-3 py-2.5 text-[13px] border border-gray-300 rounded-lg text-gray-500 hover:border-[#24305E] disabled:bg-gray-100 disabled:cursor-not-allowed">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
-                            Bấm để chọn nguyên liệu... {lines.length > 0 && <span className="ml-auto text-[#0d6efd] font-medium">({lines.length})</span>}
+                            Bấm để chọn nguyên liệu... {lines.length > 0 && <span className="ml-auto text-[#24305E] font-medium">({lines.length})</span>}
                         </button>
                     </div>
                     {lines.map((l) => (
@@ -1865,7 +1874,7 @@ function TransferForm({ materials, branches, defaultFrom, onClose, onDone }) {
                 <div className="p-4 pt-3 border-t border-gray-100 shrink-0 bg-white">
                     <div className="flex gap-2">
                         <button onClick={onClose} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>
-                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                        <button onClick={submit} disabled={submitting} className="flex-1 h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold disabled:opacity-40">
                             {submitting ? 'Đang tạo...' : 'Tạo phiếu'}
                         </button>
                     </div>
@@ -1931,7 +1940,7 @@ function MaterialPicker({ materials, categories, onSelect, onClose, multi = fals
                         <input value={search} onChange={(e) => setSearch(e.target.value)}
                             placeholder="Tìm nguyên liệu..."
                             autoFocus
-                            className="w-full pl-9 pr-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                            className="w-full pl-9 pr-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto px-4 py-2">
@@ -1948,7 +1957,7 @@ function MaterialPicker({ materials, categories, onSelect, onClose, multi = fals
                                         <span className="font-medium">{m.name}</span>
                                         <span className="text-gray-400 text-[11px] ml-2">{m.unit}</span>
                                     </span>
-                                    {multi && picked.has(m.id) && <span className="text-[#0d6efd] font-bold">✓</span>}
+                                    {multi && picked.has(m.id) && <span className="text-[#24305E] font-bold">✓</span>}
                                 </button>
                             ))}
                         </div>
@@ -1957,7 +1966,7 @@ function MaterialPicker({ materials, categories, onSelect, onClose, multi = fals
                 {multi && (
                     <div className="p-4 pt-3 border-t border-gray-100 shrink-0">
                         <button onClick={confirmMulti} disabled={picked.size === 0}
-                            className="w-full h-11 rounded-xl bg-[#0d6efd] text-white text-[14px] font-semibold disabled:opacity-40">
+                            className="w-full h-11 rounded-xl bg-[#24305E] text-white text-[14px] font-semibold disabled:opacity-40">
                             Chọn {picked.size > 0 ? `(${picked.size})` : ''}
                         </button>
                     </div>
@@ -2012,7 +2021,7 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                         <div className="col-span-2">
                             <label className="text-xs text-gray-500">Bán thành phẩm *</label>
                             <select value={produce.material_id} onChange={(e) => setProduce({ ...produce, material_id: e.target.value })}
-                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]">
+                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]">
                                 <option value="">-- Chọn --</option>
                                 {semis.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                             </select>
@@ -2021,15 +2030,15 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                             <label className="text-xs text-gray-500">Số lượng * ({matById(produce.material_id)?.unit || '...'})</label>
                             <input type="number" min="0" step="any" value={produce.quantity}
                                 onChange={(e) => setProduce({ ...produce, quantity: e.target.value })}
-                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                         </div>
                         <div>
                             <label className="text-xs text-gray-500">Ghi chú</label>
                             <input value={produce.note} onChange={(e) => setProduce({ ...produce, note: e.target.value })}
-                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                                className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                         </div>
                     </div>
-                    <button onClick={handleProduce} className="mt-3 px-5 py-2.5 bg-violet-600 text-white text-[13px] font-medium rounded hover:bg-violet-700">
+                    <button onClick={handleProduce} className="mt-3 px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                         Chế biến
                     </button>
                     <p className="text-[11px] text-gray-400 mt-2">Trừ nguyên liệu thô theo định mức (FIFO) và nhập lô mới cho bán thành phẩm.</p>
@@ -2117,9 +2126,9 @@ function CategoryTab({ categories, onChange }) {
                 <input value={name} onChange={(e) => setName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && saveNew()}
                     placeholder="Tên loại mới (VD: Gia vị)"
-                    className="flex-1 px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                    className="flex-1 px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                 <button onClick={saveNew}
-                    className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7] whitespace-nowrap">
+                    className="px-4 py-2.5 bg-[#24305E] text-white text-[14px] font-medium rounded-lg hover:bg-[#1B2547] whitespace-nowrap">
                     + Thêm loại
                 </button>
             </div>
@@ -2142,7 +2151,7 @@ function CategoryTab({ categories, onChange }) {
                                         <input value={editName} onChange={(e) => setEditName(e.target.value)}
                                             onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(c.id); if (e.key === 'Escape') cancelEdit(); }}
                                             autoFocus
-                                            className="px-2 py-1.5 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#0d6efd]" />
+                                            className="px-2 py-1.5 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                                     ) : (
                                         <b>{c.name}</b>
                                     )}
@@ -2155,7 +2164,7 @@ function CategoryTab({ categories, onChange }) {
                                             <button onClick={cancelEdit} className="text-xs text-gray-500 mr-2">Hủy</button>
                                         </>
                                     ) : (
-                                        <button onClick={() => startEdit(c)} className="text-xs font-semibold mr-2 text-[#0d6efd] hover:underline">Sửa</button>
+                                        <button onClick={() => startEdit(c)} className="text-xs font-semibold mr-2 text-[#24305E] hover:underline">Sửa</button>
                                     )}
                                     <button onClick={() => move(i, -1)} disabled={i === 0} title="Lên"
                                         className="text-xs font-bold mr-1 px-1.5 py-0.5 border rounded disabled:opacity-30">↑</button>
@@ -2549,15 +2558,15 @@ function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
                 <div className="bg-white border border-gray-200 rounded-lg p-4 mb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <label className="text-[13px] text-gray-600">Ngày kiểm
                         <DateInput value={checkDate} onChange={(v) => setCheckDate(v)}
-                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                     </label>
                     <label className="text-[13px] text-gray-600">Giờ kiểm
                         <TimeInput value={checkTime} onChange={(v) => setCheckTime(v)}
-                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                     </label>
                     <label className="text-[13px] text-gray-600">Người kiểm
                         <input type="text" value={checkerName} onChange={(e) => setCheckerName(e.target.value)} placeholder="Tên nhân viên kiểm"
-                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]" />
+                            className="mt-1 w-full px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                     </label>
                 </div>
 
@@ -2613,7 +2622,7 @@ function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
                                                 value={counts[it.id] ?? ''}
                                                 onChange={(e) => setCounts({ ...counts, [it.id]: e.target.value })}
                                                 placeholder="Nhập SL"
-                                                className="w-full px-2 py-1.5 text-[14px] border border-gray-300 rounded text-right focus:outline-none focus:border-[#0d6efd]" />
+                                                className="w-full px-2 py-1.5 text-[14px] border border-gray-300 rounded text-right focus:outline-none focus:border-[#24305E]" />
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                             {d == null
@@ -2639,7 +2648,7 @@ function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
                         Lưu số liệu
                     </button>
                     <button onClick={() => handleConfirm(false)} disabled={doneCount !== total}
-                        className="flex-1 px-5 py-3 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7] disabled:bg-gray-300 disabled:cursor-not-allowed">
+                        className="flex-1 px-5 py-3 bg-[#24305E] text-white text-[14px] font-medium rounded-lg hover:bg-[#1B2547] disabled:bg-gray-300 disabled:cursor-not-allowed">
                         Hoàn thành kiểm kho{doneCount !== total ? ' (' + doneCount + '/' + total + ')' : ''}
                     </button>
                     <button onClick={() => handleConfirm(true)} disabled={doneCount !== total}
@@ -2673,16 +2682,16 @@ function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
             <div className="flex items-center justify-between mb-3">
                 <div className="flex gap-2 items-center">
                     {!showCreate ? (
-                        <button onClick={() => setShowCreate(true)} className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7]">
+                        <button onClick={() => setShowCreate(true)} className="px-4 py-2.5 bg-[#24305E] text-white text-[14px] font-medium rounded-lg hover:bg-[#1B2547]">
                             + Tạo phiếu kiểm kê
                         </button>
                     ) : (
                         <>
                             <select value={createType} onChange={(e) => setCreateType(e.target.value)}
-                                className="px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#0d6efd]">
+                                className="px-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]">
                                 {Object.entries(STOCKTAKE_TYPES).map(([k, v]) => <option key={k} value={k}>Kiểm kê {v.toLowerCase()}</option>)}
                             </select>
-                            <button onClick={handleCreate} className="px-4 py-2.5 bg-[#0d6efd] text-white text-[14px] font-medium rounded-lg hover:bg-[#0b5ed7]">Tạo</button>
+                            <button onClick={handleCreate} className="px-4 py-2.5 bg-[#24305E] text-white text-[14px] font-medium rounded-lg hover:bg-[#1B2547]">Tạo</button>
                             <button onClick={() => setShowCreate(false)} className="px-3 py-2.5 text-[14px] text-gray-500">Hủy</button>
                         </>
                     )}
@@ -2721,8 +2730,8 @@ function StocktakeTab({ materials, categories, onDone, branchId, showAll }) {
                                 </td>
                                 <td className="px-4 py-3 text-right whitespace-nowrap">
                                     {s.status === 'confirmed'
-                                        ? <button onClick={() => openReceipt(s.id)} className="text-[#0d6efd] hover:underline text-[13px]">Xem</button>
-                                        : <button onClick={() => openDetail(s.id)} className="text-[#0d6efd] hover:underline text-[13px]">Tiếp tục kiểm</button>}
+                                        ? <button onClick={() => openReceipt(s.id)} className="text-[#24305E] hover:underline text-[13px]">Xem</button>
+                                        : <button onClick={() => openDetail(s.id)} className="text-[#24305E] hover:underline text-[13px]">Tiếp tục kiểm</button>}
                                 </td>
                             </tr>
                         ))}
@@ -2747,11 +2756,13 @@ function BomTab({ materials, onDone }) {
     const [formBatchQty, setFormBatchQty] = useState(''); // Gói 55 p11c: SL BTP mỗi mẻ
     const [formLines, setFormLines] = useState([]); // [{raw_material_id, quantity}]
 
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchRecipes = async () => {
         try {
             const res = await axios.get(`${API}/production-recipes`);
             setRecipes(res.data?.data || []);
-        } catch { /* bỏ qua */ }
+            setLoadErr(false);
+        } catch { setLoadErr(true); }
     };
     useEffect(() => { fetchRecipes(); }, []);
 
@@ -2803,16 +2814,22 @@ function BomTab({ materials, onDone }) {
                     if (r.data?.data?.id) createdIds.push(r.data.data.id);
                 }
             } catch (e) {
-                // Rollback: xóa các dòng vừa tạo
-                for (const id of createdIds) { try { await axios.delete(`${API}/production-recipes/${id}`); } catch {} }
+                // Rollback: xóa các dòng vừa tạo — UX 2026-10-26 (🟠T2): rollback lỗi cũng phải
+                // báo rõ (trước đây catch {} nuốt sạch, có thể sót dòng trùng âm thầm)
+                let rbFail = 0;
+                for (const id of createdIds) { try { await axios.delete(`${API}/production-recipes/${id}`); } catch { rbFail++; } }
+                if (rbFail) alert(`Lưu định mức thất bại và có ${rbFail} dòng vừa tạo chưa xóa được khi hoàn tác — mở lại danh sách định mức để kiểm tra dòng trùng.`);
                 throw e;
             }
             if (editingId) {
                 const oldIds = grouped[editingId]?.lines.map((l) => l.id) || [];
+                let delFail = 0;
                 for (const id of oldIds) {
                     try { await axios.delete(`${API}/production-recipes/${id}`); }
-                    catch (e) { console.error('Không xóa được dòng cũ #' + id, e); }
+                    catch (e) { delFail++; console.error('Không xóa được dòng cũ #' + id, e); }
                 }
+                // UX 2026-10-26 (🟠T2): xóa dòng cũ lỗi phải báo — nếu không sẽ trùng 2 bộ định mức âm thầm
+                if (delFail) alert(`Đã lưu định mức mới nhưng có ${delFail} dòng cũ chưa xóa được — kiểm tra lại danh sách để tránh trùng định mức.`);
             }
             setShowForm(false);
             fetchRecipes();
@@ -2821,22 +2838,23 @@ function BomTab({ materials, onDone }) {
     };
     const delGroup = async (g) => {
         if (!window.confirm(`Xóa toàn bộ định mức "${g.material?.name}"?`)) return;
-        try {
-            for (const l of g.lines) { try { await axios.delete(`${API}/production-recipes/${l.id}`); } catch {} }
-            fetchRecipes();
-            onDone();
-        } catch { alert('Xóa thất bại'); }
+        // UX 2026-10-26 (🟠T2): trước đây lỗi từng dòng bị nuốt, alert ngoài là code chết
+        let fail = 0;
+        for (const l of g.lines) { try { await axios.delete(`${API}/production-recipes/${l.id}`); } catch { fail++; } }
+        fetchRecipes();
+        onDone();
+        if (fail) alert(`Đã xóa một phần — còn ${fail} dòng chưa xóa được. Kiểm tra lại danh sách định mức.`);
     };
 
     const semiFinished = materials.filter((m) => m.is_semi_finished);
     const rawMaterials = materials.filter((m) => !m.is_semi_finished);
-    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] focus:outline-none focus:border-[#24305E]';
 
     return (
         <div>
             <div className="flex justify-between items-center mb-3">
                 <p className="text-[13px] text-gray-500">VD: Kem Buôn Mê 500gr = 200gr bột kem béo + 50gr sữa đặc + 300ml sữa tươi + 50ml cốt cà phê</p>
-                <button onClick={openCreate} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">+ Tạo định mức</button>
+                <button onClick={openCreate} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">+ Tạo định mức</button>
             </div>
             {/* Gói 55 p11: danh sách bảng gọn — mỗi dòng 1 định mức hoàn chỉnh */}
             <div className="border border-gray-100 rounded overflow-x-auto">
@@ -2851,18 +2869,18 @@ function BomTab({ materials, onDone }) {
                         {groupList.map((g) => (
                             <tr key={g.material?.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                 <td className="px-4 py-3 font-medium">{g.material?.name} <span className="text-gray-400 font-normal">({g.material?.unit})</span></td>
-                                <td className="px-3 py-3 font-bold text-[#0d6efd]">
+                                <td className="px-3 py-3 font-bold text-[#24305E]">
                                     {g.lines[0]?.batch_output_qty ? `${Number(g.lines[0].batch_output_qty).toLocaleString('vi-VN')} ${g.material?.unit}` : '—'}
                                 </td>
                                 <td className="px-3 py-3 text-gray-500">{g.lines.length} nguyên liệu</td>
                                 <td className="px-4 py-3 text-right whitespace-nowrap">
-                                    <button onClick={() => openEdit(g)} className="px-3 py-1.5 border border-[#0d6efd] text-[#0d6efd] text-[13px] rounded hover:bg-blue-50 mr-2">Sửa</button>
+                                    <button onClick={() => openEdit(g)} className="px-3 py-1.5 border border-[#24305E] text-[#24305E] text-[13px] rounded hover:bg-blue-50 mr-2">Sửa</button>
                                     <button onClick={() => delGroup(g)} className="px-3 py-1.5 border border-gray-300 text-red-600 text-[13px] rounded hover:bg-red-50">Xóa</button>
                                 </td>
                             </tr>
                         ))}
                         {groupList.length === 0 && (
-                            <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400">Chưa có định mức nào. Bấm "+ Tạo định mức".</td></tr>
+                            <tr><td colSpan={4} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách định mức. <button onClick={fetchRecipes} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có định mức nào. Bấm "+ Tạo định mức".'}</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -2913,10 +2931,10 @@ function BomTab({ materials, onDone }) {
                                 </div>
                             ))}
                         </div>
-                        <button onClick={addFormLine} className="mt-3 text-[#0d6efd] text-[13px] hover:underline">⊕ Thêm nguyên liệu</button>
+                        <button onClick={addFormLine} className="mt-3 text-[#24305E] text-[13px] hover:underline">⊕ Thêm nguyên liệu</button>
                         <div className="flex justify-end gap-2 mt-5">
                             <button onClick={() => setShowForm(false)} className="px-4 py-2 text-[13px] text-gray-500">Hủy</button>
-                            <button onClick={saveForm} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] rounded hover:bg-[#0b5ed7]">Lưu định mức</button>
+                            <button onClick={saveForm} className="px-4 py-2 bg-[#24305E] text-white text-[13px] rounded hover:bg-[#1B2547]">Lưu định mức</button>
                         </div>
                     </div>
                 </div>
@@ -2939,12 +2957,14 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
 
     const REASONS = { damaged: 'Hủy hàng', internal_use: 'Dùng nội bộ', sale: 'Xuất bán', other: 'Khác' };
 
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchList = async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API}/outbound-receipts`, { params: { branch_id: branchId, per_page: 50 } });
             setList(res.data?.data?.data || res.data?.data || []);
-        } catch { /* bỏ qua */ }
+            setLoadErr(false);
+        } catch { setLoadErr(true); }
         setLoading(false);
     };
     useEffect(() => {
@@ -3020,7 +3040,7 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
                 </div>
                 <span className="flex-1"></span>
                 <button onClick={() => setShowForm(true)}
-                    className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">+ Tạo phiếu xuất</button>
+                    className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">+ Tạo phiếu xuất</button>
             </div>
             <div className="border border-gray-100 rounded overflow-x-auto">
                 <table className="w-full text-[13px] min-w-[600px]">
@@ -3035,10 +3055,10 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
                         {loading ? (
                             <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">Đang tải...</td></tr>
                         ) : filtered.length === 0 ? (
-                            <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">Chưa có phiếu xuất — bấm "+ Tạo phiếu xuất".</td></tr>
+                            <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu xuất. <button onClick={fetchList} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có phiếu xuất — bấm "+ Tạo phiếu xuất".'}</td></tr>
                         ) : filtered.map((r) => (
                             <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50/50 cursor-pointer" onClick={() => openDetail(r.id)}>
-                                <td className="px-4 py-3 font-medium text-[#0d6efd]">{r.code}</td>
+                                <td className="px-4 py-3 font-medium text-[#24305E]">{r.code}</td>
                                 <td className="px-3 py-3">{r.created_at ? new Date(r.created_at).toLocaleDateString('vi-VN') : '—'}</td>
                                 <td className="px-3 py-3">{REASONS[r.reason] || r.reason}</td>
                                 <td className="px-3 py-3">{r.items_count ?? '—'}</td>
@@ -3151,7 +3171,7 @@ function OutboundForm({ materials, categories, branchId, onClose, onDone }) {
                     </div>
                 </div>
                 <button onClick={() => setShowPicker(true)}
-                    className="w-full py-2.5 mb-3 border-2 border-dashed border-gray-300 rounded-lg text-[13px] text-gray-500 hover:border-[#0d6efd] hover:text-[#0d6efd]">
+                    className="w-full py-2.5 mb-3 border-2 border-dashed border-gray-300 rounded-lg text-[13px] text-gray-500 hover:border-[#24305E] hover:text-[#24305E]">
                     ＋ Thêm nguyên liệu ({lines.length} dòng)
                 </button>
                 {lines.map((l) => (
@@ -3164,7 +3184,7 @@ function OutboundForm({ materials, categories, branchId, onClose, onDone }) {
                 ))}
                 <div className="flex gap-2 mt-5">
                     <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-[14px]">Hủy</button>
-                    <button onClick={submit} disabled={submitting} className="flex-1 px-4 py-2.5 bg-[#0d6efd] text-white rounded-lg text-[14px] font-semibold disabled:bg-gray-300">
+                    <button onClick={submit} disabled={submitting} className="flex-1 px-4 py-2.5 bg-[#24305E] text-white rounded-lg text-[14px] font-semibold disabled:bg-gray-300">
                         {submitting ? 'Đang tạo...' : 'Tạo phiếu xuất'}
                     </button>
                 </div>

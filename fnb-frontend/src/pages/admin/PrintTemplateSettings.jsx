@@ -20,16 +20,20 @@ const LABEL_LINES = [
 export default function PrintTemplateSettings({ onDirty, onSaved } = {}) {
   const [cfg, setCfg] = useState({});
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
+  // UX 2026-10-26 (🟠20): lỗi tải -> khóa Lưu (trước đây catch rỗng, form hiện mặc định "bật hết" như cấu hình thật, bấm Lưu là ghi đè)
+  const [loaded, setLoaded] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
+  const loadCfg = () => {
+    setLoadErr(false);
     axios.get(`${API}/settings`).then((r) => {
       const s = r.data || {}; // Gói SEC: API /settings trả object trần
       const c = {};
       [...BILL_LINES, ...LABEL_LINES].forEach((l) => { c[l.k] = s[l.k] !== '0'; });
       c.thankyou_text = s.thankyou_text || 'Cảm ơn quý khách! Hẹn gặp lại!';
-      setCfg(c);
-    }).catch(() => {});
-  }, []);
+      setCfg(c); setLoaded(true);
+    }).catch(() => setLoadErr(true));
+  };
+  useEffect(loadCfg, []);
 
   // Audit toàn diện 2026-10-21 🟠5: báo thẻ cha (Settings) mỗi lần đổi để gắn badge "● Chưa lưu"
   const toggle = (k) => { onDirty?.(); setCfg((c) => ({ ...c, [k]: !c[k] })); };
@@ -43,7 +47,7 @@ export default function PrintTemplateSettings({ onDirty, onSaved } = {}) {
       await axios.post(`${API}/settings`, { settings });
       onSaved?.(); // 🟠5: tắt badge "Chưa lưu" ở thẻ cha sau khi lưu thành công
       alert('Đã lưu mẫu in.');
-    } catch (e) { alert('Lỗi'); }
+    } catch (e) { alert('Lưu thất bại. Vui lòng thử lại.'); } // UX: bỏ alert('Lỗi') chung chung
     finally { setSaving(false); }
   };
 
@@ -75,7 +79,8 @@ export default function PrintTemplateSettings({ onDirty, onSaved } = {}) {
         {LABEL_LINES.map((l) => <Line key={l.k} l={l} />)}
       </div>
       <div className="md:col-span-2">
-        <button onClick={save} disabled={saving} className="m-btn m-btn-primary text-[13px]">
+        {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Chưa tải được cấu hình hiện tại — nút Lưu đang KHÓA để tránh ghi đè cấu hình thật bằng giá trị mặc định. <button type="button" className="m-btn m-btn-ghost m-btn-sm" onClick={loadCfg}>Tải lại</button></div>)}
+        <button onClick={save} disabled={saving || !loaded} className="m-btn m-btn-primary text-[13px]">
           {saving ? 'Đang lưu...' : 'Lưu mẫu in'}
         </button>
       </div>

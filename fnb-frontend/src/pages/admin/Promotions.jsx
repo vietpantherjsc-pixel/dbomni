@@ -124,6 +124,7 @@ export default function Promotions() {
     const TYPE_LABELS = labelMap(useSharedCategories('promotion_types', []), TYPE_LABELS_FB);
     const SCOPE_LABELS = labelMap(useSharedCategories('promotion_scopes', []), SCOPE_LABELS_FB);
     const [list, setList] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [page, setPage] = useState(1);
     const [lastPage, setLastPage] = useState(1);
     const [mode, setMode] = useState('list'); // list | form
@@ -147,6 +148,7 @@ export default function Promotions() {
         stack_with_coupon: false,
         // SPEC-02: cấu hình trigger tự động (JSON)
         auto_trigger: '', auto_valid_days: 7, auto_max_per_customer: 1,
+        auto_max_per_month: '', // Gói Đón Bình Minh (2026-10-28): trần tháng — trống = chưa đặt (không giới hạn)
         auto_extra: '{}',
     });
     const [form, setForm] = useState(emptyForm());
@@ -208,11 +210,12 @@ export default function Promotions() {
         try {
             const res = await axios.get(`${API}/promotions`, { params: { page: p } });
             if (res.data?.success) {
+                setLoadErr(false);
                 setList(res.data.data.data || []);
                 setPage(res.data.data.current_page || 1);
                 setLastPage(res.data.data.last_page || 1);
             }
-        } catch (err) { console.error('Lỗi tải KM:', err); }
+        } catch (err) { console.error('Lỗi tải KM:', err); setLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
 
     // Gói 10: /categories và /products trả MẢNG TRẦN (không bọc {data}) -> xử lý cả 2 dạng
@@ -290,11 +293,12 @@ export default function Promotions() {
                 setEditing(id);
                 // SPEC-02b: tách auto_config thành trigger + valid_days + max_per_customer + JSON phần còn lại
                 const _ac = p.auto_config || {};
-                const { trigger: _tr, valid_days: _vd, max_per_customer: _mp, ..._extra } = _ac;
+                const { trigger: _tr, valid_days: _vd, max_per_customer: _mp, max_per_month: _mpm, ..._extra } = _ac;
                 lastValidExtra.current = _extra; setShowAdv(false); setErrs({});
                 setForm({
                     name: p.name, code: p.code || '', type: p.type, value: p.value ?? '', scope: p.scope, scope_ids: p.scope_ids || [],
                     auto_trigger: _tr || '', auto_valid_days: _vd ?? 7, auto_max_per_customer: _mp ?? 1,
+                    auto_max_per_month: _mpm ?? '',
                     auto_extra: Object.keys(_extra).length ? JSON.stringify(_extra, null, 2) : '{}',
                     min_order_amount: p.min_order_amount ?? 0, max_discount_amount: p.max_discount_amount ?? '',
                     gift_product_id: p.gift_product_id || '', gift_quantity: p.gift_quantity || 1,
@@ -337,6 +341,11 @@ export default function Promotions() {
                     valid_days: Number(form.auto_valid_days) || 7,
                     max_per_customer: Number(form.auto_max_per_customer) || 1,
                 };
+                // Gói Đón Bình Minh: chỉ ghi khóa max_per_month khi Admin có nhập
+                // (kể cả 0 = tắt trần tháng); để trống = chương trình không có trần tháng.
+                if (form.auto_max_per_month !== '' && form.auto_max_per_month != null) {
+                    autoConfig.max_per_month = Math.max(0, Number(form.auto_max_per_month) || 0);
+                }
                 try {
                     const extra = JSON.parse(form.auto_extra || '{}');
                     autoConfig = { ...autoConfig, ...extra };
@@ -397,13 +406,17 @@ export default function Promotions() {
 
     const handleDelete = async (id) => {
         if (!window.confirm('Xóa khuyến mại này?')) return;
-        await axios.delete(`${API}/promotions/${id}`);
-        fetchList(page);
+        try {
+            await axios.delete(`${API}/promotions/${id}`);
+            fetchList(page);
+        } catch (e) { alert(e.response?.data?.message || 'Xóa khuyến mại thất bại. Vui lòng thử lại.'); } // UX 2026-10-26 (🟠T2)
     };
 
     const toggleActive = async (p) => {
-        await axios.patch(`${API}/promotions/${p.id}`, { is_active: !p.is_active });
-        fetchList(page);
+        try {
+            await axios.patch(`${API}/promotions/${p.id}`, { is_active: !p.is_active });
+            fetchList(page);
+        } catch (e) { alert(e.response?.data?.message || 'Bật/tắt khuyến mại thất bại. Vui lòng thử lại.'); } // UX 2026-10-26 (🟠T2)
     };
 
     const valueLabel = () => {
@@ -428,7 +441,10 @@ export default function Promotions() {
     const scopeItems = () => {
         if (form.scope === 'category') return categories;
         if (form.scope === 'menu') return menus;
-        if (form.scope === 'product') return products;
+        // B-1 (2026-10-30): ô chọn phạm vi món chỉ nạp món ĐANG BÁN; món đã nằm
+        // trong phạm vi từ trước mà nay ngừng bán vẫn hiện kèm nhãn "Ngừng bán"
+        // (không tự loại khỏi cấu hình khi lưu).
+        if (form.scope === 'product') return products.filter((p) => p.is_active || form.scope_ids.includes(p.id));
         return [];
     };
 
@@ -505,6 +521,14 @@ export default function Promotions() {
                                             className="m-input w-full" min={1} />
                                         <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
                                             Mỗi khách được nhận tối đa X lần coupon này. VD: 1 = mỗi khách chỉ được 1 lần duy nhất.
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="m-label">Tối đa coupon phát/người/tháng</label>
+                                        <input type="number" value={form.auto_max_per_month} onChange={(e) => setForm({ ...form, auto_max_per_month: e.target.value })}
+                                            className="m-input w-full" min={0} placeholder="Để trống = không giới hạn" />
+                                        <div className="text-[11.5px] mt-1 leading-snug" style={{ color: 'var(--m-ink-faint)' }}>
+                                            Trần theo tháng dương lịch, chạy cùng trần tổng ở ô bên. Để trống hoặc 0 = không giới hạn theo tháng. VD: chương trình mời bạn để 5.
                                         </div>
                                     </div>
                                 </div>
@@ -628,7 +652,8 @@ export default function Promotions() {
                                                 <label className="m-label">Món tặng <span style={{ color: 'var(--m-danger)' }}>*</span></label>
                                                 <select value={form.gift_product_id} onChange={(e) => setForm({ ...form, gift_product_id: e.target.value })} className="m-input m-select w-full" style={errStyle('gift_product_id')}>
                                                     <option value="">-- Chọn món --</option>
-                                                    {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                                    {/* B-1 (2026-10-30): cùng chuẩn ô chọn món — chỉ đang bán + món tặng đã chọn từ trước (kèm nhãn) */}
+                                                    {products.filter((p) => p.is_active || p.id === Number(form.gift_product_id)).map((p) => <option key={p.id} value={p.id}>{p.name}{p.is_active === false ? ' (Ngừng bán)' : ''}</option>)}
                                                 </select>
                                                 <FE k="gift_product_id" />
                                             </div>
@@ -731,6 +756,10 @@ export default function Promotions() {
                                             <label key={it.id} className="flex items-center gap-2 text-sm py-1">
                                                 <input type="checkbox" checked={form.scope_ids.includes(it.id)} onChange={() => setForm({ ...form, scope_ids: toggleArr(form.scope_ids, it.id) })} />
                                                 {it.name}
+                                                {/* B-1 (2026-10-30): món đã chọn từ trước mà nay ngừng bán — hiện kèm nhãn, không biến mất */}
+                                                {form.scope === 'product' && it.is_active === false && (
+                                                    <span className="text-[11px] px-1.5 py-0.5 rounded font-medium" style={{ background: '#fef3c7', color: '#92400e' }}>Ngừng bán</span>
+                                                )}
                                             </label>
                                         ))}
                                         {scopeItems().length === 0 && <div className="text-xs py-2" style={{ color: 'var(--m-ink-faint)' }}>Chưa có dữ liệu.</div>}
@@ -912,6 +941,7 @@ export default function Promotions() {
                                     </td>
                                 </tr>
                             ))}
+                            {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Không tải được danh sách khuyến mại.<button onClick={() => fetchList(page)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>)}
                             {list.length === 0 && <tr><td colSpan={7} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Chưa có khuyến mại nào.</td></tr>}
                         </tbody>
                     </table>

@@ -100,14 +100,20 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
 
   return (
     <div className="zm-modal-mask" onClick={onClose}>
-      <div className="zm-sheet" onClick={(e) => e.stopPropagation()}>
-        <img className="zm-sheet-hero" src={product.image_url || '/default-product.svg'} alt={product.name} />
+      <div className="zm-sheet" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
+        {/* 🟡12 UX 2026-10-26: nút đóng rõ ràng (trước đây chỉ đóng bằng chạm nền mờ) */}
+        <button onClick={onClose} aria-label="Đóng" style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,.92)', color: '#333', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,.18)' }}>✕</button>
+        <img className="zm-sheet-hero" src={product.image_url || '/default-product.svg'} alt={product.name} onError={(e) => { if (!e.target.src.endsWith('/default-product.svg')) e.target.src = '/default-product.svg'; }} />
         <div className="zm-sheet-body">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <h2 style={{ fontSize: 18 }}>{product.name}</h2>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmt(product.base_price)}đ</div>
-              <div style={{ fontSize: 11, color: '#aaa' }}>Giá gốc</div>
+              {/* 🟡12 UX 2026-10-26: hiện ĐƠN GIÁ THỰC (priceOf, đã gồm giá kênh/KM) làm giá chính;
+                  giá gốc chỉ hiện gạch ngang khi giá thực thấp hơn — trước đây chỉ hiện base_price gắn nhãn "Giá gốc" gây tưởng không giảm */}
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{fmt(priceOf(product))}đ</div>
+              {Number(priceOf(product)) < Number(product.base_price) && (
+                <div style={{ fontSize: 12, color: '#767676', textDecoration: 'line-through' }}>{fmt(product.base_price)}đ</div>
+              )}
             </div>
           </div>
           {product.description && <p style={{ fontSize: 13, color: '#666', marginTop: 8, lineHeight: 1.5 }}>{product.description}</p>}

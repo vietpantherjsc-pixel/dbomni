@@ -24,17 +24,22 @@ export default function Cart() {
       <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Giỏ hàng ({count})</h1></div>
       {cart.map((l) => (
         <div key={l.key} className="zm-row-item" style={{ cursor: 'default' }}>
-          <img src={l.product.image_url || '/default-product.svg'} alt="" />
+          <img src={l.product.image_url || '/default-product.svg'} alt="" onError={(e) => { if (!e.target.src.endsWith('/default-product.svg')) e.target.src = '/default-product.svg'; }} />
           <div className="zm-row-info">
             <div className="zm-row-name">{l.product.name}</div>
-            {l.optText && <div className="zm-row-desc">{l.optText}</div>}
-            {l.note && <div className="zm-row-desc">📝 {l.note}</div>}
+            {/* 🟡13 UX 2026-10-26: ở Giỏ hiện ĐẦY ĐỦ tùy chọn/ghi chú (bỏ clamp 2 dòng của .zm-row-desc) để khách kiểm lại trước thanh toán */}
+            {l.optText && <div className="zm-row-desc" style={{ display: 'block', WebkitLineClamp: 'unset', overflow: 'visible' }}>{l.optText}</div>}
+            {l.note && <div className="zm-row-desc" style={{ display: 'block', WebkitLineClamp: 'unset', overflow: 'visible' }}>📝 {l.note}</div>}
             <div className="zm-row-price">{fmt(l.unitPrice * l.qty)}đ</div>
           </div>
-          <div className="zm-qty">
-            <button onClick={() => updateQty(l.key, -1)}>−</button>
-            <span>{l.qty}</span>
-            <button onClick={() => updateQty(l.key, 1)}>+</button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <div className="zm-qty">
+              <button onClick={() => updateQty(l.key, -1)}>−</button>
+              <span>{l.qty}</span>
+              <button onClick={() => updateQty(l.key, 1)}>+</button>
+            </div>
+            {/* 🟡13: nút xóa dòng riêng (trước đây phải trừ về 0; store trừ về 0 = xóa dòng) */}
+            <button onClick={() => updateQty(l.key, -l.qty)} style={{ border: 'none', background: 'none', color: '#b91c1c', fontSize: 12, fontWeight: 700, cursor: 'pointer', minHeight: 32, padding: '4px 10px' }}>✕ Xóa</button>
           </div>
         </div>
       ))}

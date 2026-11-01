@@ -38,12 +38,11 @@ export default function TrackOrder() {
   const lookup = async (c) => {
     const cd = (c || code).trim();
     if (!cd) return;
-    // Audit 2026-10-23 BM-03: SĐT từ hồ sơ; chưa có thì hỏi như luồng hủy đơn
-    let phone = getProfile()?.phone || trackPhone || '';
-    if (!phone) {
-      phone = (prompt('Nhập SĐT đã dùng để đặt đơn (để tra cứu):') || '').trim();
-    }
-    if (!phone) { alert('Cần SĐT đặt đơn để tra cứu.'); return; }
+    // Audit 2026-10-23 BM-03 + UX 2026-10-26 (🟠3): SĐT từ hồ sơ hoặc ô nhập ngay
+    // trên trang (bỏ prompt/alert) — lỗi hiện tại chỗ dưới ô tìm
+    const phone = getProfile()?.phone || trackPhone || '';
+    if (!phone) { setErr('Nhập SĐT đã dùng để đặt đơn ở ô bên dưới để tra cứu.'); return; }
+    setErr('');
     setTrackPhone(phone);
     setLoading(true);
     try {
@@ -51,7 +50,7 @@ export default function TrackOrder() {
       setOrder(o);
       setTrackedCode(cd);
       try { storage.set('zm_last_order', cd); } catch { /* bỏ qua */ }
-    } catch (e) { alert(e.message); setOrder(null); }
+    } catch (e) { setErr(e.message || 'Không tra được đơn. Kiểm tra lại mã đơn và SĐT.'); setOrder(null); }
     finally { setLoading(false); }
   };
 
@@ -77,21 +76,19 @@ export default function TrackOrder() {
   }, [trackedCode, trackPhone]);
 
   const [cancelling, setCancelling] = useState(false);
+  const [err, setErr] = useState(''); // UX 2026-10-26 (🟠3): lỗi hiện tại chỗ
+  const [showCancel, setShowCancel] = useState(false); // UX 2026-10-26: khối xác nhận hủy inline
   const cancel = async () => {
-    if (!confirm('Chắc chắn hủy đơn này?')) return;
+    // UX 2026-10-26 (🟠3): xác nhận bằng khối inline trong trang (bỏ confirm/prompt/alert)
     // Gói SEC2: gửi SĐT đặt đơn để server xác thực người hủy
-    let phone = getProfile()?.phone || '';
-    if (!phone) {
-      phone = prompt('Nhập SĐT đã dùng để đặt đơn (để xác nhận hủy):') || '';
-      phone = phone.trim();
-    }
-    if (!phone) { alert('Cần SĐT đặt đơn để hủy.'); return; }
+    const phone = getProfile()?.phone || trackPhone || '';
+    if (!phone) { setErr('Nhập SĐT đã dùng để đặt đơn ở ô phía trên để hủy đơn.'); setShowCancel(false); return; }
     setCancelling(true);
     try {
       await api.cancelOrder(order.code, phone);
-      alert('Đã hủy đơn.');
+      setShowCancel(false);
       lookup(order.code);
-    } catch (e) { alert(e.message); }
+    } catch (e) { setErr(e.message || 'Không hủy được đơn.'); setShowCancel(false); }
     finally { setCancelling(false); }
   };
 
@@ -99,11 +96,25 @@ export default function TrackOrder() {
 
   return (
     <div className="zm-page">
-      <div className="zm-header"><h1>Theo dõi đơn hàng</h1></div>
+      <div className="zm-header"><button className="zm-back" onClick={() => nav(-1)}>←</button><h1>Theo dõi đơn hàng</h1></div>
       <div className="zm-search">
-        <input placeholder="Nhập mã đơn (VD: ZL-...)" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
-        <button className="zm-btn-outline" style={{ width: 'auto', padding: '10px 18px' }} onClick={() => lookup()}>Tìm</button>
+        <input placeholder="Nhập mã đơn (VD: ZL-...)" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} style={{ minWidth: 0 }} />
+        <button className="zm-btn-outline" style={{ width: 'auto', padding: '10px 18px', minHeight: 44, flexShrink: 0 }} onClick={() => lookup()}>Tìm</button>
       </div>
+      {!getProfile()?.phone && (
+        <div className="zm-search" style={{ marginTop: 0 }}>
+          <input type="tel" inputMode="tel" placeholder="SĐT đã dùng để đặt đơn" value={trackPhone} onChange={(e) => setTrackPhone(e.target.value)} style={{ minWidth: 0 }} />
+        </div>
+      )}
+      {err && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, margin: '0 16px 12px' }}>⚠ {err}</div>
+      )}
+      {/* 🟡14 UX 2026-10-26: hướng dẫn ở trạng thái đầu */}
+      {!order && !loading && (
+        <p style={{ fontSize: 12, color: '#767676', padding: '0 16px', lineHeight: 1.6, margin: 0 }}>
+          Mã đơn nằm trong tin nhắn xác nhận của quán, hoặc ở màn hình ngay sau khi bạn đặt hàng thành công.
+        </p>
+      )}
       {loading && <div className="zm-empty">Đang tải...</div>}
       {order && (
         <>
@@ -214,7 +225,17 @@ export default function TrackOrder() {
               khớp điều kiện backend cancel() — trước đây chỉ đơn 'pending/pending' mới thấy. */}
           {['pending', 'confirmed'].includes(order.status) && ['pending', 'pending_payment', 'transfer_notified', 'confirmed'].includes(order.payment_status) && (
             <div style={{ padding: '8px 16px' }}>
-              <button className="zm-btn-outline" onClick={cancel} disabled={cancelling}>{cancelling ? 'Đang hủy...' : 'Hủy đơn'}</button>
+              {!showCancel ? (
+                <button className="zm-btn-outline" onClick={() => setShowCancel(true)}>Hủy đơn</button>
+              ) : (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#b91c1c', marginBottom: 10 }}>Chắc chắn hủy đơn này?</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="zm-btn-outline" style={{ flex: 1 }} onClick={() => setShowCancel(false)}>Giữ lại đơn</button>
+                    <button className="zm-btn-primary" style={{ flex: 1, background: '#c62828' }} onClick={cancel} disabled={cancelling}>{cancelling ? 'Đang hủy...' : 'Xác nhận hủy'}</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>

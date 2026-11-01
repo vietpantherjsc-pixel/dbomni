@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Batch;
 use App\Models\Branch;
+use App\Models\ChannelMonthlyAdjustment;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Recipe;
@@ -106,6 +107,8 @@ class ReportController extends Controller
 
         $cur = $this->buildPeriod($branchId, $from, $to, $vatRate, $tz);
         $ref = $this->buildPeriod($branchId, $cFrom, $cTo, $vatRate, $tz);
+        // Gói PNL kênh sàn (2026-10-31): phí marketing sàn của các tháng trọn trong kỳ
+        $mkt = $this->marketingAdjustments($from, $to, $branchId);
 
         // Gói 55 p11af (P0-14): Food cost % = giá vốn nguyên liệu / doanh thu thuần (sau VAT).
         // Tính 1 lần ở đây để tái dùng cho cả Tab 1 (KPI) và Tab 2 (chi phí), tránh tính 2 lần.
@@ -143,7 +146,7 @@ class ReportController extends Controller
             'delta_vat' => $this->pct($cur['vat'], $ref['vat']),
             'buckets' => $this->buckets($period, $branchId, $from, $to, $tz, $taxRatio),
             'top_products' => $this->topProducts($cur, $ref, 5, $disp),
-            'channels' => $this->channels($cur, $ref, $taxRatio),
+            'channels' => $this->channels($cur, $ref, $taxRatio, $mkt),
             'hourly' => $this->hourly($branchId, $from, $to, $taxRatio),
             // Gói 17: thêm 2 block chi tiết (cộng thêm, frontend cũ bỏ qua)
             'by_payment' => $this->byPayment($branchId, $from, $to, $cFrom, $cTo, $taxRatio),
@@ -221,6 +224,14 @@ class ReportController extends Controller
                 'profit' => $profitData,
                 'waste' => $wasteData,
                 'products' => $productsData,
+                // Gói PNL kênh sàn (2026-10-31): tóm tắt đối soát marketing của kỳ
+                // cho giao diện gắn chú thích (tháng bị cắt / chưa nhập)
+                'marketing' => [
+                    'total' => $this->r2($mkt['total']),
+                    'full_months' => $mkt['full_months'],
+                    'partial_months' => $mkt['partial_months'],
+                    'missing_months' => $mkt['missing_months'],
+                ],
             ],
         ]);
     }
@@ -440,11 +451,16 @@ class ReportController extends Controller
      * - commission: doanh thu kênh × commission_rate/100 (từ price_lists)
      * - gross_profit = value - commission - cogs ; margin_pct = gross_profit/value*100
      * Giữ nguyên các field cũ: key, name, value, share, delta, color.
+     * Gói PNL kênh sàn (2026-10-31): chiết khấu đi qua commissionFor() — CÙNG
+     * phép tính + xử lý cờ thuế với PNL (Khối 3 hợp nhất); khi $mkt có tháng
+     * trọn và kênh đã nhập đối soát: cộng marketing_fee + gross_profit_after_marketing
+     * (phí marketing hiển thị cùng thang thuế với các số khác của thẻ cho khớp
+     * phép trừ trên thẻ; PNL dùng số gốc đã nhập, không nhân hệ số).
      */
-    private function channels(array $cur, array $ref, float $taxRatio): array
+    private function channels(array $cur, array $ref, float $taxRatio, ?array $mkt = null): array
     {
         $labels = $this->channelLabelMap();
-        $rates = $this->commissionRates();
+        $byCode = $this->priceListByCode();
         $categories = $this->channelCategoryMap();
         $orderChannels = $cur['order_channels'] ?? [];
 
@@ -465,8 +481,10 @@ class ReportController extends Controller
             $v = (float) ($cur['channels'][$key] ?? 0.0);
             $rv = (float) ($ref['channels'][$key] ?? 0.0);
             $cogs = (float) ($cogsByChannel[$key] ?? 0.0);
-            $rate = (float) ($rates[$key] ?? 0.0);
-            $commission = $v * $rate / 100;
+            // Khối 3 (2026-10-31): chiết khấu dùng commissionFor() chung với PNL
+            // — trước đây thẻ kênh bỏ qua cờ thuế nên lệch PNL ở kênh "chưa gồm thuế".
+            $comm = $this->commissionFor((string) $key, $v, $byCode);
+            $commission = $comm['cost'];
             $grossProfit = $v - $commission - $cogs;
             $marginPct = $v > 0 ? $grossProfit / $v * 100 : 0;
             if (isset($baseColors[$key])) {
@@ -475,7 +493,7 @@ class ReportController extends Controller
                 $color = $palette[$pi % count($palette)];
                 $pi++;
             }
-            $out[] = [
+            $row = [
                 'key' => $key,
                 'name' => $labels[$key] ?? ucfirst($key),
                 // Spec kênh bán hàng (2026-10-19): phân loại kênh lấy từ price_lists
@@ -489,23 +507,20 @@ class ReportController extends Controller
                 'gross_profit' => $this->r2($grossProfit * $taxRatio),
                 'margin_pct' => $this->r2($marginPct),
             ];
+            // Khối 2.2 (2026-10-31): lãi gộp SAU marketing, chỉ khi kỳ có tháng
+            // trọn và kênh này đã có số đối soát nhập — không có thì ẩn hẳn
+            // (không hiện 0 gây hiểu lầm "đã đối soát").
+            if ($mkt !== null && ($mkt['full_months'] ?? []) !== [] && $comm['code'] !== null
+                && array_key_exists($comm['code'], $mkt['by_channel'] ?? [])) {
+                $fee = (float) $mkt['by_channel'][$comm['code']];
+                $after = $grossProfit - $fee;
+                $row['marketing_fee'] = $this->r2($fee * $taxRatio);
+                $row['gross_profit_after_marketing'] = $this->r2($after * $taxRatio);
+                $row['margin_after_pct'] = $this->r2($v > 0 ? $after / $v * 100 : 0);
+            }
+            $out[] = $row;
         }
         return $out;
-    }
-
-    /** % phí sàn theo code price_list (lowercase) — 0 nếu kênh không có bảng giá. */
-    private function commissionRates(): array
-    {
-        $rates = [];
-        if (Schema::hasTable('price_lists') && Schema::hasColumn('price_lists', 'commission_rate')) {
-            foreach (DB::table('price_lists')->select('code', 'commission_rate')->get() as $pl) {
-                $code = strtolower(trim((string) $pl->code));
-                if ($code !== '') {
-                    $rates[$code] = (float) $pl->commission_rate;
-                }
-            }
-        }
-        return $rates;
     }
 
     /**
@@ -1268,55 +1283,146 @@ class ReportController extends Controller
      * Chi phí chiết khấu từng kênh = doanh thu kênh (gross, gồm VAT) × %CK
      * (+ thuế nếu CK chưa gồm thuế). Trả [] nếu chưa chạy migration Gói 17.
      */
+    /** Bảng giá theo mã (lowercase) — dùng chung cho mọi đường tính chiết khấu */
+    private function priceListByCode(): array
+    {
+        $byCode = [];
+        if (Schema::hasTable('price_lists') && Schema::hasColumn('price_lists', 'commission_rate')) {
+            foreach (DB::table('price_lists')
+                ->select('code', 'name', 'commission_rate', 'commission_tax_included', 'commission_tax_rate')
+                ->get() as $pl) {
+                $byCode[strtolower((string) $pl->code)] = $pl;
+            }
+        }
+        return $byCode;
+    }
+
+    /**
+     * Gói PNL kênh sàn (2026-10-31) — Khối 3: MỘT phép tính chiết khấu duy nhất
+     * dùng chung cho PNL (commissions) và thẻ kênh (channels): cùng nền
+     * total_amount (doanh thu kênh sau giảm, đã gồm VAT — giữ nguyên theo sự
+     * thật sàn tính), cùng % của bảng giá, cùng xử lý cờ thuế như PNL vẫn làm.
+     * Trả: bảng giá đã khớp (nếu có) + mã bảng giá + rate + cost + chú thích thuế.
+     */
+    private function commissionFor(string $chKey, float $rev, array $byCode): array
+    {
+        $aliases = ['pos' => ['nha_hang', 'pos'], 'zalo' => ['online', 'zalo']];
+        $pl = null;
+        foreach (($aliases[$chKey] ?? [$chKey]) as $c) {
+            if (isset($byCode[strtolower($c)])) {
+                $pl = $byCode[strtolower($c)];
+                break;
+            }
+        }
+        $rate = $pl ? (float) $pl->commission_rate : 0.0;
+        $cost = $rev * $rate / 100;
+        $taxNote = 'đã gồm thuế';
+        if ($pl && !$pl->commission_tax_included) {
+            $tr = (float) ($pl->commission_tax_rate ?? 0);
+            if ($tr > 0) {
+                $cost *= (1 + $tr / 100);
+                $taxNote = 'chưa gồm thuế (+' . $this->r2($tr) . '% thuế)';
+            } else {
+                $taxNote = 'chưa gồm thuế (chưa nhập thuế suất)';
+            }
+        }
+        return [
+            'price_list' => $pl,
+            'code' => $pl ? strtolower((string) $pl->code) : null,
+            'rate' => $rate,
+            'cost' => $cost,
+            'tax_note' => $taxNote,
+        ];
+    }
+
     private function commissions(array $p): array
     {
-        if (!Schema::hasTable('price_lists') || !Schema::hasColumn('price_lists', 'commission_rate')) {
+        $byCode = $this->priceListByCode();
+        if ($byCode === []) {
             return [];
         }
-        $byCode = [];
-        foreach (DB::table('price_lists')
-            ->select('code', 'name', 'commission_rate', 'commission_tax_included', 'commission_tax_rate')
-            ->get() as $pl) {
-            $byCode[strtolower((string) $pl->code)] = $pl;
-        }
         $labels = $this->channelLabelMap();
-        $aliases = ['pos' => ['nha_hang', 'pos'], 'zalo' => ['online', 'zalo']];
         $out = [];
         foreach (($p['channels'] ?? []) as $chKey => $rev) {
             $rev = (float) $rev;
-            $pl = null;
-            foreach (($aliases[$chKey] ?? [$chKey]) as $c) {
-                if (isset($byCode[strtolower($c)])) {
-                    $pl = $byCode[strtolower($c)];
-                    break;
-                }
-            }
-            $rate = $pl ? (float) $pl->commission_rate : 0.0;
-            if ($rate <= 0) {
+            $c = $this->commissionFor((string) $chKey, $rev, $byCode);
+            if ($c['rate'] <= 0) {
                 continue;
             }
-            $cost = $rev * $rate / 100;
-            $taxNote = 'đã gồm thuế';
-            if (!$pl->commission_tax_included) {
-                $tr = (float) ($pl->commission_tax_rate ?? 0);
-                if ($tr > 0) {
-                    $cost *= (1 + $tr / 100);
-                    $taxNote = 'chưa gồm thuế (+' . $this->r2($tr) . '% thuế)';
-                } else {
-                    $taxNote = 'chưa gồm thuế (chưa nhập thuế suất)';
-                }
-            }
+            $pl = $c['price_list'];
             $out[] = [
                 'channel_key' => $chKey,
                 'channel' => $labels[$chKey] ?? ucfirst($chKey),
                 'price_list' => $pl->name ?? $pl->code,
-                'rate' => $this->r2($rate),
-                'tax_note' => $taxNote,
+                'rate' => $this->r2($c['rate']),
+                'tax_note' => $c['tax_note'],
                 'revenue' => $this->r2($rev),
-                'cost' => $this->r2($cost),
+                'cost' => $this->r2($c['cost']),
             ];
         }
         return $out;
+    }
+
+    /**
+     * Gói PNL kênh sàn (2026-10-31) — Khối 1.5/2: đọc phí marketing sàn đã nhập
+     * cho các THÁNG TRỌN nằm trong kỳ [from, to]. Tháng bị kỳ cắt ngang không
+     * tính phần nào (không chia tỷ lệ theo ngày). Chỉ tính dòng active.
+     * Trả: full_months (Y-m) · partial_months (Y-m bị cắt) · missing_months
+     * (tháng trọn chưa có dòng nhập nào trong phạm vi) · items · total ·
+     * by_channel (mã bảng giá => tổng).
+     */
+    private function marketingAdjustments(Carbon $from, Carbon $to, int $branchId): array
+    {
+        $empty = ['full_months' => [], 'partial_months' => [], 'missing_months' => [], 'items' => [], 'total' => 0.0, 'by_channel' => []];
+        $full = [];
+        $partial = [];
+        $cursor = $from->copy()->startOfMonth();
+        $lastMonth = $to->copy()->startOfMonth();
+        while ($cursor->lte($lastMonth)) {
+            $mStart = $cursor->copy()->startOfMonth()->startOfDay();
+            $mEnd = $cursor->copy()->endOfMonth()->endOfDay();
+            if ($from->lte($mStart) && $to->gte($mEnd)) {
+                $full[] = $cursor->format('Y-m');
+            } else {
+                $partial[] = $cursor->format('Y-m');
+            }
+            $cursor->addMonth();
+        }
+        if ($full === [] || !Schema::hasTable('channel_monthly_adjustments')) {
+            return array_merge($empty, ['full_months' => $full, 'partial_months' => $partial,
+                'missing_months' => $full]);
+        }
+        $labels = $this->channelLabelMap();
+        $branchNames = Branch::pluck('name', 'id');
+        $rows = ChannelMonthlyAdjustment::query()
+            ->where('status', 'active')
+            ->whereIn(DB::raw("DATE_FORMAT(month, '%Y-%m')"), $full)
+            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+            ->orderBy('month')
+            ->get();
+        $items = [];
+        $byChannel = [];
+        $enteredMonths = [];
+        $total = 0.0;
+        foreach ($rows as $r) {
+            $ym = $r->month->format('Y-m');
+            $enteredMonths[$ym] = true;
+            $fee = (float) $r->marketing_fee;
+            $total += $fee;
+            $code = strtolower((string) $r->channel_code);
+            $byChannel[$code] = ($byChannel[$code] ?? 0.0) + $fee;
+            $items[] = [
+                'channel_code' => $r->channel_code,
+                'channel' => $labels[$code] ?? ($r->channel_code),
+                'branch_id' => (int) $r->branch_id,
+                'branch' => $branchNames[$r->branch_id] ?? ('CN #' . $r->branch_id),
+                'month' => $ym,
+                'amount' => $this->r2($fee),
+            ];
+        }
+        $missing = array_values(array_filter($full, fn($m) => !isset($enteredMonths[$m])));
+        return ['full_months' => $full, 'partial_months' => $partial, 'missing_months' => $missing,
+            'items' => $items, 'total' => $total, 'by_channel' => $byChannel];
     }
 
     // ================= Gói 17: Báo cáo kho =================
@@ -1752,6 +1858,9 @@ class ReportController extends Controller
 
         $cur = $this->buildPeriod($branchId, $from, $to, $vatRate, $tz);
         $ref = $this->buildPeriod($branchId, $cFrom, $cTo, $vatRate, $tz);
+        // Gói PNL kênh sàn (2026-10-31): phí marketing sàn của các tháng trọn trong kỳ
+        $mkt = $this->marketingAdjustments($from, $to, $branchId);
+        $refMkt = $this->marketingAdjustments($cFrom, $cTo, $branchId);
         $disp = fn(float $gross, float $vat): float => $taxIncluded ? $gross : max(0, $gross - $vat);
         $taxRatio = $cur['gross'] > 0 ? $disp($cur['gross'], $cur['vat']) / $cur['gross'] : 1.0;
 
@@ -1779,6 +1888,12 @@ class ReportController extends Controller
         if ($commTotal > 0) {
             $costs[] = ['name' => 'Chiết khấu kênh', 'value' => $commTotal, 'color' => '#9B59B6'];
         }
+        // Gói PNL kênh sàn (2026-10-31): phí marketing kênh sàn là chi phí trực
+        // tiếp của kỳ — dùng đúng số đã nhập theo đối soát sàn (không nhân hệ
+        // số thuế), trừ vào lợi nhuận PNL như mọi chi phí khác.
+        if ($mkt['total'] > 0) {
+            $costs[] = ['name' => 'Phí marketing kênh sàn', 'value' => $mkt['total'], 'color' => '#E5646E'];
+        }
         // Gói 57: chi phí phân bổ từ prepaid_expenses (thuê trả trước, CAPEX...)
         $allocated = $this->allocatedExpenses($branchId, $from, $to);
         if ($allocated['total'] > 0) {
@@ -1789,7 +1904,8 @@ class ReportController extends Controller
 
         $refCostTotal = array_sum(array_column($this->costs($ref), 'value'))
             + array_sum(array_column($this->commissions($ref), 'cost'))
-            + $this->allocatedExpenses($branchId, $cFrom, $cTo)['total'];
+            + $this->allocatedExpenses($branchId, $cFrom, $cTo)['total']
+            + $refMkt['total']; // PNL kênh sàn: kỳ so sánh cũng trừ marketing của chính kỳ đó
 
         $profit = $revDisplayed - $costTotal;
         $refProfit = $refDisplayed - $refCostTotal;
@@ -1829,9 +1945,17 @@ class ReportController extends Controller
                     'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
                     'delta_orders' => $this->pct($cur['orders'], $ref['orders']),
                 ],
-                'income_channels' => $this->channels($cur, $ref, $taxRatio),
+                'income_channels' => $this->channels($cur, $ref, $taxRatio, $mkt),
                 'costs' => $costsOut,
                 'commissions' => $commissions,
+                // Gói PNL kênh sàn (2026-10-31): chi tiết phí marketing kênh sàn
+                'marketing' => [
+                    'total' => $this->r2($mkt['total']),
+                    'items' => $mkt['items'],
+                    'full_months' => $mkt['full_months'],
+                    'partial_months' => $mkt['partial_months'],
+                    'missing_months' => $mkt['missing_months'],
+                ],
                 'allocated_expenses' => $allocated['items'],
                 'allocated_total' => $this->r2($allocated['total']),
                 'cost_total' => $this->r2($costTotal),

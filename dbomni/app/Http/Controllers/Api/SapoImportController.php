@@ -79,7 +79,7 @@ class SapoImportController extends Controller
     /** GET /api/sapo/suspects?status=pending&reason=&q= — danh sách nghi ngờ */
     public function suspects(Request $request): JsonResponse
     {
-        $query = SapoImportSuspect::with(['branch:id,name', 'run:id,filename,source', 'resolvedBy:id,name'])
+        $query = SapoImportSuspect::with(['branch:id,name', 'run:id,filename,source', 'resolvedBy:id,name', 'resolvedOrder:id,code'])
             ->orderByDesc('id');
         $status = (string) $request->query('status', 'pending');
         if ($status !== 'all') {
@@ -103,6 +103,9 @@ class SapoImportController extends Controller
         if ($err = $this->guardPending($suspect)) {
             return $err;
         }
+        if ($err = $this->guardManualOnly($suspect)) {
+            return $err;
+        }
         $res = $this->service->importInvoice($suspect->payload, (int) $suspect->branch_id);
         return $this->applyRerunResult($request, $suspect, $res, 'Đã chạy lại thành công.');
     }
@@ -114,8 +117,33 @@ class SapoImportController extends Controller
         if ($err = $this->guardPending($suspect)) {
             return $err;
         }
+        if ($err = $this->guardManualOnly($suspect)) {
+            return $err;
+        }
         $res = $this->service->importInvoice($suspect->payload, (int) $suspect->branch_id, true);
         return $this->applyRerunResult($request, $suspect, $res, 'Quản lý xác nhận là đơn mới thật — đã tạo đơn và trừ kho.');
+    }
+
+    /**
+     * POST /api/sapo/suspects/{id}/resolve — đánh dấu ĐÃ XỬ LÝ (gói 4, 2026-10-28):
+     * đường đóng duy nhất (cùng Bỏ qua) cho 2 reason chỉ-xử-lý-tay
+     * (missing_recipe / cancelled_after_import). Ghi chú hướng xử lý lưu vào
+     * trường resolution như cơ chế sẵn có.
+     */
+    public function suspectResolve(Request $request, int $id): JsonResponse
+    {
+        $suspect = SapoImportSuspect::findOrFail($id);
+        if ($err = $this->guardPending($suspect)) {
+            return $err;
+        }
+        $data = $request->validate(['resolution' => 'nullable|string|max:255']);
+        $suspect->update([
+            'status' => 'resolved',
+            'resolution' => $data['resolution'] ?? 'Đã xử lý tay.',
+            'resolved_by' => $request->user()?->id,
+            'resolved_at' => now(),
+        ]);
+        return response()->json(['success' => true, 'message' => 'Đã đánh dấu đã xử lý.', 'data' => $suspect->fresh()]);
     }
 
     /** POST /api/sapo/suspects/{id}/discard — bỏ qua hẳn, có ghi lý do xử lý */
@@ -147,6 +175,22 @@ class SapoImportController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Nghi ngờ không gắn chi nhánh — không thể chạy lại.',
+            ], 422);
+        }
+        return null;
+    }
+
+    /**
+     * Gói 4 (2026-10-28): 2 reason CHỈ XỬ LÝ TAY — rerun vô nghĩa (không còn gì
+     * để import lại) và force-create sai bản chất (hóa đơn đã hủy / đơn đã tạo
+     * rồi) → chặn 422 ở backend, không chỉ ẩn nút ở giao diện.
+     */
+    private function guardManualOnly(SapoImportSuspect $suspect): ?JsonResponse
+    {
+        if (in_array($suspect->reason, ['missing_recipe', 'cancelled_after_import'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Mục này chỉ xử lý tay (Đánh dấu đã xử lý / Bỏ qua) — không chạy lại hay tạo đơn được.',
             ], 422);
         }
         return null;

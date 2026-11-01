@@ -460,12 +460,13 @@ class EmployeeInventoryController extends Controller
     public function productions(Request $request): JsonResponse
     {
         $emp = $this->emp($request);
-        $list = Production::with(['material:id,name', 'employee:id,full_name'])
+        $list = Production::with(['material:id,name,unit', 'employee:id,full_name']) // UX 2026-10-26 (🟡 Hub): kèm đơn vị để Hub hiện số lượng có đơn vị
             ->where('branch_id', $emp->branch_id)
             ->orderByDesc('id')->limit(30)->get()
             ->map(fn ($p) => [
                 'id' => $p->id,
                 'material_name' => $p->material?->name,
+                'unit' => $p->material?->unit,
                 'quantity' => (float) $p->quantity,
                 'employee_name' => $p->employee?->full_name,
                 'created_at' => $p->created_at,

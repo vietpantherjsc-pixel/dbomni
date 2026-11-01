@@ -20,6 +20,13 @@ export default function RdDrafts({ meta }) {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null); // {mode:'create'} | {mode:'edit', id}
+  // UX 2026-10-26 (🟡): đóng form khi đã sửa mà chưa lưu thì hỏi trước (chụp form lúc mở để so sánh)
+  const formSnap = React.useRef('');
+  const snapForm = (f) => { formSnap.current = JSON.stringify(f); };
+  const askClose = () => {
+    if (JSON.stringify(form) !== formSnap.current && !window.confirm('Form còn thay đổi chưa lưu. Đóng sẽ mất các thay đổi này?')) return;
+    setModal(null);
+  };
   const [form, setForm] = useState(emptyForm(meta));
   const [saving, setSaving] = useState(false);
 
@@ -39,13 +46,13 @@ export default function RdDrafts({ meta }) {
   const matCost = (mid) => Number(meta.materials.find((m) => m.id === Number(mid))?.cost_per_base || 0);
   const liveCost = (form?.recipes || []).reduce((s, r) => s + (Number(r.quantity) || 0) * matCost(r.material_id), 0);
 
-  const openCreate = () => { setForm(emptyForm(meta)); setModal({ mode: 'create' }); };
+  const openCreate = () => { const f = emptyForm(meta); setForm(f); snapForm(f); setModal({ mode: 'create' }); };
 
   const openEdit = async (id) => {
     try {
       const res = await rdGet(`/rd/products/${id}`);
       const d = res.data?.data;
-      setForm({
+      const f0 = {
         name: d.name || '', category_id: d.category_id || '', unit: d.unit || '',
         description: d.description || '', image_url: d.image_url || '',
         expected_price: d.expected_price ?? '',
@@ -56,7 +63,8 @@ export default function RdDrafts({ meta }) {
         }),
         recipes: (d.recipes || []).map((r) => ({ material_id: r.material_id, quantity: r.quantity, kind: r.kind })),
         option_recipes: (d.option_recipes || []).map((r) => ({ product_option_id: r.product_option_id, material_id: r.material_id, quantity: r.quantity, kind: r.kind })),
-      });
+      };
+      setForm(f0); snapForm(f0);
       setModal({ mode: 'edit', id });
     } catch (e) { alert(e.response?.data?.message || 'Không tải được món nháp.'); }
   };
@@ -250,7 +258,7 @@ export default function RdDrafts({ meta }) {
       </p>
 
       {modal && (
-        <div className="m-modal-backdrop" onClick={() => setModal(null)}>
+        <div className="m-modal-backdrop" onClick={askClose}>
           <div className="m-modal m-modal--flex" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760 }}>
             <div className="m-modal-head">{modal.mode === 'create' ? 'Tạo món nháp' : 'Sửa món nháp'}</div>
             <div className="m-modal-body">
@@ -333,7 +341,7 @@ export default function RdDrafts({ meta }) {
             </div>
             </div>
             <div className="m-modal-foot">
-              <button onClick={() => setModal(null)} className="m-btn m-btn-ghost">Hủy</button>
+              <button onClick={askClose} className="m-btn m-btn-ghost">Hủy</button>
               <button onClick={save} disabled={saving} className="m-btn m-btn-primary">{saving ? 'Đang lưu...' : 'Lưu nháp'}</button>
             </div>
           </div>

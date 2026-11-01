@@ -1,22 +1,36 @@
-# MANIFEST — HOTFIX migration 000083 (lỗi 1553 khi áp gói tổng Audit 2026-10-23)
+# MANIFEST — HOTFIX: Loại mẫu coupon khỏi phía khuyến mãi chung
 
-**Vấn đề:** khi chạy migrate cho gói tổng Audit, migration `2026_10_23_000083_audit_nhan_su` báo lỗi:
-`Cannot drop index 'uniq_att_emp_branch_date': needed in a foreign key constraint`
-Nguyên nhân: index unique (nhân viên, chi nhánh, ngày) của bảng chấm công đang là index đỡ cho khóa ngoại của bảng đó — MySQL không cho xóa khi chưa có index khác đỡ thay.
+Áp ngay, đè thẳng vào thư mục gốc repo `D:\WORK\VIBE` (zip giữ cấu trúc từ repo root: `dbomni/`).
+**Gói KHÔNG có migration · KHÔNG cần rebuild frontend** (sửa thuần backend, 2 file).
 
-**Bản sửa:** trước khi xóa unique, migration tạo sẵn 1 index thường trên đúng 3 cột đó (`idx_att_emp_branch_date`) để khóa ngoại có index đỡ, rồi mới xóa unique. Mọi phần còn lại của migration giữ nguyên không đổi.
+## Vấn đề và cách sửa
 
-## Cách áp (2 phút)
+Các mẫu chiến dịch coupon (CP-01…CP-10 — khuôn dùng để phát coupon vào ví khách) đang lọt vào danh sách khuyến mãi chung: khách có thể áp thẳng mẫu bằng mã khuyến mãi như KM thường, và panel Ưu đãi hiện trùng 2 dòng "Coupon hóa đơn kế tiếp" (1 phía KM chung + 1 phía ví). Đây là lỗ hổng thất thoát tiền.
 
-1. Giải nén zip này đè vào `D:\WORK\VIBE` — chỉ ghi đè đúng 1 file:
-   `dbomni\database\migrations\2026_10_23_000083_audit_nhan_su.php`
-2. Chạy lại migrate — tại thư mục `D:\WORK\VIBE\dbomni`:
+Dấu hiệu phân biệt (đã kiểm chứng): mẫu coupon ⟺ trường `auto_config` có khóa `trigger` không rỗng; KM chung thật do Admin tạo luôn có `auto_config` trống. Sửa đúng 2 điểm:
+
+- `dbomni/app/Services/PromotionService.php` — trong `eligiblePromotions()`: loại mọi promotion có `auto_config.trigger` khỏi tập khuyến mãi đủ điều kiện. Điểm này phủ mọi đường áp KM chung (API eligible, đặt đơn Mini App, POS) — gọi thẳng API đặt đơn với promotion_id là id của mẫu sẽ bị từ chối "Khuyến mại không còn hiệu lực."
+- `dbomni/app/Http/Controllers/Api/OnlineOrderController.php` — trong danh sách Ưu đãi hợp nhất (`unifiedOffers()`): loại cùng dấu hiệu đó khỏi phía KM chung.
+
+Không đụng: đường coupon ví (coupon trong ví vẫn áp bình thường), luật cộng dồn, đường voucher gõ tay, dữ kiện nào trong database.
+
+## THỨ TỰ ÁP
+
+1. Giải nén zip đè vào `D:\WORK\VIBE`.
+2. Restart backend — chạy tại `D:\WORK\VIBE\dbomni`:
    ```
-   docker compose exec laravel.test php artisan migrate
+   docker compose restart laravel.test
    ```
-   Lần chạy trước: 000082 đã DONE, 000083 FAIL ngay ở lệnh đầu tiên nên **chưa có thay đổi nào của 000083 lọt vào database** — chạy lại sẽ chạy tiếp 000083 → 000084 → 000085 đến hết, không cần dọn dẹp gì.
-3. Sau khi migrate xong, **tiếp tục đúng các bước còn lại trong MANIFEST của gói tổng Audit** (bản đính kèm khi giao gói tổng): chạy tay lệnh backfill snapshot lương → restart backend → dựng lại Admin + Mini App → cấp quyền cho role thu ngân/quản lý ca → chạy checklist kiểm nhanh 7 bước.
+(Không migrate, không rebuild Admin/Mini App.)
 
-## Rollback
+## KIỂM NHANH SAU ÁP (~2 phút)
 
-Nếu migrate vẫn lỗi ở 000083 (hãy gửi nguyên văn lỗi): khôi phục file migration từ trong zip gói tổng Audit, database vẫn ở trạng thái sau 000082 — an toàn, không mất dữ liệu.
+- Mở Mini App → Checkout → panel Ưu đãi: "Coupon hóa đơn kế tiếp" chỉ còn **1 dòng phía coupon ví** (có mã + hạn dùng); các mẫu CP khác biến khỏi danh sách; KM chung thật do quán tạo còn nguyên.
+- Coupon trong ví (VD mã CP-10…) vẫn áp được bình thường ở Checkout.
+
+## ROLLBACK
+
+Đè lại 2 file bản cũ (trước hotfix) vào đúng vị trí rồi restart backend tại `D:\WORK\VIBE\dbomni`:
+```
+docker compose restart laravel.test
+```

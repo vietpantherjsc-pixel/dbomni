@@ -10,6 +10,7 @@ const EMPTY = { name: '', icon: '🎁', promotion_id: '', points_cost: 100, min_
 
 export default function PointExchange() {
     const [items, setItems] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1): phân biệt tải lỗi với thật sự trống
     const [promotions, setPromotions] = useState([]);
     const [tiers, setTiers] = useState([]);
     const [showForm, setShowForm] = useState(false);
@@ -26,7 +27,7 @@ export default function PointExchange() {
             if (ri.data?.success) setItems(ri.data.data);
             if (rp.data?.success) setPromotions(rp.data.data.data || rp.data.data || []);
             if (rt.data?.success) setTiers(rt.data.data);
-        } catch (err) { console.error('Lỗi tải Cửa hàng điểm:', err); }
+        } catch (err) { console.error('Lỗi tải Cửa hàng điểm:', err); setLoadErr(true); }
     };
     useEffect(() => { fetchData(); }, []);
 
@@ -70,14 +71,14 @@ export default function PointExchange() {
         } catch (err) { alert(err.response?.data?.message || 'Xóa thất bại'); }
     };
 
-    const inp = 'w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#0d6efd]';
+    const inp = 'w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]';
 
     return (
         <AdminLayout>
             <div className="p-5">
                 <div className="flex items-center justify-between mb-1">
                     <h1 className="text-xl font-semibold text-gray-800">Cửa hàng đổi điểm</h1>
-                    <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">
+                    <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                         + Món đổi mới
                     </button>
                 </div>
@@ -110,11 +111,11 @@ export default function PointExchange() {
                             <div><label className="text-xs text-gray-500">Trần lượt đổi/khách (toàn thời gian)</label>
                                 <input type="number" min="1" value={form.per_customer_limit} onChange={(e) => setForm({ ...form, per_customer_limit: e.target.value })} placeholder="Trống = không giới hạn" className={inp} /></div>
                             <div className="flex items-end pb-2"><label className="flex items-center gap-2 text-[13px]">
-                                <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} className="accent-[#0d6efd]" />
+                                <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} className="accent-[#24305E]" />
                                 Đang bật (hiện trên Mini App)</label></div>
                         </div>
                         <div className="flex gap-2 mt-3">
-                            <button onClick={handleSave} className="px-4 py-2 bg-[#0d6efd] text-white text-[13px] font-medium rounded hover:bg-[#0b5ed7]">{editing ? 'Cập nhật' : 'Lưu'}</button>
+                            <button onClick={handleSave} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">{editing ? 'Cập nhật' : 'Lưu'}</button>
                             <button onClick={resetForm} className="px-4 py-2 text-[13px] text-gray-500">Hủy</button>
                         </div>
                     </div>
@@ -145,13 +146,13 @@ export default function PointExchange() {
                                         ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-green-50 text-green-700">Đang bật</span>
                                         : <span className="px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-500">Đã tắt</span>}</td>
                                     <td className="px-4 py-3 text-right">
-                                        <button onClick={() => startEdit(it)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
+                                        <button onClick={() => startEdit(it)} className="text-[#24305E] hover:underline mr-3">Sửa</button>
                                         <button onClick={() => handleDelete(it.id)} className="text-red-500 hover:underline">Xóa</button>
                                     </td>
                                 </tr>
                             ))}
                             {items.length === 0 && (
-                                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Chưa có món đổi nào. Bấm "+ Món đổi mới" để cài đặt theo mùa.</td></tr>
+                                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách món đổi.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có món đổi nào. Bấm "+ Món đổi mới" để cài đặt theo mùa.'}</td></tr>
                             )}
                         </tbody>
                     </table>

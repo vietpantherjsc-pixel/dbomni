@@ -96,7 +96,7 @@ const BomLines = ({ lines, materials, onChange, materialFilter, addLabel }) => {
     return (
         <>
             {lines.map((l, i) => (
-                <div key={i} className="grid gap-2 mb-2 items-center" style={{ gridTemplateColumns: '1fr 190px 40px' }}>
+                <div key={i} className="m-line-grid m-line-grid--190">
                     <select className="m-input" value={l.material_id} onChange={(e) => setLine(i, 'material_id', e.target.value)}>
                         <option value="">— Chọn —</option>
                         {list.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
@@ -130,6 +130,7 @@ const Products = () => {
     const { can } = useAuth();
     const canBulk = can('products.bulk'); // Gói 33: CHỈ admin cấp cao nhất
     const [products, setProducts] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [categories, setCategories] = useState([]);
     const [priceLists, setPriceLists] = useState([]);
     const [optionGroups, setOptionGroups] = useState([]);
@@ -140,7 +141,9 @@ const Products = () => {
     // Demo tối ưu menu (Đại Vương chốt 2026-10-19): tab "Hiển thị theo chi nhánh" trong trang Mặt hàng
     const [pageTab, setPageTab] = useState('list');
     const [filterCat, setFilterCat] = useState('');
-    const [filterActive, setFilterActive] = useState('');
+    // Tách món ngừng bán (2026-10-30, B-1): tab trạng thái là nguồn lọc chính —
+    // 'active' (mặc định Đang bán) | 'inactive' (Ngừng bán) | 'all' (Tất cả)
+    const [statusTab, setStatusTab] = useState('active');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -228,9 +231,10 @@ const Products = () => {
     const fetchProducts = async () => {
         try {
             const response = await axios.get(`${BASE}/products`);
-            setProducts(response.data);
+            setProducts(response.data); setLoadErr(false);
         } catch (error) {
             console.error("Lỗi khi tải danh sách mặt hàng:", error);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -649,13 +653,17 @@ const Products = () => {
     }
     // ================= /Gói 33 =================
 
-    // MH-R2: lọc theo tên + danh mục + trạng thái (client-side)
+    // MH-R2: lọc theo tên + danh mục (client-side)
+    // B-1 (2026-10-30): trạng thái lọc theo TAB trạng thái — tìm kiếm/danh mục
+    // chỉ hoạt động trong tab đang chọn; số đếm trên tab tính trên toàn bộ danh sách.
+    const activeCount = products.filter((p) => p.is_active).length;
+    const inactiveCount = products.length - activeCount;
     const filteredProducts = products.filter((p) => {
         if (search && !(p.name || '').toLowerCase().includes(search.toLowerCase())
             && !(p.sku || '').toLowerCase().includes(search.toLowerCase())) return false;
         if (filterCat && String(p.category_id) !== String(filterCat)) return false;
-        if (filterActive === '1' && !p.is_active) return false;
-        if (filterActive === '0' && p.is_active) return false;
+        if (statusTab === 'active' && !p.is_active) return false;
+        if (statusTab === 'inactive' && p.is_active) return false;
         return true;
     });
 
@@ -675,9 +683,10 @@ const Products = () => {
                 </div>
                 <button onClick={openAdd} className="m-btn m-btn-primary">+ Thêm mặt hàng</button>
             </div>
-            <div className="flex gap-2 mb-4">
-                <button onClick={() => setPageTab('list')} className={`m-btn ${pageTab === 'list' ? 'm-btn-primary' : ''}`}>Danh sách</button>
-                <button onClick={() => setPageTab('visibility')} className={`m-btn ${pageTab === 'visibility' ? 'm-btn-primary' : ''}`}>Hiển thị theo chi nhánh</button>
+            {/* Phương án A (2026-10-31): chế độ xem = segmented control (chỉ trình bày, logic tab giữ nguyên) */}
+            <div className="m-seg mb-4" role="tablist">
+                <button onClick={() => setPageTab('list')} className={pageTab === 'list' ? 'on' : ''}>Danh sách</button>
+                <button onClick={() => setPageTab('visibility')} className={pageTab === 'visibility' ? 'on' : ''}>Hiển thị theo chi nhánh</button>
             </div>
             {pageTab === 'visibility' && (
                 <VisibilityMatrix
@@ -694,6 +703,15 @@ const Products = () => {
             )}
             {pageTab === 'list' && (<>
 
+            {/* B-1 (2026-10-30): tab trạng thái — mặc định Đang bán; số đếm luôn hiện để không quên kho món cũ.
+                Phương án A (2026-10-31): trình bày lại thành hàng chip lọc có nhãn "Trạng thái:" — logic lọc giữ nguyên */}
+            <div className="m-filterrow">
+                <span className="m-filter-label">Trạng thái:</span>
+                <button onClick={() => setStatusTab('active')} className={`m-fchip ${statusTab === 'active' ? 'on' : ''}`}><span className="dot g"></span>Đang bán <span className="cnt">{activeCount}</span></button>
+                <button onClick={() => setStatusTab('inactive')} className={`m-fchip ${statusTab === 'inactive' ? 'on' : ''}`}><span className="dot gr"></span>Ngừng bán <span className="cnt">{inactiveCount}</span></button>
+                <button onClick={() => setStatusTab('all')} className={`m-fchip ${statusTab === 'all' ? 'on' : ''}`}><span className="dot n"></span>Tất cả <span className="cnt">{products.length}</span></button>
+            </div>
+
             {/* MH-R2: thanh tìm kiếm + lọc */}
             <div className="m-card p-3 mb-3 flex flex-wrap items-center gap-2">
                 <input
@@ -707,14 +725,9 @@ const Products = () => {
                     <option value="">Tất cả danh mục</option>
                     {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <select value={filterActive} onChange={(e) => setFilterActive(e.target.value)} className="m-input" style={{ maxWidth: 150 }}>
-                    <option value="">Tất cả trạng thái</option>
-                    <option value="1">Đang bán</option>
-                    <option value="0">Đang ẩn</option>
-                </select>
-                {(search || filterCat || filterActive) && (
+                {(search || filterCat) && (
                     <span className="text-[12.5px]" style={{ color: 'var(--m-ink-soft)' }}>
-                        {filteredProducts.length}/{products.length} món
+                        {filteredProducts.length}/{statusTab === 'active' ? activeCount : statusTab === 'inactive' ? inactiveCount : products.length} món trong tab này
                     </span>
                 )}
             </div>
@@ -747,6 +760,12 @@ const Products = () => {
                             </>
                         )}
                     </div>
+                    {/* B-1 (2026-10-30): ở tab Ngừng bán có thao tác Bán lại hàng loạt (dùng lại bulk set_visibility sẵn có) */}
+                    {statusTab === 'inactive' && (
+                        <button onClick={() => runBulkAction('set_visibility', { visible: true })} className="m-btn m-btn-primary m-btn-sm">
+                            Bán lại {selectedIds.length} món đã chọn
+                        </button>
+                    )}
                     <button onClick={openBulkEdit} className="m-btn m-btn-sm text-white font-semibold" style={{ background: 'var(--m-stamp)' }}>
                         Chỉnh sửa nhanh
                     </button>
@@ -788,7 +807,7 @@ const Products = () => {
                             <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>Đang tải dữ liệu...</td></tr>
                         ) : filteredProducts.length === 0 ? (
                             <tr><td colSpan={canBulk ? 9 : 8} className="p-8 text-center" style={{ color: 'var(--m-ink-faint)' }}>
-                                {products.length === 0 ? 'Chưa có mặt hàng nào.' : 'Không tìm thấy mặt hàng phù hợp.'}
+                                {loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách mặt hàng. <button onClick={fetchProducts} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : (products.length === 0 ? 'Chưa có mặt hàng nào.' : 'Không tìm thấy mặt hàng phù hợp.')}
                             </td></tr>
                         ) : (
                             filteredProducts.map(product => (
@@ -864,7 +883,7 @@ const Products = () => {
 
             {isModalOpen && (
                 <div className="m-modal-backdrop" onClick={() => handleCloseModal()}>
-                    <div className="m-modal !max-w-3xl" onClick={(e) => e.stopPropagation()}>
+                    <div className="m-modal m-modal--flex !max-w-3xl" onClick={(e) => e.stopPropagation()}>
                         <div className="m-modal-head">{editingId ? 'Cập nhật mặt hàng' : 'Thêm mặt hàng mới'}</div>
                         {/* Tabs */}
                         <div className="flex gap-1 px-6 pt-3 border-b" style={{ borderColor: 'var(--m-line)' }}>
@@ -983,14 +1002,14 @@ const Products = () => {
                                                 const row = formData.prices.find((x) => x.price_list_id === pl.id) || { price: '', is_active: false };
                                                 const eff = effectivePrice(pl);
                                                 return (
-                                                    <div key={pl.id} className="grid items-center gap-3 px-3 py-2 border-b" style={{ gridTemplateColumns: 'auto 170px 1fr auto', borderColor: 'var(--m-line)' }}>
+                                                    <div key={pl.id} className="flex items-center gap-3 px-3 py-2 border-b" style={{ flexWrap: 'wrap', borderColor: 'var(--m-line)' }}>
                                                         <input type="checkbox" checked={!!row.is_active}
                                                             onChange={(e) => setPriceRow(pl.id, { is_active: e.target.checked })}
                                                             className="w-4 h-4 accent-[#24305E]" />
-                                                        <span className="text-sm font-medium truncate" title={pl.name} style={{ color: row.is_active ? 'var(--m-ink)' : 'var(--m-ink-faint)' }}>{pl.name}</span>
+                                                        <span className="text-sm font-medium truncate" title={pl.name} style={{ width: 170, flexShrink: 0, color: row.is_active ? 'var(--m-ink)' : 'var(--m-ink-faint)' }}>{pl.name}</span>
                                                         <input type="number" min="0" step={Math.pow(10, -getDecimals('price')) || 1} placeholder="Giá riêng (đ) — trống = dùng giá nhóm" disabled={!row.is_active}
                                                             value={row.price} onChange={(e) => setPriceRow(pl.id, { price: e.target.value })}
-                                                            className="m-input" style={!row.is_active ? { opacity: 0.4 } : {}} />
+                                                            className="m-input" style={{ flex: '1 1 150px', minWidth: 0, ...(!row.is_active ? { opacity: 0.4 } : {}) }} />
                                                         <span className="text-xs whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }} title="Giá hiệu lực">
                                                             {eff.price.toLocaleString('vi-VN')}đ <span style={{ color: 'var(--m-ink-faint)' }}>({eff.source})</span>
                                                         </span>

@@ -17,8 +17,11 @@ class AutoIssueCouponService
 {
     /**
      * Cấp coupon cho khách từ 1 promotion (kiểm tra trùng + hiệu lực).
+     * $sourceOrderId: đơn đã sinh ra coupon (chỉ các trigger gắn với 1 đơn cụ
+     * thể: CP-01/CP-02/CP-03) — căn cứ để thu hồi khi quán hủy đơn nguồn
+     * (vá lỗ hổng 2026-10-28). Trigger không gắn đơn (cron/sinh nhật...) để null.
      */
-    public function issue(Customer $customer, Promotion $promo, string $trigger): ?CustomerCoupon
+    public function issue(Customer $customer, Promotion $promo, string $trigger, ?int $sourceOrderId = null): ?CustomerCoupon
     {
         // Kiểm tra promotion còn hiệu lực
         if (!$promo->is_active) return null;
@@ -39,6 +42,29 @@ class AutoIssueCouponService
             ->count();
         if ($trigger !== 'points_exchange' && $issuedCount >= $maxPerCustomer) return null;
 
+        // Gói Đón Bình Minh (2026-10-28): TRẦN THÁNG — chỉ áp khi chương trình
+        // có đặt max_per_month > 0 (0/không đặt = tắt trần này; trần tổng ở
+        // trên vẫn chạy độc lập, chạm trần nào trước chặn ở đó). Đếm coupon đã
+        // phát trong THÁNG DƯƠNG LỊCH hiện tại theo issued_at, mọi trạng thái
+        // (nhất quán với trần tổng). Hai lần phát CP-02 là 2 lần gọi độc lập:
+        // người mời chạm trần tháng thì chỉ phía người mời không nhận coupon,
+        // bạn mới vẫn nhận phần của mình; Referral vẫn hoàn tất như thường.
+        $maxPerMonth = (int) ($cfg['max_per_month'] ?? 0);
+        if ($maxPerMonth > 0) {
+            $issuedThisMonth = CustomerCoupon::where('customer_id', $customer->id)
+                ->where('promotion_id', $promo->id)
+                ->whereYear('issued_at', $now->year)
+                ->whereMonth('issued_at', $now->month)
+                ->count();
+            if ($issuedThisMonth >= $maxPerMonth) {
+                Log::info('[Coupon] Chạm trần tháng', [
+                    'customer' => $customer->id, 'promo' => $promo->code,
+                    'trigger' => $trigger, 'max_per_month' => $maxPerMonth,
+                ]);
+                return null;
+            }
+        }
+
         // Tính HSD từ auto_config (số ngày hiệu lực, mặc định 7)
         $validDays = (int) ($cfg['valid_days'] ?? 7);
         $expiresAt = $now->copy()->addDays($validDays);
@@ -52,6 +78,7 @@ class AutoIssueCouponService
             'status' => 'active',
             'issued_at' => $now,
             'expires_at' => $expiresAt,
+            'source_order_id' => $sourceOrderId,
             'issue_trigger' => $trigger,
         ]);
 
@@ -77,14 +104,14 @@ class AutoIssueCouponService
      * CP-01: Cấp khi SĐT đặt đơn lần đầu (định nghĩa lại từ "đăng nhập lần đầu"
      * vì hệ thống phone-based, chưa có login Mini App).
      */
-    public function onFirstOrder(Customer $customer): void
+    public function onFirstOrder(Customer $customer, ?Order $order = null): void
     {
         $promo = $this->findPromo('CP-01');
         if (!$promo) return;
         // Chỉ cấp nếu đây là đơn đầu tiên
         $orderCount = Order::where('customer_id', $customer->id)->count();
         if ($orderCount > 1) return;
-        $this->issue($customer, $promo, 'first_order');
+        $this->issue($customer, $promo, 'first_order', $order?->id);
     }
 
     /**
@@ -99,7 +126,16 @@ class AutoIssueCouponService
         $customer = $order->customer;
         if (!$customer || empty($customer->referred_by)) return;
 
-        $referrer = Customer::where('member_code', $customer->referred_by)->first();
+        // Đối chiếu mã mời ở CẢ 2 cột (gói Đón Bình Minh, 2026-10-28): luồng
+        // Gói 9 lưu referred_by = member_code, nhưng trang Mời bạn (SPEC-02)
+        // chia sẻ referral_code — chỉ tra member_code như trước thì coupon
+        // CP-02 không bao giờ kích hoạt qua link/mã của trang Mời bạn. Cả 2
+        // cột đều unique nên tra gộp không gây nhập nhằng. (Đường điểm
+        // affiliate awardReferral ở OnlineOrderController giữ nguyên
+        // member_code như cũ — không đổi hành vi.)
+        $referrer = Customer::where('member_code', $customer->referred_by)
+            ->orWhere('referral_code', $customer->referred_by)
+            ->first();
         if (!$referrer || $referrer->id === $customer->id) return;
 
         // Đơn đầu phải đạt mức tối thiểu
@@ -116,9 +152,9 @@ class AutoIssueCouponService
 
         $referral->update(['status' => 'completed', 'completed_at' => now()]);
 
-        // Cấp cho cả 2 bên
-        $this->issue($referrer, $promo, 'referral');
-        $this->issue($customer, $promo, 'referral');
+        // Cấp cho cả 2 bên — cả 2 coupon đều sinh ra từ đơn đầu này (đơn nguồn)
+        $this->issue($referrer, $promo, 'referral', $order->id);
+        $this->issue($customer, $promo, 'referral', $order->id);
     }
 
     /**
@@ -151,7 +187,7 @@ class AutoIssueCouponService
             ->count();
 
         if ($stampCount >= $stampsRequired && $stampCount % $stampsRequired === 0) {
-            $this->issue($customer, $promo, 'stamp');
+            $this->issue($customer, $promo, 'stamp', $order->id);
         }
     }
 

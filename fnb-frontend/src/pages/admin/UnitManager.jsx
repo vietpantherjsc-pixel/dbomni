@@ -15,12 +15,13 @@ const groupName = (code) => UNIT_GROUPS.find((g) => g.code === code)?.name || '�
 // Spec cài đặt danh sách (2026-10-21): chuyển từ chip thành BẢNG có cột (L1) + form trong MODAL.
 export default function UnitManager() {
     const [items, setItems] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1): phân biệt tải lỗi với thật sự trống
     const [form, setForm] = useState({ name: '', group: 'count', is_active: true });
     const [editing, setEditing] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
     const [dragIdx, setDragIdx] = useState(null);
 
-    const load = () => axios.get(`${API}/units?all=1`).then((r) => setItems(r.data?.data || [])).catch(() => {});
+    const load = () => axios.get(`${API}/units?all=1`).then((r) => { setItems(r.data?.data || []); setLoadErr(false); }).catch(() => setLoadErr(true));
     useEffect(() => { load(); }, []);
 
     const emptyForm = () => ({ name: '', group: 'count', is_active: true });
@@ -44,7 +45,7 @@ export default function UnitManager() {
     };
 
     const toggleActive = async (u) => {
-        await axios.put(`${API}/units/${u.id}`, { is_active: !u.is_active }).catch(() => {});
+        await axios.put(`${API}/units/${u.id}`, { is_active: !u.is_active }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
         load();
     };
 
@@ -70,7 +71,7 @@ export default function UnitManager() {
     const onDragEnd = async () => {
         setDragIdx(null);
         for (let i = 0; i < items.length; i++) {
-            await axios.put(`${API}/units/${items[i].id}`, { sort_order: i }).catch(() => {});
+            await axios.put(`${API}/units/${items[i].id}`, { sort_order: i }).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
         }
     };
 
@@ -92,7 +93,7 @@ export default function UnitManager() {
                     </thead>
                     <tbody>
                         {items.length === 0 && (
-                            <tr><td colSpan={5} className="py-4 text-center text-gray-400">Chưa có đơn vị nào.</td></tr>
+                            <tr><td colSpan={5} className="py-4 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách đơn vị.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có đơn vị nào.'}</td></tr>
                         )}
                         {items.map((u, idx) => (
                             <tr key={u.id}
@@ -132,10 +133,10 @@ export default function UnitManager() {
             {modalOpen && (
                 <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
                     <div className="absolute inset-0 bg-black/40" onClick={closeModal} />
-                    <div className="relative bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl p-5 max-h-[90vh] overflow-y-auto">
+                    <div className="relative bg-white w-full sm:max-w-md rounded-t-xl sm:rounded-xl shadow-xl p-5 max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="font-bold text-[15px]">{editing ? 'Sửa đơn vị tính' : 'Thêm đơn vị tính'}</h3>
-                            <button onClick={closeModal} className="w-8 h-8 rounded-full bg-gray-100 text-gray-500">✕</button>
+                            <button onClick={closeModal} className="w-10 h-10 rounded-full bg-gray-100 text-gray-500">✕</button>
                         </div>
                         <div className="space-y-3">
                             <div>

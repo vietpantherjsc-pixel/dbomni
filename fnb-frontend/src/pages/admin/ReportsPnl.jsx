@@ -54,8 +54,8 @@ export default function ReportsPnl() {
             if (res.data?.success) setData(res.data.data);
         } catch (e) {
             console.error('Lỗi tải báo cáo PNL:', e);
-            const detail = e?.response?.data?.message || e?.message || '';
-            setErrMsg('Không tải được số liệu báo cáo.' + (detail ? ' Chi tiết: ' + detail : ''));
+            console.error('Chi tiết lỗi báo cáo:', e?.response?.data?.message || e?.message || '');
+            setErrMsg('Không tải được số liệu báo cáo. Kiểm tra kết nối mạng rồi bấm Thử tải lại.');
         }
         setLoading(false);
     }, [f]);
@@ -149,7 +149,7 @@ export default function ReportsPnl() {
                     {!loading && errMsg && !data && (
                         <div className="card" style={{ border: '1px solid #f5c2c7', background: '#fff5f5' }}>
                             <div style={{ color: '#b42318', fontWeight: 600, marginBottom: 6 }}>{errMsg}</div>
-                            <button onClick={load} className="btn btn-navy" style={{ marginTop: 4 }}>Thử tải lại</button>
+                            <button onClick={load} className="m-btn m-btn-primary" style={{ marginTop: 4 }}>Thử tải lại</button>
                         </div>
                     )}
                     {data && (<>
@@ -228,6 +228,39 @@ export default function ReportsPnl() {
                         </table></div>
                         )}
                     </div>
+
+                    {/* Gói PNL kênh sàn (2026-10-31): CHI TIẾT PHÍ MARKETING KÊNH SÀN */}
+                    {data.marketing && ((data.marketing.items || []).length > 0 || (data.marketing.full_months || []).length > 0 || (data.marketing.partial_months || []).length > 0) && (
+                    <div className="card">
+                        <h3>Chi tiết phí marketing kênh bán</h3>
+                        <div className="sub">Phí quảng cáo + marketing sàn tính cho quán, nhập theo đối soát sàn từng tháng tại trang Kênh bán hàng (tab Đối soát sàn theo tháng) — số theo đối soát sàn, đã gồm mọi thuế phí phía sàn nếu có.</div>
+                        {(data.marketing.items || []).length > 0 && (
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Kênh</th><th>Chi nhánh</th><th>Tháng</th><th className="num">Phí marketing</th></tr>
+                            {(data.marketing.items || []).map((m, i) => (
+                                <tr key={i}>
+                                    <td className="prod">{m.channel}</td>
+                                    <td>{m.branch}</td>
+                                    <td>{String(m.month).slice(5)}/{String(m.month).slice(0, 4)}</td>
+                                    <td className="num" style={{ color: 'var(--red)', fontWeight: 700 }}>{fmtVND(m.amount)}</td>
+                                </tr>
+                            ))}
+                            <tr>
+                                <td colSpan={3} style={{ textAlign: 'right', fontWeight: 700 }}>Tổng (đã trừ vào lợi nhuận kỳ này)</td>
+                                <td className="num" style={{ color: 'var(--red)', fontWeight: 700 }}>{fmtVND(data.marketing.total)}</td>
+                            </tr>
+                            </tbody>
+                        </table></div>
+                        )}
+                        {(data.marketing.missing_months || []).length > 0 && (
+                            <div className="sub" style={{ marginTop: 8 }}>⚠ Chưa nhập phí marketing cho tháng {(data.marketing.missing_months).map((m) => `${String(m).slice(5)}/${String(m).slice(0, 4)}`).join(', ')} — báo cáo chưa gồm khoản phí của tháng này (không phải bằng 0).</div>
+                        )}
+                        {(data.marketing.partial_months || []).length > 0 && (
+                            <div className="sub" style={{ marginTop: 8 }}>Phí marketing sàn tính theo tháng trọn — kỳ đang xem cắt ngang tháng {(data.marketing.partial_months).map((m) => `${String(m).slice(5)}/${String(m).slice(0, 4)}`).join(', ')} nên chưa gồm phí marketing của tháng bị cắt.</div>
+                        )}
+                    </div>
+                    )}
 
                     {/* Gói 58: CHI PHÍ PHÂN BỔ (thuê trả trước / CAPEX) — chỉ hiện khi API trả về */}
                     {Array.isArray(data.allocated_expenses) && data.allocated_expenses.length > 0 && (

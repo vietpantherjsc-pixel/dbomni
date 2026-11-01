@@ -8,12 +8,13 @@ import { API } from '../../utils/api';
 // VD: "Mua 1 Tặng 1: Trà sữa ô long tặng hồng trà" (tên cũ T8) → món "Mua 1 Tặng 1: Trà sữa ô long tặng ô long lài"
 export default function ProductAliasManager() {
   const [aliases, setAliases] = useState([]);
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1): phân biệt tải lỗi với thật sự trống
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ product_id: '', alias_name: '' });
   const [search, setSearch] = useState('');
 
   const load = () => {
-    axios.get(`${API}/product-aliases`).then((r) => setAliases(r.data?.data?.data || r.data?.data || [])).catch(() => {});
+    axios.get(`${API}/product-aliases`).then((r) => { setAliases(r.data?.data?.data || r.data?.data || []); setLoadErr(false); }).catch(() => setLoadErr(true));
     axios.get(`${API}/products?per_page=200`).then((r) => setProducts(r.data?.data?.data || r.data?.data || [])).catch(() => {});
   };
   useEffect(() => { load(); }, []);
@@ -29,7 +30,7 @@ export default function ProductAliasManager() {
 
   const remove = async (id) => {
     if (!confirm('Xóa tên thay thế này?')) return;
-    await axios.delete(`${API}/product-aliases/${id}`).catch(() => {});
+    await axios.delete(`${API}/product-aliases/${id}`).catch((e) => alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'));
     load();
   };
 
@@ -61,7 +62,7 @@ export default function ProductAliasManager() {
           <button onClick={() => remove(a.id)} className="text-[12px] text-red-600 hover:underline">Xóa</button>
         </div>
       ))}
-      {filtered.length === 0 && <div className="text-[13px] text-gray-400 py-4 text-center">Chưa có tên thay thế nào.</div>}
+      {filtered.length === 0 && <div className="text-[13px] text-gray-400 py-4 text-center">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có tên thay thế nào.'}</div>}
 
       <div className="mt-4 p-3 rounded-xl bg-slate-50 flex flex-wrap gap-2 items-center">
         <select value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })}

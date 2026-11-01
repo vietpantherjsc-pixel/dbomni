@@ -25,9 +25,9 @@ const fmtNum = (v) => {
 
 // Thẻ chỉ số (hàng 1)
 const StatCell = ({ label, value, hot }) => (
-    <div className="flex-1 px-5 py-4 min-w-0">
+    <div className="px-5 py-4 min-w-0">
         <div className="m-kicker truncate">{label}</div>
-        <div className={`mt-1.5 text-[22px] font-bold m-num truncate ${hot ? 'text-[var(--m-stamp)]' : 'text-[var(--m-ink)]'}`}>
+        <div className={`mt-1.5 text-[22px] font-bold m-num ${hot ? 'text-[var(--m-stamp)]' : 'text-[var(--m-ink)]'}`}>
             {value}
         </div>
     </div>
@@ -175,7 +175,8 @@ const Dashboard = () => {
                 ) : (
                     <>
                         {/* Hàng 1: 5 chỉ số tiền */}
-                        <div className="mt-4 m-card flex divide-x overflow-x-auto" style={{ borderColor: 'var(--m-line)' }}>
+                        {/* UX 2026-10-26 (🟠18): mobile xếp lưới 2 cột — trước đây 5 ô flex-1 + truncate cắt số tiền thành "..." */}
+                        <div className="mt-4 m-card grid grid-cols-2 sm:grid-cols-3 xl:flex xl:divide-x overflow-x-auto" style={{ borderColor: 'var(--m-line)' }}>
                             <StatCell label="Tiền hàng" value={fmtMoney(data?.gross_sales)} />
                             <StatCell label="Hoàn hủy" value={fmtMoney(data?.cancelled_total)} />
                             <StatCell label="Giảm giá" value={fmtMoney(data?.discount_total)} />

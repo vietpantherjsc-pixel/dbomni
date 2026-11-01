@@ -18,12 +18,21 @@ use Illuminate\Support\Str;
 // nhóm tùy chọn, giá theo kênh, định mức nguyên liệu, thuế suất riêng.
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         // Lấy danh sách mặt hàng kèm thông tin danh mục chứa nó
         // Gói 25: kèm hidden_branches (mảng {id, name}) để hiện badge "đang ẩn ở CN X"
+        // Tách món ngừng bán (2026-10-30, spec B-1): thêm tham số ?status=active|inactive
+        // lọc theo is_active — KHÔNG truyền tham số thì giữ nguyên hành vi cũ (trả tất cả)
+        // để mọi nơi đang dùng chung endpoint này không đổi hành vi.
         $hidden = \App\Models\BranchProductHidden::with('branch:id,name')->get()->groupBy('product_id');
-        $products = Product::with(['category', 'prices.priceList', 'categoryPrices'])->get()->map(function ($p) use ($hidden) {
+        $query = Product::with(['category', 'prices.priceList', 'categoryPrices']);
+        if ($request->query('status') === 'active') {
+            $query->where('is_active', true);
+        } elseif ($request->query('status') === 'inactive') {
+            $query->where('is_active', false);
+        }
+        $products = $query->get()->map(function ($p) use ($hidden) {
             $p->hidden_branches = isset($hidden[$p->id])
                 ? $hidden[$p->id]->map(fn($r) => ['id' => $r->branch->id, 'name' => $r->branch->name])->values()
                 : [];

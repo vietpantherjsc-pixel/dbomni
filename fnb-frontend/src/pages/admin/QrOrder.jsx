@@ -147,6 +147,7 @@ const QrOrder = () => {
     const [searchParams] = useSearchParams();
     const [tab, setTab] = useState(searchParams.get('tab') === 'tao' ? 'tao' : 'list');
     const [branches, setBranches] = useState([]);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [loading, setLoading] = useState(true);
     const [baseUrl, setBaseUrl] = useState(getBase());
     const [baseInput, setBaseInput] = useState(getBase());
@@ -159,16 +160,19 @@ const QrOrder = () => {
         setTab(searchParams.get('tab') === 'tao' ? 'tao' : 'list');
     }, [searchParams]);
 
+    // UX 2026-10-26 (vòng bổ sung B, 🟠T1): tách hàm tải ra ngoài useEffect để nút Thử lại gọi lại tại chỗ
+    const fetchBranches = async () => {
+        try {
+            const res = await axios.get(API + '/branches');
+            const list = res.data?.data || [];
+            setBranches(list);
+            if (list.length && !createBranchId) setCreateBranchId(String(list[0].id));
+            setLoadErr(false);
+        } catch (e) { setLoadErr(true); } // UX 2026-10-26 (🟠T1): trước đây nuốt lỗi -> hiện sai hướng dẫn "Thêm chi nhánh trong Thiết lập"
+        setLoading(false);
+    };
+
     useEffect(() => {
-        const fetchBranches = async () => {
-            try {
-                const res = await axios.get(API + '/branches');
-                const list = res.data?.data || [];
-                setBranches(list);
-                if (list.length && !createBranchId) setCreateBranchId(String(list[0].id));
-            } catch (e) { /* bỏ qua */ }
-            setLoading(false);
-        };
         fetchBranches();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -268,7 +272,7 @@ const QrOrder = () => {
                             onClick={() => setTab(t.key)}
                             className={`px-4 py-2.5 text-[13.5px] whitespace-nowrap border-b-2 -mb-px transition-colors ${
                                 tab === t.key
-                                    ? 'border-[#0d6efd] text-[#0d6efd] font-medium'
+                                    ? 'border-[#24305E] text-[#24305E] font-medium'
                                     : 'border-transparent text-gray-500 hover:text-gray-800'
                             }`}
                         >
@@ -304,7 +308,7 @@ const QrOrder = () => {
                                     {!b.is_active && (
                                         <span className="text-[11px] mt-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Đang tạm đóng</span>
                                     )}
-                                    <div className="text-[12px] text-[#0d6efd] break-all text-center mt-2">{link}</div>
+                                    <div className="text-[12px] text-[#24305E] break-all text-center mt-2">{link}</div>
                                     <div className="flex flex-wrap justify-center gap-2 mt-3 w-full">
                                         <button
                                             onClick={() => handleCopy(b)}
@@ -330,7 +334,7 @@ const QrOrder = () => {
                         })}
                         {branches.length === 0 && (
                             <div className="text-gray-500 text-[13px] col-span-full py-8 text-center">
-                                Chưa có chi nhánh. Thêm chi nhánh trong <b>Thiết lập → Chi nhánh</b>.
+                                {loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách chi nhánh.<button onClick={fetchBranches} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : (<>Chưa có chi nhánh. Thêm chi nhánh trong <b>Thiết lập → Chi nhánh</b>.</>)}
                             </div>
                         )}
                     </div>
@@ -365,7 +369,7 @@ const QrOrder = () => {
                                     <div className="min-w-0">
                                         <div className="font-semibold text-[15px]">{createBranch.name}</div>
                                         {createBranch.address && <div className="text-[12.5px] text-gray-500">{createBranch.address}</div>}
-                                        <div className="text-[12.5px] text-[#0d6efd] break-all mt-1">
+                                        <div className="text-[12.5px] text-[#24305E] break-all mt-1">
                                             {orderLink(baseUrl, createBranch.id)}
                                         </div>
                                     </div>

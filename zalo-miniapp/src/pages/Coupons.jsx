@@ -61,7 +61,7 @@ export default function Coupons() {
             key={v}
             onClick={() => setTab(v)}
             style={{
-              flex: 1, padding: '10px 0', borderRadius: 10, border: 'none',
+              flex: 1, padding: '12px 0', minHeight: 44, borderRadius: 8, border: 'none', // UX 2026-10-26: tab cao 44px
               background: tab === v ? '#24305E' : '#f0f0f0',
               color: tab === v ? '#fff' : '#666', fontWeight: 700, fontSize: 13,
             }}
@@ -88,7 +88,7 @@ export default function Coupons() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontWeight: 800, fontSize: 15 }}>{c.promotion?.name}</div>
-                  <div style={{ fontSize: 13, color: '#F5A623', fontWeight: 700, marginTop: 4 }}>
+                  <div style={{ fontSize: 13, color: '#b26a00', fontWeight: 700, marginTop: 4 }}> {/* UX: cam đậm đủ tương phản trên trắng */}
                     {discountText(c.promotion)}
                   </div>
                   <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
@@ -103,8 +103,8 @@ export default function Coupons() {
                   <button
                     onClick={() => nav('/checkout', { state: { couponId: c.id } })}
                     style={{
-                      background: '#F5A623', color: '#fff', border: 'none',
-                      borderRadius: 8, padding: '8px 16px', fontWeight: 700, fontSize: 13,
+                      background: '#F5A623', color: '#3a2a00', border: 'none', // UX: chữ nâu đậm trên cam như OACard (trắng/cam ~2:1)
+                      borderRadius: 8, padding: '12px 16px', minHeight: 44, fontWeight: 700, fontSize: 13,
                     }}
                   >
                     Dùng ngay

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub)
 import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // Trang nhân viên tạo phiếu xuất kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
@@ -22,13 +23,13 @@ const REASONS_FB = [
 const CSS = `
 .xk-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
 .xk-wrap button{font-family:inherit;}
-.xk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.xk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .xk-hd-user{display:flex;align-items:center;gap:10px;}
 .xk-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .xk-name{font-size:15px;font-weight:700;line-height:1.25;}
 .xk-sub{font-size:12px;opacity:.75;margin-top:1px;}
 .xk-title{font-size:20px;font-weight:800;margin-top:12px;}
-.xk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.xk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .xk-card{background:#fff;border-radius:12px;margin:12px 16px 0;padding:14px;box-shadow:0 1px 3px rgba(16,24,40,.06);}
 .xk-card h3{font-size:15px;font-weight:700;color:${NAVY};margin-bottom:10px;}
 .xk-label{font-size:13px;font-weight:700;color:#6b7280;margin-top:12px;display:block;}
@@ -42,9 +43,11 @@ const CSS = `
 .xk-del{border:none;background:#fdeeee;color:#a12b2b;font-weight:800;font-size:13px;min-width:44px;min-height:44px;border-radius:10px;}
 .xk-empty{text-align:center;color:#6b7280;font-size:13.5px;padding:18px 8px;line-height:1.6;}
 .xk-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
-.xk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;max-width:92vw;}
+.xk-toast{position:fixed;left:50%;bottom:60px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;border-radius:16px;}
 .xk-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-.xk-login{padding:40px 24px;}
+.xk-login{padding:0 16px 24px;}
+.xk-login-hd{background:${NAVY};color:#fff;margin:0 -16px 16px;padding:22px 20px 26px;border-radius:0 0 12px 12px;text-align:center;}
+.xk-login-card{background:#fff;border-radius:12px;padding:18px 16px;box-shadow:0 1px 3px rgba(16,24,40,.08);}
 .xk-pin{font-size:30px;font-weight:800;letter-spacing:12px;text-align:center;}
 .xk-send{background:${NAVY};color:#fff;width:100%;min-height:50px;border:none;border-radius:12px;font-size:15px;font-weight:700;margin-top:16px;}
 .xk-success{text-align:center;padding:48px 24px;}
@@ -110,10 +113,14 @@ export default function XuatKho({ embed } = {}) {
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
 
-  const toast = (m) => {
-    setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2400);
+  const toastTimer = React.useRef(null); // UX 2026-10-26 (🟡L29): toast lỗi hiện lâu hơn toast thường
+  const toast = (m, isErr) => {
+    setToastMsg(m);
+    setToastOn(true);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2400);
   };
+  const toastErr = (m) => toast(m, true);
 
   const logout = () => {
     localStorage.removeItem('xuatkho_token');
@@ -163,7 +170,7 @@ export default function XuatKho({ embed } = {}) {
       setCategories(((c.data && c.data.data) || {}).categories || []);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được dữ liệu.'));
+      toastErr(errMsg(e, 'Không tải được dữ liệu.'));
     } finally { setLoading(false); }
   };
 
@@ -207,7 +214,15 @@ export default function XuatKho({ embed } = {}) {
     const validItems = items.filter((it) => qtyNum(it.qty) > 0);
     if (validItems.length === 0) { toast('Vui lòng nhập số lượng cho ít nhất 1 mặt hàng.'); return; }
     const reasonLabel = (REASONS.find((r) => r.code === reason) || {}).name || reason;
-    if (!window.confirm('Tạo phiếu xuất ' + validItems.length + ' mặt hàng?\nLý do: ' + reasonLabel)) return;
+    setAskCreate({ message: 'Tạo phiếu xuất ' + validItems.length + ' mặt hàng?\nLý do: ' + reasonLabel, validItems, reasonLabel });
+  };
+
+  const [askCreate, setAskCreate] = useState(null);
+  const doCreate = async () => {
+    const validItems = (askCreate || {}).validItems || [];
+    const reasonLabel = (askCreate || {}).reasonLabel || '';
+    setAskCreate(null);
+    if (!validItems.length) return;
     setSaving(true);
     try {
       // PENDING: cần backend POST /employee/outbound-receipts
@@ -224,7 +239,7 @@ export default function XuatKho({ embed } = {}) {
       setSuccess({ code: d.code || '', reason: reasonLabel });
       setItems([]); setNote('');
     } catch (e) {
-      toast(errMsg(e, 'Tạo phiếu thất bại.'));
+      toastErr(errMsg(e, 'Tạo phiếu thất bại.'));
     } finally { setSaving(false); }
   };
 
@@ -235,16 +250,20 @@ export default function XuatKho({ embed } = {}) {
       <div className="xk-wrap">
         <style>{CSS}</style>
         <div className="xk-login">
-          <h2 style={{ fontSize: 22, fontWeight: 800, color: NAVY, textAlign: 'center', marginBottom: 8 }}>📤 Xuất kho</h2>
-          <p style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, marginBottom: 24 }}>Đăng nhập bằng SĐT + mã PIN 6 số</p>
+          <div className="xk-login-hd">
+            <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>📤 Xuất kho</h2>
+            <p style={{ opacity: .8, fontSize: 14 }}>Đăng nhập bằng SĐT + mã PIN 6 số</p>
+          </div>
+          <div className="xk-login-card">
           <form onSubmit={doLogin}>
             <label className="xk-label">Số điện thoại</label>
             <input className="xk-field" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="09xxxxxxxx" />
             <label className="xk-label">Mã PIN</label>
-            <input className="xk-field xk-pin" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/[^\d]/g, ''))} placeholder="••••••" />
+            <input className="xk-field xk-pin" type="password" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/[^\d]/g, ''))} placeholder="••••••" />
             {err && <div className="xk-msg">{err}</div>}
             <button className="xk-send" disabled={loginBusy}>{loginBusy ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
           </form>
+          </div>
         </div>
       </div>
     );
@@ -369,7 +388,8 @@ export default function XuatKho({ embed } = {}) {
         />
       )}
 
-      <div className={'xk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
+      <HubConfirm open={!!askCreate} title="Tạo phiếu xuất kho" message={askCreate ? askCreate.message : ''} confirmLabel="Tạo phiếu" onCancel={() => setAskCreate(null)} onConfirm={doCreate} />
+        <div className={'xk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
     </div>
   );
 }
@@ -445,7 +465,7 @@ function MaterialMultiPicker({ materials, categories, excludeIds, search, setSea
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={onClose} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #ddd', background: '#fff', fontSize: 15, fontWeight: 700 }}>Hủy</button>
           <button onClick={() => onConfirm([...picked])} disabled={picked.size === 0}
-            style={{ flex: 1, minHeight: 48, borderRadius: 12, border: 'none', background: '#16a34a', color: '#fff', fontSize: 15, fontWeight: 700, opacity: picked.size === 0 ? 0.45 : 1 }}>
+            style={{ flex: 1, minHeight: 48, borderRadius: 12, border: 'none', background: '#24305E', color: '#fff', fontSize: 15, fontWeight: 700, opacity: picked.size === 0 ? 0.45 : 1 }}>
             Thêm ({picked.size})
           </button>
         </div>

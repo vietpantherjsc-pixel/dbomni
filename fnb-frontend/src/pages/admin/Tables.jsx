@@ -93,7 +93,7 @@ export default function Tables() {
                         <select
                             value={addBranchId}
                             onChange={(e) => setAddBranchId(e.target.value)}
-                            className="px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb] bg-white"
+                            className="px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#24305E] bg-white"
                         >
                             <option value="">-- Chọn chi nhánh --</option>
                             {branches.map((b) => (
@@ -108,13 +108,13 @@ export default function Tables() {
                     onChange={(e) => setNewName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                     placeholder="Tên bàn mới (VD: B01)"
-                    className="flex-1 min-w-[140px] px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                    className="flex-1 min-w-[140px] px-3 py-2 text-[13px] border border-[#d1d5db] rounded-md focus:outline-none focus:ring-1 focus:ring-[#24305E]"
                 />
                 <button
                     onClick={handleAdd}
                     disabled={showAll && !addBranchId}
                     title={showAll && !addBranchId ? 'Chọn chi nhánh trước khi thêm bàn' : ''}
-                    className="px-4 py-2 bg-[#2563eb] text-white text-[13px] font-semibold rounded-md hover:bg-[#1d4ed8] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-semibold rounded-md hover:bg-[#24305E] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     + Thêm bàn
                 </button>
@@ -137,15 +137,15 @@ export default function Tables() {
                             className={`relative border rounded-lg p-4 text-center cursor-pointer transition ${
                                 t.status === 'occupied'
                                     ? 'bg-[#fef3c7] border-[#f59e0b]'
-                                    : 'bg-white border-[#e5e7eb] hover:border-[#2563eb]'
+                                    : 'bg-white border-[#e5e7eb] hover:border-[#24305E]'
                             }`}
                             title="Bấm để đổi trạng thái"
                         >
                             <div className="text-base font-bold text-[#1f2937]">{t.name}</div>
                             {showAll && (
-                                <div className="text-[10px] text-[#6b7280] mt-0.5">{branchNameOf(t.branch_id)}</div>
+                                <div className="text-[13px] text-[#6b7280] mt-0.5">{branchNameOf(t.branch_id)}</div>
                             )}
-                            <div className={`text-[11px] mt-1 font-medium ${t.status === 'occupied' ? 'text-[#b45309]' : 'text-[#059669]'}`}>
+                            <div className={`text-[13px] mt-1 font-medium ${t.status === 'occupied' ? 'text-[#b45309]' : 'text-[#059669]'}`}>
                                 {t.status === 'occupied' ? 'Có khách' : 'Trống'}
                             </div>
                             <button

@@ -60,7 +60,8 @@ export default function ReportsInventory() {
         } catch (e) {
             console.error('Lỗi tải báo cáo kho:', e);
             const detail = e?.response?.data?.message || e?.message || '';
-            setErrMsg('Không tải được số liệu báo cáo kho.' + (detail ? ' Chi tiết: ' + detail : ''));
+            console.error('Chi tiết lỗi báo cáo kho:', detail);
+            setErrMsg('Không tải được số liệu báo cáo kho. Kiểm tra kết nối mạng rồi bấm Thử tải lại.');
         }
         setLoading(false);
     }, [f]);
@@ -72,6 +73,7 @@ export default function ReportsInventory() {
         setF((prev) => ({ ...prev, [k]: v }));
     };
     const meta = data?.meta;
+    const sv = data?.stock_value; // 🔴 UX 2026-10-26: trước đây THIẾU khai báo này — API trả success là ReferenceError sập trắng trang
     const mats = data?.materials || [];
     const expiry = data?.expiry || [];
     const rangeTxt = meta
@@ -126,7 +128,7 @@ export default function ReportsInventory() {
                     {!loading && errMsg && !data && (
                         <div className="card" style={{ border: '1px solid #f5c2c7', background: '#fff5f5' }}>
                             <div style={{ color: '#b42318', fontWeight: 600, marginBottom: 6 }}>{errMsg}</div>
-                            <button onClick={load} className="btn btn-navy" style={{ marginTop: 4 }}>Thử tải lại</button>
+                            <button onClick={load} className="m-btn m-btn-primary" style={{ marginTop: 4 }}>Thử tải lại</button>
                         </div>
                     )}
                     {data && (<>

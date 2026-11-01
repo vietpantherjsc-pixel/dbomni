@@ -21,8 +21,14 @@ use Illuminate\Support\Facades\Log;
 // =====================================================================
 class SapoMailService
 {
-    /** Trạng thái đã xử lý xong (không quét lại) — 'error' được phép thử lại lần sau */
-    private const DONE_STATUSES = ['imported', 'anchor_unmatched', 'expired', 'no_link'];
+    /**
+     * Trạng thái đã xử lý xong (không quét lại) — 'error' được phép thử lại lần sau.
+     * Vá L2-1 (2026-10-28): 'anchor_unmatched' KHÔNG còn là trạng thái xong —
+     * mỗi lượt quét tự thử lại các mail chưa khớp neo (logMail ghi đè theo
+     * message_uid nên không sinh dòng trùng); khi link quá hạn, lượt quét lại
+     * sẽ ghi 'expired' và dừng hẳn. 'no_link' giữ DONE vì quét lại không sinh link.
+     */
+    private const DONE_STATUSES = ['imported', 'expired', 'no_link'];
 
     public function __construct(private SapoImportService $importer)
     {
@@ -149,9 +155,8 @@ class SapoMailService
                 if ($branchId === null) {
                     $texts = array_unique(array_map(fn($a) => $a['text'], $anchors));
                     $this->logMail($uidKey, $headers, null, 'anchor_unmatched',
-                        'Anchor text của link tải không khớp bảng map chi nhánh. Các anchor thấy trong mail: '
-                        . (implode(' | ', array_slice($texts, 0, 10)) ?: '(không có link nào)')
-                        . '. Đã dừng file này — bổ sung map anchor → chi nhánh rồi kiểm tra lại.', $receivedAt, $seen);
+                        'Chưa khớp neo chi nhánh — hệ thống sẽ tự thử lại ở lượt quét sau; bổ sung map anchor tại Cấu hình Sapo rồi bấm "Kiểm tra mail ngay" nếu muốn thử tức thì. Các anchor thấy trong mail: '
+                        . (implode(' | ', array_slice($texts, 0, 10)) ?: '(không có link nào)'), $receivedAt, $seen);
                     $summary['anchor_unmatched']++;
                     continue;
                 }

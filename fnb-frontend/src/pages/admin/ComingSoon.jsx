@@ -13,7 +13,7 @@ const ComingSoon = ({ title }) => {
                     {title}
                 </h1>
                 <div className="mt-3 bg-white rounded shadow-sm p-12 flex flex-col items-center text-center">
-                    <span className="w-16 h-16 rounded-full bg-[#eef4ff] text-[#0d6efd] flex items-center justify-center">
+                    <span className="w-16 h-16 rounded-full bg-[#eef4ff] text-[#24305E] flex items-center justify-center">
                         <Icon name="clock" className="w-8 h-8" />
                     </span>
                     <h2 className="mt-4 text-lg font-semibold text-gray-800">

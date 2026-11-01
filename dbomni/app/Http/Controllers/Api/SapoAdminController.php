@@ -158,7 +158,10 @@ class SapoAdminController extends Controller
     {
         $this->assertTable($table);
         $q = trim((string) $request->query('q', ''));
-        $query = $this->mapModel($table)->newQuery();
+        // Gói tối ưu Sapo 2026-10-30 (khai báo tách bạch theo lệnh PM): mapModel trả
+        // CHUỖI tên lớp nên ->newQuery() lên chuỗi làm sập endpoint liệt kê map —
+        // sửa thành ::query() đúng mẫu mapStore/mapDestroy trong chính file này.
+        $query = $this->mapModel($table)::query();
         $searchCols = [
             'products' => ['sapo_name'],
             'options' => ['sapo_option_text'],
@@ -178,7 +181,7 @@ class SapoAdminController extends Controller
         }
         $with = [];
         if ($table === 'products') {
-            $with = ['product:id,name'];
+            $with = ['product:id,name', 'giftProduct:id,name'];
         } elseif ($table === 'options') {
             $with = ['option:id,name,option_group_id', 'option.group:id,name'];
         } elseif ($table === 'anchors') {
@@ -213,6 +216,50 @@ class SapoAdminController extends Controller
         return response()->json(['success' => true, 'message' => 'Đã xóa.']);
     }
 
+    // ---------------- Thu gọn map (2026-10-30) ----------------
+    // Dòng map "trùng danh mục" = tên phía Sapo trùng HỆT tên hiện tại của
+    // món/tùy chọn được trỏ tới — tầng 1 tự khớp đã xử lý được nên dòng map
+    // thừa. Chỉ áp cho products/options; dòng ngoại lệ thật (tên hai phía
+    // khác nhau), dòng combo (có gift) và dòng ghi chú (option_id NULL) luôn
+    // được giữ lại. Không xóa thầm: GET xem trước danh sách, DELETE mới xóa.
+
+    /** @return array<int, array{id: int, sapo_text: string, target_name: string}> */
+    private function redundantMaps(string $table): array
+    {
+        $out = [];
+        if ($table === 'products') {
+            $rows = SapoProductMap::with('product:id,name')->whereNull('gift_product_id')->get();
+            foreach ($rows as $m) {
+                if ($m->product && $m->product->name === $m->sapo_name) {
+                    $out[] = ['id' => (int) $m->id, 'sapo_text' => $m->sapo_name, 'target_name' => $m->product->name];
+                }
+            }
+        } elseif ($table === 'options') {
+            $rows = SapoOptionMap::with('option:id,name')->whereNotNull('option_id')->get();
+            foreach ($rows as $m) {
+                if ($m->option && $m->option->name === $m->sapo_option_text) {
+                    $out[] = ['id' => (int) $m->id, 'sapo_text' => $m->sapo_option_text, 'target_name' => $m->option->name];
+                }
+            }
+        }
+        return $out;
+    }
+
+    public function mapRedundant(string $table): JsonResponse
+    {
+        $this->assertTable($table);
+        $items = $this->redundantMaps($table);
+        return response()->json(['success' => true, 'data' => ['count' => count($items), 'items' => $items]]);
+    }
+
+    public function mapPruneRedundant(string $table): JsonResponse
+    {
+        $this->assertTable($table);
+        $ids = array_column($this->redundantMaps($table), 'id');
+        $deleted = $ids ? $this->mapModel($table)::whereIn('id', $ids)->delete() : 0;
+        return response()->json(['success' => true, 'message' => 'Đã xóa ' . $deleted . ' dòng map trùng danh mục.', 'data' => ['deleted' => $deleted]]);
+    }
+
     private function assertTable(string $table): void
     {
         abort_unless(in_array($table, self::TABLES, true), 404);
@@ -237,11 +284,16 @@ class SapoAdminController extends Controller
             'products' => $request->validate([
                 'sapo_name' => 'required|string|max:255',
                 'product_id' => 'required|integer|exists:products,id',
+                // Combo Mua 1 Tặng 1 (2026-10-30): có gift_product_id = dòng map
+                // này là combo (product_id = món chính, gift = món tặng).
+                'gift_product_id' => 'nullable|integer|exists:products,id',
                 'note' => 'nullable|string|max:255',
             ]),
             'options' => $request->validate([
                 'sapo_option_text' => 'required|string|max:255',
-                'option_id' => 'required|integer|exists:product_options,id',
+                // Gói 4 (2026-10-28): option_id được để TRỐNG = map dạng "Ghi chú —
+                // không trừ kho"; có giá trị thì phải là tùy chọn tồn tại như cũ.
+                'option_id' => 'nullable|integer|exists:product_options,id',
                 'note' => 'nullable|string|max:255',
             ]),
             'channels' => $request->validate([

@@ -80,7 +80,7 @@ export default function Staff() {
             setShowForm(false); fetchAll();
             // Backend trả pin_code_plain khi vừa đặt PIN mới — hiện 1 lần duy nhất
             if (d.pin_code_plain) setNewPin(d.pin_code_plain);
-        } catch (e) { alert(e.response?.data?.message || JSON.stringify(e.response?.data?.errors) || 'Lưu thất bại'); }
+        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại. Kiểm tra lại các ô bắt buộc rồi thử lại.'); }
     };
     const remove = async (id) => { if (!window.confirm('Xóa nhân viên này?')) return; try { await axios.delete(API + '/employees/' + id); fetchAll(); } catch (e) { alert('Xóa thất bại'); } };
     const resetPin = async (id) => {
@@ -128,7 +128,7 @@ export default function Staff() {
                                     <td className="px-3 py-3 text-center font-mono tracking-widest text-gray-400">••••••</td>
                                     <td className="px-3 py-3 text-center">{e.is_active ? <span className="text-green-600">Đang làm</span> : <span className="text-gray-400">Đã nghỉ</span>}</td>
                                     {editable && <td className="px-4 py-3 text-right whitespace-nowrap">
-                                        <button onClick={() => openEdit(e)} className="text-[#0d6efd] mr-3">Sửa</button>
+                                        <button onClick={() => openEdit(e)} className="text-[#24305E] mr-3">Sửa</button>
                                         <button onClick={() => resetPin(e.id)} className="text-orange-500 mr-3">Đổi PIN</button>
                                         <button onClick={() => remove(e.id)} className="text-red-500">Xóa</button>
                                     </td>}

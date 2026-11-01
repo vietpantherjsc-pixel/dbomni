@@ -229,7 +229,14 @@ class AttendanceController extends Controller
             }
         }
 
-        $rows = $employees->map(function ($e) use ($days, $atts, $scheds, $leaveDays) {
+        // Spec nhập giờ từ lưới (2026-10-31): tháng đã khóa kỳ của TỪNG ô (tuần có
+        // thể vắt 2 tháng) — frontend hiện 🔒 và chặn nhập; endpoint chặn độc lập.
+        $lockedMonths = [];
+        foreach (collect($days)->map(fn ($d) => substr($d, 0, 7))->unique() as $m) {
+            if (\App\Models\PayrollLock::isLocked($m)) $lockedMonths[$m] = true;
+        }
+
+        $rows = $employees->map(function ($e) use ($days, $atts, $scheds, $leaveDays, $lockedMonths) {
             $cells = [];
             foreach ($days as $d) {
                 $key = $e->id . '|' . $d;
@@ -266,8 +273,10 @@ class AttendanceController extends Controller
                 $cells[$d] = [
                     // Bổ sung Mảng 4 (A3-7 FE): id bản ghi đầu (theo giờ vào) để
                     // quản lý mở modal sửa giờ; pair_count = số cặp chấm trong ngày
-                    'attendance_id' => optional($list->sortBy('check_in')->first())->id,
-                    'pair_count' => $list->count(),
+                    'attendance_id' => optional($dayRecs->sortBy('check_in')->first())->id,
+                    'pair_count' => $dayRecs->count(),
+                    // Spec nhập giờ từ lưới (2026-10-31): cờ khóa kỳ theo tháng của ô (chỉ THÊM, field cũ giữ nguyên)
+                    'payroll_locked' => isset($lockedMonths[substr($d, 0, 7)]),
                     'status' => $status,
                     'check_in' => $firstIn, 'check_out' => $lastOut,
                     'hours' => $hours, 'scheduled_hours' => $scheduledMin > 0 ? round($scheduledMin / 60, 1) : null,
@@ -355,6 +364,9 @@ class AttendanceController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
         $att = Attendance::findOrFail($id);
+        // Spec nhập giờ từ lưới (2026-10-31, mục 2.3 — Đại Vương duyệt riêng): tháng
+        // của bản ghi đã khóa kỳ thì SỬA giờ cũng bị chặn như tạo mới
+        \App\Models\PayrollLock::assertUnlocked(Carbon::parse($att->date)->format('Y-m'));
         $newIn = array_key_exists('check_in', $v) && $v['check_in'] ? Carbon::parse($v['check_in']) : $att->check_in;
         $newOut = array_key_exists('check_out', $v) && $v['check_out'] ? Carbon::parse($v['check_out']) : $att->check_out;
         if ($newIn && $newOut && $newOut->lte($newIn)) {
@@ -378,5 +390,86 @@ class AttendanceController extends Controller
             $att->save();
         });
         return response()->json(['success' => true, 'message' => 'Đã sửa giờ chấm công.', 'data' => $att->fresh()]);
+    }
+
+    // Spec nhập giờ chấm công từ lưới tuần (2026-10-31): tạo mới giờ cho 1 ô trống.
+    // Chi nhánh lấy từ hồ sơ nhân viên (payload KHÔNG nhận branch_id); toàn bộ kiểm
+    // tra điều kiện chạy lại TRONG transaction; mỗi cặp ghi 1 dòng AttendanceEdit
+    // với old = null (dấu hiệu tạo mới trong sổ vết); lý do BẮT BUỘC ở API này.
+    public function storeManual(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'employee_id' => 'required|integer',
+            'date' => 'required|date',
+            'pairs' => 'required|array|min:1|max:2',
+            'pairs.*.check_in' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+            'pairs.*.check_out' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+            'pairs.*.overnight' => 'nullable|boolean',
+            'reason' => 'required|string|max:500',
+        ]);
+        $date = Carbon::parse($v['date'])->toDateString();
+        [$userId, $editorEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+
+        $created = \Illuminate\Support\Facades\DB::transaction(function () use ($v, $date, $userId, $editorEmployeeId) {
+            $emp = Employee::find($v['employee_id']);
+            if (!$emp || !$emp->is_active) {
+                abort(422, 'Nhân viên không tồn tại hoặc đã vô hiệu — không nhập giờ được.');
+            }
+            if ($date > now()->toDateString()) {
+                abort(422, 'Chưa thể nhập giờ cho ngày tương lai.');
+            }
+            \App\Models\PayrollLock::assertUnlocked(substr($date, 0, 7));
+            // Phép ĐÃ DUYỆT phủ ngày (tính lại đúng cách grid() đang tính)
+            $onLeave = LeaveRequest::where('employee_id', $emp->id)->where('status', 'approved')
+                ->where('date_from', '<=', $date)
+                ->where(function ($q) use ($date) {
+                    $q->whereNull('date_to')->orWhere('date_to', '>=', $date);
+                })->exists();
+            if ($onLeave) {
+                abort(422, "Ngày này đã duyệt nghỉ phép cho {$emp->full_name} — muốn nhập giờ, hủy duyệt nghỉ phép trước tại trang Nghỉ phép.");
+            }
+            if (Attendance::where('employee_id', $emp->id)->where('date', $date)->exists()) {
+                abort(422, 'Ngày này đã có giờ chấm — dùng Sửa giờ trong chi tiết ô.');
+            }
+            // Dựng datetime từng cặp + validate thứ tự (qua đêm chỉ khi bật cờ)
+            $pairs = [];
+            foreach ($v['pairs'] as $i => $p) {
+                $in = Carbon::parse($date . ' ' . $p['check_in'] . ':00');
+                $out = Carbon::parse($date . ' ' . $p['check_out'] . ':00');
+                if (!empty($p['overnight'])) $out->addDay();
+                if ($out->lte($in)) {
+                    abort(422, 'Cặp ' . ($i + 1) . ': giờ ra phải sau giờ vào' . (!empty($p['overnight']) ? '.' : ' — nếu ca qua đêm, bật công tắc "Ca qua đêm".'));
+                }
+                $pairs[] = [$in, $out];
+            }
+            // Cặp 2 phải bắt đầu SAU giờ ra cặp 1 (chạm bằng cũng là chồng)
+            if (count($pairs) === 2 && $pairs[1][0]->lte($pairs[0][1])) {
+                abort(422, 'Cặp 2 chồng lên cặp 1 — giờ vào cặp 2 phải sau giờ ra cặp 1.');
+            }
+            $created = [];
+            foreach ($pairs as [$in, $out]) {
+                $att = new Attendance([
+                    'employee_id' => $emp->id,
+                    'branch_id' => $emp->branch_id,
+                    'date' => $date, // ngày của ô kể cả khi giờ ra qua đêm (mục 3.3.4)
+                ]);
+                $att->check_in = $in;
+                $att->check_out = $out;
+                $att->save();
+                \App\Models\AttendanceEdit::create([
+                    'attendance_id' => $att->id,
+                    'editor_user_id' => $userId,
+                    'editor_employee_id' => $editorEmployeeId,
+                    'old_check_in' => null,
+                    'new_check_in' => $in,
+                    'old_check_out' => null,
+                    'new_check_out' => $out,
+                    'reason' => $v['reason'],
+                ]);
+                $created[] = $att;
+            }
+            return $created;
+        });
+        return response()->json(['success' => true, 'message' => 'Đã nhập giờ chấm công.', 'data' => $created]);
     }
 }

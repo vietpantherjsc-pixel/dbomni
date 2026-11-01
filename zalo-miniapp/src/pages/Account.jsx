@@ -222,6 +222,15 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   }
   const barColor = keepMode ? (atRisk ? '#dc2626' : '#16a34a') : 'var(--zm-primary)';
 
+  // Chênh tích điểm theo kênh (spec 2026-10-28, mục 4): dòng chú thích chỉ hiện
+  // khi chính sách BẬT và kênh sàn thực sự tích chậm hơn (hệ số < 1). Hệ số 0,5
+  // → câu "gấp đôi" đúng tỉ lệ thật; hệ số khác → câu trung tính, không nói gấp đôi.
+  const chMult = Number(L.points_channel?.platform_multiplier);
+  const chNote = !L.points_channel?.enabled || !(chMult > 0 && chMult < 1) ? null
+    : Math.abs(chMult - 0.5) < 1e-9
+      ? 'Đặt qua Mini App tích điểm nhanh gấp đôi so với đặt qua app giao đồ ăn.'
+      : 'Đặt qua Mini App tích điểm nhanh hơn so với đặt qua app giao đồ ăn.';
+
   // Hàng mốc hạng: mỗi mốc = 1 cột (vòng tròn + tên căn giữa ngay dưới) — cùng
   // một đơn vị bố cục nên mốc và nhãn KHÔNG THỂ lệch nhau (sửa P0).
   const nT = tiers.length;
@@ -339,6 +348,9 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
           <div style={{ fontSize: 12.5, color: '#8a93a6', marginTop: 4 }}>
             Cách tích điểm: mỗi 10.000đ chi tiêu = 1 điểm × hệ số hạng của bạn. Điểm đổi được coupon trong Cửa hàng điểm bên dưới.
           </div>
+        )}
+        {chNote && (
+          <div style={{ fontSize: 12.5, color: '#8a93a6', marginTop: 4 }}>{chNote}</div>
         )}
         {!keepMode && L.keep?.status === 'safe' && L.keep?.threshold > 0 && (
           <div style={{ fontSize: 12, color: '#059669', marginTop: 6 }}>🛡️ Bạn đã đủ điều kiện giữ hạng {L.tier_name}.</div>
@@ -535,16 +547,47 @@ export default function Account() {
   const [accountCover, setAccountCover] = useState(() => {
     return storage.get('zm_account_cover') || '';
   });
+  // Gói Mini App 2026-10-30: mục Quét QR tích điểm chỉ hiện khi Admin bật công
+  // tắc miniapp_qr_claim_entry (mặc định ẨN) — cờ đọc qua /shop-info công khai.
+  const [qrClaimEntry, setQrClaimEntry] = useState(false);
+  useEffect(() => {
+    api.shopInfo().then((d) => setQrClaimEntry(!!d?.qr_claim_entry)).catch(() => {});
+  }, []);
   const coverInputRef = useRef(null);
+  // Gói nén cover (2026-10-30): nén ảnh ngay trên máy trước khi lưu local —
+  // thu nhỏ cạnh dài về tối đa 1200px + mã hóa JPEG chất lượng 0.8 để data URL
+  // nhẹ đi nhiều lần, tránh phình/tràn bộ nhớ cục bộ. Ảnh vẫn CHỈ lưu trên máy
+  // này (không tải lên server). Ảnh đọc/nén không được → báo chọn ảnh khác,
+  // không lưu lặng lẽ.
   const handleCoverChange = (e) => {
     const f = e.target.files?.[0];
+    e.target.value = '';
     if (!f) return;
     if (f.size > 2 * 1024 * 1024) { alert('Ảnh tối đa 2MB.'); return; }
     const reader = new FileReader();
+    reader.onerror = () => alert('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
     reader.onload = () => {
-      const url = reader.result;
-      setAccountCover(url);
-      storage.set('zm_account_cover', url);
+      const img = new Image();
+      img.onerror = () => alert('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
+      img.onload = () => {
+        try {
+          const MAX = 1200;
+          const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+          const w = Math.max(1, Math.round(img.naturalWidth * scale));
+          const h = Math.max(1, Math.round(img.naturalHeight * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          const url = canvas.toDataURL('image/jpeg', 0.8);
+          if (!url || !url.startsWith('data:image/jpeg')) throw new Error('compress failed');
+          setAccountCover(url);
+          storage.set('zm_account_cover', url);
+        } catch (err) {
+          alert('Không nén được ảnh này. Vui lòng chọn ảnh khác.');
+        }
+      };
+      img.src = reader.result;
     };
     reader.readAsDataURL(f);
   };
@@ -622,6 +665,8 @@ export default function Account() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         </button>
       </div>
+      {/* Gói nén cover (2026-10-30): nói rõ phạm vi lưu của ảnh bìa cá nhân */}
+      <div style={{ padding: '6px 16px 0', fontSize: 11.5, color: '#888', textAlign: 'right' }}>Ảnh chỉ lưu trên máy này</div>
       {!customer && (
         <>
           <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
@@ -662,14 +707,17 @@ export default function Account() {
           <LoyaltyBlocks customer={customer} onChanged={() => { const p = getProfile(); if (p?.phone && p?.member_code) doLookup(p.phone, p.member_code, true); }}>
           <PromoCarousel />
 
-          {/* Gói 53: quét QR tích điểm tại quầy */}
-          <button
-            onClick={() => nav('/scan')}
-            className="zm-btn-primary"
-            style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-          >
-            📷 Quét QR tích điểm tại quầy
-          </button>
+          {/* Gói 53: quét QR tích điểm tại quầy — Gói Mini App 2026-10-30: chỉ
+              hiện khi Admin bật công tắc (mặc định ẩn); tính năng claim giữ nguyên */}
+          {qrClaimEntry && (
+            <button
+              onClick={() => nav('/scan')}
+              className="zm-btn-primary"
+              style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+            >
+              📷 Quét QR tích điểm tại quầy
+            </button>
+          )}
 
           {/* SPEC-02: lối vào Ví ưu đãi + Mời bạn (trước đây trang /coupons, /invite tồn tại nhưng không có link từ Tài khoản) */}
           <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>

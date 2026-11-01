@@ -31,6 +31,7 @@ class MembershipTierController extends Controller
     private function loyaltyConfig(): array
     {
         $dd = \App\Services\LoyaltyService::doublePointsSettings();
+        $ch = \App\Services\LoyaltyService::channelPointsSettings();
         return [
             'tier_window_days' => (int) Setting::get('tier_window_days', 60),
             'tier_downgrade_notice_days' => (int) Setting::get('tier_downgrade_notice_days', 10),
@@ -44,6 +45,10 @@ class MembershipTierController extends Controller
             'double_points_start' => $dd['start'],
             'double_points_end' => $dd['end'],
             'double_points_multiplier' => $dd['multiplier'],
+            // Chênh hệ số tích điểm theo kênh (2026-10-28): công tắc + hệ số sàn + danh sách kênh riêng
+            'points_channel_multiplier_enabled' => $ch['enabled'],
+            'points_platform_multiplier' => $ch['platform_multiplier'],
+            'points_own_channels' => implode(', ', $ch['own_channels']),
         ];
     }
 
@@ -63,6 +68,10 @@ class MembershipTierController extends Controller
             'double_points_start' => 'nullable|date',
             'double_points_end' => 'nullable|date|after_or_equal:double_points_start',
             'double_points_multiplier' => 'nullable|numeric|min:1|max:10',
+            // Chênh hệ số kênh (2026-10-28): nullable để bản frontend cũ chưa có 3 ô này vẫn lưu được
+            'points_channel_multiplier_enabled' => 'nullable|boolean',
+            'points_platform_multiplier' => 'nullable|numeric|min:0|max:1',
+            'points_own_channels' => 'nullable|string|max:500',
         ]);
         Setting::set('tier_window_days', $validated['tier_window_days']);
         Setting::set('tier_downgrade_notice_days', $validated['tier_downgrade_notice_days']);
@@ -77,6 +86,24 @@ class MembershipTierController extends Controller
         Setting::set('double_points_end', $validated['double_points_end'] ?? '');
         Setting::set('double_points_multiplier', $validated['double_points_multiplier'] ?? '');
         Setting::query()->whereIn('key', ['double_days_start', 'double_days_end', 'double_days_multiplier'])->delete();
+        // Chênh hệ số kênh: chỉ ghi khi request có gửi 3 khóa này (frontend mới);
+        // chuẩn hóa danh sách kênh riêng: tách dấu phẩy, thường hóa, bỏ trùng.
+        if (array_key_exists('points_channel_multiplier_enabled', $validated)) {
+            Setting::set('points_channel_multiplier_enabled', !empty($validated['points_channel_multiplier_enabled']) ? '1' : '0');
+        }
+        if (array_key_exists('points_platform_multiplier', $validated)) {
+            Setting::set('points_platform_multiplier', $validated['points_platform_multiplier'] ?? '');
+        }
+        if (array_key_exists('points_own_channels', $validated)) {
+            $ownList = [];
+            foreach (explode(',', (string) ($validated['points_own_channels'] ?? '')) as $c) {
+                $c = strtolower(trim($c));
+                if ($c !== '' && !in_array($c, $ownList, true)) {
+                    $ownList[] = $c;
+                }
+            }
+            Setting::set('points_own_channels', implode(',', $ownList));
+        }
         return response()->json(['success' => true, 'message' => 'Đã lưu cấu hình Loyalty', 'loyalty_config' => $this->loyaltyConfig()]);
     }
 

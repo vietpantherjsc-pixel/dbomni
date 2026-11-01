@@ -46,6 +46,7 @@ const Transactions = () => {
     const [pagination, setPagination] = useState(null);
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1) — vòng bổ sung B: bổ sung khai báo bị thiếu (TESTER bắt hỏng lan)
     const [categories, setCategories] = useState([]);
     const [branches, setBranches] = useState([]);
     const [fCat, setFCat] = useState('');
@@ -113,12 +114,12 @@ const Transactions = () => {
             if (search) params.append('search', search);
             const res = await axios.get(`${API}/transactions?${params}`);
             if (res.data?.success) {
-                setRows(res.data.data || []);
+                setRows(res.data.data || []); setLoadErr(false);
                 setPagination(res.data.pagination || null);
                 setSummary(res.data.summary || { total_income: 0, total_expense: 0, balance: 0 });
             }
         } catch {
-            setRows([]);
+            setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -294,7 +295,7 @@ const Transactions = () => {
                                 onClick={() => setTab(t.key)}
                                 className={`px-3 py-3 text-[13px] whitespace-nowrap border-b-2 -mb-px shrink-0 transition-colors ${
                                     tab === t.key
-                                        ? 'border-[#0d6efd] text-[#0d6efd] font-medium'
+                                        ? 'border-[#24305E] text-[#24305E] font-medium'
                                         : 'border-transparent text-gray-500 hover:text-gray-800'
                                 }`}
                             >
@@ -364,10 +365,10 @@ const Transactions = () => {
                                 {loading ? (
                                     <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : rows.length === 0 ? (
-                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Chưa có phiếu nào.</td></tr>
+                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu.<button onClick={fetchRows} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có phiếu nào.'}</td></tr>
                                 ) : rows.map((r) => (
                                     <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
-                                        <td className="px-3 py-3 font-medium text-[#0d6efd] whitespace-nowrap">{r.code}</td>
+                                        <td className="px-3 py-3 font-medium text-[#24305E] whitespace-nowrap">{r.code}</td>
                                         <td className="px-3 py-3 whitespace-nowrap">{fmtDate(r.paid_at)}</td>
                                         <td className="px-3 py-3">{r.category?.name || '-'}</td>
                                         <td className="px-3 py-3">{r.branch?.name || 'Chung toàn chuỗi'}</td>
@@ -404,7 +405,7 @@ const Transactions = () => {
                                             <div className="text-gray-600 truncate">{r.note || '-'}</div>
                                             {r.attachment && ( // Gói 56
                                                 <a href={r.attachment} target="_blank" rel="noreferrer"
-                                                    className="text-[11.5px] text-[#0d6efd] hover:underline">📎 Xem chứng từ</a>
+                                                    className="text-[11.5px] text-[#24305E] hover:underline">📎 Xem chứng từ</a>
                                             )}
                                         </td>
                                         <td className="px-3 py-3 text-right whitespace-nowrap">
@@ -419,7 +420,7 @@ const Transactions = () => {
                                                 </>
                                             )}
                                             {!r.is_rejected && (
-                                                <button onClick={() => openEdit(r)} className="text-[#0d6efd] hover:underline mr-3">Sửa</button>
+                                                <button onClick={() => openEdit(r)} className="text-[#24305E] hover:underline mr-3">Sửa</button>
                                             )}
                                             {!r.related_type && (
                                                 <button onClick={() => handleDelete(r)} className="text-red-600 hover:underline">Xóa</button>

@@ -202,6 +202,7 @@ const AdminLayout = ({ children }) => {
         const mainRow = hasSub ? (
             <button
                 onClick={() => {
+                    if (collapsed) { setCollapsed(false); setOpenSub(item.path); return; } // UX 2026-10-26 (🟡): sidebar thu gọn bấm mục mẹ phải mở được trang con
                     if (childActive) return; // đang ở trang con: giữ mở, không cho thu gọn
                     setOpenSub(expanded && openSub === item.path ? null : item.path);
                 }}
@@ -360,14 +361,12 @@ const AdminLayout = ({ children }) => {
                         >
                             <Icon name="menu" className="w-5 h-5" />
                         </button>
-                        <span className="text-[14px] font-semibold whitespace-nowrap truncate max-w-[140px] text-white">
+                        <span className="text-[14px] font-semibold whitespace-nowrap truncate max-w-[220px] text-white" title={branchName}>
                             {branchName}
                         </span>
                     </div>
                     <div className="flex items-center gap-3">
-                        <button className="p-1.5 rounded-lg text-white/80 hover:bg-white/10 relative min-w-[44px] min-h-[44px] flex items-center justify-center" title="Thông báo">
-                            <Icon name="bell" className="w-5 h-5" />
-                        </button>
+                        {/* UX 2026-10-26 (🟡): bỏ nút chuông — trước đây bấm không có tác dụng (chưa có hệ thống thông báo); thêm lại khi có nguồn thông báo thật */}
                         <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-lg text-white flex items-center justify-center text-[13px] font-bold" style={{ background: 'var(--m-stamp)' }}>
                                 {(user?.name || 'A').charAt(0).toUpperCase()}

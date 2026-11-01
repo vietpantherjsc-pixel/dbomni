@@ -20,6 +20,7 @@ const KEYS = [
 export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
     const [vals, setVals] = useState({});
     const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠20): lỗi tải -> khóa Lưu, tránh ghi đè cấu hình thật
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -38,7 +39,7 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
                     zalo_pay_cod_takeaway_only: d.zalo_pay_cod_takeaway_only ?? '1',
                 });
             })
-            .catch(() => {})
+            .catch(() => setLoadErr(true))
             .finally(() => setLoading(false));
     }, []);
 
@@ -154,7 +155,8 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
                 </label>
             </div>
 
-            <button onClick={save} disabled={saving} className="m-btn m-btn-primary">
+            {loadErr && (<div style={{ color: 'var(--m-danger)', fontSize: 13, marginBottom: 10 }}>⚠ Chưa tải được cấu hình hiện tại — nút Lưu đang KHÓA để tránh ghi đè cấu hình thật bằng giá trị mặc định. Tải lại trang để thử lại.</div>)}
+            <button onClick={save} disabled={saving || loading || loadErr} className="m-btn m-btn-primary">
                 {saving ? 'Đang lưu...' : 'Lưu cấu hình'}
             </button>
         </div>

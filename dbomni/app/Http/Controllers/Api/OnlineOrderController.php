@@ -73,6 +73,9 @@ class OnlineOrderController extends Controller
         return response()->json(['success' => true, 'data' => [
             'cover_url' => $cover,
             'ref_bonus_points' => (int) Setting::get('ref_bonus_points', 100),
+            // Gói Mini App 2026-10-30: cờ hiện mục Quét QR tích điểm ở trang Tài
+            // khoản — mặc định ẩn, Admin bật ở trang Zalo Mini App khi cần dùng.
+            'qr_claim_entry' => filter_var(Setting::get('miniapp_qr_claim_entry', '0'), FILTER_VALIDATE_BOOLEAN),
         ]]);
     }
 
@@ -388,6 +391,8 @@ class OnlineOrderController extends Controller
             'phone' => 'nullable|string|max:20',
             'member_code' => 'nullable|string|max:20',
             'zalo_id' => 'nullable|string|max:100',
+            // Gói Ưu đãi hợp nhất (2026-10-31): chế độ hợp nhất cho Checkout Mini App
+            'unified' => 'nullable|boolean',
         ]);
         // customer_id trần KHÔNG được tin: chỉ dùng khi định danh khớp đúng khách đó,
         // ngược lại tính KM như khách vãng lai (KM công khai vẫn hiện, KM theo hạng thì không).
@@ -398,13 +403,210 @@ class OnlineOrderController extends Controller
                 $effectiveCustomerId = $verified->id;
             }
         }
-        return response()->json(['success' => true, 'data' => $service->eligiblePromotions([
+        $params = [
             'subtotal' => (float) $validated['subtotal'],
             'items' => $validated['items'] ?? [],
             'customer_id' => $effectiveCustomerId,
             'channel' => 'online',
             'shipping_fee' => (float) ($validated['shipping_fee'] ?? 0),
-        ])]);
+        ];
+        if (!empty($validated['unified'])) {
+            return response()->json(['success' => true, 'data' => $this->unifiedOffers($service, $params)]);
+        }
+        // Không kèm cờ unified → response y hệt trước gói (mảng KM đủ điều kiện)
+        return response()->json(['success' => true, 'data' => $service->eligiblePromotions($params)]);
+    }
+
+    /**
+     * Gói Ưu đãi hợp nhất (2026-10-31): danh sách hợp nhất KM chung + coupon ví
+     * cho panel Ưu đãi của Checkout — gồm cả mã chưa đủ điều kiện (kèm lý do và
+     * số tiền còn thiếu do server xác định) để client hiển thị mờ. Mọi số giảm
+     * đều do server tính bằng đúng các hàm của đường eligible/validateCoupon;
+     * client không tự tính % của bất kỳ mã nào.
+     * Sắp xếp: nhóm chọn được theo số giảm giảm dần (KM tặng món cuối nhóm;
+     * hòa số giảm thì coupon ví trước) → nhóm chưa đủ điều kiện theo số giảm
+     * tiềm năng giảm dần.
+     */
+    private function unifiedOffers(PromotionService $service, array $params): array
+    {
+        $subtotal = (float) $params['subtotal'];
+        $items = $params['items'] ?? [];
+        $shippingFee = (float) ($params['shipping_fee'] ?? 0);
+        $customer = !empty($params['customer_id']) ? \App\Models\Customer::find($params['customer_id']) : null;
+        $now = now();
+        $ctx = [
+            'subtotal' => $subtotal,
+            'items' => $items,
+            'customer' => $customer,
+            'channel' => 'online',
+            'shipping_fee' => $shippingFee,
+            'at' => $now,
+        ];
+        $out = [];
+
+        // --- KM chung: chỉ chương trình đang trong cửa sổ hiệu lực (chưa bắt
+        // đầu/đã kết thúc thì không xuất hiện, tránh rác danh sách) ---
+        $promotions = \App\Models\Promotion::where('is_active', true)
+            ->where(function ($q) use ($now) {
+                $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now);
+            })
+            ->where(function ($q) use ($now) {
+                $q->whereNull('expires_at')->orWhere('expires_at', '>=', $now);
+            })
+            ->get();
+        foreach ($promotions as $promo) {
+            // Hotfix 2026-11-01: mẫu chiến dịch coupon (auto_config có trigger) không
+            // thuộc phía KM chung của danh sách hợp nhất — chỉ xuất hiện qua ví coupon.
+            if (!empty($promo->auto_config['trigger'])) {
+                continue;
+            }
+            $chk = $service->checkConditions($promo, $ctx);
+            if ($promo->type === 'shipping') {
+                // KM phí ship chỉ có nghĩa khi đơn có phí ship (giao hàng)
+                if ($shippingFee <= 0) {
+                    continue;
+                }
+                $shipDiscount = (float) $promo->value <= 0
+                    ? $shippingFee
+                    : min((float) $promo->value, $shippingFee);
+                if ($shipDiscount <= 0) {
+                    continue;
+                }
+                $base = [
+                    'kind' => 'promotion', 'promotion_id' => (int) $promo->id,
+                    'code' => $promo->code, 'name' => $promo->name, 'type' => $promo->type,
+                    'is_shipping' => true, 'stack_with_coupon' => (bool) $promo->stack_with_coupon,
+                    'gift_product_name' => null,
+                ];
+                if ($chk['ok']) {
+                    $out[] = $base + ['discount' => (int) round($shipDiscount), 'eligible' => true];
+                } else {
+                    $out[] = $base + ['discount' => 0, 'eligible' => false,
+                        'reason_code' => $chk['reason'], 'reason_text' => $chk['message'],
+                        'missing_amount' => $chk['reason'] === 'MIN_ORDER' ? (int) ceil((float) $promo->min_order_amount - $subtotal) : null,
+                        'would_discount' => (int) round($shipDiscount)];
+                }
+                continue;
+            }
+            // menuProductIds() là private của service — resolve tại đây bằng
+            // đúng 1 truy vấn bảng menu_product như service vẫn làm
+            $menuProductIds = $promo->scope === 'menu' && !empty($promo->scope_ids)
+                ? \Illuminate\Support\Facades\DB::table('menu_product')->whereIn('menu_id', $promo->scope_ids)->distinct()->pluck('product_id')->all()
+                : [];
+            $calc = $service->calculateDiscount($promo, $subtotal, $items, $menuProductIds);
+            $base = [
+                'kind' => 'promotion', 'promotion_id' => (int) $promo->id,
+                'code' => $promo->code, 'name' => $promo->name, 'type' => $promo->type,
+                'is_shipping' => false, 'stack_with_coupon' => (bool) $promo->stack_with_coupon,
+                'gift_product_name' => $calc['gift_product_name'],
+            ];
+            if ($chk['ok']) {
+                // Khớp đường eligible hiện tại: giảm 0 và không phải tặng món → không phải ưu đãi thật, bỏ qua
+                if ($calc['discount'] <= 0 && $promo->type !== 'gift') {
+                    continue;
+                }
+                $out[] = $base + ['discount' => (int) round($calc['discount']), 'eligible' => true];
+            } else {
+                $out[] = $base + ['discount' => 0, 'eligible' => false,
+                    'reason_code' => $chk['reason'], 'reason_text' => $chk['message'],
+                    'missing_amount' => $chk['reason'] === 'MIN_ORDER' ? (int) ceil((float) $promo->min_order_amount - $subtotal) : null,
+                    'would_discount' => (int) round(max(0, $calc['discount']))];
+            }
+        }
+
+        // --- Coupon ví của khách đã xác thực: đúng pipeline của validateCoupon
+        // (chủ sở hữu → checkConditions → checkTrigger → discountFor) ---
+        if ($customer) {
+            $coupons = \App\Models\CustomerCoupon::with('promotion')
+                ->where('customer_id', $customer->id)
+                ->where('status', 'active')
+                ->where(function ($q) use ($now) {
+                    $q->whereNull('expires_at')->orWhere('expires_at', '>', $now);
+                })
+                ->orderByDesc('issued_at')
+                ->get();
+            foreach ($coupons as $coupon) {
+                $promo = $coupon->promotion;
+                if (!$promo) {
+                    continue;
+                }
+                // Coupon phí ship không có nghĩa khi đơn không có phí ship (như KM ship ở trên)
+                if ($promo->type === 'shipping' && $shippingFee <= 0) {
+                    continue;
+                }
+                $chk = $service->checkConditions($promo, $ctx);
+                $trig = $chk['ok'] ? $service->checkTrigger($promo, $coupon, $customer) : $chk;
+                $calc = $service->discountFor($promo, $subtotal, $items, $shippingFee);
+                $base = [
+                    'kind' => 'wallet_coupon', 'customer_coupon_id' => (int) $coupon->id,
+                    'code' => $coupon->code, 'name' => $promo->name, 'type' => $promo->type,
+                    'is_shipping' => (bool) $calc['is_shipping'],
+                    'stack_with_coupon' => (bool) $promo->stack_with_coupon,
+                    'gift_product_name' => $calc['gift_product_name'],
+                    // L2 (2026-10-31): hạn dùng của coupon — dữ kiện phân biệt các
+                    // coupon trùng tên/chiến dịch trong ví (cộng thêm, chỉ ở chế độ unified)
+                    'expires_at' => $coupon->expires_at
+                        ? \Carbon\Carbon::parse($coupon->expires_at)->format('Y-m-d')
+                        : null,
+                ];
+                if ($trig['ok'] && !$calc['unsupported']) {
+                    $out[] = $base + ['discount' => (int) round($calc['discount']), 'eligible' => true];
+                } else {
+                    $reason = !$trig['ok'] ? $trig['reason'] : 'UNSUPPORTED_TYPE';
+                    $out[] = $base + ['discount' => 0, 'eligible' => false,
+                        'reason_code' => $reason,
+                        'reason_text' => PromotionService::reasonText($reason, $promo),
+                        'missing_amount' => $reason === 'MIN_ORDER' ? (int) ceil((float) $promo->min_order_amount - $subtotal) : null,
+                        'would_discount' => $calc['unsupported'] ? 0 : (int) round(max(0, $calc['discount']))];
+                }
+            }
+        }
+
+        // Sắp xếp theo spec 2.7
+        $kindRank = fn(array $it) => $it['kind'] === 'wallet_coupon' ? 0 : 1;
+        usort($out, function ($a, $b) use ($kindRank) {
+            if ($a['eligible'] !== $b['eligible']) {
+                return $a['eligible'] ? -1 : 1;
+            }
+            if ($a['eligible']) {
+                $aGift = $a['type'] === 'gift' ? 1 : 0;
+                $bGift = $b['type'] === 'gift' ? 1 : 0;
+                if ($aGift !== $bGift) {
+                    return $aGift <=> $bGift;
+                }
+                if ($a['discount'] !== $b['discount']) {
+                    return $b['discount'] <=> $a['discount'];
+                }
+            } else {
+                if ($a['would_discount'] !== $b['would_discount']) {
+                    return $b['would_discount'] <=> $a['would_discount'];
+                }
+            }
+            // L2 (2026-10-31): hòa giữa 2 coupon ví → coupon sắp hết hạn xếp trước
+            // (khách dùng coupon cận hạn trước); các tầng sắp xếp khác giữ nguyên
+            if ($a['kind'] === 'wallet_coupon' && $b['kind'] === 'wallet_coupon') {
+                $aExp = $a['expires_at'] ?? null;
+                $bExp = $b['expires_at'] ?? null;
+                if ($aExp !== $bExp) {
+                    if ($aExp === null) {
+                        return 1;
+                    }
+                    if ($bExp === null) {
+                        return -1;
+                    }
+                    return strcmp($aExp, $bExp);
+                }
+            }
+            return $kindRank($a) <=> $kindRank($b);
+        });
+
+        // Trần cộng dồn cho giỏ hiện tại — đúng định nghĩa §5d của store()
+        $maxDiscountPct = (float) \App\Models\Setting::get('promo_max_discount_pct', 50);
+        $cap = ($maxDiscountPct > 0 && $maxDiscountPct < 100)
+            ? (int) round($subtotal * $maxDiscountPct / 100)
+            : (int) $subtotal;
+
+        return ['items' => $out, 'stack_cap_amount' => $cap];
     }
 
     /**
@@ -442,7 +644,12 @@ class OnlineOrderController extends Controller
         }
         $subtotal = (float) $validated['subtotal'];
         if ($subtotal < (float) $voucher->min_order_amount) {
-            return $fail('Chưa đạt giá trị tối thiểu của voucher.');
+            // Gói Ưu đãi hợp nhất (2026-10-31): kèm missing_amount để client hiện
+            // "Đặt thêm {X}đ" (số tiền còn thiếu do server tính, client không tự suy)
+            $missing = (int) ceil((float) $voucher->min_order_amount - $subtotal);
+            return response()->json(['success' => false,
+                'message' => 'Chưa đạt giá trị tối thiểu của voucher. Đặt thêm ' . number_format($missing, 0) . 'đ để dùng mã này.',
+                'data' => ['missing_amount' => $missing]], 422);
         }
         if ($voucher->per_customer_limit) {
             $customer = \App\Services\CustomerIdentityService::verifiedCustomer($validated);
@@ -1239,12 +1446,18 @@ class OnlineOrderController extends Controller
                     throw new Exception('Số điện thoại không khớp với đơn hàng.');
                 }
                 // Audit toàn diện 2026-10-21 🟠12: nới cho đơn chờ thanh toán qua
-                // Checkout SDK — BANK đang chờ CK (pending_payment/transfer_notified)
-                // và COD đã được kênh xác nhận (payment 'confirmed', gồm cả đơn cũ
-                // kẹt status 'confirmed') vẫn hủy online được: các trạng thái này đều
-                // CHƯA vào pha chế và CHƯA trừ kho/thu tiền (NV xác nhận mới trừ kho).
+                // Checkout SDK — BANK đang chờ CK (pending_payment) và COD đã được
+                // kênh xác nhận (payment 'confirmed', gồm cả đơn cũ kẹt status
+                // 'confirmed') vẫn hủy online được: các trạng thái này đều CHƯA vào
+                // pha chế và CHƯA trừ kho/thu tiền (NV xác nhận mới trừ kho).
                 // Đơn đã trả tiền (paid) hoặc đã sang pha chế → vẫn chặn, gọi quán.
-                $awaitingPay = in_array($order->payment_status, ['pending', 'pending_payment', 'transfer_notified', 'confirmed'], true);
+                // Chính sách Đại Vương chốt 2026-10-26: đơn khách ĐÃ BÁO CHUYỂN
+                // KHOẢN (transfer_notified) KHÔNG cho hủy online nữa — quán phải
+                // đối soát tiền thật trước khi hoàn, khách cần hủy thì gọi quán.
+                if ($order->payment_status === 'transfer_notified') {
+                    throw new Exception('Đơn đã chuyển khoản, không thể hủy online. Vui lòng gọi quán để được hỗ trợ hoàn tiền.');
+                }
+                $awaitingPay = in_array($order->payment_status, ['pending', 'pending_payment', 'confirmed'], true);
                 if (!in_array($order->status, ['pending', 'confirmed'], true) || !$awaitingPay) {
                     throw new Exception('Đơn đang được chuẩn bị, không thể hủy online. Vui lòng gọi quán.');
                 }
@@ -1443,8 +1656,8 @@ class OnlineOrderController extends Controller
                         $couponService = app(\App\Services\AutoIssueCouponService::class);
                         $customer = $order->customer;
                         if ($customer) {
-                            // CP-01: đơn đầu tiên
-                            $couponService->onFirstOrder($customer);
+                            // CP-01: đơn đầu tiên (truyền đơn nguồn để ghi source_order_id)
+                            $couponService->onFirstOrder($customer, $order);
                             // CP-02: referral (cả 2 bên)
                             $couponService->onReferralFirstOrder($order);
                             // CP-03: tích tem

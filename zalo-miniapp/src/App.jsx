@@ -14,10 +14,12 @@ import GroupRoom, { CreateGroup } from './pages/GroupOrder'; // Gói 9: đơn nh
 import Coupons from './pages/Coupons'; // SPEC-02: ví ưu đãi
 import Invite from './pages/Invite'; // SPEC-02: mời bạn
 import './index.css';
-import { loadTheme } from './api';
+import { loadTheme, captureRef } from './api';
 
 export default function App() {
-  useEffect(() => { loadTheme(); }, []);
+  // Gói Đón Bình Minh (2026-10-28): bắt mã mời ngay khi app khởi động (cả 2
+  // nguồn: URL + tham số khởi động zmp-sdk) — không phụ thuộc trang đích.
+  useEffect(() => { loadTheme(); captureRef(); }, []);
   return (
     <ShopProvider>
       <BrowserRouter>

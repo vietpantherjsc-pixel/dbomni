@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { API } from '../utils/api'; // Gói 37e: API tương đối — chạy được trên điện thoại (IP LAN)
+import { API } from '../utils/api';
+import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub): xác nhận tự chế thay window.confirm
 
 // Trang đăng ký ca làm việc nhân viên (public, KHÔNG cần đăng nhập admin)
 // Bám sát demo đã duyệt: ~/workspace/your_files/demo-dang-ky-ca-nhan-vien.html
@@ -14,7 +15,7 @@ const MAX_WEEK_OFFSET = 3;
 const CSS = `
 .dk-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(148px + env(safe-area-inset-bottom));}
 .dk-wrap button{font-family:inherit;}
-.dk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 18px 18px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
+.dk-hd{background:${NAVY};color:#fff;padding:14px 16px;position:sticky;top:0;z-index:20;border-radius:0 0 12px 12px;box-shadow:0 2px 12px rgba(36,48,94,.25);}
 .dk-hd-user{display:flex;align-items:center;gap:10px;}
 .dk-avatar{width:42px;height:42px;border-radius:50%;flex-shrink:0;background:${ORANGE};color:${NAVY};font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;}
 .dk-name{font-size:15px;font-weight:700;line-height:1.25;}
@@ -61,7 +62,7 @@ const CSS = `
 .dk-okweek{font-size:15px;font-weight:700;color:${ORANGE};margin-bottom:10px;}
 .dk-okdesc{font-size:14px;color:#6b7280;line-height:1.55;margin-bottom:24px;}
 .dk-done{background:${NAVY};color:#fff;width:100%;min-height:50px;border-radius:12px;font-size:15px;font-weight:700;}
-.dk-toast{position:fixed;left:50%;bottom:170px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:999px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;white-space:nowrap;}
+.dk-toast{position:fixed;left:50%;bottom:170px;transform:translateX(-50%) translateY(10px);background:rgba(26,29,38,.92);color:#fff;font-size:13.5px;font-weight:600;padding:11px 18px;border-radius:16px;z-index:60;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:92vw;text-align:center;line-height:1.45;}
 .dk-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .dk-msg{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;background:#fdeeee;border:1px solid #f5c9c9;color:#a12b2b;}
 .dk-loading{padding:30px 16px;text-align:center;color:#6b7280;font-size:14px;}
@@ -69,7 +70,7 @@ const CSS = `
 .dk-field{width:100%;min-height:50px;border:1.5px solid #e8e9ee;border-radius:12px;padding:10px 12px;font-size:16px;font-family:inherit;background:#fbfbfc;margin-top:10px;}
 .dk-label{font-size:13px;font-weight:700;color:#6b7280;margin-top:14px;display:block;}
 .dk-pin{font-size:30px;font-weight:800;letter-spacing:12px;text-align:center;}
-.dk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:40px;white-space:nowrap;}
+.dk-logout{background:rgba(255,255,255,.16);border:none;color:#fff;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:10px;min-height:44px;white-space:nowrap;}
 .dk-logout:active{transform:scale(.95);}
 `;
 
@@ -126,6 +127,7 @@ export default function DangKyCa() {
   const [toastOn, setToastOn] = useState(false);
   // Gói 37: hạn chót + lượt gửi
   const [deadlineAt, setDeadlineAt] = useState('');
+  const [weekErr, setWeekErr] = useState(false); // UX 2026-10-26 (🟠T1)
   const [canSubmit, setCanSubmit] = useState(true);
   const [submitsLeft, setSubmitsLeft] = useState(2);
   const [submitCount, setSubmitCount] = useState(0);
@@ -146,10 +148,14 @@ export default function DangKyCa() {
   const wkLabel = 'Tuần ' + weekDays[0].label + ' – ' + weekDays[6].label;
   const wkSub = wkOffset === 0 ? 'Tuần đăng ký hiện tại' : wkOffset === 1 ? 'Tuần kế tiếp' : wkOffset + ' tuần tới';
 
-  const toast = (m) => {
+  const toastTimer = React.useRef(null);
+  const toast = (m, isErr = false) => {
     setToastMsg(m); setToastOn(true);
-    setTimeout(() => setToastOn(false), 2200);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    // UX 2026-10-26 (🟡): thông báo LỖI hiện 5 giây để kịp đọc (trước đây mọi toast đều tắt sau 2,2s)
+    toastTimer.current = setTimeout(() => setToastOn(false), isErr ? 5000 : 2200);
   };
+  const toastErr = (m) => toast(m, true);
 
   // Đăng xuất: xóa token, reset toàn bộ state về chưa đăng nhập
   const logout = () => {
@@ -193,9 +199,11 @@ export default function DangKyCa() {
       setSubmitsLeft(typeof data.submits_left === 'number' ? data.submits_left : 2);
       setSubmitCount(typeof data.submit_count === 'number' ? data.submit_count : 0);
       setPastDeadline(dl ? new Date(dl.replace(' ', 'T') + ':00') < new Date() : false);
+      setWeekErr(false);
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Không tải được đăng ký tuần này.'));
+      setWeekErr(true); // UX 2026-10-26 (🟠T1): trước đây lỗi tải tuần làm khối hạn đăng ký kẹt ở "Đang tải…" mãi
+      toastErr(errMsg(e, 'Không tải được đăng ký tuần này.'));
     } finally { setLoading(false); }
   };
 
@@ -214,7 +222,7 @@ export default function DangKyCa() {
         setShifts(s.data && s.data.data ? s.data.data : []);
       } catch (e) {
         if (expired(e)) return;
-        toast(errMsg(e, 'Không tải được danh sách ca.'));
+        toastErr(errMsg(e, 'Không tải được danh sách ca.'));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -269,13 +277,17 @@ export default function DangKyCa() {
       toast('Đã lưu nháp ✓');
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Lưu nháp thất bại.'));
+      toastErr(errMsg(e, 'Lưu nháp thất bại.'));
     } finally { setSaving(false); }
   };
 
+  const [askSubmit, setAskSubmit] = useState(null); // UX 2026-10-26 (🟡 Hub): xác nhận tự chế thay window.confirm
   const submit = async () => {
     if (selCount === 0) return;
-    if (!window.confirm('Gửi đăng ký ' + selCount + ' ca cho ' + wkLabel + '?')) return;
+    setAskSubmit({ message: 'Gửi đăng ký ' + selCount + ' ca cho ' + wkLabel + '?' });
+  };
+  const doSubmit = async () => {
+    setAskSubmit(null);
     setSaving(true);
     try {
       await axios.post(API + '/employee/shift-registrations/week', {
@@ -285,7 +297,7 @@ export default function DangKyCa() {
       loadWeek(token); // tải lại để cập nhật lượt gửi còn lại
     } catch (e) {
       if (expired(e)) return;
-      toast(errMsg(e, 'Gửi đăng ký thất bại.'));
+      toastErr(errMsg(e, 'Gửi đăng ký thất bại.'));
     } finally { setSaving(false); }
   };
 
@@ -302,9 +314,9 @@ export default function DangKyCa() {
       <div className="dk-wrap">
         <style>{CSS}</style>
         <div className="dk-login">
-          <div className="dk-hd" style={{ borderRadius: 18 }}>
+          <div className="dk-hd" style={{ borderRadius: 12 }}>
             <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 36, marginBottom: 8 }}>&#8249; Hub</button>
+              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="dk-title">Đăng ký ca làm việc</div>
             <div className="dk-branch">Đăng nhập để tiếp tục</div>
           </div>
@@ -322,7 +334,7 @@ export default function DangKyCa() {
             <label className="dk-label">Mã PIN 6 số</label>
             <input
               className="dk-field dk-pin"
-              type="text"
+              type="password"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={6}
@@ -389,7 +401,9 @@ export default function DangKyCa() {
       <div className="dk-deadline">⏰ <span>
         {dlInfo
           ? <>Hạn đăng ký: <b>{dlInfo.time} · {dlInfo.wd}, {dlInfo.dm}</b>{cdText ? ' · ' + cdText : ''}</>
-          : 'Đang tải hạn đăng ký...'}
+          : weekErr
+            ? <>Không tải được hạn đăng ký. <button onClick={() => loadWeek(token)} style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button></>
+            : 'Đang tải hạn đăng ký...'}
       </span></div>
       {locked && lockReason && <div className="dk-msg">🔒 {lockReason}</div>}
       {!locked && submitCount > 0 && (
@@ -463,6 +477,7 @@ export default function DangKyCa() {
         </div>
       )}
 
+      <HubConfirm open={!!askSubmit} title="Gửi đăng ký ca" message={askSubmit ? askSubmit.message : ''} confirmLabel="Gửi đăng ký" onCancel={() => setAskSubmit(null)} onConfirm={doSubmit} />
       <div className={'dk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
     </div>
   );

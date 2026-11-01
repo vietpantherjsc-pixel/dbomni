@@ -14,6 +14,7 @@ export default function SharedCategoryManager() {
   const [form, setForm] = useState({ code: '', name: '' });
   const [editing, setEditing] = useState(null);
   const [msg, setMsg] = useState('');
+  const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
 
   const loadGroups = async () => {
     try {
@@ -27,14 +28,14 @@ export default function SharedCategoryManager() {
     if (g === VIRTUAL) {
       try {
         const r = await axios.get(`${API}/shared-categories`, { params: { group: g } });
-        setChannels(r.data?.data || []);
-      } catch { setChannels([]); }
+        setChannels(r.data?.data || []); setLoadErr(false);
+      } catch { setLoadErr(true); } // UX 2026-10-26 (🟠T1)
       return;
     }
     try {
       const r = await axios.get(`${API}/shared-categories/all`, { params: { group: g } });
-      setItems(r.data?.data || []);
-    } catch { setItems([]); }
+      setItems(r.data?.data || []); setLoadErr(false);
+    } catch { setLoadErr(true); } // UX 2026-10-26 (🟠T1)
   };
 
   useEffect(() => { loadGroups(); }, []);
@@ -132,7 +133,7 @@ export default function SharedCategoryManager() {
               ↺ Khôi phục mặc định
             </button>
           </div>
-          {msg && <div className="text-xs mb-2" style={{ color: 'var(--m-ink-soft)' }}>{msg}</div>}
+          {msg && <div className="text-xs mb-2" style={{ color: /thất bại|lỗi/i.test(msg) ? 'var(--m-danger)' : 'var(--m-success)' }}>{msg}</div>}
           <div className="overflow-x-auto">
             <table className="m-table w-full text-sm">
               <thead><tr><th>Mã</th><th>Tên hiển thị</th><th className="text-center">Trạng thái</th><th className="text-right">Thao tác</th></tr></thead>
@@ -157,6 +158,7 @@ export default function SharedCategoryManager() {
                     </td>
                   </tr>
                 ))}
+                {loadErr && (<div className="text-sm" style={{ color: 'var(--m-danger)', marginBottom: 8 }}>⚠ Không tải được danh sách. <button onClick={() => load(tab)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>)}
                 {items.length === 0 && (
                   <tr><td colSpan={4} className="text-center py-6" style={{ color: 'var(--m-ink-faint)' }}>
                     Chưa có giá trị nào. Bấm "↺ Khôi phục mặc định" để lấy lại danh sách chuẩn.

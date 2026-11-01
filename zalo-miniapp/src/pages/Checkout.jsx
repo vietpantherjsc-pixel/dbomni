@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { api, fmt, getProfile, setProfile, getRef, profileIdentity } from '../api';
+import { api, fmt, getProfile, setProfile, getRef, setRef } from '../api';
 import { storage } from '../utils/storage';
 import SearchSelect from '../components/SearchSelect';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
@@ -20,15 +20,20 @@ export default function Checkout() {
   const nav = useNavigate();
   const location = useLocation();
   const [step, setStep] = useState(1); // 1: nhập thông tin, 2: tóm tắt đơn
-  // SPEC-02: coupon từ ví (Coupons.jsx "Dùng ngay" truyền qua navigation state)
-  const [selectedCouponId, setSelectedCouponId] = useState(location.state?.couponId || null);
-  const [myCoupons, setMyCoupons] = useState([]);
-  const [couponDiscount, setCouponDiscount] = useState(0);
-  const [couponIsShipping, setCouponIsShipping] = useState(false);
+  // Gói Ưu đãi hợp nhất (2026-10-31): coupon chọn sẵn từ Ví (Coupons.jsx "Dùng
+  // ngay") truyền qua navigation state — xử lý 1 lần khi danh sách hợp nhất về.
+  const preselectCouponId = useRef(location.state?.couponId || null);
   const [type, setType] = useState('delivery');
   const [deliveryMode, setDeliveryMode] = useState('now'); // Gói 55 p10: 'now' = giao ngay, 'scheduled' = hẹn giờ giao
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  // Gói Đón Bình Minh (2026-10-28): ô nhập tay mã người giới thiệu — prefilled
+  // từ zm_ref khi đến từ link mời; khách đã có lịch sử đơn thì ẩn (mã mời chỉ
+  // có ý nghĩa ở đơn đầu; backend vốn chỉ kích hoạt CP-02 cho đơn đầu thật).
+  const [refCode, setRefCodeState] = useState(() => getRef());
+  const [refFromLink] = useState(() => !!getRef());
+  const [hasPriorOrders, setHasPriorOrders] = useState(false);
+  const updateRefCode = (v) => { setRefCodeState(v); setRef(v); };
   const [provinces, setProvinces] = useState([]);
   const [province, setProvince] = useState('');
   const [wards, setWards] = useState([]);
@@ -48,6 +53,8 @@ export default function Checkout() {
   const [zaloCfg, setZaloCfg] = useState(null);
   const [zaloCfgFailed, setZaloCfgFailed] = useState(false); // 🟠15: phân biệt "lỗi tải" với "chưa tải"
   const [payChannel, setPayChannel] = useState('BANK'); // BANK | COD
+  const [ckGate, setCkGate] = useState(null); // UX 2026-10-26 (MA-🟠3-bis): hộp xác nhận trong trang khi cổng CK lỗi cấu hình (thay window.confirm)
+  const ckGateOkRef = useRef(false);
   useEffect(() => {
     api.zaloPayConfig().then(setZaloCfg).catch(() => setZaloCfgFailed(true));
   }, []);
@@ -62,14 +69,6 @@ export default function Checkout() {
       return cur;
     });
   }, [zaloCfg]);
-  // SPEC-02: nạp ví coupon của khách
-  // Spec KM chống mã (2026-10-21) Phần B: nạp bằng định danh SĐT + mã TV (không dùng customer_id trần)
-  useEffect(() => {
-    const profile = getProfile();
-    if (profile?.customer_id) {
-      api.myCoupons(profileIdentity(profile), 'active').then(setMyCoupons).catch(() => {});
-    }
-  }, []);
   useEffect(() => {
     api.payMethods().then((list) => {
       if (list && list.length) {
@@ -79,17 +78,27 @@ export default function Checkout() {
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [promos, setPromos] = useState([]);
-  const [promoId, setPromoId] = useState('');
+  // Gói Ưu đãi hợp nhất (2026-10-31): danh sách hợp nhất từ server (chế độ
+  // unified) + lựa chọn phía A của khách (KM chung HOẶC coupon ví — radio).
+  // Khách không chọn = không giảm: bỏ hẳn tự áp ở bề mặt Mini App.
+  const [offers, setOffers] = useState(null); // {items, stack_cap_amount}
+  const [selA, setSelA] = useState(null); // {kind: 'promotion'|'wallet_coupon', id}
+  const [offerWarn, setOfferWarn] = useState(''); // cảnh báo trong khối Ưu đãi (mất điều kiện / coupon ví không dùng được)
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [offerSearch, setOfferSearch] = useState('');
   const [voucher, setVoucher] = useState('');
   // Audit 2026-10-21 🟠8: kết quả validate voucher từ SERVER (số giảm thật để vào tổng hiển thị)
-  const [voucherInfo, setVoucherInfo] = useState(null); // {code, name, discount}
+  const [voucherInfo, setVoucherInfo] = useState(null); // {code, name, discount, stack_with_promotion}
+  const [voucherMsg, setVoucherMsg] = useState(''); // Gói Ưu đãi hợp nhất: thông báo chặn cặp thiếu cờ (gọi tên mã đang chặn)
   const [points, setPoints] = useState(0);
   // Loyalty 2.0: không còn đổi điểm trực tiếp tại checkout — điểm chỉ đổi
   // coupon ở Cửa hàng điểm (trang Tài khoản).
   // Gói 64: bỏ tick VAT trên Mini App (hóa đơn đã kèm mã QR) — giữ state rỗng để không gãy code cũ
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
+  // UX 2026-10-26 (🟠3): lỗi validate hiện tại trang thay alert() — banner ở bước hiện tại + lỗi riêng dưới ô mã
+  const [formErr, setFormErr] = useState('');
+  const [voucherErr, setVoucherErr] = useState('');
   const [customerId, setCustomerId] = useState(null);
   const [addrBook, setAddrBook] = useState([]);
   const [addrId, setAddrId] = useState('');
@@ -142,10 +151,6 @@ export default function Checkout() {
       if (next && !schedDate) { setSchedDate(next.date); setSchedTime(next.time); }
     }
   }, [isClosed]);
-
-  useEffect(() => {
-    if (promoId && promos.length > 0 && !promos.some((p) => String(p.id) === String(promoId))) setPromoId('');
-  }, [promos]);
 
   useEffect(() => {
     if (!branch) { nav('/branches'); return; }
@@ -326,6 +331,8 @@ export default function Checkout() {
         // Gói 55 p11ac: bổ sung category_id + unit_price để KM theo danh mục / đồng giá hiện được trên Mini App
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.qty, line_total: l.unitPrice * l.qty, category_id: l.product.category_id || null, unit_price: l.unitPrice })),
         shipping_fee: fee,
+        // Gói Ưu đãi hợp nhất (2026-10-31): xin danh sách hợp nhất KM + coupon ví
+        unified: true,
       };
       // Audit 2026-10-21 🟠10 (phía FE): tra khách lỗi (mạng/422 cũ) KHÔNG được nuốt
       // luôn danh sách KM — rơi về khách vãng lai để KM công khai vẫn hiện.
@@ -333,14 +340,52 @@ export default function Checkout() {
         if (c) {
           setPoints(c.loyalty?.points ?? c.points ?? 0);
           setCustomerId(c.id);
+          // Gói Đón Bình Minh: khách đã từng có đơn (đã tích lũy chi tiêu hoặc
+          // còn đơn gần đây) → ẩn ô mã người giới thiệu ở form bên dưới.
+          setHasPriorOrders((Number(c.total_spent) || 0) > 0 || (c.orders || []).length > 0);
           api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(r?.data || [])).catch(() => {});
           return api.eligiblePromotions({ ...payload, customer_id: c.id, phone: formatPhone(phone), member_code: getProfile()?.member_code || '' });
         }
         return api.eligiblePromotions({ ...payload, channel: 'online' });
-      }).then(setPromos).catch(() => {});
+      }).then(setOffers).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
   }, [phone, subtotal, km, shipCfg, type]);
+
+  // Gói Ưu đãi hợp nhất (2026-10-31): mỗi lần danh sách hợp nhất nạp lại (đổi
+  // giỏ/SĐT/loại đơn) — xử lý coupon chọn sẵn từ Ví (1 lần) và tự nhả lựa chọn
+  // phía A đã mất điều kiện kèm cảnh báo, đúng spec mục 2.8.
+  const itemOfSel = (list, sel) => (list || []).find((i) => sel
+    && i.kind === sel.kind
+    && (sel.kind === 'promotion' ? i.promotion_id : i.customer_coupon_id) === sel.id) || null;
+  useEffect(() => {
+    if (!offers) return;
+    if (preselectCouponId.current) {
+      const cid = Number(preselectCouponId.current);
+      preselectCouponId.current = null;
+      const it = offers.items.find((i) => i.kind === 'wallet_coupon' && i.customer_coupon_id === cid);
+      if (it?.eligible) {
+        setSelA({ kind: 'wallet_coupon', id: cid });
+        setOfferWarn('');
+      } else if (it) {
+        setOfferWarn(`Coupon ${it.code} chưa dùng được cho đơn này: ${it.reason_text || 'chưa đủ điều kiện.'}`);
+      } else {
+        setOfferWarn('Coupon bạn chọn từ Ví không còn dùng được cho đơn này.');
+      }
+      return;
+    }
+    if (selA) {
+      const it = itemOfSel(offers.items, selA);
+      if (!it) {
+        setSelA(null);
+        setOfferWarn('Ưu đãi đã chọn không còn áp dụng được cho đơn này — đã bỏ chọn.');
+      } else if (!it.eligible) {
+        setSelA(null);
+        setOfferWarn(`Ưu đãi đã chọn không còn đủ điều kiện: ${it.reason_text || ''} — đã bỏ chọn.`);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offers]);
 
   // Gói 60: phí ship ưu tiên từ báo giá live của hãng (đã trừ phần quán hỗ trợ);
   // chưa có báo giá thì dùng cách tính nội bộ cũ.
@@ -353,74 +398,87 @@ export default function Checkout() {
     quoteLiveRef.current = { loading: quoteLoading, pkg: quotePkg || null, code: deliveryPkg };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quoteLoading, quote, deliveryPkg]);
-  const promo = promos.find((p) => String(p.id) === String(promoId));
-  const isShipPromo = !!(promo && (promo.is_shipping || promo.type === 'shipping') && type === 'delivery');
-  const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
-  const promoDisc = promo && !isShipPromo ? Number(promo.discount) : 0;
-  // Audit toàn diện 2026-10-21 🟠8: voucher gõ tay PHẢI vào tổng hiển thị (số giảm do
-  // server validate). Luật phía thắng giống server khi không cộng dồn: phía tiền hàng
-  // chỉ trừ MỨC LỚN HƠN giữa (KM + coupon tiền hàng) và voucher — hòa thì KM thắng
-  // (đúng luật hòa đã chốt); khi quán bật cộng dồn, server cộng thêm và tổng thật chỉ
-  // thấp hơn số hiển thị, không bao giờ cao hơn.
-  const couponMoneyDisc = couponIsShipping ? 0 : couponDiscount;
-  const couponShipDisc = couponIsShipping ? couponDiscount : 0;
-  const shipDiscTotal = shipDisc + couponShipDisc;
-  const kmMoneyDisc = promoDisc + couponMoneyDisc;
-  const voucherDisc = voucherInfo ? Number(voucherInfo.discount) || 0 : 0;
-  const voucherWins = voucherDisc > 0 && voucherDisc > kmMoneyDisc;
-  const moneyDiscTotal = voucherDisc > 0 ? Math.max(kmMoneyDisc, voucherDisc) : kmMoneyDisc;
-  // Loyalty 2.0: bỏ pointDisc — tổng không còn dòng trừ điểm (điểm chỉ đổi
-  // coupon ở Cửa hàng điểm, coupon áp như coupon ví bình thường ở trên).
+  // ===== Gói Ưu đãi hợp nhất (2026-10-31): PHÂN XỬ HIỂN THỊ §5d =====
+  // Bất biến sống còn: TỔNG HIỂN THỊ = SỐ SERVER THU. Mọi số đầu vào do server
+  // trả (số giảm từng mã, cờ cộng dồn, trần stack_cap_amount); client chỉ chạy
+  // đúng phép phân xử của store() (OnlineOrderController bước 5d) trên các số
+  // đó — thay cho cụm cộng thẳng promoDisc + couponDisc gây lỗi 41.500/76.500đ.
+  const selItem = itemOfSel(offers?.items, selA);
+  const stackCap = offers ? Number(offers.stack_cap_amount) || 0 : subtotal;
+  const aMoneyItem = selItem && !selItem.is_shipping && selItem.type !== 'gift' ? selItem : null;
+  const shipDisc = selItem?.is_shipping ? Math.min(Number(selItem.discount) || 0, shipFee) : 0;
+  const shipDiscTotal = shipDisc;
+  const aDisc = aMoneyItem ? Number(aMoneyItem.discount) || 0 : 0;
+  const bDisc = voucherInfo ? Number(voucherInfo.discount) || 0 : 0;
+  const pairAllowed = aDisc > 0 && bDisc > 0 && !!aMoneyItem?.stack_with_coupon && !!voucherInfo?.stack_with_promotion;
+  const promoSingle = aDisc > 0 ? Math.min(aDisc, stackCap) : 0;
+  const voucherSingle = bDisc > 0 ? Math.min(bDisc, stackCap) : 0;
+  const pairTotal = pairAllowed ? Math.min(aDisc + bDisc, stackCap) : 0;
+  let moneyDiscTotal = 0;
+  let aApplied = 0; // số giảm tiền hàng của phía A đang được áp
+  let vApplied = 0; // số giảm tiền hàng của voucher đang được áp
+  let voucherState = null; // 'stacked' | 'single' | 'not_applied' (đã nhận nhưng chạm trần)
+  let pairCapped = false;
+  if (pairAllowed && pairTotal > promoSingle && pairTotal > voucherSingle) {
+    moneyDiscTotal = pairTotal;
+    aApplied = aDisc;
+    vApplied = pairTotal - aDisc;
+    voucherState = 'stacked';
+    pairCapped = aDisc + bDisc > stackCap;
+  } else if (bDisc > aDisc) {
+    // Voucher thắng hẳn (kể cả khi phía A là KM ship/tặng món — mặt tiền hàng trống)
+    moneyDiscTotal = voucherSingle;
+    vApplied = voucherSingle;
+    voucherState = 'single';
+  } else if (aDisc > 0) {
+    moneyDiscTotal = promoSingle;
+    aApplied = promoSingle;
+    if (bDisc > 0) voucherState = 'not_applied';
+  } else if (bDisc > 0) {
+    moneyDiscTotal = voucherSingle;
+    vApplied = voucherSingle;
+    voucherState = 'single';
+  }
+  const totalDiscTotal = shipDiscTotal + moneyDiscTotal;
+  // Loyalty 2.0: bỏ pointDisc — tổng không còn dòng trừ điểm
   const total = Math.max(0, subtotal + shipFee - shipDiscTotal - moneyDiscTotal);
-  const selectedCoupon = myCoupons.find((c) => String(c.id) === String(selectedCouponId)) || null;
 
-  // Audit UX 2026-10-21 (hạng 1): validate coupon dùng chung cho chọn tay lẫn coupon
-  // chọn sẵn từ ví ("Dùng ngay") — trước đây preselect không được validate nên giảm = 0đ.
-  // Spec KM chống mã (2026-10-21): số giảm do SERVER tính theo phạm vi (discountFor) —
-  // frontend không tự tính % nữa; gửi kèm items + phí ship + định danh SĐT/mã TV.
-  const validatedCouponRef = useRef(null);
-  const applyCoupon = async (cid) => {
-    if (!cid) { setCouponDiscount(0); setCouponIsShipping(false); validatedCouponRef.current = null; return; }
-    try {
-      const prof = getProfile() || {};
-      const res = await api.validateCoupon({
-        // Audit 2026-10-21 🟠13: dùng SĐT TRONG FORM (cùng số sẽ gửi khi đặt đơn) —
-        // trước đây lấy SĐT profile nên khách sửa SĐT ở form là validate báo OK nhưng
-        // đặt đơn bị server từ chối "Coupon không thuộc về bạn" ở bước cuối.
-        phone: formatPhone(phone || '') || prof.phone || '',
-        member_code: prof.member_code || '',
-        coupon_id: Number(cid),
-        subtotal,
-        items: cart.map((l) => ({ product_id: l.product.id, quantity: l.qty, line_total: l.unitPrice * l.qty, category_id: l.product.category_id || null, unit_price: l.unitPrice })),
-        shipping_fee: shipFee,
-        channel: 'online',
-      });
-      setCouponDiscount(Math.round(Number(res.discount) || 0));
-      setCouponIsShipping(!!res.is_shipping);
-      validatedCouponRef.current = Number(cid);
-    } catch (err) {
-      alert(err.message || 'Coupon không hợp lệ.');
-      setSelectedCouponId(null);
-      setCouponDiscount(0);
-      setCouponIsShipping(false);
-      validatedCouponRef.current = null;
-    }
+  // Mã phía A bị voucher đang có chặn (thiếu 1 trong 2 cờ cộng dồn) — chỉ xét
+  // quan hệ cùng mặt tiền hàng; KM ship/tặng món không tranh mặt này (§5d).
+  const blockedByVoucher = (item) => !!voucherInfo && !item.is_shipping && item.type !== 'gift'
+    && !(item.stack_with_coupon && voucherInfo.stack_with_promotion);
+
+  const chooseA = (item) => {
+    if (!item?.eligible || blockedByVoucher(item)) return;
+    const key = { kind: item.kind, id: item.kind === 'promotion' ? item.promotion_id : item.customer_coupon_id };
+    // Chạm lại mã đang chọn = bỏ chọn
+    setSelA((cur) => (cur && cur.kind === key.kind && cur.id === key.id ? null : key));
+    setOfferWarn('');
   };
-  // Tự validate coupon chọn sẵn ngay khi ví coupon nạp xong
-  useEffect(() => {
-    if (!selectedCouponId || myCoupons.length === 0) return;
-    if (validatedCouponRef.current === Number(selectedCouponId)) return;
-    if (!myCoupons.some((c) => String(c.id) === String(selectedCouponId))) return;
-    setPromoId('');
-    applyCoupon(selectedCouponId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCouponId, myCoupons]);
 
-  // Audit 2026-10-21 🟠8: validate voucher gõ tay bằng endpoint server — trả về true nếu
-  // mã dùng được (đã set voucherInfo). Lỗi thì báo rõ lý do như server sẽ nói khi chốt đơn.
+  // Audit 2026-10-21 🟠8: validate voucher gõ tay bằng endpoint server.
+  // Gói Ưu đãi hợp nhất (2026-10-31): thêm kiểm soát tương thích chiều B→A —
+  // voucher thiếu cờ với phía A đang chọn thì BỊ CHẶN ngay tại lúc nhập (không
+  // thành lựa chọn, thông báo gọi đúng tên mã A đang chặn, ô nhập giữ nguyên).
   const checkVoucher = async (code) => {
     const c = String(code || '').trim().toUpperCase();
+    setVoucherErr('');
+    setVoucherMsg('');
     if (!c) { setVoucherInfo(null); return true; }
+    // Ca biên 5: mã gõ vào trùng coupon ví của chính khách → chọn luôn ở phía A
+    const walletHit = (offers?.items || []).find((i) => i.kind === 'wallet_coupon' && String(i.code || '').toUpperCase() === c);
+    if (walletHit) {
+      if (walletHit.eligible) {
+        setSelA({ kind: 'wallet_coupon', id: walletHit.customer_coupon_id });
+        setOfferWarn('');
+        setVoucher('');
+        setVoucherInfo(null);
+        setVoucherMsg('Mã này là coupon trong ví của bạn — đã chọn ở danh sách ưu đãi bên dưới.');
+        return true;
+      }
+      setVoucherErr(`Coupon ${walletHit.code} trong ví của bạn chưa dùng được: ${walletHit.reason_text || 'chưa đủ điều kiện.'}`);
+      return false;
+    }
     try {
       const prof = getProfile() || {};
       const res = await api.validateVoucher({
@@ -429,11 +487,24 @@ export default function Checkout() {
         phone: formatPhone(phone || '') || prof.phone || '',
         member_code: prof.member_code || '',
       });
-      setVoucherInfo({ code: res.code, name: res.name, discount: Math.round(Number(res.discount) || 0) });
+      const info = {
+        code: res.code, name: res.name,
+        discount: Math.round(Number(res.discount) || 0),
+        stack_with_promotion: !!res.stack_with_promotion,
+      };
+      if (aMoneyItem && !(aMoneyItem.stack_with_coupon && info.stack_with_promotion)) {
+        // Tên mã đang chặn: coupon ví gọi cả mã coupon, KM chung gọi tên chương trình
+        const aLabel = aMoneyItem.kind === 'wallet_coupon' && aMoneyItem.code
+          ? `${aMoneyItem.name} (${aMoneyItem.code})` : aMoneyItem.name;
+        setVoucherInfo(null);
+        setVoucherMsg(`Mã ${info.code} không áp dụng cùng ${aLabel} — bỏ chọn ${aLabel} để dùng mã này, hoặc giữ ${aLabel} và bỏ qua mã này.`);
+        return false;
+      }
+      setVoucherInfo(info);
       return true;
     } catch (err) {
       setVoucherInfo(null);
-      alert(err.message || 'Mã voucher không hợp lệ.');
+      setVoucherErr(err.message || 'Mã voucher không hợp lệ.');
       return false;
     }
   };
@@ -447,17 +518,20 @@ export default function Checkout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subtotal, voucherInfo]);
 
-  // Đổi loại đơn: reset voucher + KM (không áp dụng sang loại mới)
+  // Đổi loại đơn: reset toàn bộ lựa chọn ưu đãi (không áp dụng sang loại mới)
   const switchType = (t) => {
     setType(t);
-    setPromoId('');
+    setSelA(null);
     setVoucher('');
     setVoucherInfo(null);
+    setVoucherMsg('');
+    setOfferWarn('');
   };
 
   // Validate bước 1 rồi sang tóm tắt
   const goSummary = async () => {
-    if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
+    setFormErr('');
+    if (!name.trim() || !phone.trim()) { setFormErr('Nhập tên và số điện thoại ở phần thông tin nhận hàng phía trên.'); return; }
     // 🟠8: có mã voucher chưa validate (hoặc khác mã đã validate) → validate trước khi
     // sang bước 2 để tổng hiển thị ở bước 2 đã gồm số giảm/không gồm mã sai.
     const vcode = voucher.trim().toUpperCase();
@@ -466,22 +540,22 @@ export default function Checkout() {
       if (!ok) return;
     }
     if (type === 'delivery') {
-      if (!province || !ward || !street.trim()) { alert('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường.'); return; }
+      if (!province || !ward || !street.trim()) { setFormErr('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường ở phần địa chỉ giao hàng.'); return; }
       // Gói 55 p10: hẹn giờ giao — kiểm tra trong giờ mở cửa
       if (deliveryMode === 'scheduled') {
         const d = toApiDate(schedDate);
-        if (!d) { alert('Nhập ngày muốn giao (dd/mm/yyyy).'); return; }
-        if (!validTime(schedTime)) { alert('Nhập giờ muốn giao (HH:MM, 24h).'); return; }
-        if (new Date(`${d}T${schedTime}`) <= new Date()) { alert('Giờ hẹn phải sau thời điểm hiện tại.'); return; }
-        if (!isWithinOpening(branch, schedDate, schedTime)) { alert('Giờ hẹn phải trong giờ mở cửa của quán.'); return; }
+        if (!d) { setFormErr('Nhập ngày muốn giao (dd/mm/yyyy).'); return; }
+        if (!validTime(schedTime)) { setFormErr('Nhập giờ muốn giao (HH:MM, 24h).'); return; }
+        if (new Date(`${d}T${schedTime}`) <= new Date()) { setFormErr('Giờ hẹn phải sau thời điểm hiện tại.'); return; }
+        if (!isWithinOpening(branch, schedDate, schedTime)) { setFormErr('Giờ hẹn phải trong giờ mở cửa của quán.'); return; }
       }
     }
     if (type === 'scheduled') {
       const d = toApiDate(schedDate);
-      if (!d) { alert('Nhập ngày muốn tới lấy (dd/mm/yyyy).'); return; }
-      if (!validTime(schedTime)) { alert('Nhập giờ muốn tới lấy (HH:MM, 24h).'); return; }
-      if (new Date(`${d}T${schedTime}`) <= new Date()) { alert('Giờ hẹn phải sau thời điểm hiện tại.'); return; }
-      if (!isWithinOpening(branch, schedDate, schedTime)) { alert('Giờ hẹn phải trong giờ mở cửa của quán.'); return; }
+      if (!d) { setFormErr('Nhập ngày muốn tới lấy (dd/mm/yyyy).'); return; }
+      if (!validTime(schedTime)) { setFormErr('Nhập giờ muốn tới lấy (HH:MM, 24h).'); return; }
+      if (new Date(`${d}T${schedTime}`) <= new Date()) { setFormErr('Giờ hẹn phải sau thời điểm hiện tại.'); return; }
+      if (!isWithinOpening(branch, schedDate, schedTime)) { setFormErr('Giờ hẹn phải trong giờ mở cửa của quán.'); return; }
     }
     // Gói 64: bỏ validate VAT (không còn tick VAT trên Mini App)
     window.scrollTo(0, 0);
@@ -504,7 +578,7 @@ export default function Checkout() {
       const livePkg = type === 'delivery' ? quoteLiveRef.current.pkg : null;
       // Gói 60: đã cấu hình hãng mà báo giá lỗi và không có phí dự phòng → chặn (checklist #5)
       if (type === 'delivery' && deliveryReady && !livePkg && km == null) {
-        alert('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
+        setFormErr('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
         return;
       }
       let scheduledAt = null;
@@ -523,12 +597,16 @@ export default function Checkout() {
       // lỗi mà khách chọn Chuyển khoản qua đường thường thì đơn sẽ không có nơi hiện
       // STK/nội dung CK. Báo rõ để khách chọn: thử lại (tải lại trang) hoặc tiếp tục
       // và quán sẽ liên hệ hướng dẫn chuyển khoản.
-      if (!useZaloPay && payment === 'transfer') {
-        const cont = window.confirm(zaloCfgFailed
-          ? 'Chưa tải được thông tin chuyển khoản của quán (có thể do mạng chập chờn). Nếu tiếp tục, quán sẽ liên hệ hướng dẫn chuyển khoản sau khi nhận đơn.\n\nBấm OK để vẫn đặt đơn, hoặc Cancel để quay lại chọn cách thanh toán khác / thử tải lại trang.'
-          : 'Đơn chuyển khoản này sẽ được quán xác nhận và hướng dẫn thông tin chuyển khoản sau khi nhận đơn.\n\nBấm OK để tiếp tục đặt đơn.');
-        if (!cont) return;
+      if (!useZaloPay && payment === 'transfer' && !ckGateOkRef.current) {
+        // UX 2026-10-26 (MA-🟠3-bis): hiện hộp xác nhận ngay trong trang (mẫu inline như
+        // TrackOrder/WaitingPayment) thay window.confirm; khách bấm "Vẫn đặt đơn" thì
+        // ckGateOkRef mở cổng và place() chạy lại từ đầu. Nội dung giữ nguyên ý 🟠15 audit 21/10.
+        setCkGate(zaloCfgFailed
+          ? 'Chưa tải được thông tin chuyển khoản của quán (có thể do mạng chập chờn). Nếu tiếp tục, quán sẽ liên hệ hướng dẫn chuyển khoản sau khi nhận đơn.'
+          : 'Đơn chuyển khoản này sẽ được quán xác nhận và hướng dẫn thông tin chuyển khoản sau khi nhận đơn.');
+        return;
       }
+      ckGateOkRef.current = false;
       // 🟠11 (phòng race): kênh đã chọn không còn khả dụng theo cấu hình vừa tải → tự đổi
       let effChannel = payChannel;
       if (useZaloPay) {
@@ -562,14 +640,16 @@ export default function Checkout() {
         payment_method: useZaloPay ? (effChannel === 'BANK' ? 'transfer' : 'pay_at_store') : payment,
         // SPEC-01: kênh thanh toán Zalo
         ...(useZaloPay ? { pay_channel: effChannel } : {}),
-        voucher_code: voucher.trim() || null,
-        promotion_id: promoId || null,
-        // SPEC-02: coupon từ ví (thay thế promotion_id khi có)
-        customer_coupon_id: selectedCouponId ? Number(selectedCouponId) : null,
+        // Gói Ưu đãi hợp nhất (2026-10-31): chỉ gửi ĐÚNG những gì khách đã chọn
+        // và đã được nhận — voucher bị chặn khi nhập không gửi (tránh server áp
+        // thay lựa chọn của khách); không chọn gì → cả 3 trường rỗng, đơn không giảm.
+        voucher_code: voucherInfo?.code || null,
+        promotion_id: selA?.kind === 'promotion' ? selA.id : null,
+        customer_coupon_id: selA?.kind === 'wallet_coupon' ? selA.id : null,
         // Loyalty 2.0: không gửi points_redeem nữa (điểm chỉ đổi coupon ở Cửa hàng điểm)
         // Gói 64: không gửi yêu cầu VAT cho đơn online nữa (giữ null)
         note: note.trim() || null,
-        referred_by: getRef() || null,
+        referred_by: refCode.trim().toUpperCase() || null,
         items: cart.map((l) => ({
           product_id: l.product.id,
           product_option_id: l.optionId || null,
@@ -651,7 +731,7 @@ export default function Checkout() {
         nav(`/success/${order.code}`);
       }
     } catch (e) {
-      alert(e.message);
+      setFormErr(e.message || 'Đặt hàng thất bại. Vui lòng thử lại.');
     } finally { setPlacing(false); }
   };
 
@@ -693,6 +773,23 @@ export default function Checkout() {
               <label>Số điện thoại * <span style={{ color: '#888', fontWeight: 400 }}>(để tích điểm thành viên)</span></label>
               <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
             </div>
+            {/* Gói Đón Bình Minh (2026-10-28): mã người giới thiệu — chỉ hiện với
+                khách chưa có đơn; đến từ link thì hiện sẵn mã đã gắn, xóa/sửa được */}
+            {!hasPriorOrders && (
+              <div className="zm-field">
+                <label>Mã người giới thiệu (nếu có)</label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                  <input value={refCode} onChange={(e) => updateRefCode(e.target.value.toUpperCase())} placeholder="Nhập mã của người giới thiệu" maxLength={20} style={{ flex: 1 }} />
+                  {refCode && (
+                    <button type="button" onClick={() => updateRefCode('')} aria-label="Xóa mã người giới thiệu"
+                      style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}>✕</button>
+                  )}
+                </div>
+                {refFromLink && refCode && (
+                  <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>Đã gắn từ link mời — kiểm tra đúng người mời của bạn chưa nhé.</div>
+                )}
+              </div>
+            )}
 
             {type === 'delivery' && (
               <>
@@ -972,66 +1069,214 @@ export default function Checkout() {
 
             {/* Gói 64: bỏ tick xuất VAT trên Mini App (hóa đơn đã kèm mã QR cho khách quét nhập thông tin) */}
 
-            {promos.length > 0 && (
-              <div className="zm-field">
-                <label>Khuyến mại</label>
-                <select value={promoId} onChange={(e) => setPromoId(e.target.value)}>
-                  <option value="">Không dùng</option>
-                  {promos.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {(p.is_shipping || p.type === 'shipping') ? `🚚 ${p.name} (−${fmt(p.discount)}đ phí ship)` : `${p.name} (−${fmt(p.discount)}đ)`}
-                    </option>
-                  ))}
-                </select>
+            {/* ===== Gói Ưu đãi hợp nhất (2026-10-31): khối Ưu đãi + panel chọn ===== */}
+            <div
+              onClick={() => setPanelOpen(true)}
+              style={{ background: '#fff', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14, cursor: 'pointer' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 28 }}>
+                <span style={{ fontWeight: 700, fontSize: 14 }}>🎁 Ưu đãi</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {totalDiscTotal > 0 && <b style={{ color: '#16a34a', fontSize: 13.5 }}>−{fmt(totalDiscTotal)}đ</b>}
+                  <span style={{ color: '#999', fontSize: 18 }}>›</span>
+                </span>
               </div>
-            )}
-
-            {/* SPEC-02: chọn coupon từ ví (1 hóa đơn = 1 coupon) */}
-            {myCoupons.length > 0 && (
-              <div className="zm-field">
-                <label>🎫 Coupon của tôi (chọn 1)</label>
-                <select
-                  value={selectedCouponId || ''}
-                  onChange={(e) => {
-                    const cid = e.target.value || null;
-                    setSelectedCouponId(cid);
-                    // Nếu chọn coupon ví thì bỏ KM chung (quy tắc 1 hóa đơn = 1 coupon)
-                    if (cid) setPromoId('');
-                    applyCoupon(cid);
-                  }}
-                >
-                  <option value="">Không dùng coupon</option>
-                  {myCoupons.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.promotion?.name} ({c.code})
-                    </option>
-                  ))}
-                </select>
-                {selectedCouponId && couponDiscount > 0 && (
-                  <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4, fontWeight: 700 }}>
-                    Giảm {fmt(couponDiscount)}đ từ coupon
-                  </div>
-                )}
-              </div>
-            )}
-            <div style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎟️ Mã giảm giá</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <div className="zm-field" style={{ margin: 0, flex: 1 }}>
-                  <input value={voucher} onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); }} placeholder="NHẬP MÃ NẾU CÓ" style={{ textTransform: 'uppercase' }} />
+              {selItem?.is_shipping && shipDisc > 0 && (
+                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>🚚 {selItem.name}: giảm ship {fmt(shipDisc)}đ</div>
+              )}
+              {selItem?.type === 'gift' && (
+                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>🎁 {selItem.name}: tặng {selItem.gift_product_name}</div>
+              )}
+              {aApplied > 0 && aMoneyItem && (
+                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>
+                  {aMoneyItem.kind === 'wallet_coupon' ? '🎫' : '🎉'} {aMoneyItem.name}: −{fmt(aApplied)}đ{voucherState === 'stacked' ? ' (cộng dồn)' : ''}
                 </div>
-                {/* 🟠8: nút Áp dụng — validate server ngay để số giảm vào tổng hiển thị */}
-                <button type="button" className="zm-btn-primary" style={{ padding: '0 14px', fontSize: 13 }}
-                  onClick={() => checkVoucher(voucher)}>
-                  Áp dụng
-                </button>
-              </div>
-              {voucherInfo && (
-                <div style={{ fontSize: 12, color: '#16a34a', marginTop: 6, fontWeight: 700 }}>
-                  ✅ {voucherInfo.code}: giảm {fmt(voucherInfo.discount)}đ{voucherWins ? '' : (kmMoneyDisc > 0 ? ' — KM hiện tại giảm nhiều hơn nên hệ thống sẽ áp KM (voucher không bị trừ lượt)' : '')}
+              )}
+              {vApplied > 0 && voucherInfo && (
+                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>
+                  🎟️ Voucher {voucherInfo.code}: −{fmt(vApplied)}đ{voucherState === 'stacked' ? ' (cộng dồn)' : ''}{pairCapped ? ' — đã chạm trần giảm tối đa' : ''}
+                </div>
+              )}
+              {voucherState === 'not_applied' && voucherInfo && (
+                <div style={{ fontSize: 12.5, color: '#92400e', fontWeight: 600, marginTop: 4 }}>
+                  🎟️ Voucher {voucherInfo.code} chưa áp dụng cho đơn này — đi cùng {aMoneyItem?.name} đã chạm trần giảm tối đa; mã giữ nguyên, chưa bị trừ lượt.
+                </div>
+              )}
+              {offerWarn && (
+                <div style={{ fontSize: 12.5, color: '#b91c1c', fontWeight: 600, marginTop: 4 }}>⚠ {offerWarn}</div>
+              )}
+              {voucherMsg && (
+                <div style={{ fontSize: 12.5, color: '#92400e', fontWeight: 600, marginTop: 4 }}>{voucherMsg}</div>
+              )}
+              {!selItem && !voucherInfo && !offerWarn && (
+                <div style={{ fontSize: 12.5, color: '#888', marginTop: 4 }}>
+                  {(() => {
+                    const best = Math.max(0, ...(offers?.items || []).filter((i) => i.eligible).map((i) => Number(i.discount) || 0));
+                    return best > 0 ? `Có ưu đãi giảm đến ${fmt(best)}đ — chạm để chọn` : 'Nhập mã giảm giá nếu có';
+                  })()}
                 </div>
               )}
             </div>
+
+            {/* L0 (2026-10-31): overlay căn giữa + sheet chốt maxWidth 480 theo khung #root của app — hết tràn ngang ở viewport rộng */}
+            {panelOpen && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+                onClick={() => setPanelOpen(false)}>
+                <div style={{ background: '#fff', width: '100%', maxWidth: 480, maxHeight: '92vh', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column' }}
+                  onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px 8px' }}>
+                    <b style={{ fontSize: 16 }}>🎁 Ưu đãi</b>
+                    <button type="button" onClick={() => setPanelOpen(false)}
+                      style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 20, color: '#666', cursor: 'pointer' }}>✕</button>
+                  </div>
+                  <div style={{ overflowY: 'auto', padding: '0 16px 8px' }}>
+                    {/* Phía B: ô nhập voucher gõ tay */}
+                    <div style={{ fontWeight: 700, fontSize: 13.5, margin: '4px 0 6px' }}>🎟️ Mã voucher</div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input value={voucher}
+                        onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); setVoucherErr(''); setVoucherMsg(''); }}
+                        placeholder="NHẬP MÃ NẾU CÓ"
+                        style={{ flex: 1, minWidth: 0, minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', textTransform: 'uppercase', fontSize: 14 }} />
+                      <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }}
+                        onClick={() => checkVoucher(voucher)}>
+                        Áp dụng
+                      </button>
+                    </div>
+                    {voucherErr && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6, fontWeight: 600 }}>⚠ {voucherErr}</div>}
+                    {voucherMsg && <div style={{ fontSize: 12.5, color: '#92400e', marginTop: 6, fontWeight: 600 }}>{voucherMsg}</div>}
+                    {voucherInfo && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '8px 10px', marginTop: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#15803d' }}>
+                          🎟️ {voucherInfo.code} — giảm {fmt(voucherInfo.discount)}đ
+                          {voucherState === 'stacked' ? ` · Đang cộng dồn với ${aMoneyItem?.name}` : voucherState === 'not_applied' ? ' · Chưa áp dụng (chạm trần)' : ''}
+                        </span>
+                        <button type="button" aria-label="Gỡ voucher"
+                          onClick={() => { setVoucherInfo(null); setVoucher(''); setVoucherMsg(''); }}
+                          style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 16, color: '#999', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    )}
+                    {/* L4-B (2026-10-31): dòng gợi ý tương thích voucher KHÔNG còn nằm dưới ô nhập
+                        (đọc như lỗi của ô nhập) — đã chuyển vào dòng của mã đang chọn trong danh sách dưới đây.
+                        Dưới ô nhập chỉ còn thông báo khi khách thật sự nhập mã bị chặn (voucherMsg ở trên). */}
+                    {/* Ô tìm kiếm: CHỈ lọc danh sách, không áp mã (phát triển sau) */}
+                    <input value={offerSearch} onChange={(e) => setOfferSearch(e.target.value)}
+                      placeholder="🔍 Tìm ưu đãi theo tên hoặc mã…"
+                      style={{ width: '100%', minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', fontSize: 14, marginTop: 14, boxSizing: 'border-box' }} />
+                    {/* Phía A: danh sách hợp nhất, chọn 1 */}
+                    <div style={{ fontWeight: 700, fontSize: 13.5, margin: '14px 0 4px' }}>Ưu đãi chính — chọn 1 trong các mã này</div>
+                    {/* L1a (2026-10-31): khi KHÔNG mã tiền hàng nào cộng dồn được với voucher, huy hiệu
+                        "Chỉ dùng riêng" lặp trên mọi dòng mất tác dụng phân biệt → thay bằng 1 chú thích chung */}
+                    {(() => {
+                      const items = offers?.items || [];
+                      const anyStack = items.some((i) => i.stack_with_coupon && !i.is_shipping && i.type !== 'gift');
+                      return !anyStack && items.length > 0 ? (
+                        <div style={{ fontSize: 12.5, color: '#666', margin: '0 0 6px' }}>Các ưu đãi hiện tại không cộng dồn với voucher.</div>
+                      ) : null;
+                    })()}
+                    <div
+                      onClick={() => { setSelA(null); setOfferWarn(''); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 48, padding: '6px 2px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }}>
+                      <span style={{ width: 22, height: 22, borderRadius: '50%', border: `2px solid ${!selA ? '#F5A623' : '#ccc'}`, background: !selA ? '#F5A623' : 'transparent', flexShrink: 0, boxSizing: 'border-box' }} />
+                      <span style={{ fontSize: 14 }}>Không dùng ưu đãi</span>
+                    </div>
+                    {(() => {
+                      const q = offerSearch.trim().toLowerCase();
+                      const list = (offers?.items || []).filter((i) => !q
+                        || String(i.name || '').toLowerCase().includes(q)
+                        || String(i.code || '').toLowerCase().includes(q));
+                      if (list.length === 0) {
+                        return <div style={{ fontSize: 13, color: '#888', padding: '14px 2px' }}>
+                          {q ? `Không có ưu đãi nào khớp '${offerSearch.trim()}' — mã giảm giá gõ tay nhập ở ô Mã voucher phía trên.` : 'Chưa có ưu đãi nào cho đơn này.'}
+                        </div>;
+                      }
+                      const allItems = offers?.items || [];
+                      const anyStack = allItems.some((i) => i.stack_with_coupon && !i.is_shipping && i.type !== 'gift');
+                      const couponNames = new Set(allItems.filter((i) => i.kind === 'wallet_coupon').map((i) => i.name));
+                      return list.map((item) => {
+                        const idOf = item.kind === 'promotion' ? item.promotion_id : item.customer_coupon_id;
+                        const isSel = !!selA && selA.kind === item.kind && selA.id === idOf;
+                        const blocked = item.eligible && blockedByVoucher(item);
+                        const dim = !item.eligible || blocked;
+                        // L1a/L1b (2026-10-31): mã tặng món đứng ngoài §5d → không huy hiệu nội tại,
+                        // có voucher thì hiện "Dùng cùng voucher được"; khi không mã nào cộng dồn
+                        // được (anyStack = false) → ẩn huy hiệu "Chỉ dùng riêng" lặp (đã có chú thích chung)
+                        const badge = !item.eligible ? null
+                          : blocked ? { text: `✕ Không áp dụng cùng ${voucherInfo.code}`, color: '#b91c1c', bg: '#fef2f2' }
+                          : item.type === 'gift'
+                            ? (voucherInfo ? { text: '✓ Dùng cùng voucher được', color: '#15803d', bg: '#f0fdf4' } : null)
+                          : voucherInfo && !item.is_shipping ? { text: `✓ Cộng dồn được với ${voucherInfo.code}`, color: '#15803d', bg: '#f0fdf4' }
+                          : !anyStack ? null
+                          : item.stack_with_coupon ? { text: '✓ Cộng dồn được với voucher', color: '#15803d', bg: '#f0fdf4' }
+                          : { text: 'Chỉ dùng riêng', color: '#666', bg: '#f3f4f6' };
+                        const rightText = item.is_shipping
+                          ? (item.eligible ? `Giảm ship ${fmt(item.discount)}đ` : 'Giảm ship')
+                          : item.type === 'gift'
+                            ? `Tặng ${item.gift_product_name || 'món'}`
+                            : item.eligible
+                              ? `−${fmt(item.discount)}đ`
+                              : (Number(item.would_discount) > 0 ? `−${fmt(item.would_discount)}đ` : '');
+                        return (
+                          <div key={`${item.kind}-${idOf}`}
+                            onClick={() => chooseA(item)}
+                            style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minHeight: 56, padding: '8px 2px', borderBottom: '1px solid #f3f4f6',
+                              cursor: dim ? 'not-allowed' : 'pointer', opacity: dim ? 0.55 : 1,
+                              background: isSel ? '#fff7e6' : 'transparent', borderRadius: isSel ? 10 : 0 }}>
+                            <span style={{ width: 22, height: 22, borderRadius: '50%', marginTop: 2, flexShrink: 0, boxSizing: 'border-box',
+                              border: `2px solid ${isSel ? '#F5A623' : '#ccc'}`, background: isSel ? '#F5A623' : 'transparent' }} />
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>
+                                {item.kind === 'wallet_coupon' ? '🎫 ' : ''}{item.name}
+                                {/* L2 (2026-10-31): KM chung trùng tên với coupon ví → nhãn "Khuyến mãi" để phân biệt */}
+                                {item.kind === 'promotion' && couponNames.has(item.name) && (
+                                  <span style={{ fontSize: 10.5, fontWeight: 700, color: '#24305E', background: '#EDF0F8', borderRadius: 999, padding: '1px 7px', marginLeft: 6 }}>Khuyến mãi</span>
+                                )}
+                              </span>
+                              {/* L2 (2026-10-31): dòng phụ coupon ví — mã + hạn dùng là dữ kiện phân biệt; sắp hết hạn (≤7 ngày) tô cam */}
+                              {item.kind === 'wallet_coupon' && item.code && (
+                                <span style={{ display: 'block', fontSize: 12, color: '#888', marginTop: 2 }}>
+                                  Mã {item.code}
+                                  {item.expires_at ? (() => {
+                                    const [y, m, d] = String(item.expires_at).split('-');
+                                    const daysLeft = Math.ceil((new Date(`${item.expires_at}T23:59:59`) - new Date()) / 86400000);
+                                    return <> · Hạn dùng <span style={daysLeft <= 7 ? { color: '#D97706', fontWeight: 700 } : undefined}>{d}/{m}/{y}</span></>;
+                                  })() : null}
+                                </span>
+                              )}
+                              {!item.eligible && (
+                                <span style={{ display: 'block', fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}>
+                                  {item.reason_code === 'MIN_ORDER' && item.missing_amount
+                                    ? `Đặt thêm ${fmt(item.missing_amount)}đ để được hưởng`
+                                    : (item.reason_text || 'Chưa đủ điều kiện cho đơn này')}
+                                </span>
+                              )}
+                              {blocked && (
+                                <span style={{ display: 'block', fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}>Không áp dụng cùng {voucherInfo.code} — gỡ voucher để dùng mã này</span>
+                              )}
+                              {badge && (
+                                <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, marginTop: 4, padding: '2px 8px', borderRadius: 999, color: badge.color, background: badge.bg }}>{badge.text}</span>
+                              )}
+                              {/* L4-B (2026-10-31): dòng tương thích voucher gắn vào chính dòng mã ĐANG CHỌN */}
+                              {isSel && !voucherInfo && !item.is_shipping && item.type !== 'gift' && (
+                                <span style={{ display: 'block', fontSize: 12.5, color: '#666', marginTop: 3 }}>
+                                  {item.stack_with_coupon
+                                    ? 'Cộng dồn được với voucher — nhập thêm mã ở ô Mã voucher phía trên để giảm thêm.'
+                                    : 'Chỉ dùng riêng — voucher sẽ không áp dụng cùng mã này.'}
+                                </span>
+                              )}
+                            </span>
+                            {rightText && <b style={{ fontSize: 14, color: dim ? '#999' : '#16a34a', whiteSpace: 'nowrap' }}>{rightText}</b>}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px 16px', borderTop: '1px solid #eee' }}>
+                    <span style={{ fontSize: 14 }}>Tổng giảm: <b style={{ color: '#16a34a' }}>−{fmt(totalDiscTotal)}đ</b></span>
+                    <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }} onClick={() => setPanelOpen(false)}>Xong</button>
+                  </div>
+                </div>
+              </div>
+            )}
             {points > 0 && (
               <div style={{ background: '#fff7e6', border: '1px solid #ffe1a8', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
                 ⭐ Bạn có <b>{fmt(points)} điểm</b> — đổi coupon tại mục <b>Tài khoản › Cửa hàng điểm</b>{' '}
@@ -1045,6 +1290,9 @@ export default function Checkout() {
           </div>
 
           <div className="zm-cartbar">
+            {formErr && (
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>⚠ {formErr}</div>
+            )}
             <button className="zm-btn-primary" onClick={goSummary}>
               Tiếp tục · {fmt(total)}đ →
             </button>
@@ -1095,7 +1343,7 @@ export default function Checkout() {
               {type === 'scheduled' && <div>⏰ Hẹn lấy: {schedDate} {schedTime}</div>}
               {type === 'delivery' && deliveryMode === 'scheduled' && <div>📅 Hẹn giao: {schedDate} {schedTime}</div>}
               {type === 'takeaway' && <div>🏪 Nhận tại: {branch.name}</div>}
-              <div>💳 {payment === 'transfer' ? 'Chuyển khoản / QR' : 'Thanh toán tại quán'}</div>
+              <div>💳 {(zaloCfg ? payChannel === 'BANK' : payment === 'transfer') ? 'Chuyển khoản / QR' : 'Thanh toán tại quán'}</div> {/* UX 2026-10-26 (MA-❓3): trước đây đọc biến payment của nhánh dự phòng -> hiện sai kênh khi khách chọn qua payChannel (BANK/COD) */}
               {/* Gói 64: bỏ hiển thị VAT trên tóm tắt đơn */}
             </div>
           </div>
@@ -1112,30 +1360,43 @@ export default function Checkout() {
             {type === 'delivery' && shipShopSupport > 0 && (
               <div className="zm-total-row disc"><span>🏪 Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>
             )}
-            {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
-            {/* Coupon phí ship đứng NGOÀI so sánh tiền hàng — luôn hiển thị khi có */}
-            {couponIsShipping && couponDiscount > 0 && <div className="zm-total-row disc"><span>🎫 Coupon{selectedCoupon ? ` ${selectedCoupon.code}` : ''} (phí ship)</span><span>−{fmt(couponDiscount)}đ</span></div>}
-            {/* 🟠8: hiển thị theo PHÍA THẮNG thật — chỉ 1 phía tiền hàng được trừ khi không cộng dồn */}
-            {voucherWins ? (
-              <div className="zm-total-row disc"><span>🎟️ Voucher {voucherInfo.code}</span><span>−{fmt(voucherDisc)}đ</span></div>
-            ) : (
-              <>
-                {promoDisc > 0 && <div className="zm-total-row disc"><span>🎉 {promo?.name}</span><span>−{fmt(promoDisc)}đ</span></div>}
-                {!couponIsShipping && couponDiscount > 0 && <div className="zm-total-row disc"><span>🎫 Coupon{selectedCoupon ? ` ${selectedCoupon.code}` : ''}</span><span>−{fmt(couponDiscount)}đ</span></div>}
-                {voucherDisc > 0 && kmMoneyDisc > 0 && (
-                  <div className="zm-total-row" style={{ color: '#999', fontSize: 12 }}>
-                    <span>🎟️ Voucher {voucherInfo.code} (−{fmt(voucherDisc)}đ) không áp vì KM giảm nhiều hơn</span><span></span>
-                  </div>
-                )}
-              </>
+            {/* Gói Ưu đãi hợp nhất (2026-10-31): các dòng giảm do hàm phân xử §5d
+                sinh ra — chỉ ưu đãi ĐANG ÁP mới có dòng ở khối tổng */}
+            {shipDisc > 0 && selItem && <div className="zm-total-row disc"><span>{selItem.kind === 'wallet_coupon' ? '🎫' : '🚚'} {selItem.name} (phí ship)</span><span>−{fmt(shipDisc)}đ</span></div>}
+            {selItem?.type === 'gift' && <div className="zm-total-row disc"><span>🎁 {selItem.name}</span><span>Tặng {selItem.gift_product_name}</span></div>}
+            {aApplied > 0 && aMoneyItem && (
+              <div className="zm-total-row disc">
+                <span>{aMoneyItem.kind === 'wallet_coupon' ? `🎫 Coupon ${aMoneyItem.code || ''}` : `🎉 ${aMoneyItem.name}`}</span>
+                <span>−{fmt(aApplied)}đ</span>
+              </div>
+            )}
+            {vApplied > 0 && voucherInfo && (
+              <div className="zm-total-row disc">
+                <span>🎟️ Voucher {voucherInfo.code}{voucherState === 'stacked' ? ' (cộng dồn)' : ''}</span>
+                <span>−{fmt(vApplied)}đ</span>
+              </div>
             )}
             <div className="zm-total-row grand"><span>Tổng cộng</span><span>{fmt(total)}đ</span></div>
           </div>
 
+          {/* UX 2026-10-26 (MA-🟠3-bis): hộp xác nhận cổng chuyển khoản */}
+          {ckGate && (
+            <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>⚠ Xác nhận đặt đơn chuyển khoản</div>
+              <div style={{ fontSize: 13, color: '#444', lineHeight: 1.55, marginBottom: 10 }}>{ckGate}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="zm-btn-inline" style={{ background: '#e8eaf0', color: '#24305E' }} onClick={() => setCkGate(null)}>Quay lại</button>
+                <button className="zm-btn-inline" onClick={() => { ckGateOkRef.current = true; setCkGate(null); place(); }}>Vẫn đặt đơn</button>
+              </div>
+            </div>
+          )}
           <div className="zm-cartbar" style={{ display: 'flex', gap: 8 }}>
             <button className="zm-btn-primary" style={{ flex: 1, background: '#e8eaf0', color: '#24305E' }} onClick={() => setStep(1)}>
               ← Sửa
             </button>
+            {formErr && (
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>⚠ {formErr}</div>
+            )}
             <button className="zm-btn-primary" style={{ flex: 2 }} disabled={placing} onClick={place}>
               {placing ? 'Đang đặt...' : `Đặt hàng · ${fmt(total)}đ`}
             </button>
