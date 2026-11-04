@@ -27,7 +27,7 @@ class AppServiceProvider extends ServiceProvider
         $router = $this->app['router'];
         $router->aliasMiddleware('permission', \App\Http\Middleware\CheckPermission::class);
         // Audit 2026-10-23 A3-5/BM-04: phân biệt bề mặt token theo abilities Sanctum
-        $router->aliasMiddleware('ability', \Laravel\Sanctum\Http\Middleware\CheckAnyAbility::class);
+        $router->aliasMiddleware('ability', \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class);
         $router->aliasMiddleware('staff_hub_token', \App\Http\Middleware\StaffHubToken::class);
         // CC-R1: chặn NV đã tắt dùng token cũ
         $router->aliasMiddleware('employee.active', \App\Http\Middleware\EnsureEmployeeActive::class);

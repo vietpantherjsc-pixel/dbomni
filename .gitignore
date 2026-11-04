@@ -1,0 +1,4 @@
+catalog.sql
+*.zip
+zalo-miniapp/dist/
+/dbomni/public/images/minigame-shares/*

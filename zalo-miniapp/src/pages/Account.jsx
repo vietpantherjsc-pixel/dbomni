@@ -179,6 +179,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   const [exchanging, setExchanging] = useState(null);
   const [shopOpen, setShopOpen] = useState(false); // Cửa hàng điểm: hiện 3 món + Xem thêm
   const [histOpen, setHistOpen] = useState(false); // Lịch sử: 10 giao dịch + Xem thêm
+  const [mgState, setMgState] = useState(null); // Minigame (2026-11-01): thẻ game dưới Cửa hàng điểm
   const shopAnchorRef = useRef(null); // nút "Đổi điểm ngay" ở dải trạng thái cuộn xuống đây
 
   const identity = () => profileIdentity(getProfile());
@@ -188,6 +189,8 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     api.pointsHistory(identity()).then((r) => setHistory(r?.data || null)).catch(() => {});
   };
   useEffect(() => { if (L) loadShop(); }, [customer.id]);
+  // Minigame: lỗi API/tắt công tắc → thẻ ẩn, trang không vỡ (bất biến hồi quy mục 12.3)
+  useEffect(() => { api.minigameState(identity()).then((d) => setMgState(d)).catch(() => setMgState(null)); }, [customer.id]);
 
   if (!L) return children ? <>{children}</> : null;
 
@@ -424,6 +427,23 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
           <button className="zm-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={() => nav('/coupons')}>Xem Ví coupon ›</button>
         </Collapsible>
       </div>
+
+      {/* Minigame (2026-11-01): thẻ lối vào game NGAY DƯỚI Cửa hàng điểm, trước
+          PromoCarousel — chèn thêm, không đổi mọi khối Phương án A khác */}
+      {mgState?.enabled && (
+        <button onClick={() => nav('/game')} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: '#fff', border: '1px solid #e3e8f2', borderRadius: 14, padding: '13px 16px', marginTop: 12, minHeight: 56, cursor: 'pointer' }}>
+          <span style={{ fontSize: 26, flexShrink: 0 }}>🧋</span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontWeight: 800, fontSize: 14.5, color: '#24305E' }}>Chơi Hứng Trân Châu</span>
+            <span style={{ display: 'block', fontSize: 12, color: '#8a93a6', marginTop: 2 }}>
+              {mgState.plays_left_today > 0
+                ? `Còn ${mgState.plays_left_today} lượt hôm nay · đã nhận ${fmt(mgState.earned_today)}/${fmt(mgState.daily_cap_points)} điểm`
+                : 'Chơi giải trí không giới hạn ›'}
+            </span>
+          </span>
+          <span style={{ color: '#c3cadb', fontSize: 18, flexShrink: 0 }}>›</span>
+        </button>
+      )}
 
       {/* PromoCarousel + hàng hành động nhanh: Account truyền qua children (đúng thứ tự phương án A) */}
       {children}

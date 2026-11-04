@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\GroupOrderController;
 use App\Http\Controllers\Api\MaterialController;
 use App\Http\Controllers\Api\MaterialCategoryController;
 use App\Http\Controllers\Api\MembershipTierController;
+use App\Http\Controllers\Api\AdminMinigameController; // Minigame (2026-11-01): Admin minigame
 use App\Http\Controllers\Api\MenuAdminController;
 use App\Http\Controllers\Api\OnlineOrderController;
 use App\Http\Controllers\Api\OptionGroupController;
@@ -43,6 +44,7 @@ use App\Http\Controllers\Api\SapoMailController; // Cầu nối Sapo — Phần 
 use App\Http\Controllers\Api\VoucherController; // Spec 5 (2026-10-21): CRUD voucher — BỔ SUNG import còn thiếu
 use App\Http\Controllers\Api\RDController; // SPEC R&D (2026-10-21): phân hệ R&D 3 tab
 use App\Http\Controllers\Api\PointsController; // Loyalty 2.0 (2026-10-21): Cửa hàng điểm + lịch sử điểm
+use App\Http\Controllers\Api\MinigameController; // Minigame (2026-11-01)
 use App\Http\Controllers\Api\PointExchangeItemController; // Loyalty 2.0: Admin CRUD món đổi điểm
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ShiftController;
@@ -450,6 +452,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/membership-tiers/redeem-config', [MembershipTierController::class, 'updateRedeemConfig']);
         // Loyalty 2.0: cấu hình loyalty toàn cục (cửa sổ/HSD/cảnh báo/Double Days/coupon chào hạng)
         Route::post('/membership-tiers/loyalty-config', [MembershipTierController::class, 'updateLoyaltyConfig']);
+        // Minigame (2026-11-01): cấu hình + vận hành + thu hồi điểm theo phiên
+        Route::get('/admin/minigame/config', [AdminMinigameController::class, 'config']);
+        Route::post('/admin/minigame/config', [AdminMinigameController::class, 'updateConfig']);
+        Route::get('/admin/minigame/stats', [AdminMinigameController::class, 'stats']);
+        Route::get('/admin/minigame/sessions', [AdminMinigameController::class, 'sessions']);
+        Route::post('/admin/minigame/sessions/{id}/revoke', [AdminMinigameController::class, 'revoke']);
     });
 
     // Loyalty 2.0: Cửa hàng điểm — Admin CRUD món đổi (đọc mở trong nhóm auth,
@@ -779,6 +787,12 @@ Route::prefix('online')->group(function () {
     Route::get('/points/exchange-items', [PointsController::class, 'exchangeItems'])->middleware('throttle:online-read');
     Route::post('/points/exchange', [PointsController::class, 'exchange'])->middleware('throttle:order-action');
     Route::get('/points/history', [PointsController::class, 'history'])->middleware('throttle:online-read');
+    // Minigame (2026-11-01): trạng thái/phiên/nộp kết quả/kỷ lục giải trí/chia sẻ thẻ
+    Route::get('/minigame/state', [MinigameController::class, 'state'])->middleware('throttle:online-read');
+    Route::post('/minigame/session', [MinigameController::class, 'session'])->middleware('throttle:order-action');
+    Route::post('/minigame/submit', [MinigameController::class, 'submit'])->middleware('throttle:order-action');
+    Route::post('/minigame/best', [MinigameController::class, 'best'])->middleware('throttle:order-action');
+    Route::post('/minigame/share-card', [MinigameController::class, 'shareCard'])->middleware('throttle:30,1');
     Route::get('/customer', [OnlineOrderController::class, 'customer'])->middleware('throttle:online-read');
     Route::post('/orders', [OnlineOrderController::class, 'store'])->middleware('throttle:60,1');
     Route::get('/orders/{code}', [OnlineOrderController::class, 'track'])->middleware('throttle:online-read');

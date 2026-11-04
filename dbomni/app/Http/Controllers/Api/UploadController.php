@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Branch;
 use App\Models\Setting;
+use App\Support\MediaFilename;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -48,7 +49,8 @@ class UploadController extends Controller
             @unlink($old);
         }
 
-        $filename = $scope . '_' . time() . '.jpg';
+        // Tên do server sinh theo scope (đã ASCII); vẫn qua MediaFilename::unique theo rule chung.
+        $filename = MediaFilename::unique($dir, $scope . '_' . time() . '.jpg');
         $tmpSrc = $file->getRealPath();
         $dstPath = $dir . '/' . $filename;
 
@@ -83,7 +85,8 @@ class UploadController extends Controller
             mkdir($dir, 0755, true);
         }
         $ext = $this->serverExt($file);
-        $filename = 'promo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        // Rule 2026-11-04: tên lưu qua MediaFilename (tên gốc bỏ dấu + hậu tố chống trùng).
+        $filename = MediaFilename::unique($dir, MediaFilename::forUpload('promo', $file, $ext));
         $file->move($dir, $filename);
         // Gói 50b: URL tuyệt đối theo host thật của request (tránh localhost:3001 của frontend)
         return response()->json(['success' => true, 'data' => ['url' => $request->getSchemeAndHttpHost() . '/covers/' . $filename]]);
@@ -101,7 +104,8 @@ class UploadController extends Controller
             mkdir($dir, 0755, true);
         }
         $ext = $this->serverExt($file);
-        $filename = 'product_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        // Rule 2026-11-04: tên lưu qua MediaFilename (tên gốc bỏ dấu + hậu tố chống trùng).
+        $filename = MediaFilename::unique($dir, MediaFilename::forUpload('product', $file, $ext));
         $file->move($dir, $filename);
         return response()->json(['success' => true, 'data' => ['url' => $request->getSchemeAndHttpHost() . '/images/products/' . $filename]]);
     }
@@ -128,7 +132,8 @@ class UploadController extends Controller
             }
         }
         $ext = $this->serverExt($file);
-        $filename = 'logo_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        // Rule 2026-11-04: tên lưu qua MediaFilename (tên gốc bỏ dấu + hậu tố chống trùng).
+        $filename = MediaFilename::unique($dir, MediaFilename::forUpload('logo', $file, $ext));
         $file->move($dir, $filename);
         $url = $request->getSchemeAndHttpHost() . '/images/brand/' . $filename;
         Setting::set('brand_logo', $url);

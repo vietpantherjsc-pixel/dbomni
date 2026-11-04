@@ -26,6 +26,9 @@ Schedule::command('coupons:issue-scheduled')->dailyAt('01:00');
 Schedule::command('loyalty:expire-points')->dailyAt('01:00');
 Schedule::command('loyalty:evaluate-tiers')->dailyAt('01:00');
 
+// Minigame (2026-11-01): dọn ảnh thẻ chia sẻ kết quả quá 30 ngày
+Schedule::command('minigame:clean-share-cards')->dailyAt('02:30');
+
 // Cầu nối Sapo — Phần C: quét mail xuất file sau 3 khung giờ nhân viên xuất
 // (12:30 / 21:00 / 22:30) → 13:00 / 21:30 / 23:00, import theo anchor text → chi nhánh
 Schedule::command('sapo:check-mail --scheduled')->dailyAt('13:00');

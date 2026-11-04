@@ -13,6 +13,22 @@ import { API } from '../../utils/api';
 // Loyalty toàn cục (cửa sổ, HSD điểm, Double Days, coupon chào hạng).
 // Khu "quy đổi điểm" cũ đã gỡ (điểm không còn trừ trực tiếp vào đơn).
 // =====================================================================
+// Nhãn các khóa cấu hình riêng của game Hứng Trân Châu (Admin Minigame)
+const MG_GAME_LABELS = {
+    mg_htc_duration_seconds: 'Thời lượng phiên (giây)', mg_htc_points_pearl: 'Điểm trân châu',
+    mg_htc_points_leaf: 'Điểm lá trà', mg_htc_points_coffee: 'Điểm hạt cà phê',
+    mg_htc_points_sun: 'Điểm mặt trời Daybreak', mg_htc_points_burnt: 'Điểm TRỪ khi hứng hạt cháy',
+    mg_htc_max_misses: 'Số lần hụt tối đa', mg_htc_interval_start_ms: 'Nhịp rơi đầu phiên (ms)',
+    mg_htc_interval_end_ms: 'Nhịp rơi cuối phiên (ms)', mg_htc_speed_min: 'Tốc độ rơi nhỏ nhất (px/s)',
+    mg_htc_speed_max: 'Tốc độ rơi lớn nhất (px/s)', mg_htc_speed_gain_per_s: 'Tăng tốc mỗi giây (px/s)',
+    mg_htc_ratio_pearl: 'Tỉ lệ trân châu (%)', mg_htc_ratio_leaf: 'Tỉ lệ lá trà (%)',
+    mg_htc_ratio_coffee: 'Tỉ lệ hạt cà phê (%)', mg_htc_ratio_sun: 'Tỉ lệ mặt trời (%)',
+    mg_htc_ratio_burnt: 'Tỉ lệ hạt cháy (%)',
+};
+const MG_FLAG_LABELS = {
+    perfect_catch: 'Hứng hoàn hảo', streak_perfect: 'Chuỗi hoàn hảo', sun_ratio: 'Hứng mặt trời bất thường',
+    score_mismatch: 'Điểm báo lệch >10%', fast_submit: 'Nộp sát biên thời lượng',
+};
 const BENEFITS = [
     ['birthday_bonus', 'Ưu đãi sinh nhật'],
     ['early_access_new_item', 'Thử món mới sớm'],
@@ -38,6 +54,14 @@ export default function MemberTiers() {
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [promotions, setPromotions] = useState([]);
     const [cfg, setCfg] = useState(null);
+    // Chia tab (2026-11-01): 'tiers' mặc định; dữ liệu Minigame tải lười khi mở tab game lần đầu
+    const [tab, setTab] = useState('tiers');
+    const [mgLoaded, setMgLoaded] = useState(false);
+    // Minigame (2026-11-01): thẻ cấu hình + vận hành đặt cạnh khu Loyalty
+    const [mg, setMg] = useState(null);
+    const [mgStats, setMgStats] = useState(null);
+    const [mgSessions, setMgSessions] = useState([]);
+    const [mgFlagged, setMgFlagged] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY_FORM);
@@ -54,6 +78,50 @@ export default function MemberTiers() {
         } catch (err) { console.error('Lỗi tải hạng:', err); setLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
     useEffect(() => { fetchData(); }, []);
+
+    // Minigame: tải cấu hình + số liệu hôm nay + danh sách phiên
+    const fetchMgSessions = async (flagged) => {
+        try {
+            const res = await axios.get(`${API}/admin/minigame/sessions`, { params: { flagged: flagged ? 1 : 0, page: 1 } });
+            if (res.data?.success) setMgSessions(res.data.data.data || []);
+        } catch { /* khu minigame lỗi không làm vỡ trang hạng */ }
+    };
+    const fetchMg = async () => {
+        try {
+            const [rc, rs] = await Promise.all([
+                axios.get(`${API}/admin/minigame/config`),
+                axios.get(`${API}/admin/minigame/stats`),
+            ]);
+            if (rc.data?.success) setMg(rc.data.data);
+            if (rs.data?.success) setMgStats(rs.data.data);
+        } catch { /* bỏ qua — trang hạng vẫn dùng bình thường */ }
+        fetchMgSessions(true);
+    };
+    // Badge tab Minigame: chỉ gọi stats nhẹ lúc mở trang để hiện số phiên bị cờ
+    useEffect(() => {
+        axios.get(`${API}/admin/minigame/stats`).then((rs) => { if (rs.data?.success) setMgStats(rs.data.data); }).catch(() => {});
+    }, []);
+    // Tải lười: cấu hình + phiên của tab Minigame chỉ tải khi mở tab lần đầu
+    useEffect(() => {
+        if (tab === 'game' && !mgLoaded) { setMgLoaded(true); fetchMg(); }
+    }, [tab, mgLoaded]);
+    useEffect(() => { if (mgLoaded) fetchMgSessions(mgFlagged); }, [mgFlagged, mgLoaded]);
+
+    const saveMg = async () => {
+        try {
+            const res = await axios.post(`${API}/admin/minigame/config`, { shared: mg.shared, games: mg.games });
+            if (res.data?.success) { alert(res.data.message); setMg(res.data.data); }
+        } catch (err) { alert(err.response?.data?.message || 'Lưu cấu hình Minigame thất bại'); }
+    };
+
+    const revokeMgSession = async (s) => {
+        const reason = window.prompt(`Thu hồi điểm phiên #${s.id} (${s.customer?.name || ''} · +${s.reward_points} điểm)?\nNhập lý do thu hồi (bắt buộc):`);
+        if (!reason || !reason.trim()) return;
+        try {
+            const res = await axios.post(`${API}/admin/minigame/sessions/${s.id}/revoke`, { reason: reason.trim() });
+            if (res.data?.success) { alert(res.data.message); fetchMgSessions(mgFlagged); fetchMg(); }
+        } catch (err) { alert(err.response?.data?.message || 'Thu hồi thất bại'); }
+    };
 
     const resetForm = () => { setEditing(null); setForm(EMPTY_FORM); setShowForm(false); };
 
@@ -137,11 +205,22 @@ export default function MemberTiers() {
             <div className="p-5">
                 <div className="flex items-center justify-between mb-1">
                     <h1 className="text-xl font-semibold text-gray-800">Thẻ thành viên</h1>
-                    <button onClick={() => { resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
+                    <button onClick={() => { setTab('tiers'); resetForm(); setShowForm(true); }} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
                         + Hạng mới
                     </button>
                 </div>
                 <p className="text-[13px] text-[#6b7280] mb-4">Loyalty 2.0: hạng xét theo chi tiêu trong cửa sổ trượt; điểm chỉ dùng đổi coupon tại Cửa hàng điểm trên Mini App.</p>
+
+                {/* Chia tab (2026-11-01, demo Đại Vương duyệt): giữ nguyên mọi khối, chỉ gom tab */}
+                <div className="flex gap-1 border-b-2 border-gray-200 mb-4 overflow-x-auto" role="tablist">
+                    <button role="tab" onClick={() => setTab('tiers')} className={`px-4 text-[14px] font-semibold whitespace-nowrap min-h-[46px] border-b-[3px] -mb-[2px] ${tab === 'tiers' ? 'text-[#24305E] border-[#24305E]' : 'text-gray-500 border-transparent'}`}>🎖 Hạng & tích điểm</button>
+                    <button role="tab" onClick={() => setTab('game')} className={`px-4 text-[14px] font-semibold whitespace-nowrap min-h-[46px] border-b-[3px] -mb-[2px] flex items-center gap-2 ${tab === 'game' ? 'text-[#24305E] border-[#24305E]' : 'text-gray-500 border-transparent'}`}>
+                        🧋 Minigame
+                        {mgStats?.flagged > 0 && <span className="px-2 py-0.5 rounded-full text-[11px] bg-red-500 text-white font-bold">{mgStats.flagged} phiên bị cờ</span>}
+                    </button>
+                </div>
+
+                {tab === 'tiers' && (<>
 
                 {/* Cấu hình Loyalty toàn cục */}
                 {cfg && (
@@ -299,6 +378,100 @@ export default function MemberTiers() {
                         </tbody>
                     </table>
                 </div>
+
+                </>)}
+
+                {tab === 'game' && (<>
+                {/* Minigame (2026-11-01): thẻ cấu hình cạnh khu Loyalty + vận hành */}
+                {mg && (
+                    <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+                        <h3 className="font-semibold text-[14px] mb-1">Minigame — Hứng Trân Châu</h3>
+                        <p className="text-[12px] text-gray-400 mb-3">Điểm game cộng qua lô riêng "minigame", không tính chi tiêu xét hạng. Mọi thay đổi áp cho phiên cấp từ lúc lưu; phiên đang mở giữ cấu hình lúc cấp.</p>
+                        <label className="flex items-center gap-2 text-[13px] font-medium mb-3">
+                            <input type="checkbox" checked={!!mg.shared.minigame_enabled} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_enabled: e.target.checked } })} className="accent-[#24305E] w-4 h-4" />
+                            Bật Minigame toàn hệ (tắt = thẻ game ẩn ở Mini App, API từ chối cấp phiên)
+                        </label>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div><label className="text-xs text-gray-500">Lượt có thưởng/ngày</label>
+                                <input type="number" min="1" value={mg.shared.minigame_daily_plays} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_daily_plays: e.target.value } })} className={inp} /></div>
+                            <div><label className="text-xs text-gray-500">Trần điểm game/ngày/tài khoản</label>
+                                <input type="number" min="0" value={mg.shared.minigame_daily_cap_points} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_daily_cap_points: e.target.value } })} className={inp} /></div>
+                            <div><label className="text-xs text-gray-500">Trần phát hành toàn hệ/ngày</label>
+                                <input type="number" min="0" value={mg.shared.minigame_global_cap_points} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_global_cap_points: e.target.value } })} className={inp} /></div>
+                            <div><label className="text-xs text-gray-500">Hạn nộp kết quả (giây)</label>
+                                <input type="number" min="30" value={mg.shared.minigame_session_ttl_seconds} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_session_ttl_seconds: e.target.value } })} className={inp} /></div>
+                            {[1, 2, 3].map((i) => (
+                                <React.Fragment key={i}>
+                                    <div><label className="text-xs text-gray-500">Mốc {i} — điểm đạt</label>
+                                        <input type="number" min="0" value={mg.shared[`minigame_t${i}_score`]} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, [`minigame_t${i}_score`]: e.target.value } })} className={inp} /></div>
+                                    <div><label className="text-xs text-gray-500">Mốc {i} — điểm thưởng</label>
+                                        <input type="number" min="0" value={mg.shared[`minigame_t${i}_points`]} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, [`minigame_t${i}_points`]: e.target.value } })} className={inp} /></div>
+                                </React.Fragment>
+                            ))}
+                            <div><label className="text-xs text-gray-500">Nhiệm vụ ngày — điểm đạt</label>
+                                <input type="number" min="0" value={mg.shared.minigame_mission_score} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_mission_score: e.target.value } })} className={inp} /></div>
+                            <div><label className="text-xs text-gray-500">Nhiệm vụ ngày — điểm cộng</label>
+                                <input type="number" min="0" value={mg.shared.minigame_mission_points} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_mission_points: e.target.value } })} className={inp} /></div>
+                            <div><label className="text-xs text-gray-500">Ngưỡng cờ chuỗi hoàn hảo (phiên)</label>
+                                <input type="number" min="2" value={mg.shared.minigame_anomaly_streak} onChange={(e) => setMg({ ...mg, shared: { ...mg.shared, minigame_anomaly_streak: e.target.value } })} className={inp} /></div>
+                        </div>
+                        {Object.entries(mg.games || {}).map(([gameId, game]) => (
+                            <div key={gameId} className="mt-4 pt-3 border-t border-gray-100">
+                                <label className="flex items-center gap-2 text-[13px] font-medium mb-2">
+                                    <input type="checkbox" checked={!!game.enabled} onChange={(e) => setMg({ ...mg, games: { ...mg.games, [gameId]: { ...game, enabled: e.target.checked } } })} className="accent-[#24305E] w-4 h-4" />
+                                    Bật game {gameId}
+                                </label>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    {Object.keys(game.defaults || {}).map((key) => (
+                                        <div key={key}><label className="text-xs text-gray-500">{MG_GAME_LABELS[key] || key}</label>
+                                            <input type="number" step={Number.isInteger(game.defaults[key]) ? 1 : 0.1} value={game.config[key] ?? ''} onChange={(e) => setMg({ ...mg, games: { ...mg.games, [gameId]: { ...game, config: { ...game.config, [key]: e.target.value } } } })} className={inp} /></div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                        <button onClick={saveMg} className="mt-4 px-4 py-2 bg-[#24305E] text-white text-[13px] rounded hover:bg-[#1B2547]">Lưu cấu hình Minigame</button>
+
+                        {mgStats && (
+                            <div className="mt-5 pt-3 border-t border-gray-100">
+                                <div className="text-[13px] font-medium text-gray-700 mb-2">Vận hành hôm nay ({mgStats.date})</div>
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
+                                    {[['Phiên đã cấp', mgStats.sessions_issued], ['Phiên đã nộp', mgStats.sessions_submitted], ['Khách đã chơi', mgStats.players], ['Điểm đã phát', mgStats.points_issued], ['Phiên bị gắn cờ', mgStats.flagged]].map(([label, val]) => (
+                                        <div key={label} className="bg-gray-50 rounded-lg py-2"><div className="text-[17px] font-bold text-[#24305E]">{num(val)}</div><div className="text-[11px] text-gray-500">{label}</div></div>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-2 mt-4 mb-2">
+                                    <div className="text-[13px] font-medium text-gray-700">Phiên chơi</div>
+                                    <button onClick={() => setMgFlagged(true)} className={`px-3 py-1.5 text-[12px] rounded border min-h-[36px] ${mgFlagged ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-200'}`}>Chỉ phiên bất thường</button>
+                                    <button onClick={() => setMgFlagged(false)} className={`px-3 py-1.5 text-[12px] rounded border min-h-[36px] ${!mgFlagged ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-200'}`}>Tất cả phiên</button>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-[12.5px]">
+                                        <thead><tr className="text-left text-gray-500 border-b">
+                                            <th className="py-2 pr-2">Phiên</th><th className="py-2 pr-2">Khách</th><th className="py-2 pr-2">Điểm báo / kiểm chứng</th><th className="py-2 pr-2">Thưởng</th><th className="py-2 pr-2">Cờ bất thường</th><th className="py-2 pr-2">Trạng thái</th><th className="py-2">Thao tác</th>
+                                        </tr></thead>
+                                        <tbody>
+                                            {mgSessions.length === 0 && <tr><td colSpan={7} className="py-3 text-gray-400">Chưa có phiên nào.</td></tr>}
+                                            {mgSessions.map((s) => (
+                                                <tr key={s.id} className="border-b border-gray-50">
+                                                    <td className="py-2 pr-2">#{s.id}<div className="text-[11px] text-gray-400">{s.submitted_at || s.issued_at || ''}</div></td>
+                                                    <td className="py-2 pr-2">{s.customer?.name || '—'}<div className="text-[11px] text-gray-400">{s.customer?.phone || ''}</div></td>
+                                                    <td className="py-2 pr-2">{s.claimed_score ?? '—'} / <b>{s.verified_score ?? '—'}</b></td>
+                                                    <td className="py-2 pr-2">+{s.reward_points}{s.lot_remaining !== null && s.lot_remaining !== undefined ? <div className="text-[11px] text-gray-400">lô còn {s.lot_remaining}</div> : null}</td>
+                                                    <td className="py-2 pr-2">{(s.anomaly_flags || []).map((f) => <span key={f} className="inline-block bg-amber-100 text-amber-800 rounded px-1.5 py-0.5 mr-1 mb-1 text-[11px]">{MG_FLAG_LABELS[f] || f}</span>)}</td>
+                                                    <td className="py-2 pr-2">{s.status}</td>
+                                                    <td className="py-2">{s.status === 'submitted' && s.reward_points > 0 && (
+                                                        <button onClick={() => revokeMgSession(s)} className="px-3 py-1.5 text-[12px] rounded bg-red-50 text-red-600 border border-red-200 min-h-[36px]">Thu hồi điểm</button>
+                                                    )}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+                </>)}
             </div>
         </AdminLayout>
     );

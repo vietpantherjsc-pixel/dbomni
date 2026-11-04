@@ -87,6 +87,12 @@ export const api = {
   pointsExchangeItems: (identity) => req(`/points/exchange-items?${identityQuery(identity)}`),
   pointsExchange: (identity, itemId) => req('/points/exchange', { method: 'POST', body: JSON.stringify({ ...identity, item_id: itemId }) }),
   pointsHistory: (identity) => req(`/points/history?${identityQuery(identity)}`),
+  // Minigame (2026-11-01): trạng thái/phiên/nộp kết quả/kỷ lục giải trí/thẻ chia sẻ
+  minigameState: (identity) => req(`/minigame/state?${identityQuery(identity)}`),
+  minigameSession: (identity, gameId) => req('/minigame/session', { method: 'POST', body: JSON.stringify({ ...identity, game_id: gameId }) }),
+  minigameSubmit: (identity, payload) => req('/minigame/submit', { method: 'POST', body: JSON.stringify({ ...identity, ...payload }) }),
+  minigameBest: (identity, payload) => req('/minigame/best', { method: 'POST', body: JSON.stringify({ ...identity, ...payload }) }),
+  minigameShareCard: (identity, image) => req('/minigame/share-card', { method: 'POST', body: JSON.stringify({ ...identity, image }) }),
   myStamps: (identity) => req(`/coupons/stamps?${identityQuery(identity)}`),
   myReferral: (identity) => req(`/coupons/referral?${identityQuery(identity)}`),
   validateCoupon: (payload) => req('/coupons/validate', { method: 'POST', body: JSON.stringify(payload) }),
