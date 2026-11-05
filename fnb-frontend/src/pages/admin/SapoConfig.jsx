@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
@@ -182,7 +183,7 @@ function MapProducts() {
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-1">Tên chưa map <span className="text-sm font-normal text-gray-500">(từ lần import gần nhất)</span></h2>
         <p className="text-xs text-gray-500 mb-3">Import tự khớp món có tên trùng hệt danh mục đang bán (kể cả sau khi bóc hậu tố kênh). Chỉ cần thêm dòng ở bảng map khi: tên hai hệ thống khác nhau, cần trỏ tay sang món khác, định nghĩa combo Mua 1 Tặng 1, hoặc xử lý ngoại lệ. Khớp luôn chính xác từng ký tự, không tự đoán.</p>
-        <input className={inputCls + ' mb-3'} placeholder="Tìm tên Sapo..." value={q1} onChange={(e) => setQ1(e.target.value)} />
+        <SearchInput className={inputCls} placeholder="Tìm tên Sapo..." value={q1} onChange={(e) => setQ1(e.target.value)} onSearch={(v) => setQ1(v)} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
         {f1.length === 0 && <p className="text-sm text-gray-400">Không còn tên nào chưa map.</p>}
         <div className="divide-y">
           {f1.map((x) => (
@@ -200,7 +201,7 @@ function MapProducts() {
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-3">Đã map ({mapped.length})</h2>
         <PruneMaps table="products" onPruned={load} />
-        <input className={inputCls + ' mb-3'} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} />
+        <SearchInput className={inputCls} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} onSearch={(v) => setQ2(v)} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
         <div className="divide-y">
           {f2.map((m) => (
             <div key={m.id} className="py-2.5 flex items-center gap-2">
@@ -223,7 +224,7 @@ function MapProducts() {
           {pickStep === 'main' ? (
             <>
               <p className="text-xs text-gray-500 mb-2">Bước 1/2 — chọn <b>món chính</b> (nếu đây là combo Mua 1 Tặng 1 thì đây là món khách trả tiền).</p>
-              <input className={inputCls + ' mb-3'} placeholder="Tìm món DBOMNI theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <SearchInput className={inputCls} placeholder="Tìm món DBOMNI theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} onSearch={(v) => searchCandidates(v)} autoFocus wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
               <div className="divide-y max-h-80 overflow-y-auto">
                 {candidates.map((c) => (
                   <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => { setMainPick(c); setPickStep('gift'); setCq(''); searchCandidates(''); }}>
@@ -241,7 +242,7 @@ function MapProducts() {
             <>
               <p className="text-xs text-gray-500 mb-2">Bước 2/2 — món chính: <b>{mainPick?.name}</b>. Nếu tên Sapo này là <b>combo Mua 1 Tặng 1</b>, chọn thêm món tặng kèm; import sẽ bung thành 2 dòng (chính có tiền, tặng 0đ). Không phải combo thì bỏ qua bước này.</p>
               {picking.giftName && <p className="text-xs text-orange-600 mb-2">Hiện đang đặt món tặng: <b>{picking.giftName}</b> — chọn món khác để thay, hoặc bấm nút bỏ qua để gỡ combo.</p>}
-              <input className={inputCls + ' mb-3'} placeholder="Tìm món tặng theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <SearchInput className={inputCls} placeholder="Tìm món tặng theo tên hoặc SKU..." value={cq} onChange={(e) => searchCandidates(e.target.value)} onSearch={(v) => searchCandidates(v)} autoFocus wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
               <div className="divide-y max-h-64 overflow-y-auto mb-3">
                 {candidates.map((c) => (
                   <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(mainPick.id, c.id)}>
@@ -312,7 +313,7 @@ function MapOptions() {
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-1">Text lựa chọn chưa map <span className="text-sm font-normal text-gray-500">(từng đoạn trong cột "Tên lựa chọn")</span></h2>
         <p className="text-xs text-gray-500 mb-3">Import tự khớp đoạn text trùng hệt tên tùy chọn thuộc các nhóm của chính món đó (gồm size). Chỉ cần thêm dòng ở bảng map khi: đoạn text viết khác tên tùy chọn trong danh mục, cần trỏ tay, hoặc là text ghi chú thuần (không trừ kho).</p>
-        <input className={inputCls + ' mb-3'} placeholder="Tìm text lựa chọn..." value={q1} onChange={(e) => setQ1(e.target.value)} />
+        <SearchInput className={inputCls} placeholder="Tìm text lựa chọn..." value={q1} onChange={(e) => setQ1(e.target.value)} onSearch={(v) => setQ1(v)} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
         {f1.length === 0 && <p className="text-sm text-gray-400">Không còn text nào chưa map.</p>}
         <div className="divide-y">
           {f1.map((x) => (
@@ -330,7 +331,7 @@ function MapOptions() {
       <div className="bg-white rounded-xl border p-4">
         <h2 className="font-bold mb-3">Đã map ({mapped.length})</h2>
         <PruneMaps table="options" onPruned={load} />
-        <input className={inputCls + ' mb-3'} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} />
+        <SearchInput className={inputCls} placeholder="Tìm trong danh sách đã map..." value={q2} onChange={(e) => setQ2(e.target.value)} onSearch={(v) => setQ2(v)} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
         <div className="divide-y">
           {f2.map((m) => (
             <div key={m.id} className="py-2.5 flex items-center gap-2">
@@ -365,7 +366,7 @@ function MapOptions() {
             <button className={btnPrimary + ' w-full'} onClick={() => save(null)}>Lưu dạng ghi chú</button>
           ) : (
             <>
-              <input className={inputCls + ' mb-3'} placeholder="Tìm tùy chọn theo tên hoặc tên nhóm..." value={cq} onChange={(e) => searchCandidates(e.target.value)} autoFocus />
+              <SearchInput className={inputCls} placeholder="Tìm tùy chọn theo tên hoặc tên nhóm..." value={cq} onChange={(e) => searchCandidates(e.target.value)} onSearch={(v) => searchCandidates(v)} autoFocus wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
               <div className="divide-y max-h-80 overflow-y-auto">
                 {candidates.map((c) => (
                   <button key={c.id} className="w-full text-left py-2.5 px-1 hover:bg-gray-50 flex items-center gap-2" onClick={() => save(c.id)}>
@@ -610,8 +611,8 @@ function Suspects({ goTab }) {
             <option value="">— Mọi lý do —</option>
             {Object.entries(REASON_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
-          <input className={inputCls + ' md:flex-1'} placeholder="Tìm theo mã hóa đơn Sapo..." value={q}
-            onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} />
+          <SearchInput className={inputCls} placeholder="Tìm theo mã hóa đơn Sapo..." value={q}
+            onChange={(e) => setQ(e.target.value)} onSearch={() => load()} wrapperStyle={{ display: 'flex', flex: 1 }} />
           <button className={btnGhost + ' py-2.5'} onClick={load}>Tìm</button>
         </div>
       </div>
@@ -892,7 +893,7 @@ function MapRows({ table, title, hint, keyLabel, valueLabel, keyType = 'text', k
         )}
         <button className={btnPrimary + ' md:w-auto w-full'} onClick={add}>Thêm</button>
       </div>
-      <input className={inputCls + ' mb-2'} placeholder="Tìm..." value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && load()} />
+      <SearchInput className={inputCls} placeholder="Tìm..." value={q} onChange={(e) => setQ(e.target.value)} onSearch={() => load()} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 8 }} />
       <div className="divide-y max-h-72 overflow-y-auto">
         {rows.map((r) => (
           <div key={r.id} className="py-2 flex items-center gap-2">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
 
@@ -94,9 +95,11 @@ const TransactionCategories = () => {
 
                 <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
                     <div className="p-4 border-b border-gray-100">
-                        <input value={search} onChange={(e) => setSearch(e.target.value)}
+                        <SearchInput value={search} onChange={(e) => setSearch(e.target.value)}
+                            onSearch={(v) => setSearch(v)}
                             placeholder="Tìm danh mục..."
-                            className="w-full sm:max-w-xs text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]" />
+                            wrapperClassName="w-full sm:max-w-xs"
+                            className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]" />
                     </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-[13px] min-w-[560px]">

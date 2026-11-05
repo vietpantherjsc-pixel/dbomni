@@ -162,9 +162,13 @@ class AttendanceController extends Controller
             ->where('date', 'like', $month . '%')
             ->orderBy('date', 'desc')->get()
             ->map(function ($a) {
-                $a->work_hours = ($a->check_in && $a->check_out)
+                // Họ #28: trả MẢNG THUẦN, ép 'date' về Y-m-d (model thô bị cast
+                // 'date' serialize thành ISO UTC −7h; setAttribute là no-op).
+                $arr = $a->toArray();
+                $arr['date'] = $a->date?->toDateString();
+                $arr['work_hours'] = ($a->check_in && $a->check_out)
                     ? round(Carbon::parse($a->check_in)->diffInMinutes($a->check_out) / 60, 1) : null;
-                return $a;
+                return $arr;
             });
         return response()->json(['success' => true, 'data' => $items]);
     }

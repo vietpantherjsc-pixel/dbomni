@@ -1,4 +1,14 @@
 import React, { useState, useEffect } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -55,8 +65,8 @@ function StockAlerts({ branchId }) {
     const [showExp, setShowExp] = useState(false);
     useEffect(() => {
         const bq = branchId !== '0' ? `?branch_id=${branchId}` : '';
-        axios.get(`${API}/inventory/btp-low-stock${bq}`).then((r) => setBtp(r.data?.data || [])).catch(() => {});
-        axios.get(`${API}/inventory/expiring-batches${bq}`).then((r) => setExp(r.data?.data || [])).catch(() => {});
+        axios.get(`${API}/inventory/btp-low-stock${bq}`).then((r) => setBtp(r.data?.data || [])).catch((e) => noteExpired(e));
+        axios.get(`${API}/inventory/expiring-batches${bq}`).then((r) => setExp(r.data?.data || [])).catch((e) => noteExpired(e));
     }, [branchId]);
     if (btp.length === 0 && exp.length === 0) return null;
     const red = exp.filter((e) => e.level === 'red');
@@ -97,6 +107,7 @@ const Dashboard = () => {
     const [range, setRange] = useState('today');
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [sessionExpired, setSessionExpired] = useState(false); // S5: 401 ở luồng tải chính → banner câu chuẩn thay vì dashboard trống câm
     // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
     const branchCtx = useBranch();
     const branchId = (branchCtx && branchCtx.branchId) || '0';
@@ -117,6 +128,7 @@ const Dashboard = () => {
                     setData(res.data.data.sapo || null);
                 }
             } catch (err) {
+                if (err?.response?.status === 401) setSessionExpired(true); // S5
                 console.error('Lỗi tải số liệu tổng quan:', err);
             } finally {
                 setLoading(false);
@@ -130,7 +142,7 @@ const Dashboard = () => {
         axios.get(`${API}/settings`).then((res) => {
             const v = Number(res.data?.food_cost_alert_pct);
             if (v > 0) setFoodCostAlertPct(v);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
         // Gói 56: lấy Prime Cost % từ API overview
         const bq = branchId !== '0' ? `&branch_id=${branchId}` : '';
         const ovPeriod = range === 'today' ? 'day' : range === '7d' ? 'week' : 'month';
@@ -138,12 +150,17 @@ const Dashboard = () => {
             .then((res) => {
                 const v = res.data?.data?.profit?.prime_cost_pct;
                 if (v !== null && v !== undefined) setPrimeCostPct(v);
-            }).catch(() => {});
+            }).catch((e) => noteExpired(e));
     }, [range, branchId]);
 
     return (
         <AdminLayout>
             <div className="p-6 max-w-[1200px] mx-auto">
+                {sessionExpired && (
+                    <div className="m-card px-4 py-3" style={{ border: '1px solid #f5c2c7', background: '#fff5f5', color: '#b42318', fontWeight: 600, marginBottom: 12 }}>
+                        Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.
+                    </div>
+                )}
                 {/* Tiêu đề */}
                 <div className="flex items-center gap-3">
                     <h1 className="text-[22px] font-bold text-[var(--m-ink)]">

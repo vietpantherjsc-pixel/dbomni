@@ -2,12 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
 import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub)
-import SearchIcon from '../components/SearchIcon'; // Gói 55 p11x
+import HubPinPrompt from '../components/HubPinPrompt'; // Gói phiên Hub (2026-11-05): PIN step-up chốt kiểm kê
+import { getStaffSession, clearStaffSession, staffSessionExpired, staffBranchName, saveStaffSession } from '../utils/staffSession';
+import { ensurePinToken, cachedPinToken, clearPinToken } from '../utils/staffPin';
+import SearchInput from '../components/SearchInput';
 
 // Trang nhân viên kiểm kê kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
-// Token riêng: localStorage['kiemke_token'] / ['kiemke_emp']
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/
+// staff_branch_id — đăng nhập 1 lần tại /nhan-vien, CN khóa theo phiên.
 // API (base /api, header Authorization: Bearer <token>):
-// - POST /employee/phone-login {phone, pin_code}
 // - GET  /employee/me
 // - GET  /employee/stocktakes
 // - POST /employee/stocktakes {type:'daily', note?}  -> {data:{id, items}, resumed?}
@@ -106,15 +109,11 @@ function statusLabel(st) {
 }
 
 export default function KiemKe() {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-  const [token, setToken] = useState(() => localStorage.getItem('kiemke_token') || '');
-  const [emp, setEmp] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('kiemke_emp') || 'null'); } catch (e) { return null; }
-  });
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
-  const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: không gắn ?t=
+  const session = getStaffSession();
+  const sessBranchId = session ? session.branchId : 0;
+  const [token, setToken] = useState(() => (session ? session.token : ''));
+  const [emp, setEmp] = useState(() => (session ? session.emp : null));
 
   const [screen, setScreen] = useState('home'); // home | count | done
   const [sheets, setSheets] = useState([]); // phiếu gần đây
@@ -149,43 +148,20 @@ export default function KiemKe() {
   };
   const toastErr = (m) => toast(m, true);
 
-  const logout = () => {
-    localStorage.removeItem('kiemke_token');
-    localStorage.removeItem('kiemke_emp');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setSheets([]); setScreen('home');
-    setSheetId(null); setItems([]); setCounts({}); setSearch('');
-    setShowConfirm(false); setSummary(null); setToastOn(false);
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung tại Hub
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  const expired = (e) => {
+  const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub
     if (e && e.response && e.response.status === 401) {
-      logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      staffSessionExpired();
       return true;
     }
     return false;
   };
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('kiemke_token', tk);
-      localStorage.setItem('kiemke_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   const loadSheets = async (tk) => {
     setLoading(true);
@@ -205,24 +181,24 @@ export default function KiemKe() {
       axios.get(API + '/employee/stocktake-meta', auth(token)).then((r) => {
         const d = r.data?.data || {};
         setBranches(d.branches || []);
-        setSelBranch(String(d.current_branch_id || ''));
+        setSelBranch(String(sessBranchId || d.current_branch_id || '')); // Gói phiên Hub 2026-11-05: CN của phiên khóa lúc đăng nhập thắng
         setCategories(d.categories || []);
-      }).catch(() => {});
+      }).catch((e) => { expired(e); });
       // Gói 55 p11w: nạp tất cả nguyên liệu để thêm vào phiếu
       axios.get(API + '/employee/materials', auth(token)).then((r) => {
         if (r.data?.success) setAllMaterials(r.data.data || []);
-      }).catch(() => {});
+      }).catch((e) => { expired(e); });
       // khôi phục thông tin NV nếu thiếu
       if (!emp) {
         axios.get(API + '/employee/me', auth(token))
           .then((r) => {
             const info = (r.data && (r.data.data || r.data.employee)) || null;
             if (info) {
-              localStorage.setItem('kiemke_emp', JSON.stringify(info));
+              saveStaffSession(token, info, sessBranchId);
               setEmp(info);
             }
           })
-          .catch(() => {});
+          .catch((e) => { expired(e); });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -335,11 +311,32 @@ export default function KiemKe() {
     } finally { setBusy(false); }
   };
 
+  // Gói phiên Hub (2026-11-05): chốt kiểm kê chạy thẳng không qua duyệt →
+  // PIN step-up (purpose 'stocktake_confirm', token Cache 5 phút phía server).
+  const [pinPrompt, setPinPrompt] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinErr, setPinErr] = useState('');
   const doConfirm = async () => {
     setShowConfirm(false);
+    const cached = cachedPinToken('stocktake_confirm');
+    if (cached) { await doConfirmWithPin(cached); return; }
+    setPinErr(''); setPinPrompt(true);
+  };
+  const submitPin = async (pinCode) => {
+    setPinBusy(true); setPinErr('');
+    try {
+      const t = await ensurePinToken(token, 'stocktake_confirm', pinCode);
+      setPinPrompt(false);
+      await doConfirmWithPin(t);
+    } catch (e) {
+      if (e && e.response && e.response.status === 401) { expired(e); return; }
+      setPinErr(errMsg(e, 'Mã PIN không đúng.'));
+    } finally { setPinBusy(false); }
+  };
+  const doConfirmWithPin = async (pinToken) => {
     setBusy(true);
     try {
-      await axios.post(API + '/employee/stocktakes/' + sheetId + '/confirm', {}, auth(token));
+      await axios.post(API + '/employee/stocktakes/' + sheetId + '/confirm', { pin_token: pinToken }, auth(token));
       const total = items.length;
       let diff = 0;
       items.forEach((it) => {
@@ -351,6 +348,12 @@ export default function KiemKe() {
       loadSheets(token);
     } catch (e) {
       if (expired(e)) return;
+      if (e && e.response && e.response.data && e.response.data.code === 'PIN_REQUIRED') {
+        clearPinToken('stocktake_confirm');
+        setPinErr(''); setPinPrompt(true);
+        toast('Cần xác nhận PIN để chốt kiểm kê.');
+        return;
+      }
       toastErr(errMsg(e, 'Chốt kiểm kê thất bại.'));
     } finally { setBusy(false); }
   };
@@ -392,6 +395,8 @@ export default function KiemKe() {
     [counts]
   );
 
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng — chưa có phiên
+  // chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
   if (!token) {
     return (
       <div className="kk-wrap">
@@ -401,36 +406,12 @@ export default function KiemKe() {
             <button onClick={goHub} aria-label="Quay lại hub"
               style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="kk-title">📦 Kiểm kê kho</div>
-            <div className="kk-sub">Đăng nhập để tiếp tục</div>
+            <div className="kk-sub">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <form className="kk-card" onSubmit={doLogin}>
-            <label className="kk-label" style={{ marginTop: 4 }}>Số điện thoại</label>
-            <input
-              className="kk-field"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, ''))}
-              placeholder="09xxxxxxxx"
-              autoComplete="tel"
-            />
-            <label className="kk-label">Mã PIN 6 số</label>
-            <input
-              className="kk-field kk-pin"
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              autoComplete="off"
-            />
-            {err && <div className="kk-msg" style={{ margin: '12px 0 0' }}>{err}</div>}
-            <button className="kk-send" type="submit" disabled={loginBusy}>
-              {loginBusy ? 'Đang xử lý...' : 'Đăng nhập'}
-            </button>
-          </form>
+          <div className="kk-card">
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="kk-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
+          </div>
         </div>
       </div>
     );
@@ -447,7 +428,7 @@ export default function KiemKe() {
           <div className="kk-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="kk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="kk-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="kk-sub">{staffBranchName(session) || (emp && emp.branch_name) || ''}</div>
           </div>
           <button className="kk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
           <button className="kk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
@@ -458,16 +439,13 @@ export default function KiemKe() {
       {screen === 'home' && (
         <React.Fragment>
           <section className="kk-card">
-            {/* Gói 55 p11t: chọn chi nhánh kiểm kê */}
-            {branches.length > 1 && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>Chi nhánh kiểm kê</div>
-                <select value={selBranch} onChange={(e) => setSelBranch(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', fontSize: 14, border: '1px solid #ddd', borderRadius: 10 }}>
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
+            {/* Gói phiên Hub 2026-11-05: CN khóa theo phiên đăng nhập — chỉ hiển thị, đổi CN = đăng xuất rồi đăng nhập lại */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: '#666', marginBottom: 6 }}>Chi nhánh kiểm kê</div>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: NAVY }}>
+                🏬 {(branches.find((b) => String(b.id) === String(selBranch)) || {}).name || staffBranchName(session) || (emp && emp.branch_name) || ''}
               </div>
-            )}
+            </div>
             {/* Gói 55 p11t: tích chọn loại nguyên liệu */}
             {categories.length > 0 && (
               <div style={{ marginBottom: 12 }}>
@@ -561,15 +539,14 @@ export default function KiemKe() {
             {/* UX 2026-10-26 (🟠25): tách riêng — ô lọc danh sách đếm (gõ là lọc ngay) và nút thêm nguyên liệu mở popup; trước đây 1 ô kiêm 2 việc gây nhầm */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div style={{ position: 'relative', flex: 1 }}>
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
-                  <SearchIcon size={16} />
-                </span>
-                <input
+                <SearchInput
                   className="kk-field"
-                  style={{ marginTop: 0, width: '100%', paddingLeft: 36 }}
+                  style={{ marginTop: 0, width: '100%' }}
                   value={filterText}
                   onChange={(e) => setFilterText(e.target.value)}
+                  onSearch={(v) => setFilterText(v)}
                   placeholder="Lọc nguyên liệu trong phiếu..."
+                  wrapperStyle={{ display: 'flex', width: '100%' }}
                 />
               </div>
               <button onClick={() => setShowAddPicker(true)}
@@ -675,6 +652,11 @@ export default function KiemKe() {
         </React.Fragment>
       )}
 
+      {pinPrompt && (
+        <HubPinPrompt title="🔐 Xác nhận PIN để chốt kiểm kê"
+          message="Chốt kiểm kê là thao tác chạy thẳng (không qua duyệt) nên cần nhập lại mã PIN của bạn."
+          busy={pinBusy} err={pinErr} onSubmit={submitPin} onClose={() => setPinPrompt(false)} />
+      )}
       <HubConfirm open={askCancel} title="Hủy phiếu kiểm kê" message="Hủy phiếu kiểm kê này? Dữ liệu đã nhập sẽ mất." confirmLabel="Hủy phiếu" danger onCancel={() => setAskCancel(false)} onConfirm={cancelDraft} />
       <HubConfirm open={askRemove != null} title="Xóa nguyên liệu" message="Xóa nguyên liệu này khỏi phiếu?" confirmLabel="Xóa" danger onCancel={() => setAskRemove(null)} onConfirm={doRemoveItem} />
       <div className={'kk-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
@@ -722,16 +704,15 @@ function AddMaterialPicker({ allMaterials, existingIds, categories, onClose, onA
       <div className="kk-modal" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
         <h3>Thêm nguyên liệu</h3>
         <div style={{ position: 'relative', marginBottom: 12 }}>
-          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
-            <SearchIcon size={16} />
-          </span>
-          <input
+          <SearchInput
             className="kk-field"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onSearch={(v) => setSearch(v)}
             placeholder="Tìm nguyên liệu chưa có trong phiếu..."
             autoFocus
-            style={{ paddingLeft: 36 }}
+            wrapperStyle={{ display: 'flex', width: '100%' }}
+            style={{ width: '100%' }}
           />
         </div>
         <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>

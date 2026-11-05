@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import VisibilityMatrix from './VisibilityMatrix'; // Demo tối ưu menu: tab Hiển thị trong trang cha
 
@@ -38,7 +39,9 @@ export default function Menus() {
     if (r.data?.success) setProducts(r.data.data.products || []);
   };
   useEffect(() => { load().catch((e) => {
-    if (e.response?.status === 401) return; // hết phiên: AuthContext tự chuyển về login
+    // S5(3): KHÔNG có cơ chế AuthContext tự chuyển về login — 401 phải hiện câu
+    // chuẩn hết phiên (phán 2026-11-04) thay vì nuốt câm như trước.
+    if (e.response?.status === 401) { alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'); return; }
     alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.');
   }); }, []);
 
@@ -213,7 +216,7 @@ export default function Menus() {
               <>
                 <div className="m-kicker mb-2">Món trong thực đơn ({products.length}) — kéo-thả hoặc bấm ↑/↓ để sắp xếp</div>
                 <div className="flex gap-2 mb-3 relative">
-                  <input className="m-input" placeholder="Tìm món để thêm…" value={q} onChange={(e) => search(e.target.value)} />
+                  <SearchInput className="m-input" placeholder="Tìm món để thêm…" value={q} onChange={(e) => search(e.target.value)} onSearch={(v) => search(v)} />
                   {found.length > 0 && (
                     <div className="absolute top-full left-0 right-0 mt-1 m-card z-10 max-h-60 overflow-auto m-scroll">
                       {found.map((p) => (

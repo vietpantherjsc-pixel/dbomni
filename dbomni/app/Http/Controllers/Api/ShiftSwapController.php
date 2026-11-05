@@ -84,6 +84,17 @@ class ShiftSwapController extends Controller
             'message' => 'Đã gửi yêu cầu đổi ca. Chờ NV kia xác nhận.'], 201);
     }
 
+    // Họ #28: trả hàng dạng MẢNG THUẦN với ngày của 2 quan hệ lịch ca ép về
+    // chuỗi Y-m-d — trả model thô khiến cast 'date' của WorkSchedule serialize
+    // thành ISO UTC (lệch −1 ngày phía hiển thị). setAttribute là no-op.
+    private static function plainDates(ShiftSwapRequest $m): array
+    {
+        $a = $m->toArray();
+        if ($m->requesterSchedule) $a['requester_schedule']['date'] = $m->requesterSchedule->date?->toDateString();
+        if ($m->targetSchedule) $a['target_schedule']['date'] = $m->targetSchedule->date?->toDateString();
+        return $a;
+    }
+
     // NV B: danh sách yêu cầu chờ mình xác nhận
     public function pendingForMe(Request $request): JsonResponse
     {
@@ -91,7 +102,8 @@ class ShiftSwapController extends Controller
         $emp = $request->user();
         $rows = ShiftSwapRequest::with(['requester:id,full_name', 'requesterSchedule.workShift:id,name,start_time,end_time', 'targetSchedule.workShift:id,name,start_time,end_time'])
             ->where('target_id', $emp->id)->where('status', 'pending')
-            ->orderBy('id', 'desc')->get();
+            ->orderBy('id', 'desc')->get()
+            ->map(fn ($m) => self::plainDates($m));
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
@@ -118,7 +130,8 @@ class ShiftSwapController extends Controller
         /** @var Employee $emp */
         $emp = $request->user();
         $rows = ShiftSwapRequest::with(['target:id,full_name', 'requesterSchedule.workShift:id,name', 'targetSchedule.workShift:id,name'])
-            ->where('requester_id', $emp->id)->orderBy('id', 'desc')->limit(20)->get();
+            ->where('requester_id', $emp->id)->orderBy('id', 'desc')->limit(20)->get()
+            ->map(fn ($m) => self::plainDates($m));
         return response()->json(['success' => true, 'data' => $rows]);
     }
 
@@ -127,7 +140,8 @@ class ShiftSwapController extends Controller
     {
         $rows = ShiftSwapRequest::with(['requester:id,full_name', 'target:id,full_name',
                 'requesterSchedule.workShift:id,name,start_time,end_time', 'targetSchedule.workShift:id,name,start_time,end_time'])
-            ->where('status', 'target_confirmed')->orderBy('id', 'desc')->get();
+            ->where('status', 'target_confirmed')->orderBy('id', 'desc')->get()
+            ->map(fn ($m) => self::plainDates($m));
         return response()->json(['success' => true, 'data' => $rows]);
     }
 

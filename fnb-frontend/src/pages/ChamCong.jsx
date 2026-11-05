@@ -4,9 +4,19 @@ import { fmtDate, fmtTime } from '../utils/format';
 import { API } from '../utils/api'; // Gói 37e: API tương đối — chạy được trên điện thoại (IP LAN)
 import DateInput from '../components/DateInput';
 import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
+import { getStaffSession, clearStaffSession, staffSessionExpired, staffBranchName, saveStaffSession } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05)
 
 // Trang chấm công nhân viên (public, mở từ QR: /cham-cong?b=<id>&t=<token>)
-// Gói 35 — dùng endpoint /api/employee/... với header Authorization: Bearer <emp_token>
+// Gói 35 — dùng endpoint /api/employee/... với header Authorization: Bearer
+// Gói phiên Hub + H-04 (2026-11-05, Đại Vương phán): phần HIỂN THỊ (trạng
+// thái hôm nay · lịch sử · yêu cầu) đi theo PHIÊN ĐĂNG NHẬP CHUNG của Hub
+// (staff_*) khi có — không còn biến mất vì 401 ở trang khác dùng chung khóa
+// emp_token như trước. Nút chấm vào/ra GIỮ ngữ nghĩa tại-quầy: chỉ chạy khi
+// trang được mở từ mã QR chấm công của chi nhánh (?b=&t=), server vẫn đối
+// chiếu attendance_qr_token như cũ; mở không-từ-QR thì bấm chấm chỉ nhận
+// thông báo rõ ràng, TUYỆT ĐỐI không xóa phiên. Luồng QR thuần (chưa từng
+// đăng nhập Hub) vẫn đăng nhập bằng PIN qua qr-login như cũ (khóa emp_*
+// giờ chỉ còn trang này dùng, không trang nào khác đụng vào).
 
 const NAVY = '#24305E';
 const ORANGE = '#F5A623';
@@ -66,14 +76,20 @@ function errMsg(err, fallback) {
 }
 
 export default function ChamCong() {
-  // Gói 68: nút về Cổng nhân viên (giữ token QR như các trang NV khác)
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
+  // Gói 68: nút về Cổng nhân viên (gói phiên Hub 2026-11-05: không gắn ?t= nữa)
+  const goHub = () => { window.location.href = '/nhan-vien'; };
+  // Gói phiên Hub 2026-11-05: chụp phiên chung 1 lần lúc mở trang — nguồn
+  // hiển thị ưu tiên; sessBranchId là CN khóa lúc đăng nhập Hub.
+  const [sess] = useState(() => getStaffSession());
+  const sessionMode = !!sess;
+  const sessBranchId = sess ? sess.branchId : 0;
   const [params] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     return { b: q.get('b') || '', t: q.get('t') || '' };
   });
-  const [token, setToken] = useState(() => localStorage.getItem('emp_token') || '');
+  const [token, setToken] = useState(() => (sess ? sess.token : '') || localStorage.getItem('emp_token') || '');
   const [emp, setEmp] = useState(() => {
+    if (sess) return sess.emp;
     try { return JSON.parse(localStorage.getItem('emp_info') || 'null'); } catch (e) { return null; }
   });
   const [pin, setPin] = useState('');
@@ -101,7 +117,7 @@ export default function ChamCong() {
     try {
       const r = await axios.get(API + '/employee/attendance/today', {
         ...auth(tk),
-        params: { branch_id: (emp && emp.branch_id) || params.b || undefined },
+        params: { branch_id: (sessionMode && sessBranchId) || (emp && emp.branch_id) || params.b || undefined },
       });
       setToday(r.data && r.data.data ? r.data.data : null);
       setTodayErr(false);
@@ -114,7 +130,9 @@ export default function ChamCong() {
       const info = r.data && r.data.data ? r.data.data : null;
       if (info) {
         setEmp(info);
-        localStorage.setItem('emp_info', JSON.stringify(info));
+        // Gói phiên Hub 2026-11-05: ghi đúng kho của nguồn phiên đang dùng
+        if (sessionMode) saveStaffSession(tk, info, sessBranchId);
+        else localStorage.setItem('emp_info', JSON.stringify(info));
         return info;
       }
     } catch (e) { if (expired(e)) return null; /* token cũ */ }
@@ -158,6 +176,13 @@ export default function ChamCong() {
   };
 
   const doCheck = async (kind) => {
+    // Gói phiên Hub 2026-11-05 (phán Đại Vương): nút chấm chỉ chạy khi mở từ
+    // mã QR tại quầy — thiếu ?b=/?t= thì báo rõ ràng, KHÔNG gọi API, KHÔNG
+    // xóa phiên (phần hiển thị theo phiên đăng nhập vẫn nguyên).
+    if (!params.b || !params.t) {
+      setMsg({ ok: false, text: 'Cần mở trang từ mã QR tại quầy để chấm công. Bạn vẫn xem được trạng thái, lịch sử và yêu cầu bằng phiên đăng nhập hiện tại.' });
+      return;
+    }
     setBusy(true); setMsg(null);
     try {
       const r = await axios.post(
@@ -223,15 +248,26 @@ export default function ChamCong() {
   };
 
   const logout = () => {
+    // Gói phiên Hub 2026-11-05: đang dùng phiên Hub thì Đăng xuất = hủy
+    // phiên chung tại Hub; luồng QR thuần chỉ dọn khóa emp_* của trang này.
+    if (sessionMode) {
+      clearStaffSession();
+      setToken(''); setEmp(null);
+      window.location.href = '/nhan-vien';
+      return;
+    }
     localStorage.removeItem('emp_token');
     localStorage.removeItem('emp_info');
     setToken(''); setEmp(null); setPin(''); setMsg(null); setTab('today'); setToday(null);
     setHistory([]); setHistoryLoaded(false); setRequests([]); setReqLoaded(false);
   };
 
-  // Token hết hạn (401) → đăng xuất về màn hình nhập PIN, không để hiện tên NV cũ
+  // Token hết hạn (401): phiên Hub → xử lý tập trung tại Hub; luồng QR →
+  // chỉ dọn khóa của trang này. Hai nguồn không bao giờ xóa khóa của nhau
+  // (gốc lỗi H-04: 401 ở trang chị em dùng chung emp_token xóa cả trang này).
   const expired = (e) => {
     if (e && e.response && e.response.status === 401) {
+      if (sessionMode) { staffSessionExpired(); return true; }
       logout();
       setMsg({ ok: false, text: 'Phiên đăng nhập đã hết hạn. Vui lòng nhập PIN để đăng nhập lại.' });
       return true;
@@ -288,7 +324,7 @@ export default function ChamCong() {
             <button onClick={goHub} aria-label="Quay lại hub"
               style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>‹ Hub</button>
             <div className="cc-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="cc-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
+            <div className="cc-branch">{(sessionMode && staffBranchName(sess)) || (emp && emp.branch_name) || 'Chi nhánh'}</div>
             <div className="cc-title">Chấm công</div>
           </header>
 
@@ -335,6 +371,11 @@ export default function ChamCong() {
                     onClick={() => doCheck('out')}
                   >Chấm công ra</button>
                 </div>
+                {(!params.b || !params.t) && (
+                  <div style={{ fontSize: 12.5, color: '#8a5a00', marginTop: 10 }}>
+                    📍 Bạn đang xem bằng phiên đăng nhập — muốn <b>chấm công</b>, hãy quét mã QR tại quầy.
+                  </div>
+                )}
                 {msg && <div className={'cc-msg ' + (msg.ok ? 'ok' : 'err')}>{msg.text}</div>}
               </div>
             )}
@@ -403,6 +444,9 @@ export default function ChamCong() {
                           {' · '}{fmtDate(rq.date_from)}{rq.date_to ? ' → ' + fmtDate(rq.date_to) : ''}
                         </div>
                         {rq.reason && <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>{rq.reason}</div>}
+                        {rq.status === 'rejected' && rq.reject_reason && (
+                          <div style={{ fontSize: 13, color: '#b91c1c', marginTop: 4 }}>Lý do từ chối: {rq.reject_reason}</div>
+                        )}
                         <span className="cc-badge" style={{ background: b.bg, color: b.fg }}>{b.txt}</span>
                       </div>
                     );

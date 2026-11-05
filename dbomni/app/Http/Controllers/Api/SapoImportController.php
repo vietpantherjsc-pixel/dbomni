@@ -36,7 +36,7 @@ class SapoImportController extends Controller
             $file->getClientOriginalName(),
             (int) $validated['branch_id'],
             'upload',
-            $request->user()?->id
+            $this->actorUserId($request) // Sổ #82: created_by của lượt import cũng là FK users
         );
 
         if ($run->status === 'error') {
@@ -140,7 +140,7 @@ class SapoImportController extends Controller
         $suspect->update([
             'status' => 'resolved',
             'resolution' => $data['resolution'] ?? 'Đã xử lý tay.',
-            'resolved_by' => $request->user()?->id,
+            'resolved_by' => $this->actorUserId($request),
             'resolved_at' => now(),
         ]);
         return response()->json(['success' => true, 'message' => 'Đã đánh dấu đã xử lý.', 'data' => $suspect->fresh()]);
@@ -157,10 +157,20 @@ class SapoImportController extends Controller
         $suspect->update([
             'status' => 'discarded',
             'resolution' => $data['resolution'] ?? 'Quản lý bỏ qua.',
-            'resolved_by' => $request->user()?->id,
+            'resolved_by' => $this->actorUserId($request),
             'resolved_at' => now(),
         ]);
         return response()->json(['success' => true, 'message' => 'Đã bỏ qua nghi ngờ này.', 'data' => $suspect->fresh()]);
+    }
+
+    /**
+     * Sổ #82 (2026-11-04, họ actor/FK): phần User của actor cho các cột FK
+     * users phía Sapo (resolved_by của suspects · created_by của lượt import)
+     * — phiên NV xử lý thì ghi null thay vì ghi mã NV vào FK users.
+     */
+    private function actorUserId(Request $request): ?int
+    {
+        return \App\Support\ApprovalActor::ids($request->user())[0];
     }
 
     private function guardPending(SapoImportSuspect $suspect): ?JsonResponse
@@ -204,7 +214,7 @@ class SapoImportController extends Controller
                     'status' => 'resolved',
                     'resolved_order_id' => $res['order_id'] ?? null,
                     'resolution' => $createdNote,
-                    'resolved_by' => $request->user()?->id,
+                    'resolved_by' => $this->actorUserId($request),
                     'resolved_at' => now(),
                 ]);
                 return response()->json(['success' => true, 'message' => 'Đã tạo đơn thành công.', 'data' => $suspect->fresh()]);
@@ -214,7 +224,7 @@ class SapoImportController extends Controller
                     'status' => 'resolved',
                     'resolved_order_id' => $existing?->id,
                     'resolution' => 'Đơn đã có trong DBOMNI (trùng mã hóa đơn) — không tạo lại.',
-                    'resolved_by' => $request->user()?->id,
+                    'resolved_by' => $this->actorUserId($request),
                     'resolved_at' => now(),
                 ]);
                 return response()->json(['success' => true, 'message' => 'Đơn đã tồn tại — đã đóng nghi ngờ.', 'data' => $suspect->fresh()]);
@@ -222,7 +232,7 @@ class SapoImportController extends Controller
                 $suspect->update([
                     'status' => 'resolved',
                     'resolution' => 'Đơn thuộc kênh DBOMNI — bỏ qua theo quy tắc lọc kênh.',
-                    'resolved_by' => $request->user()?->id,
+                    'resolved_by' => $this->actorUserId($request),
                     'resolved_at' => now(),
                 ]);
                 return response()->json(['success' => true, 'message' => 'Đơn kênh DBOMNI — đã đóng nghi ngờ.', 'data' => $suspect->fresh()]);
@@ -230,7 +240,7 @@ class SapoImportController extends Controller
                 $suspect->update([
                     'status' => 'resolved',
                     'resolution' => 'Hóa đơn đã hủy trên Sapo.',
-                    'resolved_by' => $request->user()?->id,
+                    'resolved_by' => $this->actorUserId($request),
                     'resolved_at' => now(),
                 ]);
                 return response()->json(['success' => true, 'message' => 'Hóa đơn đã hủy — đã đóng nghi ngờ.', 'data' => $suspect->fresh()]);

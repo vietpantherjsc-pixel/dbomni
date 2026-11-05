@@ -72,7 +72,6 @@ class OnlineOrderController extends Controller
         }
         return response()->json(['success' => true, 'data' => [
             'cover_url' => $cover,
-            'ref_bonus_points' => (int) Setting::get('ref_bonus_points', 100),
             // Gói Mini App 2026-10-30: cờ hiện mục Quét QR tích điểm ở trang Tài
             // khoản — mặc định ẩn, Admin bật ở trang Zalo Mini App khi cần dùng.
             'qr_claim_entry' => filter_var(Setting::get('miniapp_qr_claim_entry', '0'), FILTER_VALIDATE_BOOLEAN),
@@ -348,6 +347,41 @@ class OnlineOrderController extends Controller
             return $baseFee;
         }
         return $baseFee + ceil($km - $baseKm) * $perKm;
+    }
+
+    // Sổ #95: gương openStatus() của Mini App (utils/openingHours.js) — trả
+    // thông điệp đóng cửa nếu quán đang đóng, null nếu đang mở HOẶC không đủ
+    // cấu hình giờ để kết luận (client: openStatus null = không coi là đóng).
+    // Nguồn giờ duy nhất là branch.opening_hours — cùng dữ kiện client đọc.
+    // Văn bản gương banner UI: "Quán đã đóng cửa" + "(mở lại HH:MM)" khi biết
+    // giờ mở; ngày nghỉ theo chế độ daily thì không có giờ mở để báo.
+    private function closedNowMessage(Branch $branch): ?string
+    {
+        $oh = $branch->opening_hours;
+        if (!is_array($oh) || $oh === []) return null;
+        $open = null;
+        $close = null;
+        if (($oh['mode'] ?? null) === 'daily' && !empty($oh['days']) && is_array($oh['days'])) {
+            $cfg = $oh['days'][(int) now()->format('w')] ?? null;
+            if (!$cfg || !empty($cfg['off'])) {
+                return 'Quán đã đóng cửa';
+            }
+            $open = $cfg['open'] ?? null;
+            $close = $cfg['close'] ?? null;
+        } else {
+            $open = $oh['open'] ?? null;
+            $close = $oh['close'] ?? null;
+        }
+        if (!$open || !$close) return null;
+        $op = explode(':', (string) $open);
+        $cp = explode(':', (string) $close);
+        $o = ((int) ($op[0] ?? 0)) * 60 + ((int) ($op[1] ?? 0));
+        $c = ((int) ($cp[0] ?? 0)) * 60 + ((int) ($cp[1] ?? 0));
+        $cur = (int) now()->format('H') * 60 + (int) now()->format('i');
+        $isOpen = $o <= $c ? ($cur >= $o && $cur < $c) : ($cur >= $o || $cur < $c);
+        if ($isOpen) return null;
+
+        return 'Quán đã đóng cửa (mở lại ' . $open . ')';
     }
 
     // Gói 55 p11ac: server tự tính khoảng cách (không tin distance_km client gửi)
@@ -687,19 +721,37 @@ class OnlineOrderController extends Controller
         // data=null (khách vãng lai) thay vì lỗi 422 (lỗi này từng làm danh sách KM —
         // kể cả KM công khai — trống lặng lẽ ở checkout). Vẫn KHÔNG tra khách chỉ bằng
         // SĐT (giữ nguyên tắc bảo mật Gói 11).
-        $validated = $request->validate([
-            'phone' => 'required|string|max:20',
-            'member_code' => 'nullable|string|max:20',
-        ]);
-        if (empty($validated['member_code'])) {
-            return response()->json(['success' => true, 'data' => null]);
-        }
-        $customer = Customer::with('tier')
-            ->where('phone', $validated['phone'])
-            ->where('member_code', $validated['member_code'])
-            ->first();
+        // Spec đăng nhập SĐT + mật khẩu §3.2: token phiên được xét TRƯỚC cặp
+        // SĐT + mã; cặp chỉ còn hiệu lực khi tài khoản chưa đặt mật khẩu và
+        // mã không mang tiền tố IMP. Đường cứu "tra bằng mã IMP để xoay mã"
+        // của spec B §5.2 bị RÚT ở gói này (§7.2): cặp IMP chết ở mọi lớp,
+        // không xoay ở đây nữa (xoay chỉ còn ở lần xác thực Zalo đầu tiên).
+        $customer = \App\Services\CustomerSessionService::resolveFromToken($request->bearerToken());
+        $codeRotated = false;
         if (!$customer) {
-            return response()->json(['success' => true, 'data' => null]);
+            $validated = $request->validate([
+                'phone' => 'required|string|max:20',
+                'member_code' => 'nullable|string|max:20',
+            ]);
+            if (empty($validated['member_code'])) {
+                return response()->json(['success' => true, 'data' => null]);
+            }
+            $customer = Customer::with('tier')
+                ->where('phone', $validated['phone'])
+                ->where('member_code', $validated['member_code'])
+                ->first();
+            if (!$customer || !\App\Services\CustomerIdentityService::pairUsable($customer)) {
+                return response()->json(['success' => true, 'data' => null]);
+            }
+            // Đăng nhập bằng mã lần đầu mà chưa có mốc đồng ý → ghi mốc
+            // 'code_login' (chỉ ghi khi đang trống).
+            if (empty($customer->consent_agreed_at)) {
+                $customer->consent_agreed_at = now();
+                $customer->consent_source = 'code_login';
+                $customer->save();
+            }
+        } else {
+            $customer->load('tier');
         }
         // Gói 12a: lịch sử Tài khoản ẩn đơn hoàn thành quá 24h (đơn chưa xong vẫn hiện kể cả qua ngày)
         $cutoff = now()->subHours(24);
@@ -718,6 +770,12 @@ class OnlineOrderController extends Controller
             'name' => $customer->name,
             'phone' => $customer->phone,
             'member_code' => $customer->member_code,
+            'code_rotated' => $codeRotated,
+            // Spec mật khẩu §3.4/§5.4/§7.3: client dựa vào 3 cờ để chọn
+            // màn bảo mật, ô email và ô đồng ý ở Checkout.
+            'has_password' => !empty($customer->password_hash),
+            'email' => $customer->email,
+            'has_consented' => !empty($customer->consent_agreed_at),
             'points' => $customer->points,
             'total_spent' => (float) $customer->total_spent,
             'tier' => $customer->tier?->name,
@@ -750,6 +808,11 @@ class OnlineOrderController extends Controller
             'customer_phone' => 'required|string|max:20',
             // Spec KM chống mã (2026-10-21) Phần B: mã TV để xác thực quyền lợi theo SĐT
             'member_code' => 'nullable|string|max:20',
+            // Spec mật khẩu §7.3: email tự nguyện ở checkout (không bắt buộc,
+            // không ghi đè — chỉ điền khi hồ sơ đang trống, xem trong transaction).
+            'email' => 'nullable|email|max:150',
+            // Spec mật khẩu §5.4: cờ đồng ý NĐ 13 ở đơn đầu (cổng cứng ở server).
+            'consent_agreed' => 'nullable|boolean',
             'zalo_user_id' => 'nullable|string|max:100',
             'delivery_address' => 'required_if:order_type,delivery|nullable|string|max:255',
             'distance_km' => 'nullable|numeric|min:0|max:100', // Gói 55 p11ac: chỉ để tham khảo, server tự tính lại
@@ -783,15 +846,53 @@ class OnlineOrderController extends Controller
             'items.*.note' => 'nullable|string|max:255',
         ]);
 
-        try {
-            // Gói 55 p11ac: idempotency — client_key đã tồn tại thì trả đơn cũ
-            if (!empty($validated['client_key'])) {
-                $existing = Order::with('items')->where('client_key', $validated['client_key'])->first();
-                if ($existing) {
-                    return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
-                }
+        // Đợt fix rà soát VPS (S8): khớp quy tắc COD của đường /checkout-orders
+        // (PaymentController) — "Trả tại quán" không đi với đơn giao hàng khi quán
+        // bật chỉ-mang-về (zalo_pay_cod_takeaway_only, mặc định bật). Đường tạo đơn
+        // thường trước đây thiếu chốt này nên đơn giao hàng vẫn trả tại quán được.
+        if (($validated['payment_method'] ?? null) === 'pay_at_store'
+            && ($validated['order_type'] ?? null) === 'delivery'
+            && (bool) Setting::get('zalo_pay_cod_takeaway_only', '1')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Trả tại quán chỉ áp dụng cho đơn mang về/hẹn giờ.',
+            ], 422);
+        }
+
+        // Sổ #95 (2026-11-05): chốt giờ đóng cửa ở SERVER — trước đây chỉ UI
+        // khóa, gọi API trực tiếp ngoài giờ vẫn tạo được đơn tức thời (mẫu vật
+        // HD20261105000906 lúc 06:30, quán mở 07:00). Gương luật Mini App:
+        // đóng cửa thì chỉ nhận đơn CÓ hẹn giờ (scheduled_at đã qua validate
+        // after:now). checkout-orders và chốt đơn nhóm đều dùng chung store()
+        // này nên được phủ luôn; POS dùng OrderController, không đụng.
+        if (empty($validated['scheduled_at'])) {
+            $branchForHours = Branch::find($validated['branch_id']);
+            $closedMsg = $branchForHours ? $this->closedNowMessage($branchForHours) : null;
+            if ($closedMsg !== null) {
+                return response()->json(['success' => false, 'message' => $closedMsg], 422);
             }
-            $order = DB::transaction(function () use ($validated, $promotionService, $loyaltyService) {
+        }
+
+        // Spec mật khẩu §5.4: cổng cứng đồng ý NĐ 13 ở đơn đầu — khách chưa
+        // từng đồng ý thì đơn phải kèm cờ consent_agreed (mã lỗi riêng để
+        // client hiện ô đồng ý và cho đặt lại). Áp ở cả 2 đường tạo đơn
+        // (đường thường + checkout-orders; chốt đơn nhóm cũng qua store()).
+        // T-11: khách SĐT hoàn toàn mới (chưa có dòng hồ sơ — hồ sơ sẽ được
+        // tạo ngay tại đơn đầu) cũng bị cổng, không chỉ khách đã có hồ sơ.
+        $existingCustomer = Customer::where('phone', $validated['customer_phone'])->first();
+        if ((!$existingCustomer || empty($existingCustomer->consent_agreed_at)) && empty($validated['consent_agreed'])) {
+            return response()->json([
+                'success' => false,
+                'code' => 'consent_required',
+                'message' => 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.',
+            ], 422);
+        }
+
+        try {
+            // Sổ #92 (2026-11-05): việc tạo đơn đóng vào một callable để vòng thử
+            // lại bên dưới gọi lại được — thân transaction giữ nguyên từng dòng.
+            $createOrder = function () use ($validated, $promotionService, $loyaltyService) {
+                return DB::transaction(function () use ($validated, $promotionService, $loyaltyService) {
                 $subtotal = 0;
                 $orderItemsData = [];
                 $promoItems = [];
@@ -860,6 +961,22 @@ class OnlineOrderController extends Controller
                 // Chưa xác thực vẫn đặt đơn như khách vãng lai (chỉ chặn quyền lợi).
                 $identityVerified = $customerJustCreated
                     || \App\Services\CustomerIdentityService::matches($customer, $validated);
+
+                // Spec mật khẩu §7.3: email ở checkout chỉ điền khi hồ sơ
+                // đang trống (không ghi đè email khách đã tự đặt ở Tài khoản
+                // — tránh người khác cầm SĐT gõ đè).
+                if (!empty($validated['email']) && empty($customer->email)) {
+                    $customer->email = $validated['email'];
+                    $customer->email_added_at = now();
+                    $customer->save();
+                }
+                // Spec mật khẩu §5.4: đơn đầu kèm cờ đồng ý → ghi mốc nguồn
+                // 'checkout' (chỉ ghi khi mốc đang trống).
+                if (!empty($validated['consent_agreed']) && empty($customer->consent_agreed_at)) {
+                    $customer->consent_agreed_at = now();
+                    $customer->consent_source = 'checkout';
+                    $customer->save();
+                }
 
                 // 3. Phí ship (đơn giao hàng) — server tự tính, KHÔNG tin client.
                 // Gói 10c: chưa cộng dòng "Phí dịch vụ" vội — đợi trừ KM phí ship (bước 5b).
@@ -1198,7 +1315,7 @@ class OnlineOrderController extends Controller
                     'zalo_user_id' => $validated['zalo_user_id'] ?? null,
                     'delivery_address' => $validated['delivery_address'] ?? null,
                     'distance_km' => $distanceKm, // Gói 55 p11ac: server tự tính
-                    'delivery_note' => trim(($validated['delivery_note'] ?? '') . ($shipNote ? ($validated['delivery_note'] ? ' | ' : '') . $shipNote : '')),
+                    'delivery_note' => trim(($validated['delivery_note'] ?? '') . ($shipNote ? (!empty($validated['delivery_note']) ? ' | ' : '') . $shipNote : '')), // FIX #43: điều kiện trong từng dùng $validated['delivery_note'] không ?? — thiếu trường + có ghi chú ship là nổ lỗi, chặn cả đơn giao
                     'shipping_fee' => $shippingFee,
                     'shipping_discount' => $shippingDiscount, // Gói 10c
                     'shipping_promotion_id' => $shippingPromotion?->id, // Gói 10c
@@ -1221,7 +1338,6 @@ class OnlineOrderController extends Controller
                     'vat_company_name' => null,
                     'vat_company_address' => null,
                     'vat_email' => null,
-                    'delivery_note' => $validated['delivery_note'] ?? null,
                     'province' => $validated['province'] ?? null,
                     'ward' => $validated['ward'] ?? null,
                     // Gói 60: gói giao hàng khách chọn + phí đã khóa lúc chốt đơn
@@ -1261,7 +1377,34 @@ class OnlineOrderController extends Controller
                 }
 
                 return $order->load(['items.product', 'customer']);
-            });
+                });
+            };
+
+            // Sổ #92: thử lại tối đa 3 lần CHỈ với lỗi SQL tạm thời — 1062 (đua
+            // mã đơn hoặc đua client_key) và 1213 (deadlock). Mỗi lần thử lại:
+            // ô kiểm client_key (Gói 55 p11ac) chạy lại trước — thấy đơn sinh
+            // đôi đã commit thì trả đơn cũ, không tạo đơn thứ hai; còn đua mã
+            // thì nextCode trong closure sinh mã mới theo count đã cập nhật.
+            // Mọi lỗi khác ném thẳng ra catch ngoài, hành vi giữ nguyên.
+            $order = null;
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                if (!empty($validated['client_key'])) {
+                    $existing = Order::with('items')->where('client_key', $validated['client_key'])->first();
+                    if ($existing) {
+                        return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
+                    }
+                }
+                try {
+                    $order = $createOrder();
+                    break;
+                } catch (\Illuminate\Database\QueryException $qe) {
+                    $sqlCode = (int) ($qe->errorInfo[1] ?? 0);
+                    if ($attempt >= 3 || !in_array($sqlCode, [1062, 1213], true)) {
+                        throw $qe;
+                    }
+                    usleep(30000 * $attempt + random_int(0, 30000));
+                }
+            }
 
             return response()->json([
                 'success' => true,
@@ -1278,6 +1421,15 @@ class OnlineOrderController extends Controller
                     return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
                 }
             }
+            // Sổ #92 — Vá L: ghi log TRƯỚC khi trả 400 (trước đây catch này nuốt
+            // lỗi im lặng, không qua clientErrorMessage() vốn có ghi log).
+            \Illuminate\Support\Facades\Log::error('[OnlineOrder] store failed', [
+                'exception' => get_class($e),
+                'sql_code' => $e instanceof \Illuminate\Database\QueryException ? (int) ($e->errorInfo[1] ?? 0) : null,
+                'client_key' => $validated['client_key'] ?? null,
+                'branch_id' => $validated['branch_id'] ?? null,
+                'message' => $e->getMessage(),
+            ]);
             // Gói SEC2: không lộ message SQL thô ra client
             $message = $e instanceof \Illuminate\Database\QueryException
                 ? 'Có lỗi xảy ra. Vui lòng thử lại.'
@@ -1344,6 +1496,10 @@ class OnlineOrderController extends Controller
             'payment_method' => $order->payment_method,
             'pay_channel' => $order->pay_channel,
             'customer_notified_at' => $order->customer_notified_at,
+            // Lát 3c (2026-11-04): SĐT chi nhánh cho dòng "gọi quán để hủy" phía
+            // Mini App — đơn đã báo chuyển khoản không hủy online được (luật
+            // 2026-10-26) nên khách cần số quán ngay trên trang theo dõi/chờ TT.
+            'branch_phone' => $order->branch?->phone,
             'transfer' => $awaitingPayment
                 ? app(\App\Services\ZaloPaymentService::class)->transferInfoForOrder($order)
                 : null,
@@ -1354,6 +1510,8 @@ class OnlineOrderController extends Controller
             'created_at' => $order->created_at,
             // Gói 60: thông tin giao hàng cho trang theo dõi đơn (poll 5s)
             'delivery' => $order->order_type === 'delivery' ? [
+                // S15: địa chỉ giao hàng khách đã nhập — trang theo dõi hiện lại để khách tự kiểm
+                'address' => $order->delivery_address,
                 'provider' => $order->delivery_provider,
                 'provider_label' => $order->delivery_provider === 'ahamove' ? 'AhaMove'
                     : ($order->delivery_provider === 'lalamove' ? 'Lalamove' : null),
@@ -1529,6 +1687,12 @@ class OnlineOrderController extends Controller
                 if (!$customer) {
                     throw new Exception('Không tìm thấy thành viên. Hãy đăng nhập Tài khoản trước.');
                 }
+                // Spec mật khẩu §3.2: cặp SĐT + mã chết ở mọi endpoint quyền
+                // lợi khi tài khoản đã đặt mật khẩu hoặc mã mang tiền tố IMP
+                // (cùng thông báo chung như không tìm thấy — không lộ lý do).
+                if (!\App\Services\CustomerIdentityService::pairUsable($customer)) {
+                    throw new Exception('Không tìm thấy thành viên. Hãy đăng nhập Tài khoản trước.');
+                }
                 if ($order->customer_id && (int) $order->customer_id !== (int) $customer->id) {
                     throw new Exception('Đơn đã được gán cho thành viên khác.');
                 }
@@ -1627,26 +1791,6 @@ class OnlineOrderController extends Controller
                     if ($customer) {
                         $order->points_earned = $loyaltyService->earnForOrder($customer, $order, (float) $order->total_amount);
                         $order->save();
-                    }
-                }
-
-                // Gói 9: thưởng điểm cho người giới thiệu (affiliate)
-                // Gói 13: chỉ trao cho ĐƠN ĐẦU TIÊN của khách (tránh trao lặp lại mọi đơn)
-                if (!empty($order->referred_by)) {
-                    $referrer = Customer::where('member_code', $order->referred_by)->first();
-                    $isFirstOrder = $order->customer_id
-                        ? !Order::where('customer_id', $order->customer_id)
-                            ->where('id', '!=', $order->id)
-                            ->where(function ($q) {
-                                $q->where('payment_status', 'paid')->orWhere('stock_deducted', true);
-                            })
-                            ->exists()
-                        : true;
-                    if ($referrer && $referrer->id !== $order->customer_id && $isFirstOrder) {
-                        $bonus = (int) Setting::get('ref_bonus_points', 100);
-                        if ($bonus > 0) {
-                            $loyaltyService->awardReferral($referrer, $order, $bonus);
-                        }
                     }
                 }
 

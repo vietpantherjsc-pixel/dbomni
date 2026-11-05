@@ -18,6 +18,7 @@ use App\Models\RdProductPrice;
 use App\Models\RdRecipe;
 use App\Models\Recipe;
 use App\Models\Setting;
+use App\Support\RecipeUnitResolver;
 use App\Models\Transaction;
 use App\Models\TransactionCategory;
 use Carbon\Carbon;
@@ -127,13 +128,16 @@ class RDController extends Controller
             return response()->json(['success' => false, 'message' => 'Không có quyền xem R&D.'], 403);
         }
 
-        $materials = Material::orderBy('name')->get()->map(function ($m) {
+        $materials = Material::with('units')->orderBy('name')->get()->map(function ($m) {
             return [
                 'id' => $m->id,
                 'name' => $m->name,
                 'unit' => $m->unit,
                 // Đơn giá đã quy về đơn vị cơ sở (đúng calcCost) để frontend tính giá vốn trực tiếp
                 'cost_per_base' => $this->materialUnitCost($m),
+                // Spec định mức đơn vị quy đổi: danh sách đơn vị chọn được
+                // của từng nguyên liệu (cơ sở + quy đổi, hệ số = DB factor).
+                'units' => RecipeUnitResolver::unitsFor($m),
             ];
         });
 
@@ -188,13 +192,21 @@ class RDController extends Controller
         $data['description'] = $p->description;
         $data['option_group_ids'] = $p->optionGroups->pluck('id')->values();
         $data['prices'] = $p->prices->map(fn($pr) => ['price_list_id' => $pr->price_list_id, 'price' => (float) $pr->price])->values();
+        // Spec định mức đơn vị quy đổi: trả kèm bản chụp + số hiển thị để
+        // form mở sửa thấy lại đúng đơn vị đã chọn (display_qty server tính).
         $data['recipes'] = $p->recipes->whereNull('product_option_id')->values()->map(fn($r) => [
             'material_id' => $r->material_id, 'material_name' => $r->material?->name,
             'quantity' => (float) $r->quantity, 'kind' => $r->kind,
+            'display_unit_name' => $r->display_unit_name,
+            'display_factor' => $r->display_factor !== null ? (float) $r->display_factor : null,
+            'display_qty' => $r->display_qty,
         ])->values();
         $data['option_recipes'] = $p->recipes->whereNotNull('product_option_id')->values()->map(fn($r) => [
             'product_option_id' => $r->product_option_id, 'material_id' => $r->material_id,
             'material_name' => $r->material?->name, 'quantity' => (float) $r->quantity, 'kind' => $r->kind,
+            'display_unit_name' => $r->display_unit_name,
+            'display_factor' => $r->display_factor !== null ? (float) $r->display_factor : null,
+            'display_qty' => $r->display_qty,
         ])->values();
         return response()->json(['success' => true, 'data' => $data]);
     }
@@ -215,13 +227,45 @@ class RDController extends Controller
             'prices.*.price' => 'required|numeric|min:0',
             'recipes' => 'nullable|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
-            'recipes.*.quantity' => 'required|numeric|min:0',
+            // Spec định mức đơn vị quy đổi: client mới chỉ gửi display_*
+            // (không gửi quantity) — quantity nullable, xem ProductController.
+            'recipes.*.quantity' => 'nullable|numeric|min:0',
+            'recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'recipes.*.kind' => 'nullable|in:ingredient,packaging',
             'option_recipes' => 'nullable|array',
             'option_recipes.*.product_option_id' => 'required|exists:product_options,id',
             'option_recipes.*.material_id' => 'required|exists:materials,id',
-            'option_recipes.*.quantity' => 'required|numeric|min:0',
+            'option_recipes.*.quantity' => 'nullable|numeric|min:0',
+            'option_recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'option_recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'option_recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'option_recipes.*.kind' => 'nullable|in:ingredient,packaging',
+        ];
+    }
+
+    // Spec định mức đơn vị quy đổi (2.1): như ProductController — dòng có
+    // display_qty thì server quy đổi duy nhất, dòng kiểu cũ giữ nguyên.
+    private function draftLineValues(array $r): array
+    {
+        if (RecipeUnitResolver::usesDisplay($r)) {
+            $material = Material::with('units')->findOrFail($r['material_id']);
+            $resolved = RecipeUnitResolver::resolve($r, $material);
+            return [
+                'quantity' => $resolved['quantity'],
+                'display_unit_name' => $resolved['display_unit_name'],
+                'display_factor' => $resolved['display_factor'],
+            ];
+        }
+        return [
+            'quantity' => $r['quantity'],
+            'display_unit_name' => null,
+            'display_factor' => null,
         ];
     }
 
@@ -230,29 +274,27 @@ class RDController extends Controller
     {
         RdRecipe::where('rd_product_id', $p->id)->whereNull('product_option_id')->delete();
         foreach ($v['recipes'] ?? [] as $r) {
-            if ((float) $r['quantity'] <= 0) {
+            if (!RecipeUnitResolver::usesDisplay($r) && (float) ($r['quantity'] ?? 0) <= 0) {
                 continue;
             }
-            RdRecipe::create([
+            RdRecipe::create(array_merge([
                 'rd_product_id' => $p->id,
                 'product_option_id' => null,
                 'material_id' => $r['material_id'],
-                'quantity' => $r['quantity'],
                 'kind' => $r['kind'] ?? 'ingredient',
-            ]);
+            ], $this->draftLineValues($r)));
         }
         RdRecipe::where('rd_product_id', $p->id)->whereNotNull('product_option_id')->delete();
         foreach ($v['option_recipes'] ?? [] as $r) {
-            if ((float) $r['quantity'] <= 0) {
+            if (!RecipeUnitResolver::usesDisplay($r) && (float) ($r['quantity'] ?? 0) <= 0) {
                 continue;
             }
-            RdRecipe::create([
+            RdRecipe::create(array_merge([
                 'rd_product_id' => $p->id,
                 'product_option_id' => $r['product_option_id'],
                 'material_id' => $r['material_id'],
-                'quantity' => $r['quantity'],
                 'kind' => $r['kind'] ?? 'ingredient',
-            ]);
+            ], $this->draftLineValues($r)));
         }
         if (array_key_exists('option_group_ids', $v)) {
             $p->optionGroups()->sync($v['option_group_ids'] ?? []);
@@ -353,6 +395,10 @@ class RDController extends Controller
                     'product_option_id' => $r->product_option_id,
                     'material_id' => $r->material_id,
                     'quantity' => $r->quantity,
+                    // Spec định mức đơn vị quy đổi (mục 4): bản sao giữ nguyên
+                    // đơn vị hiển thị đã chọn của dòng gốc.
+                    'display_unit_name' => $r->display_unit_name,
+                    'display_factor' => $r->display_factor,
                     'kind' => $r->kind,
                 ]);
             }
@@ -416,12 +462,16 @@ class RDController extends Controller
                 );
             }
             // Định mức → recipes (cơ bản product_option_id null + theo tùy chọn)
+            // Spec định mức đơn vị quy đổi (mục 4): mang theo cả đơn vị hiển
+            // thị + hệ số chụp của dòng nháp (số cơ sở giữ nguyên).
             foreach ($p->recipes as $r) {
                 Recipe::create([
                     'product_id' => $product->id,
                     'product_option_id' => $r->product_option_id,
                     'material_id' => $r->material_id,
                     'quantity' => $r->quantity,
+                    'display_unit_name' => $r->display_unit_name,
+                    'display_factor' => $r->display_factor,
                     'kind' => $r->kind,
                 ]);
             }
@@ -827,9 +877,13 @@ class RDController extends Controller
             ->where('status', '!=', 'cancelled')
             ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()])
             ->when($branchId, fn($q) => $q->where('branch_id', $branchId))
-            ->get(['id', 'subtotal_amount', 'discount_amount', 'commission_amount']);
+            ->get(['id', 'subtotal_amount', 'discount_amount', 'commission_amount', 'online_channel', 'shipping_fee']);
         $orderCount = $orders->count();
-        $revenue = (float) $orders->sum(fn($o) => (float) $o->subtotal_amount - (float) $o->discount_amount);
+        // Vá phí ship thu hộ 2026-11-04: subtotal_amount của đơn online ĐÃ gồm
+        // phí ship (OnlineOrderController lưu subtotal + shipping) → trừ lại
+        // cho đơn zalo để doanh thu hòa vốn chỉ gồm tiền hàng.
+        $revenue = (float) $orders->sum(fn($o) => (float) $o->subtotal_amount - (float) $o->discount_amount
+            - ($o->online_channel === 'zalo' ? (float) $o->shipping_fee : 0));
         $commission = (float) $orders->sum('commission_amount');
         $items = \App\Models\OrderItem::whereIn('order_id', $orders->pluck('id')->all())->get();
         $bomCost = $this->bomCostForItems($items, $branchId);

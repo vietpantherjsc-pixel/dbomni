@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, fmt, getProfile, profileIdentity } from '../../api';
+import { api, fmt, getProfile, profileIdentity, authWithZalo } from '../../api';
+import ConsentCheck from '../../components/ConsentCheck';
 import { generateSchedule, scoreFromCounters, casualParams, casualType } from './hungTranChauEngine';
 // Tài sản hình NGUYÊN BẢN của Đại Vương (không vẽ lại): chi tiết chữ K +
 // mặt trời crop từ file logo gốc (huy hiệu thẻ chia sẻ + biểu tượng điểm);
@@ -63,7 +64,7 @@ const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padSt
 // DOM: HUD, đầu trang, chú thích điểm — thay bản tự vẽ đã bị bác.
 export function SunMarkIcon({ size = 16, style }) {
   return (
-    <img src={kSunUrl} alt="Daybreak" style={{ height: Math.round(size * 1.34), width: 'auto', display: 'inline-block', verticalAlign: '-4px', ...style }} />
+    <img src={kSunUrl} alt="Daybreak" style={{ height: Math.round(size * 1.34), width: 'auto', display: 'inline-block', ...style }} />
   );
 }
 
@@ -103,6 +104,12 @@ export default function HungTranChau() {
   const [state, setState] = useState(null);
   const [loadErr, setLoadErr] = useState(false);
   const [mode, setMode] = useState('reward');
+  // Spec đăng ký Zalo B §2.3: lối vào phụ ở trang Minigame — khách chưa có
+  // định danh bấm chế độ có thưởng → lời dẫn + nút Zalo (dùng chung authWithZalo
+  // và component đồng ý với trang Tài khoản, không chép luồng thứ hai).
+  const [gameAgree, setGameAgree] = useState(false);
+  const [gameZaloBusy, setGameZaloBusy] = useState(false);
+  const [gameB3, setGameB3] = useState(false);
   const [phase, setPhase] = useState('idle'); // idle|starting|playing|submitting|result|aborted
   const [hud, setHud] = useState({ score: 0, misses: 0, timeLeft: 0, elapsed: 0 });
   const [result, setResult] = useState(null);
@@ -234,6 +241,25 @@ export default function HungTranChau() {
     rafRef.current = requestAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Spec đăng ký Zalo B §2.3: đăng ký từ trang game, xong quay lại chơi có thưởng
+  // với định danh mới (loadState nạp lại lượt/thưởng; identity() đọc hồ sơ mới).
+  const handleGameZaloRegister = async () => {
+    if (!gameAgree) return;
+    setGameZaloBusy(true);
+    try {
+      const json = await authWithZalo();
+      if (json.code === 'not_zalo') { alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.'); return; }
+      if (!json.success) {
+        if (json.code === 'phone_permission_required') { setGameB3(true); return; }
+        alert(json.message || 'Không đăng ký được bằng Zalo.');
+        return;
+      }
+      setGameB3(false);
+      loadState();
+    } catch { /* từ chối hộp thoại quyền Zalo → giữ nguyên trang */ }
+    finally { setGameZaloBusy(false); }
+  };
 
   const startGame = async () => {
     setNotice(''); setResult(null); setShareStatus(''); setShareCardImg('');
@@ -480,7 +506,7 @@ export default function HungTranChau() {
       <div style={{ background: NAVY, color: '#fff', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
         <button onClick={() => nav('/account')} style={{ background: 'none', border: 0, color: '#fff', fontSize: 20, minWidth: 44, minHeight: 44 }}>‹</button>
         <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>🧋 Hứng Trân Châu</div>
-        {myPoints !== null && <div style={{ fontSize: 13, fontWeight: 700 }}><SunMarkIcon size={16} style={{ filter: 'brightness(1.6)' }} /> {fmt(myPoints)} điểm</div>}
+        {myPoints !== null && <div style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}><SunMarkIcon size={16} style={{ filter: 'brightness(1.6)' }} />{fmt(myPoints)} điểm</div>}
       </div>
 
       <div style={{ padding: '14px 16px 0' }}>
@@ -506,13 +532,13 @@ export default function HungTranChau() {
             {mode === 'reward' ? (
               <>
                 <span>⏱ {Math.ceil(hud.timeLeft)}s</span>
-                <span><SunMarkIcon size={17} /> {fmt(hud.score)}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><SunMarkIcon size={17} />{fmt(hud.score)}</span>
                 <span>{'💧'.repeat(Math.max(0, (state.game?.max_misses || 3) - hud.misses))}{'🤍'.repeat(hud.misses)}</span>
               </>
             ) : (
               <>
                 <span>⏱ {fmtTime(hud.elapsed / 1000)}</span>
-                <span><SunMarkIcon size={17} /> {fmt(hud.score)}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><SunMarkIcon size={17} />{fmt(hud.score)}</span>
                 <span>🏅 {fmt(state.casual_best?.score || 0)}</span>
               </>
             )}
@@ -522,9 +548,32 @@ export default function HungTranChau() {
               <div style={{ fontSize: 15, color: NAVY, fontWeight: 700, lineHeight: 1.5 }}>
                 Kéo ly hứng trân châu 🧋 lá trà 🍃 hạt cà phê ☕<br />Tránh hạt cháy ✖ · Hụt {state.game?.max_misses || 3} vật tốt là thua
               </div>
-              <button className="zm-btn-primary" style={{ marginTop: 16, minHeight: 48, padding: '0 34px', width: 'auto' }} onClick={startGame}>
-                {mode === 'reward' ? `Chơi có thưởng (${state.plays_left_today} lượt)` : 'Chơi giải trí'}
-              </button>
+              {mode === 'reward' && !(getProfile()?.phone && getProfile()?.member_code) ? (
+                <div style={{ marginTop: 16, width: '100%', maxWidth: 340, background: '#fff', borderRadius: 12, padding: 14, textAlign: 'left' }}>
+                  <div style={{ fontSize: 13.5, color: NAVY, fontWeight: 700, lineHeight: 1.5 }}>Chế độ có thưởng cần tài khoản thành viên để ghi điểm.</div>
+                  <div style={{ marginTop: 10 }}>
+                    <ConsentCheck checked={gameAgree} onChange={setGameAgree} />
+                  </div>
+                  {!gameB3 ? (
+                    <>
+                      <button className="zm-btn-primary" style={{ marginTop: 12, minHeight: 48, width: '100%', background: !gameAgree ? '#c3cadb' : undefined }} disabled={!gameAgree || gameZaloBusy} onClick={handleGameZaloRegister}>
+                        {gameZaloBusy ? 'Đang xử lý...' : 'Đăng ký bằng Zalo'}
+                      </button>
+                      {!gameAgree && <div style={{ fontSize: 12.5, color: '#888', marginTop: 8, textAlign: 'center' }}>Tích ô đồng ý ở trên để bật nút đăng ký.</div>}
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 13, color: '#9A3412', marginTop: 12, lineHeight: 1.5 }}>Cần số điện thoại đã xác thực từ Zalo để tạo tài khoản. Không có dữ liệu nào được tạo từ lần thử vừa rồi.</div>
+                      <button className="zm-btn-primary" style={{ marginTop: 12, minHeight: 48, width: '100%' }} disabled={gameZaloBusy} onClick={() => { setGameB3(false); handleGameZaloRegister(); }}>Thử lại</button>
+                    </>
+                  )}
+                  <button onClick={() => setMode('casual')} style={{ display: 'block', margin: '12px auto 0', background: 'none', border: 0, color: NAVY, fontSize: 13, fontWeight: 700 }}>Chơi giải trí không cần tài khoản ›</button>
+                </div>
+              ) : (
+                <button className="zm-btn-primary" style={{ marginTop: 16, minHeight: 48, padding: '0 34px', width: 'auto' }} onClick={startGame}>
+                  {mode === 'reward' ? `Chơi có thưởng (${state.plays_left_today} lượt)` : 'Chơi giải trí'}
+                </button>
+              )}
               {notice && <div style={{ marginTop: 10, fontSize: 13, color: '#D43A2F', fontWeight: 600 }}>{notice}</div>}
             </div>
           )}
@@ -596,7 +645,7 @@ export default function HungTranChau() {
             </div>
             <div style={{ fontSize: 12.5, color: '#8A93A6', marginTop: 6 }}>Điểm game hôm nay: {fmt(state.earned_today)}/{fmt(state.daily_cap_points)} · Còn {state.plays_left_today} lượt</div>
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12.5, color: '#5B6478', marginTop: 8 }}>
-              <span><img src={pearlUrl} alt="" style={{ height: 18, verticalAlign: '-4px' }} /> +{pts.pearl}</span><span><img src={leafUrl} alt="" style={{ height: 18, verticalAlign: '-4px' }} /> +{pts.leaf}</span><span><img src={coffeeUrl} alt="" style={{ height: 15, verticalAlign: '-3px' }} /> +{pts.coffee}</span><span><img src={specialUrl} alt="" style={{ height: 20, verticalAlign: '-5px' }} /> +{pts.sun}</span><span><img src={burntUrl} alt="" style={{ height: 18, verticalAlign: '-4px' }} /> cháy −{pts.burnt}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><img src={pearlUrl} alt="" style={{ height: 18 }} /> +{pts.pearl}</span><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><img src={leafUrl} alt="" style={{ height: 18 }} /> +{pts.leaf}</span><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><img src={coffeeUrl} alt="" style={{ height: 15 }} /> +{pts.coffee}</span><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><img src={specialUrl} alt="" style={{ height: 20 }} /> +{pts.sun}</span><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><img src={burntUrl} alt="" style={{ height: 18 }} /> cháy −{pts.burnt}</span>
             </div>
           </div>
         ) : (

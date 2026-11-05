@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
@@ -42,6 +43,10 @@ const statusPill = (status) => {
             return <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium bg-red-50 text-red-600 border border-red-200">Đã hủy</span>;
         case 'held':
             return <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium bg-amber-50 text-amber-700 border border-amber-200">Đang lưu</span>;
+        case 'processing':
+            // Sổ #32: sau xác nhận tiền, backend đặt status='processing' (vào KDS
+            // pha chế) — trước đây rơi vào default "Đang xử lý" nên nhãn không đổi.
+            return <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium bg-orange-50 text-orange-700 border border-orange-200">Đang pha chế</span>;
         default:
             return <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium bg-blue-50 text-blue-700 border border-blue-200">Đang xử lý</span>;
     }
@@ -67,6 +72,15 @@ const Orders = () => {
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState(null);
+    // Sổ #23: trạng thái "đã lên cò" của nút xác nhận tiền — xác nhận 2 bước ngay
+    // trên nút, thay hộp thoại confirm() của trình duyệt. Tự gỡ khi đổi đơn/sau 6s.
+    const [confirmPayArmed, setConfirmPayArmed] = useState(false);
+    useEffect(() => { setConfirmPayArmed(false); }, [selected?.id]);
+    useEffect(() => {
+        if (!confirmPayArmed) return;
+        const t = setTimeout(() => setConfirmPayArmed(false), 6000);
+        return () => clearTimeout(t);
+    }, [confirmPayArmed]);
     const [expandItems, setExpandItems] = useState(false); // Gói 49: xổ chi tiết món
     const [expandDisc, setExpandDisc] = useState(false); // Gói 49: xổ chi tiết giảm giá
     const [showImport, setShowImport] = useState(false); // Gói 23
@@ -215,7 +229,7 @@ const Orders = () => {
     const exportCsv = () => {
         // UX 2026-10-26 (🟠9): header có dấu + trạng thái tiếng Việt (trước đây không dấu + mã thô)
         const header = ['Mã', 'Thời gian', 'Thu ngân', 'Khách hàng', 'Thanh toán', 'Tổng tiền', 'Trạng thái'];
-        const STATUS_VI = { completed: 'Hoàn thành', pending: 'Chờ xử lý', confirmed: 'Đã xác nhận', preparing: 'Đang làm', ready: 'Sẵn sàng', delivering: 'Đang giao', cancelled: 'Đã hủy', held: 'Đơn lưu' };
+        const STATUS_VI = { completed: 'Hoàn thành', pending: 'Chờ xử lý', confirmed: 'Đã xác nhận', processing: 'Đang pha chế', preparing: 'Đang làm', ready: 'Sẵn sàng', delivering: 'Đang giao', cancelled: 'Đã hủy', held: 'Đơn lưu' }; // Sổ #32: bổ sung processing (thiếu khóa này khiến CSV in nguyên chữ 'processing')
         const rows = orders.map((o) => [
             o.code,
             fmtDateTime(o.created_at),
@@ -312,15 +326,13 @@ const Orders = () => {
                             Đã failover
                         </label>
                         <div className="flex-1 relative">
-                            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                                <path d="M21 21l-4.35-4.35M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0z" />
-                            </svg>
-                            <input
+                            <SearchInput
                                 value={searchInput}
                                 onChange={(e) => setSearchInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                                onSearch={() => handleSearch()}
                                 placeholder="Tìm kiếm qua mã tham chiếu / tên đơn"
-                                className="w-full text-[13px] border border-gray-300 rounded pl-9 pr-3 py-2 focus:outline-none focus:border-[#24305E]"
+                                wrapperStyle={{ display: 'flex', width: '100%' }}
+                                className="w-full text-[13px] border border-gray-300 rounded pl-3 pr-3 py-2 focus:outline-none focus:border-[#24305E]"
                             />
                         </div>
                         <button
@@ -490,7 +502,7 @@ const Orders = () => {
                             {selected.delivery_provider && (
                                 <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
                                     <div className="font-bold text-gray-800 mb-1.5">
-                                        🛵 {selected.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+                                        {selected.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
                                         {selected.delivery_failover_from && (
                                             <span className="ml-2 text-[11px] font-medium bg-amber-100 text-amber-700 border border-amber-300 rounded-full px-2 py-0.5">
                                                 Failover từ {selected.delivery_failover_from === 'ahamove' ? 'AhaMove' : 'Lalamove'}
@@ -515,7 +527,7 @@ const Orders = () => {
                                             }}
                                             className="mt-2 text-[12px] bg-blue-600 text-white rounded px-3 py-1.5 font-medium"
                                         >
-                                            🔄 Thử tạo lại đơn hãng
+                                            Thử tạo lại đơn hãng
                                         </button>
                                     )}
                                 </div>
@@ -524,20 +536,35 @@ const Orders = () => {
                             <div className="space-y-2 pb-3 border-b border-gray-100">
                                 <div className="flex justify-between items-center cursor-pointer" onClick={() => setExpandItems(!expandItems)}>
                                     <span className="text-gray-600">Tiền mặt hàng, combo</span>
-                                    <span>{Number(selected.subtotal_amount).toLocaleString('vi-VN')}đ <span className="text-[10px] text-gray-400">{expandItems ? '▲' : '▼'}</span></span>
+                                    {/* Lát 2a (2026-11-04): subtotal_amount của đơn online GỒM cả phí ship
+                                        (cách lưu của luồng Mini App) → tiền hàng thật phải trừ phí ship,
+                                        nếu không dòng này thành 65.000đ và cộng với dòng Phí ra gấp đôi. */}
+                                    <span>{Number(selected.online_channel === 'zalo' ? Math.max(0, (selected.subtotal_amount || 0) - (selected.shipping_fee || 0)) : (selected.subtotal_amount || 0)).toLocaleString('vi-VN')}đ <span className="text-[10px] text-gray-400">{expandItems ? '▲' : '▼'}</span></span>
                                 </div>
                                 {expandItems && (
                                     <div className="bg-gray-50 rounded p-2 space-y-2">
-                                        {(selected.items || []).map((it) => (
+                                        {(selected.items || []).map((it) => {
+                                            // Lát 2a (2026-11-04): cột options có 2 dạng trong dữ liệu —
+                                            // đơn online lưu MAP {id_tùy_chọn: tên} (OnlineOrderController),
+                                            // đơn POS/import lưu LIST [{name, price}]. Cách vẽ cũ chỉ hiểu
+                                            // LIST: gặp MAP thì tùy chọn biến mất, và khi món có thêm ghi
+                                            // chú thì .map trên object làm trắng trang. Chuẩn hóa về 1
+                                            // dạng trước khi vẽ (KDS vẫn đọc đúng nhờ Object.values).
+                                            const optList = Array.isArray(it.options)
+                                                ? it.options.map((op) => (typeof op === 'string' ? { name: op } : op))
+                                                : (it.options && typeof it.options === 'object'
+                                                    ? Object.values(it.options).map((name) => ({ name }))
+                                                    : (typeof it.options === 'string' && it.options ? [{ name: it.options }] : []));
+                                            return (
                                             <div key={it.id}>
                                                 <div className="flex justify-between text-[12px]">
-                                                    <span>{it.product?.name || it.product_name} (x{it.quantity})</span>
+                                                    <span>{it.product_name || it.product?.name} (x{it.quantity})</span>
                                                     <span className="font-medium">{Number(it.price * it.quantity).toLocaleString('vi-VN')}đ</span>
                                                 </div>
                                                 {/* Gói 49b: hiện nhóm tùy chọn từ cột Tùy chọn (import) + option/note */}
-                                                {((it.options && it.options.length > 0) || it.option?.name || it.note) && (
+                                                {(optList.length > 0 || it.option?.name || it.note) && (
                                                     <div className="text-[11px] text-gray-500 pl-2 space-y-0.5">
-                                                        {(it.options || []).map((op, oi) => (
+                                                        {optList.map((op, oi) => (
                                                             <div key={oi}>{op.name}{op.price > 0 ? ` (+${Number(op.price).toLocaleString('vi-VN')}đ)` : ''}</div>
                                                         ))}
                                                         {[it.option?.name, it.note].filter(Boolean).map((t, ti) => (
@@ -546,7 +573,8 @@ const Orders = () => {
                                                     </div>
                                                 )}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                                 {Number(selected.discount_amount) > 0 && (() => {
@@ -593,7 +621,11 @@ const Orders = () => {
                                 NV xác nhận khi đã thu tiền (backend confirmPayment không chặn trạng thái này). */}
                             {selected.online_channel === 'zalo' && ['pending', 'pending_payment', 'transfer_notified', 'confirmed'].includes(selected.payment_status) && selected.status !== 'cancelled' && (
                                 <>
-                                    {selected.customer_notified_at && (
+                                    {/* Lát 2i (2026-11-04): banner "đã báo chuyển khoản" chỉ đúng
+                                        nghĩa khi đơn ĐANG chờ xác nhận (transfer_notified) — trước
+                                        đây chỉ cần còn mốc notified_at là hiện, nên sau khi xác
+                                        nhận xong mở lại chi tiết vẫn thấy dòng chờ xác nhận. */}
+                                    {selected.customer_notified_at && selected.payment_status === 'transfer_notified' && (
                                         <div className="mt-4 text-[12.5px] px-3 py-2 rounded-lg" style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46' }}>
                                             💳 Khách đã báo chuyển khoản lúc {fmtDateTime(selected.customer_notified_at)} — hãy đối chiếu sao kê trước khi xác nhận.
                                         </div>
@@ -605,7 +637,13 @@ const Orders = () => {
                                     )}
                                     <button
                                         onClick={async () => {
-                                            if (!confirm(`Xác nhận đã nhận tiền đơn ${selected.code}? Đơn sẽ trừ kho và vào KDS.`)) return;
+                                            // Sổ #23 (2026-11-04): KHÔNG dùng hộp thoại confirm() của trình
+                                            // duyệt nữa — môi trường không hiện hộp thoại (trình duyệt kiểm
+                                            // tự động/webview) nuốt im lặng thành "chưa xác nhận" → bấm mà
+                                            // không gọi API, không dấu vết. Xác nhận 2 bước ngay trên nút:
+                                            // bấm 1 = nút đỏ đòi xác nhận lại, bấm 2 = thực hiện.
+                                            if (!confirmPayArmed) { setConfirmPayArmed(true); return; }
+                                            setConfirmPayArmed(false);
                                             try {
                                                 const res = await axios.post(`${API}/orders/${selected.id}/confirm-payment`);
                                                 if (res.data?.success) { alert(res.data.message); setSelected(null); fetchOrders(); }
@@ -613,9 +651,15 @@ const Orders = () => {
                                             } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
                                         }}
                                         className="w-full py-2.5 mt-4 bg-green-600 text-white rounded text-[13px] font-bold hover:bg-green-700"
+                                        style={confirmPayArmed ? { background: '#dc2626' } : undefined}
                                     >
-                                        ✅ Xác nhận đã nhận tiền (vào KDS)
+                                        {confirmPayArmed ? `⚠️ Bấm lại để XÁC NHẬN đã nhận tiền đơn ${selected.code}` : '✅ Xác nhận đã nhận tiền (vào KDS)'}
                                     </button>
+                                    {confirmPayArmed && (
+                                        <div className="mt-2 text-[12px]" style={{ color: '#b91c1c' }}>
+                                            Đơn sẽ trừ kho và vào KDS ngay khi xác nhận. Bấm nút lần nữa để thực hiện, hoặc đóng chi tiết đơn để hủy.
+                                        </div>
+                                    )}
                                 </>
                             )}
                             <div className="flex gap-2 pt-4">
@@ -629,7 +673,7 @@ const Orders = () => {
                                         subtotal: selected.subtotal_amount, discount: selected.discount_amount,
                                         total: selected.total_amount, payment_method: selected.payment_method,
                                         items: (selected.items || []).map((it) => ({
-                                            product_name: it.product?.name || it.product_name, quantity: it.quantity,
+                                            product_name: it.product_name || it.product?.name, quantity: it.quantity,
                                             unit_price: it.unit_price ?? it.price, note: it.option?.name || it.note,
                                         })),
                                     })}
@@ -637,7 +681,7 @@ const Orders = () => {
                                 <button onClick={() => printLabels({
                                         code: selected.code,
                                         items: (selected.items || []).map((it) => ({
-                                            product_name: it.product?.name || it.product_name, quantity: it.quantity,
+                                            product_name: it.product_name || it.product?.name, quantity: it.quantity,
                                             note: it.option?.name || it.note,
                                         })),
                                     })}
@@ -684,7 +728,7 @@ const Orders = () => {
                             {(splitOrder.items || []).map((it) => (
                                 <div key={it.id} className="flex items-center justify-between gap-3 border-b border-gray-50 pb-2">
                                     <span className="flex-1">
-                                        {it.product?.name || it.product_name} × {it.quantity}
+                                        {it.product_name || it.product?.name} × {it.quantity}
                                         {it.option?.name && <span className="text-gray-400 text-xs"> ({it.option.name})</span>}
                                     </span>
                                     <input

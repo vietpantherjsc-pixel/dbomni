@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
-import { fmtDate } from '../../utils/format';
+import { fmtDate, toApiDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 
@@ -26,6 +27,7 @@ export default function Staff() {
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);
     const [newPin, setNewPin] = useState(null); // PIN vừa tạo/reset — chỉ hiện 1 lần
+    const [savedMsg, setSavedMsg] = useState(''); // S10: thông báo thành công sau khi tạo NV (trước đây đóng form im lặng)
 
     const fetchAll = useCallback(async () => {
         const [e, r, b] = await Promise.all([
@@ -48,7 +50,10 @@ export default function Staff() {
         setEditing(emp);
         const bIds = emp.branches?.length ? emp.branches.map((b) => String(b.id)) : (emp.branch_id ? [String(emp.branch_id)] : []);
         setForm({
-            full_name: emp.full_name || '', dob: emp.dob?.slice(0, 10) || '', start_date: emp.start_date?.slice(0, 10) || '',
+            // S10: KHÔNG slice(0,10) chuỗi thô — ngày từ API có thể kèm múi giờ (…T17:00:00Z)
+            // khiến slice lệch 1 ngày so với danh sách (fmtDate đổi về giờ địa phương).
+            // Chuẩn hóa qua toApiDate — cùng bộ parse với tầng hiển thị.
+            full_name: emp.full_name || '', dob: toApiDate(emp.dob), start_date: toApiDate(emp.start_date),
             phone: emp.phone || '', email: emp.email || '', education: emp.education || '', qualification: emp.qualification || '',
             username: emp.username || '', password: '', pin_code: '', // PIN đã hash ở backend — không điền vào form
             role_id: emp.role_id ? String(emp.role_id) : '', branch_id: emp.branch_id ? String(emp.branch_id) : '',
@@ -80,6 +85,11 @@ export default function Staff() {
             setShowForm(false); fetchAll();
             // Backend trả pin_code_plain khi vừa đặt PIN mới — hiện 1 lần duy nhất
             if (d.pin_code_plain) setNewPin(d.pin_code_plain);
+            // S10: tạo mới mà không có PIN hiện kèm → báo thành công rõ ràng (toast tại trang)
+            else if (!editing) {
+                setSavedMsg('Đã tạo nhân viên ' + form.full_name.trim() + '.');
+                setTimeout(() => setSavedMsg(''), 4000);
+            }
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại. Kiểm tra lại các ô bắt buộc rồi thử lại.'); }
     };
     const remove = async (id) => { if (!window.confirm('Xóa nhân viên này?')) return; try { await axios.delete(API + '/employees/' + id); fetchAll(); } catch (e) { alert('Xóa thất bại'); } };
@@ -98,13 +108,16 @@ export default function Staff() {
             <div className="p-5">
                 <div className="flex flex-wrap items-center gap-3 mb-4">
                     <h1 className="text-xl font-bold">Nhân viên</h1>
-                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm tên / SĐT / username" className="border border-gray-300 rounded px-3 py-2 text-[13px] w-56" />
+                    <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onSearch={(v) => setSearch(v)} placeholder="Tìm tên / SĐT / username" className="border border-gray-300 rounded px-3 py-2 text-[13px] w-56" />
                     <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="border border-gray-300 rounded px-3 py-2 text-[13px]">
                         <option value="">Tất cả chi nhánh</option>
                         {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                     {editable && <button onClick={openAdd} className="ml-auto px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">+ Thêm nhân viên</button>}
                 </div>
+                {savedMsg && (
+                    <div className="mb-3 px-4 py-2.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-[13px] font-medium">✓ {savedMsg}</div>
+                )}
                 <div className="m-card overflow-x-auto">
                     <table className="w-full text-[13px] min-w-[860px]">
                         <thead><tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">

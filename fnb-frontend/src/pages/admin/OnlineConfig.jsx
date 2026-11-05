@@ -22,9 +22,8 @@ const imgSrc = (u) => {
 export default function OnlineConfig() {
   const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '6000' });
-  // Gói 9: cover trang chủ Mini App + điểm thưởng giới thiệu
+  // Gói 9: cover trang chủ Mini App
   const [cover, setCover] = useState('');
-  const [refPoints, setRefPoints] = useState('100');
   // Dời từ Thiết lập chung (2026-10-20): banner KM + card Quan tâm OA thuộc cấu hình Mini App
   const [slideInt, setSlideInt] = useState('5');
   const [savingSlide, setSavingSlide] = useState(false);
@@ -52,12 +51,11 @@ export default function OnlineConfig() {
     } catch (e) {
       alert('Không tải được danh sách chi nhánh: ' + (e.response?.data?.message || e.message));
     }
-    // Gói 9: nạp cover + điểm thưởng giới thiệu
+    // Gói 9: nạp cover
     try {
       const s = await axios.get(API + '/settings');
       if (s.data) {
         setCover(s.data.shop_cover_url || '');
-        setRefPoints(String(s.data.ref_bonus_points ?? '100'));
         if (s.data.promo_slide_interval) setSlideInt(String(s.data.promo_slide_interval));
         setOaCfg({
           oa_card_enabled: s.data.oa_card_enabled ?? '1',
@@ -81,7 +79,7 @@ export default function OnlineConfig() {
   const saveCover = async () => {
     setSavingCover(true);
     try {
-      await api('/settings', { method: 'post', data: { settings: { shop_cover_url: cover, ref_bonus_points: refPoints } } });
+      await api('/settings', { method: 'post', data: { settings: { shop_cover_url: cover } } });
       alert('Đã lưu.');
     } catch (e) { alert('Thao tác thất bại. Vui lòng thử lại.'); }
     finally { setSavingCover(false); }

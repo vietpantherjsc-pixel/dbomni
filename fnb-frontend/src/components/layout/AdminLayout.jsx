@@ -6,6 +6,7 @@ import '../../styles/matcha.css';
 import { loadTheme, getStoredLogo } from '../../utils/theme';
 import { loadFont } from '../../utils/font';
 import { loadNumberSettings } from '../../utils/number';
+import { ConfirmHost } from '../../utils/confirmInApp'; // Sổ #23: hộp xác nhận nội bộ cho các nút duyệt/xác nhận
 import axios from 'axios';
 import { API } from '../../utils/api';
 
@@ -137,6 +138,7 @@ const AdminLayout = ({ children }) => {
     // Gói 18: dropdown chọn chi nhánh
     const [branches, setBranches] = useState([]);
     const [branchOpen, setBranchOpen] = useState(false);
+    const [sessionExpired, setSessionExpired] = useState(false); // S5(3): 401 khi tải CN → banner câu chuẩn
     // Logo thương hiệu (2026-10-21): setting brand_logo — có logo thì sidebar
     // hiện ảnh thay chữ; đổi logo ở trang Thiết lập là sidebar cập nhật ngay.
     const [brandLogo, setBrandLogo] = useState(() => getStoredLogo());
@@ -150,7 +152,10 @@ const AdminLayout = ({ children }) => {
     useEffect(() => {
         axios.get(API + '/branches')
             .then((r) => { if (r.data?.success) setBranches(r.data.data || []); })
-            .catch(() => {});
+            // S5(3): trước đây nuốt câm mọi lỗi → hết phiên làm bộ chọn CN trống
+            // trên MỌI trang Admin mà không ai biết vì sao. 401 nay hiện banner
+            // câu chuẩn; lỗi khác giữ nguyên hành vi (không chặn trang).
+            .catch((e) => { if (e.response?.status === 401) setSessionExpired(true); });
     }, []);
 
     const branchName = branchId === '0'
@@ -389,8 +394,15 @@ const AdminLayout = ({ children }) => {
                     </div>
                 </header>
 
+                {sessionExpired && (
+                    <div style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', color: '#b91c1c', padding: '10px 16px', fontSize: 13, fontWeight: 600 }}>
+                        Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.
+                    </div>
+                )}
+
                 {/* Nội dung trang */}
                 <main className="flex-1 overflow-y-auto m-scroll">{children}</main>
+                <ConfirmHost />
             </div>
         </div>
     );

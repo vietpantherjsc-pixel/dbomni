@@ -46,7 +46,10 @@ export default function ReportsInventory() {
     useEffect(() => {
         axios.get(API + '/branches')
             .then((r) => { if (r.data?.success) setBranches(r.data.data || []); })
-            .catch(() => {});
+            .catch((e) => {
+                // S5: 401 = hết phiên → hiện câu chuẩn thay vì nuốt lỗi câm
+                if (e?.response?.status === 401) setErrMsg('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+            });
     }, []);
 
     const load = useCallback(async () => {
@@ -61,7 +64,10 @@ export default function ReportsInventory() {
             console.error('Lỗi tải báo cáo kho:', e);
             const detail = e?.response?.data?.message || e?.message || '';
             console.error('Chi tiết lỗi báo cáo kho:', detail);
-            setErrMsg('Không tải được số liệu báo cáo kho. Kiểm tra kết nối mạng rồi bấm Thử tải lại.');
+            // S5: 401 = hết phiên → câu chuẩn thay cho thông báo lỗi tải chung chung
+            setErrMsg(e?.response?.status === 401
+                ? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
+                : 'Không tải được số liệu báo cáo kho. Kiểm tra kết nối mạng rồi bấm Thử tải lại.');
         }
         setLoading(false);
     }, [f]);

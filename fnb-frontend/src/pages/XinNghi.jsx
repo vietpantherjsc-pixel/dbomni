@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import { getStaffSession, clearStaffSession, staffSessionExpired } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05)
 import DateInput from '../components/DateInput';
 
 // Trang nhân viên xin nghỉ theo ca (public, KHÔNG cần đăng nhập admin)
-// Token riêng: localStorage['xinnghi_token'] / ['xinnghi_emp']
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/staff_branch_id — đăng nhập 1 lần tại /nhan-vien
 // API (base /api, header Authorization: Bearer <token>):
-// - POST /employee/phone-login {phone, pin_code}
 // - GET  /employee/me
 // - GET  /employee/shift-leaves/my-shifts
 // - POST /employee/shift-leaves {date, work_shift_id, reason?}
@@ -55,12 +55,10 @@ const ST_CLS = { pending: 'xn-b-pending', approved: 'xn-b-approved', rejected: '
 const fmtD = (iso) => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '';
 
 export default function XinNghi() {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-    const [token, setToken] = useState(() => localStorage.getItem('xinnghi_token') || '');
-    const [emp, setEmp] = useState(() => { try { return JSON.parse(localStorage.getItem('xinnghi_emp') || 'null'); } catch (e) { return null; } });
-    const [phone, setPhone] = useState('');
-    const [pin, setPin] = useState('');
-    const [loginErr, setLoginErr] = useState('');
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: không gắn ?t=
+    const session = getStaffSession();
+    const [token, setToken] = useState(() => (session ? session.token : ''));
+    const [emp, setEmp] = useState(() => (session ? session.emp : null));
     const [shifts, setShifts] = useState([]);
     const [myReqs, setMyReqs] = useState([]);
     const [sel, setSel] = useState('');
@@ -72,44 +70,49 @@ export default function XinNghi() {
 
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     // UX 2026-10-26 (🟠23): hết phiên 401 -> đăng xuất + báo, như các trang Hub chị em (trước đây trang này nuốt mọi lỗi kể cả 401, NV kẹt ở màn hình cũ)
-    const expired = (e) => {
+    const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub
         if (e && e.response && e.response.status === 401) {
-            logout();
-            setLoginErr('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+            staffSessionExpired();
             return true;
         }
         return false;
     };
 
-    const loadAll = async () => {
+    // Sổ #29: tách 2 chân tải — ca về là hiện ngay, không chờ danh sách đơn
+    // (trước đây Promise.all trói cứng: chân đơn treo thì ca cũng không hiện).
+    const [loadingShifts, setLoadingShifts] = useState(false);
+    const loadShifts = async () => {
+        setLoadingShifts(true);
         try {
-            const [s, r] = await Promise.all([
-                api('/employee/shift-leaves/my-shifts'),
-                api('/employee/shift-leaves'),
-            ]);
+            const s = await api('/employee/shift-leaves/my-shifts');
             setShifts(s.data?.data || []);
-            setMyReqs(r.data?.data || []);
             setLoadErr(false);
         } catch (e) { if (!expired(e)) setLoadErr(true); }
+        finally { setLoadingShifts(false); }
     };
-    useEffect(() => { if (token) loadAll(); }, [token]); // eslint-disable-line
-
-    const doLogin = async () => {
-        setLoginErr('');
+    const loadReqs = async () => {
         try {
-            const r = await axios.post(API + '/employee/phone-login', { phone: phone.trim(), pin_code: pin.trim() });
-            const tk = r.data?.token || r.data?.data?.token;
-            const info = r.data?.employee || r.data?.data?.employee;
-            if (!tk) throw new Error('Đăng nhập thất bại');
-            localStorage.setItem('xinnghi_token', tk);
-            localStorage.setItem('xinnghi_emp', JSON.stringify(info));
-            setToken(tk); setEmp(info);
-        } catch (e) { setLoginErr(e.response?.data?.message || 'SĐT hoặc PIN chưa đúng'); }
+            const r = await api('/employee/shift-leaves');
+            setMyReqs(r.data?.data || []);
+        } catch (e) { if (!expired(e)) setLoadErr(true); }
     };
-    const logout = () => {
-        localStorage.removeItem('xinnghi_token');
-        localStorage.removeItem('xinnghi_emp');
+    const loadAll = () => { loadShifts(); loadReqs(); };
+    useEffect(() => { if (token) loadAll(); }, [token]); // eslint-disable-line
+    // Sổ #29 (tiền lệ Cách 1 ở Hub): quay lại tab/focus thì nạp lại ca + đơn —
+    // trang mở từ trước khi có ca không còn giữ danh sách rỗng cũ. loadAll chỉ
+    // set shifts/myReqs nên form đang nhập (ca đã chọn, lý do) không bị đụng.
+    useEffect(() => {
+        if (!token) return;
+        const onBack = () => { if (document.visibilityState === 'visible') loadAll(); };
+        window.addEventListener('focus', onBack);
+        document.addEventListener('visibilitychange', onBack);
+        return () => { window.removeEventListener('focus', onBack); document.removeEventListener('visibilitychange', onBack); };
+    }, [token]); // eslint-disable-line
+
+    const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung tại Hub
+        clearStaffSession();
         setToken(''); setEmp(null);
+        window.location.href = '/nhan-vien';
     };
 
     const [sending, setSending] = useState(false); // UX 2026-10-26 (🟠24): khóa nút khi đang gửi, chống gửi trùng
@@ -138,15 +141,11 @@ export default function XinNghi() {
                         <button onClick={goHub} aria-label="Quay lại hub"
                           style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 12 }}>‹ Về Cổng nhân viên</button>
                         <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Xin nghỉ theo ca</h2>
-                        <p style={{ opacity: .8, fontSize: 14 }}>Đăng nhập bằng SĐT + PIN để gửi yêu cầu nghỉ cho ca đã đăng ký.</p>
+                        <p style={{ opacity: .8, fontSize: 14 }}>Trang này dùng chung phiên đăng nhập của Cổng nhân viên.</p>
                     </div>
                     <div className="xn-login-card">
-                        <label className="xn-label">Số điện thoại</label>
-                        <input className="xn-field" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="VD: 0901234567" />
-                        <label className="xn-label">Mã PIN</label>
-                        <input className="xn-field" type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN của bạn" />
-                        {loginErr && <div className="xn-msg" style={{ margin: '12px 0 0' }}>{loginErr}</div>}
-                        <button className="xn-send" onClick={doLogin} disabled={!phone.trim() || !pin.trim()}>Đăng nhập</button>
+                        <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+                        <button className="xn-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
                     </div>
                 </div>
             ) : (
@@ -158,7 +157,7 @@ export default function XinNghi() {
                                 <div className="xn-name">{emp?.full_name || 'Nhân viên'}</div>
                                 <div className="xn-sub">Xin nghỉ theo ca</div>
                             </div>
-                            <button className="xn-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
+                            <button className="xn-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
                             <button className="xn-logout" onClick={logout}>Đăng xuất</button>
                         </div>
                     </div>
@@ -182,15 +181,18 @@ export default function XinNghi() {
                     <div className="xn-card">
                         <h3>📝 Tạo yêu cầu nghỉ</h3>
                         <label className="xn-label">Ca đã đăng ký / đã xếp</label>
-                        <select className="xn-field" value={sel} onChange={(e) => setSel(e.target.value)}>
-                            <option value="">— Chọn ca —</option>
+                        <select className="xn-field" value={sel} onChange={(e) => setSel(e.target.value)} disabled={loadingShifts}>
+                            <option value="">{loadingShifts ? 'Đang tải ca…' : '— Chọn ca —'}</option>
                             {shifts.map((s) => (
                                 <option key={s.date + '|' + s.work_shift_id} value={s.date + '|' + s.work_shift_id}>
                                     {fmtD(s.date)} — {s.shift_name} ({s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)})
                                 </option>
                             ))}
                         </select>
-                        {shifts.length === 0 && <div className="xn-empty">Không có ca nào sắp tới.</div>}
+                        {/* Sổ #29: đang tải thì nói đang tải — cấm hiện "không có ca" khi chưa tải xong */}
+                        {loadingShifts
+                            ? <div className="xn-empty">Đang tải ca…</div>
+                            : shifts.length === 0 && <div className="xn-empty">Không có ca nào sắp tới.</div>}
                         <label className="xn-label">Lý do</label>
                         <input className="xn-field" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: việc gia đình" />
                         <button className="xn-bigbtn" style={{ marginTop: 14 }} onClick={submit} disabled={!sel || sending}>{sending ? 'Đang gửi…' : 'Gửi yêu cầu nghỉ'}</button>
@@ -205,6 +207,9 @@ export default function XinNghi() {
                                 <div>
                                     <div style={{ fontWeight: 700, fontSize: 14 }}>{fmtD(typeof r.date === 'string' ? r.date : r.date?.slice(0, 10))} — {r.work_shift?.name}</div>
                                     <div style={{ fontSize: 12, color: '#6b7280' }}>{r.reason || 'Không có lý do'}</div>
+                                    {r.status === 'rejected' && r.reject_reason && (
+                                        <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 2 }}>Lý do từ chối: {r.reject_reason}</div>
+                                    )}
                                 </div>
                                 <span className={`xn-badge ${ST_CLS[r.status] || ''}`}>{ST_LABEL[r.status] || r.status}</span>
                             </div>
@@ -321,7 +326,8 @@ function SwapTab({ api, shifts, fmtD, onExpired }) {
                             <div>
                                 <div style={{ fontWeight: 700, fontSize: 14 }}>{r.requester?.full_name} muốn đổi ca</div>
                                 <div style={{ fontSize: 12, color: '#6b7280' }}>
-                                    Ca bạn: {r.target_schedule?.work_shift?.name} — Ca họ: {r.requester_schedule?.work_shift?.name}
+                                    Ca bạn: {r.target_schedule?.work_shift?.name}{r.target_schedule?.date ? ` (${fmtD(r.target_schedule.date)})` : ''} — Ca họ: {r.requester_schedule?.work_shift?.name}{r.requester_schedule?.date ? ` (${fmtD(r.requester_schedule.date)})` : ''}
+                                    {/* Sổ #38: vẽ kèm NGÀY 2 ca — payload pendingForMe đã có date thuần; thiếu ngày thì người được nhờ phải đồng ý mù */}
                                 </div>
                             </div>
                             <div style={{ display: 'flex', gap: 6 }}>

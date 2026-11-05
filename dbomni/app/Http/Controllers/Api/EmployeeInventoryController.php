@@ -30,6 +30,20 @@ class EmployeeInventoryController extends Controller
     // ---------- Danh mục dùng chung ----------
 
     // Gói 55 p11t: chi nhánh kiểm kê — mặc định = chi nhánh ca đang chấm công
+
+    // Gói phiên Hub (2026-11-05): cổng PIN step-up cho hành động chạy thẳng —
+    // token do POST /employee/pin-verify cấp (Cache 'pin_token:{purpose}:{id}',
+    // sống 5 phút). Thiếu/sai/hết hạn → 403 mã PIN_REQUIRED đúng khuôn cụm duyệt.
+    private function requirePinToken(Request $request, Employee $emp, string $purpose, string $message): ?\Illuminate\Http\JsonResponse
+    {
+        $token = (string) $request->input('pin_token', '');
+        $valid = $token !== '' && hash_equals((string) \Illuminate\Support\Facades\Cache::get('pin_token:' . $purpose . ':' . $emp->id), $token);
+        if (!$valid) {
+            return response()->json(['success' => false, 'code' => 'PIN_REQUIRED', 'message' => $message], 403);
+        }
+        return null;
+    }
+
     public function branches(Request $request): JsonResponse
     {
         $emp = $this->emp($request);
@@ -243,6 +257,9 @@ class EmployeeInventoryController extends Controller
     public function confirmStocktake(Request $request, int $id): JsonResponse
     {
         $emp = $this->emp($request);
+        if ($pinErr = $this->requirePinToken($request, $emp, 'stocktake_confirm', 'Cần xác nhận PIN để chốt kiểm kê.')) {
+            return $pinErr;
+        }
         // Gói 55 p11u: cho phép các chi nhánh NV được phép
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
@@ -395,6 +412,9 @@ class EmployeeInventoryController extends Controller
     public function storeProduction(Request $request, InventoryService $inv): JsonResponse
     {
         $emp = $this->emp($request);
+        if ($pinErr = $this->requirePinToken($request, $emp, 'production', 'Cần xác nhận PIN để chạy sản xuất.')) {
+            return $pinErr;
+        }
         $v = $request->validate([
             'material_id' => 'required|exists:materials,id',
             'quantity' => 'required|numeric|min:0.01',

@@ -6,14 +6,37 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\MembershipTier;
 use App\Models\PointTransaction;
+use App\Support\ApprovalActor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 // Gói 5 (2026-10-05): Quản lý khách hàng — SĐT làm định danh, mã QR thành viên.
 class CustomerController extends Controller
 {
+    /**
+     * Lát 1b (rà soát đêm 2026-11-04): "Tổng đã mua" phía Admin phải cùng cơ số
+     * TIỀN HÀNG với mọi thước đo khác (quy tắc Order::revenueAmount — đơn zalo
+     * trừ phí ship thu hộ). Cột customers.total_spent tích lũy từ các lượt tích
+     * điểm TRƯỚC vá phí ship còn lẫn cả ship (lệch sống: cửa sổ 60 ngày 135.000đ
+     * trong khi cột hiện 155.000đ) → tính lại từ đơn tại thời điểm đọc: chỉ đơn
+     * đã thanh toán và chưa hủy (đúng tập đơn đã qua tích điểm, chưa bị thu hồi).
+     */
+    private function spentByGoods(array $customerIds): array
+    {
+        if (!$customerIds) return [];
+        return \App\Models\Order::whereIn('customer_id', $customerIds)
+            ->where('payment_status', 'paid')
+            ->where('status', '<>', 'cancelled')
+            ->groupBy('customer_id')
+            ->selectRaw("customer_id, SUM(total_amount - CASE WHEN online_channel = 'zalo' THEN shipping_fee ELSE 0 END) as spent")
+            ->pluck('spent', 'customer_id')
+            ->map(fn($v) => (float) $v)
+            ->all();
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Customer::with('tier')->orderByDesc('id');
@@ -46,6 +69,13 @@ class CustomerController extends Controller
                 $c->points_expiring_soon = (int) ($sums[$c->id] ?? 0);
             });
         }
+        // Lát 1b: đè total_spent bằng cơ số tiền hàng tính từ đơn (xem spentByGoods)
+        if ($ids) {
+            $spent = $this->spentByGoods($ids);
+            $page->getCollection()->each(function ($c) use ($spent) {
+                $c->total_spent = $spent[$c->id] ?? 0.0;
+            });
+        }
 
         return response()->json(['success' => true, 'data' => $page]);
     }
@@ -61,6 +91,7 @@ class CustomerController extends Controller
         // Loyalty 2.0: kèm lô điểm còn hạn + lịch sử hạng + coupon ví đang hiệu
         // lực (để Admin xem và thu hồi khi cần) trong cùng response chi tiết.
         $data = $customer->toArray();
+        $data['total_spent'] = $this->spentByGoods([$id])[$id] ?? 0.0; // Lát 1b: cơ số tiền hàng
         $data['point_lots'] = \App\Models\PointLot::where('customer_id', $id)
             ->where('points_remaining', '>', 0)
             ->orderBy('expires_at')
@@ -118,7 +149,16 @@ class CustomerController extends Controller
             'birthday' => 'nullable|date',
             'note' => 'nullable|string|max:255',
             'membership_tier_id' => 'nullable|exists:membership_tiers,id',
+            // Spec mật khẩu §7.3: Admin sửa được email (đúng định dạng, tối
+            // đa 150 ký tự, KHÔNG unique; để trống = xóa). Sửa ở Admin KHÔNG
+            // ghi email_added_at (cột đó chỉ ghi hành vi tự nguyện của khách).
+            'email' => 'nullable|email|max:150',
         ]);
+        if (array_key_exists('email', $validated)) {
+            $validated['email'] = ($validated['email'] ?? null) !== null && trim((string) $validated['email']) !== ''
+                ? trim((string) $validated['email'])
+                : null;
+        }
         // Loyalty 2.0 (spec 3.3): Admin gán tay hạng → hạng được bảo vệ khỏi
         // cron tụt hạng trong 1 cửa sổ đầy đủ + ghi log reason=manual.
         $tierChanged = array_key_exists('membership_tier_id', $validated)
@@ -142,6 +182,59 @@ class CustomerController extends Controller
             ]);
         }
         return response()->json(['success' => true, 'data' => $customer->load('tier')]);
+    }
+
+    // Spec mật khẩu §5.3: Admin mở cửa sổ hỗ trợ đặt mật khẩu tại quầy
+    // (15 phút) — nhân viên chỉ mở cửa, khách tự đặt trên máy của mình.
+    // Actor ghi đúng cột User/Employee (mẫu ApprovalActor, không auth()->id() trần).
+    public function openPasswordSetupWindow(Request $request, int $id): JsonResponse
+    {
+        $customer = Customer::findOrFail($id);
+        [$userId, $employeeId] = ApprovalActor::ids($request->user());
+        $customer->update([
+            'password_setup_until' => now()->addMinutes(15),
+            'password_setup_by_user_id' => $userId,
+            'password_setup_by_employee_id' => $employeeId,
+        ]);
+        Log::info('[MatKhauKhach] Admin mo cua so dat mat khau tai quay', ['customer_id' => $id, 'user_id' => $userId, 'employee_id' => $employeeId]);
+        return response()->json(['success' => true, 'data' => [
+            'customer_id' => $customer->id,
+            'password_setup_until' => $customer->password_setup_until?->toIso8601String(),
+        ]]);
+    }
+
+    // Spec mật khẩu §5.3: Admin đóng cửa sổ hỗ trợ trước hạn.
+    public function closePasswordSetupWindow(Request $request, int $id): JsonResponse
+    {
+        $customer = Customer::findOrFail($id);
+        $customer->update([
+            'password_setup_until' => null,
+            'password_setup_by_user_id' => null,
+            'password_setup_by_employee_id' => null,
+        ]);
+        return response()->json(['success' => true]);
+    }
+
+    // Spec mật khẩu §7.4: Admin cấp lại mã thành viên (mã là định danh công
+    // khai — nút này phục vụ in thẻ mới, KHÔNG phải thao tác bảo mật đăng
+    // nhập). Mã cũ chết ngay tại thời điểm lưu; mã cũ không được lưu lại.
+    // Phiên token của khách KHÔNG bị thu hồi.
+    public function regenerateMemberCode(Request $request, int $id): JsonResponse
+    {
+        $customer = Customer::findOrFail($id);
+        [$userId, $employeeId] = ApprovalActor::ids($request->user());
+        $newCode = $this->generateMemberCode();
+        $customer->update([
+            'member_code' => $newCode,
+            'member_code_rotated_at' => now(),
+            'member_code_rotated_by_user_id' => $userId,
+            'member_code_rotated_by_employee_id' => $employeeId,
+        ]);
+        Log::info('[MatKhauKhach] Admin cap lai ma thanh vien', ['customer_id' => $id, 'user_id' => $userId, 'employee_id' => $employeeId]);
+        return response()->json(['success' => true, 'data' => [
+            'customer_id' => $customer->id,
+            'member_code' => $newCode,
+        ]]);
     }
 
     // Điều chỉnh điểm thủ công (cộng/trừ) — ghi lịch sử

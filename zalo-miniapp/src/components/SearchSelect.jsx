@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import SearchInput from './SearchInput';
+import ZmIcon from './ZmIcon';
 
 // Gói 50f: ô chọn có tìm kiếm cho Tỉnh/Phường (danh sách dài, chọn nhanh trên mobile).
 // Props: label, value (code), options [{code, name}], placeholder, onChange(code), disabled
@@ -53,14 +55,15 @@ export default function SearchSelect({ label, value, options, placeholder, onCha
                 <button
                   type="button" onClick={() => setOpen(false)}
                   style={{ border: 'none', background: '#f0f0f0', borderRadius: '50%', width: 28, height: 28, fontSize: 14 }}
-                >✕</button>
+                ><ZmIcon name="x" size={14} /></button>
               </div>
-              <input
+              <SearchInput
                 autoFocus
                 value={kw}
                 onChange={(e) => setKw(e.target.value)}
-                placeholder="🔍 Gõ để tìm..."
-                style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #e0e0e0', fontSize: 14, boxSizing: 'border-box' }}
+                onSearch={(v) => setKw(v)}
+                placeholder="Gõ để tìm..."
+                inputStyle={{ padding: '10px 12px', borderRadius: 10, border: '1px solid #e0e0e0', fontSize: 14 }}
               />
             </div>
             <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, padding: '4px 0 16px' }}>

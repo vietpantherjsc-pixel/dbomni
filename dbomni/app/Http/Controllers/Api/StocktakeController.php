@@ -56,11 +56,15 @@ class StocktakeController extends Controller
             'material_ids.*' => 'exists:materials,id',
         ]);
 
-        $stocktake = DB::transaction(function () use ($validated, $request) {
+        // Sổ #78 (2026-11-04, cùng họ #75/#76): user_id của stocktakes là FK
+        // users, bảng không có cột employee — tính phần User của actor TRƯỚC
+        // closure (NV → null, User → giữ nguyên như cũ).
+        [$stocktakeUserId] = \App\Support\ApprovalActor::ids($request->user());
+        $stocktake = DB::transaction(function () use ($validated, $request, $stocktakeUserId) {
             $stocktake = Stocktake::create([
                 'code' => Stocktake::nextCode(), // Rà mã 2026-10-20
                 'branch_id' => $validated['branch_id'],
-                'user_id' => $request->user()->id,
+                'user_id' => $stocktakeUserId,
                 'type' => $validated['type'] ?? 'spontaneous',
                 'status' => 'draft',
                 'note' => $validated['note'] ?? null,

@@ -203,6 +203,9 @@ class GroupOrderController extends Controller
             'payment_method' => 'required|string|max:30',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
             'promotion_id' => 'nullable|exists:promotions,id',
+            // Spec mật khẩu §5.4: cờ đồng ý NĐ 13 để store() ghi mốc 'checkout'
+            // (chốt đơn nhóm cũng qua store() nên cùng cổng cứng).
+            'consent_agreed' => 'nullable|boolean',
             'points_redeem' => 'nullable|integer|min:0', // Loyalty 2.0: giữ lỏng cho client cũ — bị bỏ qua ở OnlineOrderController::store
             'note' => 'nullable|string|max:255',
             'referred_by' => 'nullable|string|max:20',

@@ -23,9 +23,8 @@ class SettingsController extends Controller
             'decimals_quantity' => Setting::get('decimals_quantity', '1'),
             'decimals_tax' => Setting::get('decimals_tax', '0'),
             'decimals_discount' => Setting::get('decimals_discount', '0'),
-            // Gói 9: cover Mini App + điểm thưởng giới thiệu
+            // Gói 9: cover Mini App
             'shop_cover_url' => Setting::get('shop_cover_url', ''),
-            'ref_bonus_points' => Setting::get('ref_bonus_points', '100'),
             // Gói Mini App 2026-10-30: công tắc hiện mục "Quét QR tích điểm" ở
             // trang Tài khoản Mini App — mặc định TẮT (Đại Vương phán tạm ẩn vì
             // luồng bán POS đang hoãn); bật lại ở trang Zalo Mini App (Admin).

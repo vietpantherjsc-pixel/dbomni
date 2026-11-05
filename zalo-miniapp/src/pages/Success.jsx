@@ -1,12 +1,13 @@
 import React from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import ZmIcon from '../components/ZmIcon';
 
 export default function Success() {
   const { code } = useParams();
   const nav = useNavigate();
   return (
     <div className="zm-page" style={{ textAlign: 'center', paddingTop: 60 }}>
-      <div style={{ fontSize: 64 }}>✅</div>
+      <div style={{ color: '#16a34a', display: 'flex', justifyContent: 'center' }}><ZmIcon name="checkCircle" size={64} /></div>
       <h2 style={{ margin: '12px 0' }}>Đặt món thành công!</h2>
       <p style={{ color: '#666', fontSize: 14 }}>Mã đơn của bạn:</p>
       <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--zm-primary)', margin: '8px 0' }}>{code}</div>

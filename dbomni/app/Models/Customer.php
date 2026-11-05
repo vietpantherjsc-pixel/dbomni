@@ -15,15 +15,40 @@ class Customer extends Model
         'membership_tier_id', 'note', 'referred_by',
         'referral_code', // SPEC-02
         'zalo_id', 'avatar', // Spec P4-P5: định danh Zalo
+        'consent_agreed_at', 'consent_source', // Spec đăng ký Zalo B: mốc đồng ý NĐ 13
         'tier_warning_at', 'tier_projected_id', 'tier_manual_until', // Loyalty 2.0
+        // Spec đăng nhập SĐT + mật khẩu: email tự nguyện (không unique).
+        // password_hash KHÔNG nằm ở đây — chỉ gán tường minh trong các
+        // endpoint của spec, không bao giờ từ request hàng loạt.
+        'email', 'email_added_at',
+        'password_setup_until', 'password_setup_at',
+        'password_setup_by_user_id', 'password_setup_by_employee_id',
+        'member_code_rotated_at', 'member_code_rotated_by_user_id',
+        'member_code_rotated_by_employee_id',
     ];
+
+    // Spec đăng nhập SĐT + mật khẩu §2: mật khẩu băm không bao giờ lọt vào JSON.
+    protected $hidden = ['password_hash'];
 
     protected $casts = [
         'birthday' => 'date',
         'total_spent' => 'decimal:2',
         'tier_warning_at' => 'datetime',
         'tier_manual_until' => 'datetime',
+        'consent_agreed_at' => 'datetime',
+        'email_added_at' => 'datetime',
+        'password_set_at' => 'datetime',
+        'password_locked_until' => 'datetime',
+        'password_setup_until' => 'datetime',
+        'password_setup_at' => 'datetime',
+        'member_code_rotated_at' => 'datetime',
     ];
+
+    // Spec đăng nhập SĐT + mật khẩu §2–§3: các phiên đăng nhập của khách.
+    public function sessions(): HasMany
+    {
+        return $this->hasMany(CustomerSession::class)->orderByDesc('id');
+    }
 
     public function tier(): BelongsTo
     {

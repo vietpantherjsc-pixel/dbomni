@@ -1,3 +1,4 @@
+import ZmIcon from './ZmIcon';
 import React, { useState, useMemo } from 'react';
 import { fmt, priceOf } from '../api';
 import { useShop } from '../store';
@@ -102,7 +103,7 @@ export default function ProductSheet({ product, onClose, onAdd, addLabel }) {
     <div className="zm-modal-mask" onClick={onClose}>
       <div className="zm-sheet" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
         {/* 🟡12 UX 2026-10-26: nút đóng rõ ràng (trước đây chỉ đóng bằng chạm nền mờ) */}
-        <button onClick={onClose} aria-label="Đóng" style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,.92)', color: '#333', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,.18)' }}>✕</button>
+        <button onClick={onClose} aria-label="Đóng" style={{ position: 'absolute', top: 10, right: 10, zIndex: 5, width: 44, height: 44, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,.92)', color: '#333', fontSize: 18, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(0,0,0,.18)' }}><ZmIcon name="x" size={18} /></button>
         <img className="zm-sheet-hero" src={product.image_url || '/default-product.svg'} alt={product.name} onError={(e) => { if (!e.target.src.endsWith('/default-product.svg')) e.target.src = '/default-product.svg'; }} />
         <div className="zm-sheet-body">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>

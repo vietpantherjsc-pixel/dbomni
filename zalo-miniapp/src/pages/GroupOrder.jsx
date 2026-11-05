@@ -2,13 +2,16 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api, fmt, priceOf, getMyGroups, saveMyGroup, getRef, getProfile, setProfile } from '../api';
 import { storage } from '../utils/storage';
+import { findPlaceByName } from '../utils/placeName'; // Sổ #69: khớp tên tỉnh/phường có chuẩn hóa
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
 import SearchSelect from '../components/SearchSelect';
+import ZmIcon from '../components/ZmIcon';
 import { TabBar } from './Home';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
 import { DateField, TimeField, toApiDate, validTime, formatPhone } from '../utils/checkoutFields.jsx';
+import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4 (Q3): ô đồng ý dùng chung với Checkout đơn thường
 
 // Gói 9 (2026-10-05): Đặt đơn nhóm.
 // - Trưởng nhóm tạo link -> share; mọi người vào link, nhập tên, chọn món.
@@ -40,7 +43,7 @@ export function CreateGroup() {
     <div className="zm-page">
       <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Đặt đơn nhóm</h1></div>
       <div style={{ padding: 24, textAlign: 'center' }}>
-        <div style={{ fontSize: 56 }}>👥</div>
+        <div style={{ color: '#24305E', display: 'flex', justifyContent: 'center' }}><ZmIcon name="users" size={56} /></div>
         <h2 style={{ fontSize: 18, margin: '12px 0 8px' }}>Tạo nhóm đặt chung</h2>
         <p style={{ fontSize: 13, color: '#888', lineHeight: 1.6 }}>
           Bạn sẽ nhận 1 link để gửi cho bạn bè.<br />
@@ -84,8 +87,12 @@ export default function GroupRoom() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (tab !== 'summary') return;
-    const t = setInterval(load, 15000); // tự refresh tổng đơn mỗi 15s
+    // Lát 3h (2026-11-04): vòng tự làm mới chạy ở CẢ tab Chọn món — trước đây
+    // chỉ chạy ở tab Tổng đơn nên món thành viên khác vừa thêm không hiện khi
+    // đang ở tab Chọn món (phần còn lại của #40). Tab Thanh toán giữ nguyên
+    // không poll để khỏi xáo trộn biểu mẫu đang chốt.
+    if (tab === 'checkout') return;
+    const t = setInterval(load, 15000); // tự refresh dữ liệu nhóm mỗi 15s
     return () => clearInterval(t);
   }, [tab, load]);
   useEffect(() => {
@@ -98,7 +105,7 @@ export default function GroupRoom() {
     return (
       <div className="zm-page">
         <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Đơn nhóm</h1></div>
-        <div className="zm-empty">⚠️ {err}</div>
+        <div className="zm-empty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><ZmIcon name="alert" size={20} />{err}</div>
         <TabBar />
       </div>
     );
@@ -111,7 +118,7 @@ export default function GroupRoom() {
       <div className="zm-page">
         <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Đơn nhóm</h1></div>
         <div style={{ padding: 24, textAlign: 'center' }}>
-          <div style={{ fontSize: 56 }}>🍽️</div>
+          <div style={{ color: '#24305E', display: 'flex', justifyContent: 'center' }}><ZmIcon name="utensils" size={56} /></div>
           <h2 style={{ fontSize: 18, margin: '12px 0 4px' }}>{group.branch?.name}</h2>
           <p style={{ fontSize: 13, color: '#888' }}>Nhóm của <b>{group.leader_name}</b> · {group.member_count} người đã chọn món</p>
           <div className="zm-field" style={{ textAlign: 'left', marginTop: 20 }}>
@@ -168,7 +175,7 @@ export default function GroupRoom() {
     <div className="zm-page">
       <div className="zm-header">
         <button className="zm-back" onClick={() => nav('/')}>←</button>
-        <h1>👥 Đơn nhóm · {upper}</h1>
+        <h1 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="users" size={18} />Đơn nhóm · {upper}</h1>
       </div>
 
       <div className="zm-group-bar">
@@ -178,16 +185,16 @@ export default function GroupRoom() {
             {isLeader ? 'Bạn là trưởng nhóm' : `Bạn là ${me.name}`} · {group.member_count} người · {group.total_qty} món
           </div>
         </div>
-        <button className="zm-btn-outline" style={{ width: 'auto', padding: '8px 14px', fontSize: 13 }} onClick={copyLink}>
-          📋 Copy link
+        <button className="zm-btn-outline" style={{ width: 'auto', padding: '8px 14px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={copyLink}>
+          <ZmIcon name="copy" size={14} />Copy link
         </button>
       </div>
 
       {/* Spec đơn nhóm đồng bộ (2026-10-21): nhóm đã chốt — MỌI thành viên thấy mã đơn + nút Theo dõi */}
       {group.status === 'ordered' && group.order_code && (
         <div style={{ margin: '12px 16px 0', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: '12px 14px' }}>
-          <div style={{ fontSize: 13, color: '#166534' }}>
-            ✅ Đơn nhóm đã được chốt — mã đơn <b>{group.order_code}</b>
+          <div style={{ fontSize: 13, color: '#166534', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <ZmIcon name="checkCircle" size={14} />Đơn nhóm đã được chốt — mã đơn <b>{group.order_code}</b>
           </div>
           <button className="zm-btn-primary" style={{ marginTop: 10 }}
             onClick={() => nav(`/track?code=${encodeURIComponent(group.order_code)}`)}>
@@ -198,9 +205,9 @@ export default function GroupRoom() {
 
       {tab !== 'checkout' && (
         <div className="zm-seg" style={{ margin: '12px 16px 0' }}>
-          <button className={tab === 'menu' ? 'on' : ''} onClick={() => setTab('menu')}>🍽️ Chọn món</button>
+          <button className={tab === 'menu' ? 'on' : ''} onClick={() => setTab('menu')}><ZmIcon name="utensils" size={15} />Chọn món</button>
           <button className={tab === 'summary' ? 'on' : ''} onClick={() => { setTab('summary'); load(); }}>
-            🧾 Tổng đơn ({group.total_qty})
+            <ZmIcon name="receipt" size={15} />Tổng đơn ({group.total_qty})
           </button>
         </div>
       )}
@@ -234,8 +241,8 @@ export default function GroupRoom() {
               <div className="zm-row-info">
                 <div className="zm-row-name">{it.product_name}</div>
                 {it.option_names?.length > 0 && <div className="zm-row-desc">{it.option_names.join(', ')}</div>}
-                <div className="zm-group-names">👤 {(it.member_names || []).join(', ')}</div>
-                {it.note && <div className="zm-row-desc">📝 {it.note}</div>}
+                <div className="zm-group-names" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="user" size={12} />{(it.member_names || []).join(', ')}</div>
+                {it.note && <div className="zm-row-desc"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="note" size={12} />{it.note}</span></div>}
                 <div className="zm-row-price">{fmt(it.unit_price)}đ</div>
               </div>
               {canEdit(it) ? (
@@ -346,11 +353,41 @@ function GroupCheckout({ group, onDone, onBack }) {
   const [voucher, setVoucher] = useState('');
   // Audit 2026-10-21 🟠8: voucher validate server để vào tổng hiển thị (như đơn thường)
   const [voucherInfo, setVoucherInfo] = useState(null); // {code, name, discount}
+  const [voucherErr, setVoucherErr] = useState('');
   const [points, setPoints] = useState(0);
   // Loyalty 2.0: gỡ đổi điểm trực tiếp ở checkout nhóm (như đơn thường)
   const [customerId, setCustomerId] = useState(null);
+  // Spec mật khẩu §5.4 (bổ sung Q3): ô đồng ý NĐ 13 ở đơn nhóm — chỉ đồng ý
+  // của trưởng nhóm mới có ý nghĩa (đơn đứng tên/SĐT/mã TV của trưởng nhóm).
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [hasConsented, setHasConsented] = useState(null); // null = chưa rõ
+  const [consentNeeded, setConsentNeeded] = useState(false);
   const [addrBook, setAddrBook] = useState([]);
   const [addrId, setAddrId] = useState('');
+  // Lát 3g (2026-11-04, #39): tự áp địa chỉ MẶC ĐỊNH khi sổ địa chỉ tải xong
+  // (như Checkout) — chỉ khi khách chưa tự đụng vào ô chọn địa chỉ.
+  const addrTouched = useRef(false);
+  const fillFromAddress = (a) => {
+    // Sổ #69 (2026-11-04): như Checkout — khớp tên qua findPlaceByName có
+    // chuẩn hóa, tránh trượt "TP. Hồ Chí Minh" vs "Thành phố Hồ Chí Minh".
+    const pc = findPlaceByName(provinces, a.province)?.code;
+    if (pc) {
+      setProvince(String(pc));
+      loadWards(pc).then((ws) => {
+        setWards(ws || []);
+        const wc = findPlaceByName(ws || [], a.ward)?.code;
+        setWard(wc ? String(wc) : '');
+      });
+    }
+    setStreet(a.street || '');
+    setPickedCoord(null);
+  };
+  useEffect(() => {
+    if (addrTouched.current || addrId || !addrBook.length) return;
+    const d = addrBook.find((a) => a.is_default);
+    if (d) { setAddrId(String(d.id)); fillFromAddress(d); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addrBook]);
   const [saveAddr, setSaveAddr] = useState(false);
   const [addrLabel, setAddrLabel] = useState('Nhà');
   const [showAddrPop, setShowAddrPop] = useState(false);
@@ -540,7 +577,11 @@ function GroupCheckout({ group, onDone, onBack }) {
         if (c) {
           setPoints(c.loyalty?.points ?? c.points ?? 0);
           setCustomerId(c.id);
-          api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(r?.data || [])).catch(() => {});
+          // Spec mật khẩu §5.4 (Q3): đọc has_consented từ cùng lời gọi tra KM
+          // này như Checkout — chưa đồng ý thì hiện ô đồng ý ở đơn nhóm.
+          setHasConsented(!!c.has_consented);
+          if (c.has_consented === false) setConsentNeeded(true);
+          api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: r là mảng thuần (req đã bóc phong bì)
           return api.eligiblePromotions({ ...payload, customer_id: c.id, phone: formatPhone(phone), member_code: getProfile()?.member_code || '' });
         }
         return api.eligiblePromotions({ ...payload, channel: 'online' });
@@ -568,7 +609,7 @@ function GroupCheckout({ group, onDone, onBack }) {
   // 🟠8: validate voucher bằng endpoint server (số giảm thật); lỗi báo rõ như khi chốt đơn
   const checkVoucher = async (code) => {
     const c = String(code || '').trim().toUpperCase();
-    if (!c) { setVoucherInfo(null); return true; }
+    if (!c) { setVoucherInfo(null); setVoucherErr(''); return true; }
     try {
       const prof = getProfile() || {};
       const res = await api.validateVoucher({
@@ -578,15 +619,16 @@ function GroupCheckout({ group, onDone, onBack }) {
         member_code: prof.member_code || '',
       });
       setVoucherInfo({ code: res.code, name: res.name, discount: Math.round(Number(res.discount) || 0) });
+      setVoucherErr('');
       return true;
     } catch (err) {
       setVoucherInfo(null);
-      alert(err.message || 'Mã voucher không hợp lệ.');
+      setVoucherErr(err.message || 'Mã voucher không hợp lệ.');
       return false;
     }
   };
 
-  const switchType = (t) => { setType(t); setPromoId(''); setVoucher(''); setVoucherInfo(null); setRedeem(0); };
+  const switchType = (t) => { setType(t); setPromoId(''); setVoucher(''); setVoucherInfo(null); };
 
   const validateSchedule = (label) => {
     const d = toApiDate(schedDate);
@@ -610,6 +652,12 @@ function GroupCheckout({ group, onDone, onBack }) {
     if (vcode && vcode !== (voucherInfo?.code || '')) {
       const ok = await checkVoucher(vcode);
       if (!ok) return;
+    }
+    // Spec mật khẩu §5.4 (Q3): đơn nhóm đầu chưa tích ô đồng ý thì khóa nút
+    // đặt đơn ngay ở client (cổng cứng thật vẫn ở server — 422 consent_required).
+    if (consentNeeded && !consentChecked) {
+      alert('Bạn cần tích ô đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+      return;
     }
     setPlacing(true);
     try {
@@ -639,6 +687,8 @@ function GroupCheckout({ group, onDone, onBack }) {
         customer_phone: formatPhone(phone),
         // Spec KM chống mã Phần B: mã TV của trưởng nhóm để xác thực quyền lợi trong store()
         member_code: getProfile()?.member_code || null,
+        // Spec mật khẩu §5.4 (Q3): cờ đồng ý NĐ 13 của trưởng nhóm ở đơn đầu.
+        consent_agreed: !!consentChecked,
         order_type: type === 'delivery' ? 'delivery' : 'takeaway',
         delivery_address: type === 'delivery' ? fullAddress() : null,
         province: type === 'delivery' ? provName() : null,
@@ -673,13 +723,22 @@ function GroupCheckout({ group, onDone, onBack }) {
         }).catch(() => {});
       }
       onDone(order);
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      // Spec mật khẩu §5.4 (Q3): server từ chối vì thiếu đồng ý → bật ô đồng ý
+      // lên để trưởng nhóm tích lại rồi đặt lại (cùng cơ chế phục hồi như Checkout).
+      if (e.code === 'consent_required') {
+        setConsentNeeded(true);
+        alert(e.message || 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+      } else {
+        alert(e.message);
+      }
+    }
     finally { setPlacing(false); }
   };
 
   return (
     <div style={{ padding: '0 16px 16px' }}>
-      <div className="zm-alert" style={{ margin: '12px 0' }}>👥 Chốt đơn nhóm <b>{group.code}</b> — {group.total_qty} món · {fmt(group.subtotal)}đ. Tên từng người đã ghi trong ghi chú từng món.</div>
+      <div className="zm-alert" style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="users" size={14} />Chốt đơn nhóm <b>{group.code}</b> — {group.total_qty} món · {fmt(group.subtotal)}đ. Tên từng người đã ghi trong ghi chú từng món.</div>
 
       {isClosed && (
         <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 12px', fontSize: 13, color: '#991b1b', marginBottom: 12 }}>
@@ -689,9 +748,9 @@ function GroupCheckout({ group, onDone, onBack }) {
       )}
 
       <div className="zm-seg" style={{ marginTop: 4 }}>
-        <button className={type === 'delivery' ? 'on' : ''} disabled={isClosed} onClick={() => { switchType('delivery'); if (isClosed) setDeliveryMode('scheduled'); }}>🛵 Giao hàng</button>
-        <button className={type === 'takeaway' ? 'on' : ''} disabled={isClosed} onClick={() => switchType('takeaway')}>🏃 Mang đi</button>
-        <button className={type === 'scheduled' ? 'on' : ''} onClick={() => switchType('scheduled')}>⏰ Hẹn giờ lấy</button>
+        <button className={type === 'delivery' ? 'on' : ''} onClick={() => { switchType('delivery'); if (isClosed) setDeliveryMode('scheduled'); }}><ZmIcon name="bike" size={16} />Giao hàng</button>
+        <button className={type === 'takeaway' ? 'on' : ''} disabled={isClosed} onClick={() => switchType('takeaway')}><ZmIcon name="bag" size={16} />Mang đi</button>
+        <button className={type === 'scheduled' ? 'on' : ''} onClick={() => switchType('scheduled')}><ZmIcon name="clock" size={16} />Hẹn giờ lấy</button>
       </div>
 
       <div className="zm-field">
@@ -702,6 +761,14 @@ function GroupCheckout({ group, onDone, onBack }) {
         <label>Số điện thoại * <span style={{ color: '#888', fontWeight: 400 }}>(để tích điểm thành viên)</span></label>
         <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
       </div>
+
+      {/* Spec mật khẩu §5.4 (Q3): ô đồng ý NĐ 13 ở đơn nhóm — chỉ hiện khi
+          trưởng nhóm chưa đồng ý; chưa tích thì nút đặt đơn khóa (xem place()). */}
+      {consentNeeded && (
+        <div style={{ margin: '4px 0 8px' }}>
+          <ConsentCheck checked={consentChecked} onChange={setConsentChecked} />
+        </div>
+      )}
 
       {type === 'delivery' && (
         <>
@@ -714,7 +781,7 @@ function GroupCheckout({ group, onDone, onBack }) {
               borderRadius: 12, padding: 12, marginBottom: 8, cursor: isClosed ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', gap: 10, opacity: isClosed ? 0.5 : 1,
             }}>
-            <span style={{ fontSize: 24 }}>⚡</span>
+            <span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="zap" size={24} /></span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Giao ngay</div>
               <div style={{ fontSize: 12, color: '#888' }}>{isClosed ? 'Không khả dụng khi quán đóng cửa' : 'Shipper giao luôn trong ~30 phút'}</div>
@@ -729,7 +796,7 @@ function GroupCheckout({ group, onDone, onBack }) {
               borderRadius: 12, padding: 12, marginBottom: 12, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 10,
             }}>
-            <span style={{ fontSize: 24 }}>📅</span>
+            <span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="calendar" size={24} /></span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Hẹn giờ giao</div>
               <div style={{ fontSize: 12, color: '#888' }}>Chọn ngày giờ muốn nhận hàng</div>
@@ -760,12 +827,12 @@ function GroupCheckout({ group, onDone, onBack }) {
           {/* Card thông tin nhận hàng — bấm mở popup (như đơn thường) */}
           <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
             <div className="zm-deliv-top">
-              <div className="zm-deliv-ic">📍</div>
+              <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
               <div className="zm-deliv-t">Thông tin nhận hàng</div>
               <div className="zm-deliv-chg">Thay đổi</div>
             </div>
             <div className="zm-deliv-mid">
-              <div className="zm-deliv-uic">👤</div>
+              <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
               <div style={{ flex: 1 }}>
                 <div className="zm-deliv-nm">
                   {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
@@ -784,24 +851,15 @@ function GroupCheckout({ group, onDone, onBack }) {
                 <h3>Thông tin nhận hàng</h3>
                 {addrBook.length > 0 && (
                   <div className="zm-field">
-                    <label>📒 Sổ địa chỉ</label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
                     <select value={addrId} onChange={(e) => {
+                      addrTouched.current = true;
                       const id = e.target.value;
                       setAddrId(id);
                       if (!id) return;
                       const a = addrBook.find((x) => String(x.id) === id);
                       if (!a) return;
-                      const pc = provinces.find((p) => p.name === a.province)?.code;
-                      if (pc) {
-                        setProvince(String(pc));
-                        loadWards(pc).then((ws) => {
-                          setWards(ws || []);
-                          const wc = (ws || []).find((w) => w.name === a.ward)?.code;
-                          setWard(wc ? String(wc) : '');
-                        });
-                      }
-                      setStreet(a.street || '');
-                      setPickedCoord(null);
+                      fillFromAddress(a);
                     }}>
                       <option value="">— Nhập địa chỉ mới —</option>
                       {addrBook.map((a) => (
@@ -835,9 +893,9 @@ function GroupCheckout({ group, onDone, onBack }) {
                     autoComplete="off"
                   />
                 </div>
-                {geoLoading && <div className="zm-note">📍 Đang tự động tính khoảng cách...</div>}
+                {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
                 {km != null && shipCfg && (
-                  <div className="zm-alert">📏 Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
+                  <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
                 )}
                 {geoError && (
                   <div className="zm-alert" style={{ background: '#fef3c7', borderColor: '#fcd34d' }}>
@@ -845,7 +903,7 @@ function GroupCheckout({ group, onDone, onBack }) {
                     <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
                   </div>
                 )}
-                {quoteLoading && <div className="zm-note">🛵 Đang tính phí ship từ hãng giao hàng...</div>}
+                {quoteLoading && <div className="zm-note">Đang tính phí ship từ hãng giao hàng...</div>}
                 {!quoteLoading && quote?.packages?.length > 0 && (
                   <div className="zm-field">
                     <label>Chọn gói giao hàng</label>
@@ -863,7 +921,7 @@ function GroupCheckout({ group, onDone, onBack }) {
                           }}
                         >
                           <div>
-                            <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? '🛵 Nhanh' : '⚡ Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
+                            <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
                             <div style={{ color: '#666', fontSize: 12 }}>{p.eta_text}{p.shop_support > 0 ? ` · Quán hỗ trợ ${fmt(p.shop_support)}đ` : ''}</div>
                           </div>
                           <div style={{ fontWeight: 700, color: '#24305E' }}>{fmt(p.customer_pays)}đ</div>
@@ -893,7 +951,7 @@ function GroupCheckout({ group, onDone, onBack }) {
                   </label>
                 )}
                 <button type="button" className="zm-loc-btn" onClick={useCurrentLocation} disabled={locLoading}>
-                  📍 {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
+                  {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
                 </button>
                 <p className="zm-loc-hint">Bấm "Vị trí hiện tại" để tự điền địa chỉ và tính phí ship chính xác, hoặc nhập tay rồi bấm Lưu.</p>
                 <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
@@ -940,14 +998,15 @@ function GroupCheckout({ group, onDone, onBack }) {
       <div style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎟️ Mã giảm giá</div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <div className="zm-field" style={{ margin: 0, flex: 1 }}>
-            <input value={voucher} onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); }} placeholder="NHẬP MÃ NẾU CÓ" style={{ textTransform: 'uppercase' }} />
+          <div className="zm-field" style={{ margin: 0, flex: 1, minWidth: 0 }}>
+            <input value={voucher} onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); setVoucherErr(''); }} placeholder="NHẬP MÃ NẾU CÓ" style={{ textTransform: 'uppercase' }} />
           </div>
-          <button type="button" className="zm-btn-primary" style={{ padding: '0 14px', fontSize: 13 }}
+          <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }}
             onClick={() => checkVoucher(voucher)}>
             Áp dụng
           </button>
         </div>
+        {voucherErr && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6, fontWeight: 600 }}>⚠ {voucherErr}</div>}
         {voucherInfo && (
           <div style={{ fontSize: 12, color: '#16a34a', marginTop: 6, fontWeight: 700 }}>
             ✅ {voucherInfo.code}: giảm {fmt(voucherInfo.discount)}đ{voucherWins ? '' : (promoDisc > 0 ? ' — KM hiện tại giảm nhiều hơn nên hệ thống sẽ áp KM (voucher không bị trừ lượt)' : '')}

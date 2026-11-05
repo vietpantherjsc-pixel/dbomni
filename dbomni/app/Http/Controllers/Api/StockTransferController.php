@@ -192,7 +192,8 @@ class StockTransferController extends Controller
             return response()->json(['success' => false, 'message' => 'Chỉ hủy được phiếu nháp.'], 422);
         }
         // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
-        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
+        // Sổ #77 (2026-11-04): truyền $request->user() — NV hủy TRỰC TIẾP cũng có vết.
+        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
         $t->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu chuyển kho.']);
     }

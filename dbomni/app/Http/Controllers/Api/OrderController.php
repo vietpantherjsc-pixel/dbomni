@@ -175,7 +175,11 @@ class OrderController extends Controller
 
         try {
             $actor = $request->user();
-            $userId = $actor->id;
+            // Sổ #81 (2026-11-04, họ actor/FK): orders.user_id là FK users
+            // (đã nullable từ Gói 6) — NV tạo đơn POS ghi null, User giữ id.
+            // Đã liệt kê toàn hàm: $userId chỉ tiêu thụ ở đúng điểm ghi đơn
+            // phía dưới, không hàm con nào nhận nó.
+            $userId = $actor instanceof \App\Models\Employee ? null : $actor->id;
             // Gói 55 p11ac: kiểm tra quyền chiết khấu — chỉ role có orders.discount mới được giảm giá
             $canDiscount = true;
             if ($actor instanceof \App\Models\Employee) {
@@ -751,6 +755,29 @@ class OrderController extends Controller
         // đổi sang cancelled/refunded để revokeEarn biết có cần trừ lại total_spent không.
         $wasPaid = $order->payment_status === 'paid';
 
+        // Phí ship THU HỘ (Phương án B) — số tiền phải hoàn khách khi hủy đơn
+        // ĐÃ THU TIỀN (vá 2026-11-04): hủy TRƯỚC khi giao cho shipper → hoàn
+        // cả phí ship; đơn ĐÃ giao shipper → hoàn TRỪ phí ship. Tín hiệu
+        // dispatched dùng sẵn của hệ thống: đã có đơn hãng (delivery_order_id)
+        // và trạng thái giao đã qua mốc tài xế lấy hàng — cùng mốc
+        // cancelDeliveryOrder() bên dưới không còn hủy được phía hãng (chỉ
+        // hủy khi searching/driver_assigned). Hoàn tiền tại quán làm tay nên
+        // số này ghi vào note của đơn + trả kèm response để NV đối chiếu.
+        $refundDue = null;
+        $shippingKept = 0.0;
+        if ($wasPaid) {
+            $dispatched = !empty($order->delivery_order_id)
+                && !in_array($order->delivery_status, [
+                    \App\Services\Delivery\DeliveryService::ST_SEARCHING,
+                    \App\Services\Delivery\DeliveryService::ST_ASSIGNED,
+                    \App\Services\Delivery\DeliveryService::ST_CANCELLED,
+                    \App\Services\Delivery\DeliveryService::ST_FAILED,
+                    null, '',
+                ], true);
+            $shippingKept = $dispatched ? (float) $order->shipping_fee : 0.0;
+            $refundDue = max(0, (float) $order->total_amount - $shippingKept);
+        }
+
         // Hoàn trả nguyên vật liệu theo BOM nếu restock = true
         // Gói 3b: đơn held chưa từng trừ kho (stock_deducted=false) thì không có gì để hoàn.
         if ($shouldRestock && $order->stock_deducted) {
@@ -775,6 +802,11 @@ class OrderController extends Controller
         // Gói 55 p11ag: truy vết người hủy đơn (chống gian lận hủy đơn bỏ túi)
         $order->cancelled_by = $cancelledBy;
         $order->cancelled_by_type = $cancelledByType;
+        if ($refundDue !== null) {
+            $order->note = trim(($order->note ? $order->note . ' | ' : '')
+                . 'Hoàn khách khi hủy: ' . number_format($refundDue, 0) . 'đ'
+                . ($shippingKept > 0 ? ' (đã trừ phí ship ' . number_format($shippingKept, 0) . 'đ — đơn đã giao shipper)' : ''));
+        }
         $order->save();
 
         // Gói 5: hoàn điểm đã đổi khi hủy đơn
@@ -816,6 +848,13 @@ class OrderController extends Controller
         // Gói 60: hủy đơn hãng tương ứng nếu tài xế chưa lấy hàng (checklist #10).
         // Trạng thái hai phía khớp nhau; phí hủy (nếu hãng tính) ghi nhận vào đơn.
         $this->cancelDeliveryOrder($order, $reason);
+
+        // Số hoàn chỉ để serialize vào response (thuộc tính tạm, không lưu DB;
+        // đặt SAU mọi save() trong hàm này nên không bị ghi xuống bảng).
+        if ($refundDue !== null) {
+            $order->setAttribute('refund_due', $refundDue);
+            $order->setAttribute('shipping_kept', $shippingKept);
+        }
 
         return $order;
     }
@@ -1418,7 +1457,7 @@ class OrderController extends Controller
     public function showByCode(Request $request, string $code): JsonResponse
     {
         $order = Order::where('code', $code)
-            ->with(['branch', 'customer:id,name,member_code,tier_id', 'customer.tier:id,name', 'items.product', 'items.option'])
+            ->with(['branch', 'customer:id,name,member_code,membership_tier_id', 'customer.tier:id,name', 'items.product', 'items.option'])
             ->firstOrFail();
         if ($deny = $this->denyOrderBranch($request, $order->branch_id)) return $deny;
 

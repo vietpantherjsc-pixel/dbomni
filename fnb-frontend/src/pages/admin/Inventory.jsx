@@ -1,13 +1,25 @@
 import React, { useState, useEffect, useMemo } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import { useParams } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate, fmtTime, fmtDateTime } from '../../utils/format';
 import { API } from '../../utils/api';
+import { unitsFor, factorOf, trimNum, convertDisplay, snapshotDisplay, lineFromServer, emptyLine, lineToPayload } from '../../utils/recipeUnits'; // Spec định mức đơn vị quy đổi (2026-11-05)
+import { confirmInApp } from '../../utils/confirmInApp'; // Sổ #23: xác nhận nội bộ thay confirm() trình duyệt
 import DateInput from '../../components/DateInput';
 import TimeInput from '../../components/TimeInput';
-import SearchIcon from '../../components/SearchIcon'; // Gói 55 p11x
 
 const STOCKTAKE_TYPES = { daily: 'Ngày', weekly: 'Tuần', monthly: 'Tháng', spontaneous: 'Đột xuất' };
 
@@ -208,7 +220,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
         axios.get(API + '/units').then((r) => {
             const list = r.data?.data || r.data || [];
             setSysUnits(Array.isArray(list) ? list : []);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
     }, []);
     // Gói 55 p11m: mặt hàng liên kết
     const [linkedProducts, setLinkedProducts] = useState([]);
@@ -521,7 +533,7 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
         setLinkedProducts([]);
         axios.get(API + '/materials/' + m.id + '/linked-products').then((r) => {
             if (r.data?.success) setLinkedProducts(r.data.data || []);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
         setShowForm(true);
     };
 
@@ -878,9 +890,10 @@ function StockTab({ stock, materials, categories, onChange, addSignal, branchId 
                         ))}
                     </select>
                     <div className="flex flex-1 items-center border border-gray-300 rounded-r px-3 bg-white">
-                        <span className="text-gray-400 mr-2" style={{display:"flex"}}><SearchIcon size={16} /></span>
-                        <input value={searchText} onChange={(e) => setSearchText(e.target.value)}
+                        <SearchInput value={searchText} onChange={(e) => setSearchText(e.target.value)}
+                            onSearch={(v) => setSearchText(v)}
                             placeholder="Tìm kiếm theo tên nguyên liệu..."
+                            wrapperStyle={{ flex: 1, display: 'flex' }}
                             className="flex-1 py-2 text-[13px] focus:outline-none" />
                     </div>
                 </div>
@@ -1156,7 +1169,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
         fetchReceipts();
         axios.get(`${API}/partners`, { params: { type: 'supplier', is_active: 1 } })
             .then((r) => setSuppliers(r.data?.data || []))
-            .catch(() => {});
+            .catch((e) => noteExpired(e));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [branchId]);
 
@@ -1168,7 +1181,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
         } catch (e) { alert(e.response?.data?.message || 'Không tải được phiếu'); }
     };
     const cancelReceipt = async (id) => {
-        if (!window.confirm('Hủy phiếu nhập này? Chỉ hủy được khi nguyên liệu chưa xuất dùng.')) return;
+        if (!(await confirmInApp('Hủy phiếu nhập này? Chỉ hủy được khi nguyên liệu chưa xuất dùng.'))) return; // Sổ #23
         try {
             await axios.post(`${API}/inbound-receipts/${id}/cancel`);
             setDetail(null);
@@ -1178,7 +1191,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
     };
     // K-R1: duyệt phiếu nhập nháp của NV (cộng kho + sinh phiếu chi)
     const approveReceipt = async (id) => {
-        if (!window.confirm('Duyệt phiếu nhập này? Kho sẽ tăng theo phiếu và sinh phiếu chi.')) return;
+        if (!(await confirmInApp('Duyệt phiếu nhập này? Kho sẽ tăng theo phiếu và sinh phiếu chi.'))) return; // Sổ #23
         try {
             await axios.post(`${API}/inbound-receipts/${id}/approve`);
             setDetail(null);
@@ -1204,7 +1217,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
             <div className="flex items-center justify-between mb-3">
                 <div className="text-[13px] text-gray-500">Phiếu nhập hàng theo hóa đơn nhà cung cấp</div>
                 <button onClick={() => setShowForm(true)}
-                    className="px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
+                    className="px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] shrink-0 whitespace-nowrap">
                     ＋ Tạo phiếu nhập
                 </button>
             </div>
@@ -1236,7 +1249,7 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                                     </td>
                                     <td className="px-2 py-2.5">
                                         <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${r.status === 'confirmed' ? 'bg-blue-100 text-blue-700' : r.status === 'draft' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'}`}>
-                                            {r.status === 'confirmed' ? 'Đã nhập' : r.status === 'draft' ? 'Nháp' : 'Đã hủy'}
+                                            {r.status === 'confirmed' ? 'Đã nhập' : r.status === 'draft' ? (r.created_by_employee_id ? 'Chờ duyệt' : 'Nháp') : 'Đã hủy'}
                                         </span>
                                     </td>
                                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
@@ -1298,7 +1311,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
     useEffect(() => {
         axios.get(`${API}/material-categories`).then((r) => {
             if (r.data?.success) setCategories(r.data.data || []);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
     }, []);
 
     const addLine = (m) => {
@@ -1662,7 +1675,7 @@ function TransferTab({ materials, branches, branchId, onDone }) {
     useEffect(() => { fetchTransfers(); }, []);
 
     const doConfirm = async (id) => {
-        if (!window.confirm('Chốt chuyển kho? Tồn kho 2 chi nhánh sẽ thay đổi ngay.')) return;
+        if (!(await confirmInApp('Chốt chuyển kho? Tồn kho 2 chi nhánh sẽ thay đổi ngay.'))) return; // Sổ #23
         try {
             const res = await axios.post(`${API}/stock-transfers/${id}/confirm`);
             alert(res.data?.message + (res.data?.data?.total_cost ? ` (Giá vốn: ${vnd(res.data.data.total_cost)}đ)` : ''));
@@ -1671,7 +1684,7 @@ function TransferTab({ materials, branches, branchId, onDone }) {
         } catch (e) { alert(e.response?.data?.message || 'Chốt thất bại'); }
     };
     const doCancel = async (id) => {
-        if (!window.confirm('Hủy phiếu chuyển kho này?')) return;
+        if (!(await confirmInApp('Hủy phiếu chuyển kho này?'))) return; // Sổ #23
         try {
             await axios.post(`${API}/stock-transfers/${id}/cancel`);
             fetchTransfers();
@@ -1770,7 +1783,7 @@ function TransferForm({ materials, branches, defaultFrom, onClose, onDone }) {
         // Nạp danh sách loại nguyên liệu để nhóm trong popup
         axios.get(`${API}/material-categories`).then((r) => {
             if (r.data?.success) setCategories(r.data.data || []);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
     }, []);
 
     useEffect(() => {
@@ -1934,13 +1947,12 @@ function MaterialPicker({ materials, categories, onSelect, onClose, multi = fals
                         <button onClick={onClose} className="text-gray-400 text-xl leading-none">×</button>
                     </div>
                     <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
-                        </span>
-                        <input value={search} onChange={(e) => setSearch(e.target.value)}
+                        <SearchInput value={search} onChange={(e) => setSearch(e.target.value)}
+                            onSearch={(v) => setSearch(v)}
                             placeholder="Tìm nguyên liệu..."
                             autoFocus
-                            className="w-full pl-9 pr-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
+                            wrapperStyle={{ display: 'flex', width: '100%' }}
+                            className="w-full pl-3 pr-3 py-2.5 text-[14px] border border-gray-300 rounded-lg focus:outline-none focus:border-[#24305E]" />
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto px-4 py-2">
@@ -2753,8 +2765,10 @@ function BomTab({ materials, onDone }) {
     const [editingId, setEditingId] = useState(null); // material_id đang sửa (null = tạo mới)
     // Form tạo/sửa đầy đủ: chọn BTP + SL mỗi mẻ + danh sách dòng
     const [formMatId, setFormMatId] = useState('');
-    const [formBatchQty, setFormBatchQty] = useState(''); // Gói 55 p11c: SL BTP mỗi mẻ
-    const [formLines, setFormLines] = useState([]); // [{raw_material_id, quantity}]
+    const [formBatchQty, setFormBatchQty] = useState(''); // Gói 55 p11c: SL BTP mỗi mẻ (số HIỂN THỊ — spec định mức đơn vị quy đổi)
+    const [formBatchUnit, setFormBatchUnit] = useState(''); // Đơn vị hiển thị của ô mẻ
+    const [origBatch, setOrigBatch] = useState({ qty: null, unit: null, factor: null }); // Bộ ba orig_* của ô mẻ (spec 1.5)
+    const [formLines, setFormLines] = useState([]); // [{raw_material_id, display_qty, display_unit_name, orig_*}]
 
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchRecipes = async () => {
@@ -2775,29 +2789,38 @@ function BomTab({ materials, onDone }) {
     });
     const groupList = Object.values(grouped);
 
+    const matOf = (id) => materials.find((m) => String(m.id) === String(id));
     // Mở modal tạo mới: chọn BTP + thêm nhiều dòng
     const openCreate = () => {
         setEditingId(null);
         setFormMatId('');
         setFormBatchQty('');
-        setFormLines([{ raw_material_id: '', quantity: '' }]);
+        setFormBatchUnit('');
+        setOrigBatch({ qty: null, unit: null, factor: null });
+        setFormLines([emptyLine({ raw_material_id: '' })]);
         setShowForm(true);
     };
-    // Mở modal sửa: nạp các dòng hiện có
+    // Mở modal sửa: nạp các dòng hiện có (số hiển thị + đơn vị đã chụp, kèm orig_*).
     const openEdit = (g) => {
+        const first = g.lines[0] || {};
         setEditingId(g.material?.id);
         setFormMatId(String(g.material?.id));
-        setFormBatchQty(g.lines[0]?.batch_output_qty || '');
-        setFormLines(g.lines.map((l) => ({ id: l.id, raw_material_id: String(l.raw_material_id), quantity: l.quantity })));
+        // Spec 1.4: đơn vị hiển thị của ô mẻ đã bị xóa khỏi danh mục → rơi về
+        // hiển thị cơ sở; origBatch GIỮ NGUYÊN để server nhánh (b) xóa chụp.
+        const bd = snapshotDisplay(first.batch_display_qty, first.batch_display_unit_name, first.batch_output_qty, g.material);
+        setFormBatchQty(bd.displayQty);
+        setFormBatchUnit(bd.displayUnitName);
+        setOrigBatch({ qty: first.batch_output_qty ?? null, unit: first.batch_display_unit_name ?? null, factor: first.batch_display_factor ?? null });
+        setFormLines(g.lines.map((l) => ({ id: l.id, ...lineFromServer({ ...l, material_id: l.raw_material_id }, matOf(l.raw_material_id)), raw_material_id: String(l.raw_material_id) })));
         setShowForm(true);
     };
-    const addFormLine = () => setFormLines([...formLines, { raw_material_id: '', quantity: '' }]);
+    const addFormLine = () => setFormLines([...formLines, emptyLine({ raw_material_id: '' })]);
     const removeFormLine = (i) => setFormLines(formLines.filter((_, j) => j !== i));
 
     const saveForm = async () => {
         if (!formMatId) return alert('Chọn bán thành phẩm.');
         if (!Number(formBatchQty)) return alert('Nhập số lượng BTP mỗi mẻ chế biến (VD: 500).');
-        const valid = formLines.filter((l) => l.raw_material_id && Number(l.quantity) > 0);
+        const valid = formLines.filter((l) => l.raw_material_id && Number(l.display_qty) > 0);
         if (!valid.length) return alert('Thêm ít nhất 1 nguyên liệu với số lượng.');
         try {
             // Gói 55: tạo mới TRƯỚC, chỉ xóa cũ sau khi tất cả POST thành công
@@ -2808,8 +2831,14 @@ function BomTab({ materials, onDone }) {
                     const r = await axios.post(`${API}/production-recipes`, {
                         material_id: Number(formMatId),
                         raw_material_id: Number(l.raw_material_id),
-                        quantity: Number(l.quantity),
-                        batch_output_qty: Number(formBatchQty),
+                        // Spec định mức đơn vị quy đổi: chỉ gửi display_* +
+                        // batch_display_* (server quy đổi duy nhất).
+                        ...lineToPayload(l),
+                        batch_display_qty: Number(formBatchQty),
+                        batch_display_unit_name: formBatchUnit || null,
+                        orig_batch_output_qty: origBatch.qty ?? null,
+                        orig_batch_display_unit_name: origBatch.unit ?? null,
+                        orig_batch_display_factor: origBatch.factor ?? null,
                     });
                     if (r.data?.data?.id) createdIds.push(r.data.data.id);
                 }
@@ -2854,7 +2883,7 @@ function BomTab({ materials, onDone }) {
         <div>
             <div className="flex justify-between items-center mb-3">
                 <p className="text-[13px] text-gray-500">VD: Kem Buôn Mê 500gr = 200gr bột kem béo + 50gr sữa đặc + 300ml sữa tươi + 50ml cốt cà phê</p>
-                <button onClick={openCreate} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">+ Tạo định mức</button>
+                <button onClick={openCreate} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] shrink-0 whitespace-nowrap">+ Tạo định mức</button>
             </div>
             {/* Gói 55 p11: danh sách bảng gọn — mỗi dòng 1 định mức hoàn chỉnh */}
             <div className="border border-gray-100 rounded overflow-x-auto">
@@ -2870,7 +2899,9 @@ function BomTab({ materials, onDone }) {
                             <tr key={g.material?.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                 <td className="px-4 py-3 font-medium">{g.material?.name} <span className="text-gray-400 font-normal">({g.material?.unit})</span></td>
                                 <td className="px-3 py-3 font-bold text-[#24305E]">
-                                    {g.lines[0]?.batch_output_qty ? `${Number(g.lines[0].batch_output_qty).toLocaleString('vi-VN')} ${g.material?.unit}` : '—'}
+                                    {g.lines[0]?.batch_display_qty !== undefined && g.lines[0]?.batch_display_qty !== null
+                                        ? `${trimNum(g.lines[0].batch_display_qty)} ${g.lines[0].batch_display_unit_name || g.material?.unit}`
+                                        : (g.lines[0]?.batch_output_qty ? `${Number(g.lines[0].batch_output_qty).toLocaleString('vi-VN')} ${g.material?.unit}` : '—')}
                                 </td>
                                 <td className="px-3 py-3 text-gray-500">{g.lines.length} nguyên liệu</td>
                                 <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -2893,7 +2924,14 @@ function BomTab({ materials, onDone }) {
                         <h3 className="font-bold text-lg mb-4">{editingId ? 'Sửa định mức' : 'Tạo định mức bán thành phẩm'}</h3>
                         <div className="mb-4">
                             <label className="text-xs text-gray-500">{editingId ? 'Bán thành phẩm *' : 'Vật tư làm bán thành phẩm *'}</label>
-                            <select value={formMatId} onChange={(e) => setFormMatId(e.target.value)}
+                            <select value={formMatId} onChange={(e) => {
+                                const id = e.target.value;
+                                setFormMatId(id);
+                                // Đổi BTP = ô mẻ mới: nhập lại số lượng theo đơn vị của BTP mới.
+                                setFormBatchQty('');
+                                setFormBatchUnit(matOf(id)?.unit || '');
+                                setOrigBatch({ qty: null, unit: null, factor: null });
+                            }}
                                 disabled={!!editingId} className={`w-full mt-1 ${inp} ${editingId ? 'bg-gray-50' : ''}`}>
                                 <option value="">— Chọn —</option>
                                 {/* Gói 68: tạo mới chỉ liệt kê vật tư CHƯA có định mức (lưu xong thành BTP); sửa giữ BTP cũ */}
@@ -2901,35 +2939,68 @@ function BomTab({ materials, onDone }) {
                             </select>
                             {!editingId && <p className="text-[11px] text-gray-400 mt-1">Chỉ hiện vật tư chưa có định mức — lưu xong, vật tư này trở thành bán thành phẩm.</p>}
                         </div>
-                        {/* Gói 55 p11c: số lượng BTP mỗi mẻ */}
+                        {/* Gói 55 p11c: số lượng BTP mỗi mẻ — spec định mức đơn vị quy đổi: ô mẻ cũng chọn được đơn vị của chính BTP */}
                         <div className="mb-4">
                             <label className="text-xs text-gray-500">Số lượng bán thành phẩm mỗi mẻ chế biến *</label>
                             <div className="flex items-center gap-2 mt-1">
                                 <input type="number" min="0" step="any" value={formBatchQty}
                                     onChange={(e) => setFormBatchQty(e.target.value)}
                                     className={`flex-1 ${inp}`} placeholder="VD: 500" />
-                                <span className="text-[13px] text-gray-500">{materials.find((m) => String(m.id) === String(formMatId))?.unit || 'đơn vị'}</span>
+                                <select value={formBatchUnit || matOf(formMatId)?.unit || ''} disabled={!formMatId}
+                                    title="Đơn vị nhập"
+                                    onChange={(e) => {
+                                        const btp = matOf(formMatId);
+                                        const from = factorOf(btp, formBatchUnit || btp?.unit);
+                                        const to = factorOf(btp, e.target.value);
+                                        setFormBatchQty(formBatchQty === '' ? '' : trimNum(convertDisplay(formBatchQty, from, to)));
+                                        setFormBatchUnit(e.target.value);
+                                    }}
+                                    className={`w-24 ${inp}`}>
+                                    {unitsFor(matOf(formMatId)).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                                </select>
                             </div>
                             <p className="text-[11px] text-gray-400 mt-1">VD: 1 mẻ ra 500gr Kem Buôn Mê — định mức nguyên liệu bên dưới tính cho 500gr này.</p>
                         </div>
                         <label className="text-[13px] font-medium">Nguyên liệu trong định mức *</label>
                         <div className="mt-2 space-y-2">
-                            {formLines.map((l, i) => (
+                            {formLines.map((l, i) => {
+                                const lm = matOf(l.raw_material_id);
+                                return (
                                 <div key={i} className="flex items-center gap-2">
                                     <select value={l.raw_material_id}
-                                        onChange={(e) => setFormLines(formLines.map((x, j) => j === i ? { ...x, raw_material_id: e.target.value } : x))}
+                                        onChange={(e) => {
+                                            const m = matOf(e.target.value);
+                                            setFormLines(formLines.map((x, j) => j === i ? {
+                                                ...x, raw_material_id: e.target.value, display_qty: '',
+                                                display_unit_name: m?.unit || '',
+                                                orig_quantity: null, orig_display_unit_name: null, orig_display_factor: null,
+                                            } : x));
+                                        }}
                                         className={`flex-1 ${inp}`}>
                                         <option value="">— Nguyên liệu thô —</option>
                                         {rawMaterials.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                                     </select>
-                                    <input type="number" min="0" step="any" placeholder="SL" value={l.quantity}
-                                        onChange={(e) => setFormLines(formLines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))}
+                                    <input type="number" min="0" step="any" placeholder="SL" value={l.display_qty ?? ''}
+                                        onChange={(e) => setFormLines(formLines.map((x, j) => j === i ? { ...x, display_qty: e.target.value } : x))}
                                         className={`w-24 ${inp}`} />
-                                    {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
-                                    <span className="text-[12px] text-gray-500 whitespace-nowrap w-12">{materials.find((m) => String(m.id) === String(l.raw_material_id))?.unit || 'đv'}</span>
+                                    <select value={l.display_unit_name || lm?.unit || ''} disabled={!l.raw_material_id}
+                                        title="Đơn vị nhập"
+                                        onChange={(e) => {
+                                            const from = factorOf(lm, l.display_unit_name || lm?.unit);
+                                            const to = factorOf(lm, e.target.value);
+                                            setFormLines(formLines.map((x, j) => j === i ? {
+                                                ...x,
+                                                display_qty: x.display_qty === '' ? '' : trimNum(convertDisplay(x.display_qty, from, to)),
+                                                display_unit_name: e.target.value,
+                                            } : x));
+                                        }}
+                                        className={`w-20 ${inp}`}>
+                                        {unitsFor(lm).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                                    </select>
                                     <button onClick={() => removeFormLine(i)} className="text-red-500 hover:text-red-700 px-1">×</button>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                         <button onClick={addFormLine} className="mt-3 text-[#24305E] text-[13px] hover:underline">⊕ Thêm nguyên liệu</button>
                         <div className="flex justify-end gap-2 mt-5">
@@ -2971,7 +3042,7 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
         fetchList();
         axios.get(`${API}/material-categories`).then((r) => {
             if (r.data?.success) setCategories(r.data.data || []);
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [branchId]);
 
@@ -2982,7 +3053,7 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
         } catch (e) { alert(e.response?.data?.message || 'Không tải được phiếu'); }
     };
     const doConfirm = async (id) => {
-        if (!window.confirm('Chốt phiếu xuất? Kho sẽ bị trừ theo FIFO, không hoàn tác được.')) return;
+        if (!(await confirmInApp('Chốt phiếu xuất? Kho sẽ bị trừ theo FIFO, không hoàn tác được.'))) return; // Sổ #23
         try {
             await axios.post(`${API}/outbound-receipts/${id}/confirm`);
             alert('Đã chốt phiếu xuất.');
@@ -2990,7 +3061,7 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
         } catch (e) { alert(e.response?.data?.message || 'Chốt thất bại'); }
     };
     const doCancel = async (id) => {
-        if (!window.confirm('Hủy phiếu xuất này?')) return;
+        if (!(await confirmInApp('Hủy phiếu xuất này?'))) return; // Sổ #23
         try {
             await axios.post(`${API}/outbound-receipts/${id}/cancel`);
             setDetail(null); fetchList();
@@ -3033,9 +3104,9 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
                         <option value="cancelled">Đã hủy</option>
                     </select>
                     <div className="flex flex-1 items-center border border-gray-300 rounded-r px-3 bg-white">
-                        <span className="text-gray-400 mr-2" style={{display:"flex"}}><SearchIcon size={16} /></span>
-                        <input value={searchText} onChange={(e) => setSearchText(e.target.value)}
-                            placeholder="Tìm theo mã phiếu..." className="flex-1 py-2 text-[13px] focus:outline-none" />
+                        <SearchInput value={searchText} onChange={(e) => setSearchText(e.target.value)}
+                            onSearch={(v) => setSearchText(v)}
+                            placeholder="Tìm theo mã phiếu..." wrapperStyle={{ flex: 1, display: 'flex' }} className="flex-1 py-2 text-[13px] focus:outline-none" />
                     </div>
                 </div>
                 <span className="flex-1"></span>

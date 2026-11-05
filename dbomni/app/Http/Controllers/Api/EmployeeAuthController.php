@@ -19,6 +19,13 @@ class EmployeeAuthController extends Controller
     private const PIN_MAX_FAILS = 5;
     private const PIN_LOCK_MINUTES = 15;
 
+    // Đợt fix rà soát VPS (S5): danh sách bề mặt đăng nhập SĐT+PIN — mỗi bề mặt
+    // một TÊN token riêng, đăng nhập ở bề mặt này chỉ thu hồi token cùng tên
+    // (issueEmployeeToken vốn đã thu hồi theo tên). Client không khai/khai sai
+    // → rơi về 'shift_register' như hành vi cũ. Tên token không mang quyền —
+    // abilities của mọi token NV đều là ['employee'] như nhau.
+    private const PHONE_SURFACES = ['hub', 'shift_register', 'shift_leave', 'stock_in', 'stock_out', 'stock_transfer', 'stocktake', 'production'];
+
     private function pinLocked(Employee $emp): bool
     {
         return Cache::has('pin_lock:' . $emp->id);
@@ -75,7 +82,9 @@ class EmployeeAuthController extends Controller
             return response()->json(['success' => false, 'message' => 'Tên đăng nhập hoặc mật khẩu không chính xác.'], 401);
         }
 
-        $emp->tokens()->delete();
+        // S5: như nhánh NV của AuthController — chỉ thu hồi phiên Admin 'employee_token',
+        // không giết phiên các bề mặt NV khác (Hub/chấm công/đăng ký ca...).
+        $emp->tokens()->where('name', 'employee_token')->delete();
         // Audit 2026-10-23 BM-10: token NV có hạn 7 ngày (trước đây không hết hạn)
         $token = $emp->createToken('employee_token', ['employee'], now()->addDays(7))->plainTextToken;
 
@@ -106,7 +115,7 @@ class EmployeeAuthController extends Controller
             'pin_code' => 'required|string|size:6|regex:/^[0-9]{6}$/',
             'phone' => 'nullable|string',
             'username' => 'nullable|string',
-            'purpose' => 'nullable|in:approval', // Gói "Chờ duyệt trên Hub" (2026-10-21)
+            'purpose' => 'nullable|in:approval,stocktake_confirm,production', // Gói "Chờ duyệt trên Hub" (2026-10-21) + gói phiên Hub 2026-11-05: PIN step-up chốt kiểm kê / sản xuất
         ]);
 
         // Gói "Chờ duyệt trên Hub" (2026-10-21, mục 5b spec): xác nhận PIN của chính NV
@@ -127,6 +136,28 @@ class EmployeeAuthController extends Controller
             $token = Str::random(40);
             Cache::put('approval_token:' . $actor->id, $token, 300);
             return response()->json(['success' => true, 'data' => ['approval_token' => $token, 'expires_in' => 300]]);
+        }
+
+        // Gói phiên Hub (2026-11-05): PIN step-up cho 2 hành động chạy thẳng không
+        // qua duyệt — chốt kiểm kê (stocktake_confirm) và chạy sản xuất
+        // (production). Cùng cơ chế khóa PIN/token Cache 5 phút như approval,
+        // khóa Cache riêng theo purpose; controller đích kiểm mã PIN_REQUIRED.
+        if (in_array($v['purpose'] ?? null, ['stocktake_confirm', 'production'], true)) {
+            $actor = $request->user();
+            if (!$actor instanceof Employee) {
+                return response()->json(['success' => false, 'message' => 'Chỉ nhân viên mới dùng chức năng này.'], 403);
+            }
+            if ($this->pinLocked($actor)) {
+                return $this->pinLockResponse();
+            }
+            if (!Hash::check($v['pin_code'], (string) $actor->pin_code)) {
+                $this->registerPinFailure($actor);
+                return response()->json(['success' => false, 'message' => 'Mã PIN không đúng.'], 401);
+            }
+            $this->clearPinFailures($actor);
+            $token = Str::random(40);
+            Cache::put('pin_token:' . $v['purpose'] . ':' . $actor->id, $token, 300);
+            return response()->json(['success' => true, 'data' => ['pin_token' => $token, 'expires_in' => 300]]);
         }
 
         $emp = null;
@@ -225,6 +256,8 @@ class EmployeeAuthController extends Controller
         $v = $request->validate([
             'phone' => 'required|string',
             'pin_code' => 'required|string|size:6|regex:/^[0-9]{6}$/',
+            'surface' => 'nullable|string', // S5: bề mặt gọi đăng nhập (hub/shift_register/...)
+            'branch_id' => 'nullable|integer', // Gói phiên Hub 2026-11-05: CN chọn ngay lúc đăng nhập
         ]);
         // Gói 38: PIN lưu hash — tìm NV theo SĐT trước, rồi Hash::check (không where theo pin_code)
         $emp = Employee::with(['branch:id,name', 'branches:id,name'])
@@ -238,7 +271,29 @@ class EmployeeAuthController extends Controller
             return response()->json(['success' => false, 'message' => 'SĐT hoặc mã PIN không đúng.'], 401);
         }
         $this->clearPinFailures($emp);
-        return $this->issueEmployeeToken($emp, 'shift_register');
+        // S5: tên token theo bề mặt của trang gọi — trước đây MỌI trang dùng chung
+        // 'shift_register' nên đăng nhập ở trang này thu hồi phiên của mọi trang kia.
+        // Gói phiên Hub (2026-11-05): CN chọn tại đăng nhập phải thuộc phân công
+        // của NV — CN trở thành một phần của phiên (client giữ staff_branch_id,
+        // server vẫn kiểm phân công ở từng request như hiện nay).
+        $sessionBranchId = null;
+        if (!empty($v['branch_id'])) {
+            $allowed = $this->assignedBranches($emp);
+            $allowedIds = array_map(fn ($b) => (int) ($b['id'] ?? $b), $allowed);
+            if (!in_array((int) $v['branch_id'], $allowedIds, true)) {
+                return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phân công của bạn.'], 422);
+            }
+            $sessionBranchId = (int) $v['branch_id'];
+        }
+        $surface = (string) ($v['surface'] ?? '');
+        $name = in_array($surface, self::PHONE_SURFACES, true) ? $surface : 'shift_register';
+        $resp = $this->issueEmployeeToken($emp, $name);
+        if ($sessionBranchId !== null) {
+            $data = $resp->getData(true);
+            $data['session_branch_id'] = $sessionBranchId;
+            $resp->setData($data);
+        }
+        return $resp;
     }
 
     // Gói 35: thông tin NV từ token (trang public load lại)

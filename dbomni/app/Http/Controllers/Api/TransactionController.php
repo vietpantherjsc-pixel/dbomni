@@ -38,34 +38,50 @@ class TransactionController extends Controller
     /** Danh sách phiếu + tổng kết kỳ theo bộ lọc. */
     public function index(Request $request): JsonResponse
     {
-        $q = Transaction::with(['category:id,name,type', 'branch:id,name', 'partner:id,code,name', 'account:id,name,type'])
-            ->when($request->filled('type'), fn($qq) => $qq->where('type', $request->type))
+        // Lát 1c (rà soát đêm 2026-11-04): tách PHẠM VI TỔNG khỏi bộ lọc của tab.
+        // Trước đây summary tính trên chính query đã lọc theo `type` của tab →
+        // "Tồn quỹ" ở tab Phiếu thu ≠ tab Phiếu chi; và tính cả phiếu CHỜ DUYỆT
+        // (duyệt xong tổng không đổi). Nay: tổng tính trên phạm vi chung (CN /
+        // quỹ / kỳ / đối tác / danh mục / tìm kiếm — KHÔNG lọc type và trạng
+        // thái duyệt) với cơ số tiền hiệu lực thống nhất ở $effective.
+        $scope = Transaction::query()
             ->when($request->filled('branch_id'), fn($qq) => $qq->where('branch_id', $request->branch_id))
             ->when($request->filled('category_id'), fn($qq) => $qq->where('category_id', $request->category_id))
             ->when($request->filled('partner_id'), fn($qq) => $qq->where('partner_id', $request->partner_id))
-            ->when($request->filled('status'), fn($qq) => $qq->where('status', $request->status))
             ->when($request->filled('account_id'), fn($qq) => $qq->where('account_id', $request->account_id)) // Gói 57
-            // Gói 59: lọc phiếu chờ duyệt cho trang duyệt của quản lý.
-            // Gói "Chờ duyệt trên Hub" (2026-10-21): chờ = đủ 3 điều kiện (chưa duyệt user/employee, chưa từ chối).
             ->when($request->user() instanceof \App\Models\Employee, fn($qq) => $qq->where(fn($w) => $w->whereIn('branch_id', $request->user()->allBranchIds())->orWhereNull('branch_id')))
-            ->when($request->input('pending_approval') == '1', fn($qq) => $qq->pendingApproval())
-            // Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt (trang Thu chi Admin).
-            ->when($request->input('approval_status') === 'pending', fn($qq) => $qq->pendingApproval())
-            ->when($request->input('approval_status') === 'approved', fn($qq) => $qq->wasApproved())
-            ->when($request->input('approval_status') === 'rejected', fn($qq) => $qq->wasRejected())
             ->when($request->filled('date_from'), fn($qq) => $qq->whereDate('paid_at', '>=', $request->date_from))
             ->when($request->filled('date_to'), fn($qq) => $qq->whereDate('paid_at', '<=', $request->date_to))
             ->when($request->filled('search'), function ($qq) use ($request) {
                 $s = '%' . $request->search . '%';
                 $qq->where(fn($w) => $w->where('code', 'like', $s)->orWhere('note', 'like', $s));
-            })
+            });
+
+        // Cơ số TIỀN HIỆU LỰC (dùng chung cho tổng + lũy kế): đã thanh toán,
+        // chưa bị từ chối, và đã qua duyệt. Phiếu tự sinh từ duyệt nhập kho /
+        // nhập nhanh (related_type inbound_receipt/batch) sinh ra TỪ hành động
+        // duyệt nên hiệu lực ngay dù không mang dấu duyệt riêng (dữ liệu cũ
+        // cũng theo lệ này); các đời tạo mới đã được đóng dấu duyệt tại nguồn.
+        $effective = fn($qq) => $qq->where('status', 'paid')->whereNull('rejected_at')
+            ->where(fn($w) => $w->where(fn($a) => $a->whereNotNull('approved_by')->orWhereNotNull('approved_by_employee_id'))
+                ->orWhereIn('related_type', ['inbound_receipt', 'batch']));
+
+        $q = (clone $scope)->with(['category:id,name,type', 'branch:id,name', 'partner:id,code,name', 'account:id,name,type'])
+            ->when($request->filled('type'), fn($qq) => $qq->where('type', $request->type))
+            ->when($request->filled('status'), fn($qq) => $qq->where('status', $request->status))
+            // Gói 59: lọc phiếu chờ duyệt cho trang duyệt của quản lý.
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): chờ = đủ 3 điều kiện (chưa duyệt user/employee, chưa từ chối).
+            ->when($request->input('pending_approval') == '1', fn($qq) => $qq->pendingApproval())
+            // Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt (trang Thu chi Admin).
+            ->when($request->input('approval_status') === 'pending', fn($qq) => $qq->pendingApproval())
+            ->when($request->input('approval_status') === 'approved', fn($qq) => $qq->wasApproved())
+            ->when($request->input('approval_status') === 'rejected', fn($qq) => $qq->wasRejected())
             ->orderByDesc('paid_at')
             ->orderByDesc('id');
 
         $summary = [
-            // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu bị từ chối không tính vào số dư/báo cáo.
-            'total_income' => (float) (clone $q)->where('type', 'income')->where('status', 'paid')->whereNull('rejected_at')->sum('amount'),
-            'total_expense' => (float) (clone $q)->where('type', 'expense')->where('status', 'paid')->whereNull('rejected_at')->sum('amount'),
+            'total_income' => (float) $effective((clone $scope)->where('type', 'income'))->sum('amount'),
+            'total_expense' => (float) $effective((clone $scope)->where('type', 'expense'))->sum('amount'),
         ];
         $summary['balance'] = $summary['total_income'] - $summary['total_expense'];
 
@@ -75,16 +91,23 @@ class TransactionController extends Controller
         // Gói 57: running balance — số dư lũy kế theo thứ tự thời gian.
         // Nếu lọc theo 1 quỹ: bắt đầu từ opening_balance của quỹ;
         // ngược lại bắt đầu từ 0 (chỉ mang tính tham khảo vì nhiều quỹ).
+        // Lát 1c: lũy kế chạy trên TOÀN BỘ tập đã lọc (không chỉ trang hiện
+        // tại) và chỉ cộng phiếu hiệu lực theo $effective — trước đây chạy
+        // trên 1 trang và cộng cả phiếu đã bị từ chối (lệch với Tồn quỹ).
         $opening = 0.0;
         if ($request->filled('account_id') && class_exists(\App\Models\Account::class)) {
             $acc = \App\Models\Account::find($request->account_id);
             if ($acc) $opening = (float) $acc->opening_balance;
         }
-        $chrono = $items->sortBy([['paid_at', 'asc'], ['id', 'asc']])->values();
+        $chrono = (clone $q)->reorder()->orderBy('paid_at')->orderBy('id')
+            ->get(['id', 'type', 'amount', 'status', 'approved_by', 'approved_by_employee_id', 'rejected_at', 'related_type', 'paid_at']);
         $bal = $opening;
         $rbMap = [];
         foreach ($chrono as $tx) {
-            if ($tx->status === 'paid') {
+            $isEffective = $tx->status === 'paid' && $tx->rejected_at === null
+                && ($tx->approved_by !== null || $tx->approved_by_employee_id !== null
+                    || in_array($tx->related_type, ['inbound_receipt', 'batch'], true));
+            if ($isEffective) {
                 $bal += $tx->type === 'income' ? (float) $tx->amount : -(float) $tx->amount;
             }
             $rbMap[$tx->id] = round($bal, 0);
@@ -165,9 +188,27 @@ class TransactionController extends Controller
         return response()->json(['success' => true, 'data' => $tx->load('category', 'branch', 'partner', 'account')], 201);
     }
 
-    public function update(Request $request, int $id): JsonResponse
+    // Sổ #94 (2026-11-05): phân giải tham số {id} của route — tham số route là
+    // chuỗi, ép kiểu int mù khiến gọi bằng MÃ PHIẾU nổ TypeError 500 (vật chứng
+    // sống 06:26:05 ở pay()). Số → tra theo id (hành vi cũ không đổi); không
+    // phải số → tra theo mã phiếu (code). Danh mục không có mã nên không phải
+    // số = không thấy. Không thấy ở cả hai → nơi gọi trả 404 JSON.
+    protected function resolveTransaction($id): ?Transaction
     {
-        $tx = Transaction::findOrFail($id);
+        return is_numeric($id)
+            ? Transaction::find((int) $id)
+            : Transaction::where('code', (string) $id)->first();
+    }
+
+    protected function resolveCategory($id): ?TransactionCategory
+    {
+        return is_numeric($id) ? TransactionCategory::find((int) $id) : null;
+    }
+
+    public function update(Request $request, $id): JsonResponse
+    {
+        $tx = $this->resolveTransaction($id);
+        if (!$tx) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu.'], 404);
         if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
 
         // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu đã từ chối là hồ sơ đóng — không sửa.
@@ -215,9 +256,10 @@ class TransactionController extends Controller
         return response()->json(['success' => true, 'data' => $tx->fresh()->load('category', 'branch', 'partner')]);
     }
 
-    public function destroy(Request $request, int $id): JsonResponse
+    public function destroy(Request $request, $id): JsonResponse
     {
-        $tx = Transaction::findOrFail($id);
+        $tx = $this->resolveTransaction($id);
+        if (!$tx) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu.'], 404);
         if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
         // Gói 27: phiếu tự sinh giữ lại để đối soát với kho — không cho xóa.
         if ($tx->isAuto()) {
@@ -241,9 +283,10 @@ class TransactionController extends Controller
      * Gói 29: thanh toán trừ dần công nợ 1 phiếu.
      * Validate amount <= còn nợ; cộng paid_amount; đủ -> status = paid.
      */
-    public function pay(Request $request, int $id): JsonResponse
+    public function pay(Request $request, $id): JsonResponse
     {
-        $tx = Transaction::findOrFail($id);
+        $tx = $this->resolveTransaction($id);
+        if (!$tx) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu.'], 404);
         if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
         // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu đã từ chối không được thanh toán tiếp.
         if ($tx->rejected_at !== null) {
@@ -261,14 +304,21 @@ class TransactionController extends Controller
             'note' => 'nullable|string|max:500',
         ]);
 
-        $payment = DB::transaction(function () use ($tx, $v) {
+        // Sổ #76 (2026-11-04, cùng họ #75): created_by của transaction_payments
+        // là FK users — phiên NV ghi thanh toán mà lấy auth()->id() sẽ 1452.
+        // Bảng không có cột created_by_employee_id nên NV → null.
+        [$payUserId, $payEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        if ($payUserId === null && $payEmployeeId === null) {
+            $payUserId = auth()->id();
+        }
+        $payment = DB::transaction(function () use ($tx, $v, $payUserId) {
             $p = TransactionPayment::create([
                 'transaction_id' => $tx->id,
                 'amount' => $v['amount'],
                 'paid_at' => $v['paid_at'] ?? now()->toDateString(),
                 'payment_method' => $v['payment_method'] ?? null,
                 'note' => $v['note'] ?? null,
-                'created_by' => auth()->id(),
+                'created_by' => $payUserId,
             ]);
             $tx->increment('paid_amount', $v['amount']);
             $tx->refresh();
@@ -288,14 +338,17 @@ class TransactionController extends Controller
 
     // Gói 59: quản lý duyệt phiếu do NV tạo (route đặt trong group permission:finance.manage).
     // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết Employee qua ApprovalActor; chặn cả phiếu đã từ chối.
-    public function approve(Request $request, int $id): JsonResponse
+    public function approve(Request $request, $id): JsonResponse
     {
-        $tx = Transaction::findOrFail($id);
+        $tx = $this->resolveTransaction($id);
+        if (!$tx) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu.'], 404);
         if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
         if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
         }
-        [$uid, $eid] = \App\Support\ApprovalActor::ids();
+        // Sổ #75 (2026-11-04): truyền $request->user() — ids() không đối số mù
+        // với phiên NV duyệt trực tiếp, fallback sẽ ghi mã NV vào FK users.
+        [$uid, $eid] = \App\Support\ApprovalActor::ids($request->user());
         if ($uid === null && $eid === null) {
             $uid = auth()->id(); // luồng Admin cũ
         }
@@ -311,7 +364,7 @@ class TransactionController extends Controller
      * Lý do BẮT BUỘC (trim không rỗng, tối đa 500 ký tự). Phiếu bị từ chối = hồ sơ đóng (terminal):
      * không sửa, không gửi lại, không duyệt lại — muốn xử lý lại thì tạo phiếu mới.
      */
-    public function reject(Request $request, int $id): JsonResponse
+    public function reject(Request $request, $id): JsonResponse
     {
         $v = $request->validate([
             'reason' => 'required|string|max:500',
@@ -320,16 +373,24 @@ class TransactionController extends Controller
         if ($reason === '') {
             return response()->json(['success' => false, 'message' => 'Lý do từ chối không được để trống.'], 422);
         }
-        $tx = Transaction::findOrFail($id);
+        $tx = $this->resolveTransaction($id);
+        if (!$tx) return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu.'], 404);
         if ($deny = $this->denyTransactionBranch($request, $tx->branch_id)) return $deny;
         if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
         }
-        [$uid, $eid] = \App\Support\ApprovalActor::ids();
+        // Sổ #75 (2026-11-04): truyền $request->user() như ở approve().
+        [$uid, $eid] = \App\Support\ApprovalActor::ids($request->user());
         if ($uid === null && $eid === null) {
             $uid = auth()->id(); // luồng Admin cũ
         }
         $tx->update([
+            // F4 (Đại Vương phán 2026-11-05 "Hiển thị đã hủy"): phiếu bị từ chối
+            // duyệt thì TRẠNG THÁI cũng chuyển 'cancelled' — dấu từ chối
+            // (rejected_at/reason/by) giữ nguyên làm vết duyệt. Mọi bề mặt tiền
+            // vốn lọc (status='paid' + rejected_at null) nên số không đổi;
+            // bề mặt hiển thị đọc status sẽ thấy "Đã hủy" như phán.
+            'status' => 'cancelled',
             'rejected_at' => now(),
             'reject_reason' => $reason,
             'rejected_by' => $uid,
@@ -339,9 +400,10 @@ class TransactionController extends Controller
     }
 
     /** Sửa danh mục (tên; loại không cho đổi nếu đã có phiếu). */
-    public function updateCategory(Request $request, int $id): JsonResponse
+    public function updateCategory(Request $request, $id): JsonResponse
     {
-        $cat = TransactionCategory::findOrFail($id);
+        $cat = $this->resolveCategory($id);
+        if (!$cat) return response()->json(['success' => false, 'message' => 'Không tìm thấy danh mục.'], 404);
         $v = $request->validate([
             'name' => 'sometimes|string|max:100',
             'type' => 'sometimes|in:income,expense',
@@ -353,7 +415,7 @@ class TransactionController extends Controller
         if (isset($v['name'])) {
             $dup = TransactionCategory::where('name', $v['name'])
                 ->where('type', $v['type'] ?? $cat->type)
-                ->where('id', '!=', $id)->exists();
+                ->where('id', '!=', $cat->id)->exists();
             if ($dup) {
                 return response()->json(['success' => false, 'message' => 'Tên danh mục đã tồn tại.'], 422);
             }
@@ -363,9 +425,10 @@ class TransactionController extends Controller
     }
 
     /** Xóa danh mục (chặn danh mục hệ thống và danh mục đang có phiếu). */
-    public function destroyCategory(int $id): JsonResponse
+    public function destroyCategory($id): JsonResponse
     {
-        $cat = TransactionCategory::findOrFail($id);
+        $cat = $this->resolveCategory($id);
+        if (!$cat) return response()->json(['success' => false, 'message' => 'Không tìm thấy danh mục.'], 404);
         if ($cat->is_system) {
             return response()->json(['success' => false, 'message' => 'Danh mục hệ thống không được xóa.'], 422);
         }

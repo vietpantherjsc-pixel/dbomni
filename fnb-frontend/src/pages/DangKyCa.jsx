@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api';
+import { getStaffSession, clearStaffSession, staffSessionExpired, saveStaffSession } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05)
 import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub): xác nhận tự chế thay window.confirm
 
 // Trang đăng ký ca làm việc nhân viên (public, KHÔNG cần đăng nhập admin)
 // Bám sát demo đã duyệt: ~/workspace/your_files/demo-dang-ky-ca-nhan-vien.html
-// API: /api/employee/*, token NV ở localStorage['emp_token'], header Authorization: Bearer
+// API: /api/employee/* — phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/staff_branch_id, đăng nhập 1 lần tại /nhan-vien (hết dùng chung khóa emp_token với trang Chấm công — gốc lỗi H-04)
 
 const NAVY = '#24305E';
 const ORANGE = '#F5A623';
@@ -107,15 +108,10 @@ function countdownText(deadlineDate) {
 }
 
 export default function DangKyCa() {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-  const [token, setToken] = useState(() => localStorage.getItem('emp_token') || '');
-  const [emp, setEmp] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('emp_info') || 'null'); } catch (e) { return null; }
-  });
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
-  const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: không gắn ?t=
+  const session = getStaffSession();
+  const [token, setToken] = useState(() => (session ? session.token : ''));
+  const [emp, setEmp] = useState(() => (session ? session.emp : null));
 
   const [shifts, setShifts] = useState([]);
   const [wkOffset, setWkOffset] = useState(0);
@@ -157,21 +153,17 @@ export default function DangKyCa() {
   };
   const toastErr = (m) => toast(m, true);
 
-  // Đăng xuất: xóa token, reset toàn bộ state về chưa đăng nhập
+  // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung tại Hub
   const logout = () => {
-    localStorage.removeItem('emp_token');
-    localStorage.removeItem('emp_info');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setShifts([]); setSel({}); setLoading(false); setSaving(false);
-    setDeadlineAt(''); setCanSubmit(true); setSubmitsLeft(2); setSubmitCount(0); setPastDeadline(false);
-    setShowSuccess(false); setToastOn(false);
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  // Token hết hạn (401) → đăng xuất, không để hiện tên NV cũ
+  // Token hết hạn (401) → xử lý tập trung tại Hub (gói phiên Hub 2026-11-05)
   const expired = (e) => {
     if (e && e.response && e.response.status === 401) {
-      logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      staffSessionExpired();
       return true;
     }
     return false;
@@ -207,6 +199,17 @@ export default function DangKyCa() {
     } finally { setLoading(false); }
   };
 
+  // Tách riêng để nút "Tải lại" ở trạng thái trống (S12) gọi lại được
+  const loadShifts = async (tk) => {
+    try {
+      const s = await axios.get(API + '/employee/work-shifts', auth(tk));
+      setShifts(s.data && s.data.data ? s.data.data : []);
+    } catch (e) {
+      if (expired(e)) return;
+      toastErr(errMsg(e, 'Không tải được danh sách ca.'));
+    }
+  };
+
   useEffect(() => {
     if (!token) return;
     (async () => {
@@ -214,16 +217,10 @@ export default function DangKyCa() {
         const r = await axios.get(API + '/employee/me', auth(token));
         if (r.data && r.data.data) {
           setEmp(r.data.data);
-          localStorage.setItem('emp_info', JSON.stringify(r.data.data));
+          saveStaffSession(token, r.data.data, session ? session.branchId : 0);
         }
       } catch (e) { if (!expired(e)) { /* giữ info cũ */ } }
-      try {
-        const s = await axios.get(API + '/employee/work-shifts', auth(token));
-        setShifts(s.data && s.data.data ? s.data.data : []);
-      } catch (e) {
-        if (expired(e)) return;
-        toastErr(errMsg(e, 'Không tải được danh sách ca.'));
-      }
+      await loadShifts(token);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
@@ -233,28 +230,6 @@ export default function DangKyCa() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekIso, token]);
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    // Chuẩn hóa SĐT: trim, bỏ khoảng trắng, +84xxxxxxxxx → 0xxxxxxxxx
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', {
-        phone: p, pin_code: pin,
-      });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('emp_token', tk);
-      localStorage.setItem('emp_info', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   const selCount = Object.keys(sel).filter((k) => sel[k]).length;
 
@@ -309,6 +284,8 @@ export default function DangKyCa() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng — chưa có phiên
+  // chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
   if (!token) {
     return (
       <div className="dk-wrap">
@@ -318,38 +295,12 @@ export default function DangKyCa() {
             <button onClick={goHub} aria-label="Quay lại hub"
               style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="dk-title">Đăng ký ca làm việc</div>
-            <div className="dk-branch">Đăng nhập để tiếp tục</div>
+            <div className="dk-branch">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <form className="dk-day" style={{ marginTop: 14 }} onSubmit={doLogin}>
-            <label className="dk-label" style={{ marginTop: 4 }}>Số điện thoại</label>
-            <input
-              className="dk-field"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, ''))}
-              placeholder="09xxxxxxxx"
-              autoComplete="tel"
-            />
-            <label className="dk-label">Mã PIN 6 số</label>
-            <input
-              className="dk-field dk-pin"
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              autoComplete="off"
-            />
-            {err && <div className="dk-msg" style={{ margin: '12px 0 0' }}>{err}</div>}
-            <div style={{ marginTop: 16 }}>
-              <button className="dk-btn dk-send" type="submit" disabled={loginBusy} style={{ width: '100%' }}>
-                {loginBusy ? 'Đang xử lý...' : 'Đăng nhập'}
-              </button>
-            </div>
-          </form>
+          <div className="dk-day" style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="dk-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
+          </div>
         </div>
       </div>
     );
@@ -383,7 +334,7 @@ export default function DangKyCa() {
             <div className="dk-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
             <div className="dk-branch">{(emp && emp.branch_name) || 'Chi nhánh'}</div>
           </div>
-          <button className="dk-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
+          <button className="dk-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
           <button className="dk-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="dk-title">Đăng ký ca làm việc</div>
@@ -415,6 +366,16 @@ export default function DangKyCa() {
 
       {loading ? (
         <div className="dk-loading">Đang tải dữ liệu tuần...</div>
+      ) : shifts.length === 0 ? (
+        /* Đợt fix rà soát VPS (S12): chưa có mẫu ca → trạng thái trống CÓ lời giải thích
+           thay vì 7 thẻ ngày rỗng im lặng như trước. */
+        <div className="dk-privacy" style={{ background: '#eef3fb', borderColor: '#c9d6f2', color: '#24305E', margin: '16px', alignItems: 'flex-start' }}>
+          <span style={{ flex: 1, lineHeight: 1.55 }}>
+            📋 <b>Chưa có mẫu ca để đăng ký.</b><br />
+            Quán chưa thiết lập mẫu ca làm việc nên chưa thể đăng ký ca trên trang này. Bạn vui lòng liên hệ quản lý để được xếp ca trực tiếp.
+          </span>
+          <button onClick={() => loadShifts(token)} style={{ minHeight: 44, padding: '0 14px', borderRadius: 10, border: '1px solid #c9d6f2', background: '#fff', fontWeight: 700, flexShrink: 0 }}>Tải lại</button>
+        </div>
       ) : (
         <main>
           {weekDays.map((day, di) => {

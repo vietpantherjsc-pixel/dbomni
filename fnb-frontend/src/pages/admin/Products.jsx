@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import VisibilityMatrix from './VisibilityMatrix'; // Demo tối ưu menu: tab Hiển thị trong trang cha
 import { fmtPrice, getDecimals } from '../../utils/number';
+import { unitsFor, factorOf, trimNum, convertDisplay, lineFromServer, emptyLine, lineToPayload } from '../../utils/recipeUnits'; // Spec định mức đơn vị quy đổi (2026-11-05)
 import { useBranch } from '../../contexts/BranchContext'; // Gói 25: badge ẩn/hiện theo CN
 import { useAuth } from '../../contexts/AuthContext'; // Gói 33: phân quyền bulk
 
@@ -36,8 +38,8 @@ const initialFormState = {
     option_group_ids: [],
     prices: [],   // [{price_list_id, price, is_active}]
     category_prices: [], // Spec kênh bán hàng: [{category: 'store'|'online'|'partner', price}] — giá chung phân loại
-    recipes: [],  // [{material_id, quantity, kind}]
-    option_recipes: [], // Gói 8c: [{product_option_id, material_id, quantity, kind}]
+    recipes: [],  // [{material_id, display_qty, display_unit_name, orig_*, kind}] — spec định mức đơn vị quy đổi
+    option_recipes: [], // Gói 8c: [{product_option_id, material_id, display_qty, display_unit_name, orig_*, kind}]
 };
 
 // Gói 8c: cấu hình định mức theo món cho 1 nhóm per_product (VD: Size)
@@ -88,35 +90,66 @@ const PerProductGroupConfig = ({ group, baseMaterials, materials, optionRecipes,
         </div>
     );
 };
+// Spec định mức đơn vị quy đổi (2026-11-05): mỗi dòng có ô chọn đơn vị cạnh ô
+// số lượng; số lưu vẫn là cơ sở (server quy đổi), client chỉ gửi display_*.
 const BomLines = ({ lines, materials, onChange, materialFilter, addLabel }) => {
     const setLine = (i, k, v) => onChange(lines.map((l, j) => j === i ? { ...l, [k]: v } : l));
-    const matUnit = (id) => { const m = materials.find((x) => String(x.id) === String(id)); return m ? m.unit : ''; };
-    const matName = (id) => { const m = materials.find((x) => String(x.id) === String(id)); return m ? m.name : ''; };
+    const matOf = (id) => materials.find((x) => String(x.id) === String(id));
+    const matUnit = (id) => matOf(id)?.unit || '';
+    const matName = (id) => matOf(id)?.name || '';
     const list = materialFilter ? materials.filter(materialFilter) : materials;
+    // Đổi nguyên liệu = dòng mới: nhập lại số lượng theo đơn vị của NL mới.
+    const onMaterialChange = (i, id) => {
+        const m = matOf(id);
+        onChange(lines.map((l, j) => j === i ? {
+            ...l, material_id: id, display_qty: '',
+            display_unit_name: m?.unit || '',
+            orig_quantity: null, orig_display_unit_name: null, orig_display_factor: null,
+        } : l));
+    };
+    // Đổi đơn vị trong lúc nhập: giữ nguyên lượng thật, chỉ đổi cách đọc.
+    const onUnitChange = (i, unitName) => {
+        const l = lines[i];
+        const m = matOf(l.material_id);
+        const from = factorOf(m, l.display_unit_name || m?.unit);
+        const to = factorOf(m, unitName);
+        onChange(lines.map((x, j) => j === i ? {
+            ...x,
+            display_qty: x.display_qty === '' ? '' : trimNum(convertDisplay(x.display_qty, from, to)),
+            display_unit_name: unitName,
+        } : x));
+    };
     return (
         <>
-            {lines.map((l, i) => (
+            {lines.map((l, i) => {
+                const m = matOf(l.material_id);
+                const units = unitsFor(m);
+                return (
                 <div key={i} className="m-line-grid m-line-grid--190">
-                    <select className="m-input" value={l.material_id} onChange={(e) => setLine(i, 'material_id', e.target.value)}>
+                    <select className="m-input" value={l.material_id} onChange={(e) => onMaterialChange(i, e.target.value)}>
                         <option value="">— Chọn —</option>
-                        {list.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
+                        {list.map((mm) => <option key={mm.id} value={mm.id}>{mm.name} ({mm.unit})</option>)}
                     </select>
-                    {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
                     <div className="flex items-center gap-1.5">
-                        <input type="number" min="0" step={Math.pow(10, -getDecimals('quantity')) || 1} className="m-input" placeholder="SL"
-                            value={l.quantity} onChange={(e) => setLine(i, 'quantity', e.target.value)} />
-                        <span className="text-[12px] whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }}>{matUnit(l.material_id) || 'đv cơ sở'}</span>
+                        <input type="number" min="0" step="any" className="m-input" placeholder="SL"
+                            value={l.display_qty ?? ''} onChange={(e) => setLine(i, 'display_qty', e.target.value)} />
+                        <select className="m-input shrink-0" style={{ width: 92 }} value={l.display_unit_name || m?.unit || ''}
+                            disabled={!l.material_id} title="Đơn vị nhập"
+                            onChange={(e) => onUnitChange(i, e.target.value)}>
+                            {units.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                        </select>
                     </div>
                     <button type="button" className="m-btn m-btn-ghost m-btn-sm !px-0" onClick={() => onChange(lines.filter((_, j) => j !== i))}>✕</button>
                 </div>
-            ))}
-            <button type="button" className="m-btn m-btn-ghost m-btn-sm mt-1" onClick={() => onChange([...lines, { material_id: '', quantity: '' }])}>
+                );
+            })}
+            <button type="button" className="m-btn m-btn-ghost m-btn-sm mt-1" onClick={() => onChange([...lines, emptyLine()])}>
                 {addLabel || '+ Thêm dòng'}
             </button>
-            {lines.some((l) => l.material_id && l.quantity) && (
+            {lines.some((l) => l.material_id && l.display_qty) && (
                 <div className="text-xs mt-2 space-y-1" style={{ color: 'var(--m-ink-soft)' }}>
-                    {lines.filter((l) => l.material_id && l.quantity).map((l, i) => (
-                        <div key={i}>• {l.quantity} {matUnit(l.material_id)} {matName(l.material_id)}</div>
+                    {lines.filter((l) => l.material_id && l.display_qty).map((l, i) => (
+                        <div key={i}>• {l.display_qty} {l.display_unit_name || matUnit(l.material_id)} {matName(l.material_id)}</div>
                     ))}
                 </div>
             )}
@@ -410,10 +443,10 @@ const Products = () => {
                     .filter((x) => x && x.category && Number(x.price) > 0)
                     .map((x) => ({ category: x.category, price: x.price })),
                 recipes: (p.recipes || []).filter((x) => !x.product_option_id)
-                    .map((x) => ({ material_id: String(x.material_id), quantity: x.quantity, kind: x.kind || 'ingredient' })),
+                    .map((x) => ({ ...lineFromServer(x, materials.find((m) => String(m.id) === String(x.material_id))), kind: x.kind || 'ingredient' })),
                 // Gói 8c: định mức theo món
                 option_recipes: (p.option_recipes || [])
-                    .map((x) => ({ product_option_id: x.product_option_id, material_id: String(x.material_id), quantity: x.quantity, kind: x.kind || 'ingredient' })),
+                    .map((x) => ({ ...lineFromServer(x, materials.find((m) => String(m.id) === String(x.material_id))), product_option_id: x.product_option_id, kind: x.kind || 'ingredient' })),
             });
             setCostPrice(p.cost_price ?? null);
         } catch (e) {
@@ -466,12 +499,12 @@ const Products = () => {
                     .filter((x) => x.category && x.price !== '' && Number(x.price) >= 0)
                     .map((x) => ({ category: x.category, price: Number(x.price) })),
                 recipes: formData.recipes
-                    .filter((x) => x.material_id && Number(x.quantity) > 0)
-                    .map((x) => ({ material_id: Number(x.material_id), quantity: Number(x.quantity), kind: x.kind || 'ingredient' })),
+                    .filter((x) => x.material_id && Number(x.display_qty) > 0)
+                    .map((x) => ({ ...lineToPayload(x), material_id: Number(x.material_id), kind: x.kind || 'ingredient' })),
                 // Gói 8c: định mức theo món
                 option_recipes: (formData.option_recipes || [])
-                    .filter((x) => x.product_option_id && x.material_id && Number(x.quantity) > 0)
-                    .map((x) => ({ product_option_id: Number(x.product_option_id), material_id: Number(x.material_id), quantity: Number(x.quantity), kind: x.kind || 'ingredient' })),
+                    .filter((x) => x.product_option_id && x.material_id && Number(x.display_qty) > 0)
+                    .map((x) => ({ ...lineToPayload(x), product_option_id: Number(x.product_option_id), material_id: Number(x.material_id), kind: x.kind || 'ingredient' })),
             };
             if (editingId) {
                 await axios.put(`${BASE}/products/${editingId}`, payload);
@@ -714,12 +747,14 @@ const Products = () => {
 
             {/* MH-R2: thanh tìm kiếm + lọc */}
             <div className="m-card p-3 mb-3 flex flex-wrap items-center gap-2">
-                <input
+                <SearchInput
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="🔍 Tìm theo tên hoặc SKU..."
+                    onSearch={(v) => setSearch(v)}
+                    placeholder="Tìm theo tên hoặc SKU..."
                     className="m-input"
                     style={{ minWidth: 200, flex: '1 1 200px' }}
+                    wrapperStyle={{ flex: '1 1 200px', minWidth: 200 }}
                 />
                 <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} className="m-input" style={{ maxWidth: 180 }}>
                     <option value="">Tất cả danh mục</option>

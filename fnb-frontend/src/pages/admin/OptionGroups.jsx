@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+import { unitsFor, factorOf, trimNum, convertDisplay, lineFromServer, emptyLine, lineToPayload } from '../../utils/recipeUnits'; // Spec định mức đơn vị quy đổi (2026-11-05)
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 
 // Gói 8a (2026-10-05): Nhóm tùy chọn — kéo-thả sắp xếp nhóm & tùy chọn,
@@ -31,7 +33,9 @@ export default function OptionGroups() {
     }
   };
   useEffect(() => { load().catch((e) => {
-    if (e.response?.status === 401) return;
+    // S5(3): 401 phải hiện câu chuẩn hết phiên (phán 2026-11-04) — không có cơ
+    // chế AuthContext tự chuyển về login, nuốt câm là sai.
+    if (e.response?.status === 401) { alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'); return; }
     alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.');
   }); }, []);
 
@@ -395,7 +399,7 @@ function AssignModal({ group, onClose }) {
       <div className="m-modal !max-w-lg" onClick={(e) => e.stopPropagation()}>
         <div className="m-modal-head">Gán nhóm "{group.name}" cho mặt hàng</div>
         <div className="m-modal-body">
-          <input className="m-input w-full mb-3" placeholder="Tìm món…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <SearchInput className="m-input w-full" placeholder="Tìm món…" value={q} onChange={(e) => setQ(e.target.value)} onSearch={(v) => setQ(v)} wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }} />
           <div className="max-h-[50vh] overflow-y-auto m-scroll border rounded-lg" style={{borderColor:'var(--m-line)'}}>
             {list.map((p) => (
               <label key={p.id} className="flex items-center gap-3 px-3 py-2 border-b text-sm cursor-pointer hover:bg-[var(--m-bg-soft)]" style={{borderColor:'var(--m-line)'}}>
@@ -430,40 +434,75 @@ function RecipeModal({ option, onClose }) {
       const r = await axios.get(`${BASE}/options/${option.id}/recipes`);
       const d = r.data?.data;
       setMaterials(d?.materials || []);
+      const mats = d?.materials || [];
+      const matOf = (id) => mats.find((m) => String(m.id) === String(id));
       const recs = d?.recipes || [];
       const ing = recs.filter((x) => (x.kind || 'ingredient') === 'ingredient');
       const pack = recs.filter((x) => x.kind === 'packaging');
-      setIngredients(ing.length ? ing.map((x) => ({ material_id: String(x.material_id), quantity: x.quantity })) : [{ material_id: '', quantity: '' }]);
-      setPackaging(pack.length ? pack.map((x) => ({ material_id: String(x.material_id), quantity: x.quantity })) : [{ material_id: '', quantity: '' }]);
+      // Spec định mức đơn vị quy đổi: nạp số hiển thị + đơn vị đã chụp (kèm orig_*).
+      setIngredients(ing.length ? ing.map((x) => ({ ...lineFromServer(x, matOf(x.material_id)), kind: 'ingredient' })) : [emptyLine({ kind: 'ingredient' })]);
+      setPackaging(pack.length ? pack.map((x) => ({ ...lineFromServer(x, matOf(x.material_id)), kind: 'packaging' })) : [emptyLine({ kind: 'packaging' })]);
     })().catch((e) => alert('Thao tác thất bại. Vui lòng thử lại.'));
   }, [option.id]);
 
   const packMats = materials.filter((m) => (m.type || '').toLowerCase().includes('pack') || (m.type || '').includes('bao') || (m.name || '').toLowerCase().includes('ly') || (m.name || '').toLowerCase().includes('hũ') || (m.name || '').toLowerCase().includes('hộp'));
 
-  const LineEditor = ({ lines, setLines, materialList, placeholder }) => (
+  // Spec định mức đơn vị quy đổi (2026-11-05): ô chọn đơn vị cạnh ô SL.
+  const LineEditor = ({ lines, setLines, materialList, placeholder }) => {
+    const matOf = (id) => materialList.find((x) => String(x.id) === String(id));
+    // Đổi nguyên liệu = dòng mới: nhập lại số lượng theo đơn vị của NL mới.
+    const onMaterialChange = (i, id) => {
+      const m = matOf(id);
+      setLines(lines.map((x, j) => j === i ? {
+        ...x, material_id: id, display_qty: '',
+        display_unit_name: m?.unit || '',
+        orig_quantity: null, orig_display_unit_name: null, orig_display_factor: null,
+      } : x));
+    };
+    // Đổi đơn vị: giữ nguyên lượng thật, chỉ đổi cách đọc.
+    const onUnitChange = (i, unitName) => {
+      const l = lines[i];
+      const m = matOf(l.material_id);
+      const from = factorOf(m, l.display_unit_name || m?.unit);
+      const to = factorOf(m, unitName);
+      setLines(lines.map((x, j) => j === i ? {
+        ...x,
+        display_qty: x.display_qty === '' ? '' : trimNum(convertDisplay(x.display_qty, from, to)),
+        display_unit_name: unitName,
+      } : x));
+    };
+    return (
     <>
-      {lines.map((l, i) => (
+      {lines.map((l, i) => {
+        const m = matOf(l.material_id);
+        const units = unitsFor(m);
+        return (
         <div key={i} className="m-line-grid">
-          <select className="m-input" value={l.material_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, material_id: e.target.value } : x))}>
+          <select className="m-input" value={l.material_id} onChange={(e) => onMaterialChange(i, e.target.value)}>
             <option value="">{placeholder}</option>
-            {materialList.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
+            {materialList.map((mm) => <option key={mm.id} value={mm.id}>{mm.name} ({mm.unit})</option>)}
           </select>
-          {/* Fix runtime zip tổng: SL tính theo ĐƠN VỊ CƠ SỞ — hiện rõ đơn vị cạnh ô nhập */}
           <div className="flex items-center gap-1.5">
-            <input type="number" min="0" step="0.5" className="m-input" placeholder="SL" value={l.quantity} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} />
-            <span className="text-[12px] whitespace-nowrap" style={{ color: 'var(--m-ink-soft)' }}>{(materialList.find((m) => String(m.id) === String(l.material_id))?.unit) || 'đv cơ sở'}</span>
+            <input type="number" min="0" step="any" className="m-input" placeholder="SL" value={l.display_qty ?? ''} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, display_qty: e.target.value } : x))} />
+            <select className="m-input shrink-0" style={{ width: 92 }} value={l.display_unit_name || m?.unit || ''}
+              disabled={!l.material_id} title="Đơn vị nhập"
+              onChange={(e) => onUnitChange(i, e.target.value)}>
+              {units.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+            </select>
           </div>
           <button className="m-btn m-btn-ghost m-btn-sm !px-0" onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
         </div>
-      ))}
-      <button className="m-btn m-btn-ghost m-btn-sm mt-1" onClick={() => setLines([...lines, { material_id: '', quantity: '' }])}>+ Thêm dòng</button>
+        );
+      })}
+      <button className="m-btn m-btn-ghost m-btn-sm mt-1" onClick={() => setLines([...lines, emptyLine({ kind: lines[0]?.kind || 'ingredient' })])}>+ Thêm dòng</button>
     </>
-  );
+    );
+  };
 
   const save = async () => {
     const toPayload = (lines, kind) => lines
-      .filter((l) => l.material_id && Number(l.quantity) > 0)
-      .map((l) => ({ material_id: Number(l.material_id), quantity: Number(l.quantity), kind }));
+      .filter((l) => l.material_id && Number(l.display_qty) > 0)
+      .map((l) => ({ ...lineToPayload(l), material_id: Number(l.material_id), kind }));
     setSaving(true);
     try {
       await axios.put(`${BASE}/options/${option.id}/recipes`, {

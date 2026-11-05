@@ -71,7 +71,7 @@ class InboundController extends Controller
      * (quyết định của Đại Vương: danh mục "Nhập hàng").
      * Idempotent: cặp (related_type, related_id) đã có phiếu thì không tạo trùng.
      */
-    private function createAutoExpense(int $branchId, float $amount, int $relatedId, string $note): void
+    private function createAutoExpense(int $branchId, float $amount, int $relatedId, string $note, ?array $actorIds = null): void
     {
         // Gói 55 p11ac: dùng related_type='batch' riêng cho luồng nhập nhanh (batch_id),
         // tránh đụng với luồng phiếu nhập (related_type='inbound_receipt', related_id=receipt_id)
@@ -85,6 +85,16 @@ class InboundController extends Controller
             ['name' => 'Nhập hàng', 'type' => 'expense'],
             ['is_system' => true]
         );
+        // Lát 1c: đóng dấu duyệt tại nguồn như InboundReceiptController (phiếu
+        // sinh từ hành động nhập kho đã xác nhận — tiền hiệu lực ngay).
+        // Sổ #75 (2026-11-04): ưu tiên cặp actor do điểm gọi truyền vào (đã
+        // tính bằng ids($request->user())) — ids() không đối số ở đây mù với
+        // phiên NV đi đường trực tiếp, fallback auth()->id() sẽ ghi mã NV vào
+        // cột FK users (approved_by/created_by đều constrained users).
+        [$autoUserId, $autoEmployeeId] = $actorIds ?? \App\Support\ApprovalActor::ids();
+        if ($autoUserId === null && $autoEmployeeId === null) {
+            $autoUserId = auth()->id();
+        }
         Transaction::create([
             'code' => Transaction::nextCode('expense'),
             'type' => 'expense',
@@ -94,8 +104,13 @@ class InboundController extends Controller
             'paid_amount' => $amount, // Gói 29: phiếu tự sinh đã thanh toán -> còn nợ = 0
             'paid_at' => now()->toDateString(),
             'status' => 'paid',
+            'approved_by' => $autoUserId,
+            'approved_by_employee_id' => $autoEmployeeId,
+            'approved_at' => now(),
             'note' => $note,
-            'created_by' => auth()->id(),
+            // Sổ #75: created_by lấy phần User của cặp actor (NV → null thay vì
+            // ghi mã NV vào cột FK users; User → giữ nguyên như auth()->id() cũ).
+            'created_by' => $autoUserId,
             'related_type' => 'batch',
             'related_id' => $relatedId,
         ]);
@@ -115,7 +130,9 @@ class InboundController extends Controller
             'batch_code' => 'nullable|string|max:50',
         ]);
 
-        $result = DB::transaction(function () use ($validated) {
+        // Sổ #75: cặp actor tính ngoài transaction để truyền xuống phiếu chi tự sinh.
+        $actorIds = \App\Support\ApprovalActor::ids($request->user());
+        $result = DB::transaction(function () use ($validated, $actorIds) {
             $created = $this->createBatch($validated['branch_id'], $validated);
             // Gói 27: tự sinh phiếu chi "Đã thanh toán" theo tổng tiền phiếu nhập.
             $amount = (float) $validated['purchase_quantity'] * (float) ($validated['unit_cost'] ?? 0);
@@ -124,7 +141,8 @@ class InboundController extends Controller
                     $validated['branch_id'],
                     $amount,
                     $created['batch']->id,
-                    "Tự sinh từ phiếu nhập kho {$created['batch']->batch_code} ({$created['material']})"
+                    "Tự sinh từ phiếu nhập kho {$created['batch']->batch_code} ({$created['material']})",
+                    $actorIds
                 );
             }
             return $created;
@@ -153,7 +171,9 @@ class InboundController extends Controller
             'items.*.batch_code' => 'nullable|string|max:50',
         ]);
 
-        $results = DB::transaction(function () use ($validated) {
+        // Sổ #75: cặp actor tính ngoài transaction để truyền xuống phiếu chi tự sinh.
+        $actorIds = \App\Support\ApprovalActor::ids($request->user());
+        $results = DB::transaction(function () use ($validated, $actorIds) {
             $out = [];
             foreach ($validated['items'] as $item) {
                 $out[] = $this->createBatch($validated['branch_id'], $item);
@@ -169,7 +189,8 @@ class InboundController extends Controller
                     $validated['branch_id'],
                     $total,
                     $out[0]['batch']->id,
-                    'Tự sinh từ phiếu nhập kho nhiều dòng (' . count($out) . ' dòng): ' . $codes
+                    'Tự sinh từ phiếu nhập kho nhiều dòng (' . count($out) . ' dòng): ' . $codes,
+                    $actorIds
                 );
             }
             return $out;

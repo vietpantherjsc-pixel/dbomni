@@ -22,7 +22,9 @@ class AuthController extends Controller
         // 2. Xác thực tài khoản admin (users)
         if (Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
             $user = User::where('email', $request->email)->firstOrFail();
-            $user->tokens()->delete();
+            // Đợt fix rà soát VPS (S5): thu hồi theo MỤC ĐÍCH — đăng nhập Admin chỉ
+            // thu hồi token 'auth_token' (phiên Admin), không đụng token mục đích khác.
+            $user->tokens()->where('name', 'auth_token')->delete();
             $token = $user->createToken('auth_token', ['*'])->plainTextToken;
             return response()->json([
                 'message' => 'Đăng nhập thành công',
@@ -45,7 +47,9 @@ class AuthController extends Controller
             ->where('is_active', true)
             ->first();
         if ($emp && $emp->password && Hash::check($request->string('password'), $emp->password)) {
-            $emp->tokens()->delete();
+            // S5: chỉ thu hồi phiên Admin của chính NV ('employee_token') — trước đây
+            // xóa TOÀN BỘ token nên đăng nhập Admin giết cả phiên Hub/chấm công/đăng ký ca.
+            $emp->tokens()->where('name', 'employee_token')->delete();
             // Audit 2026-10-23 BM-10: token NV có hạn 7 ngày
             $token = $emp->createToken('employee_token', ['employee'], now()->addDays(7))->plainTextToken;
             return response()->json([

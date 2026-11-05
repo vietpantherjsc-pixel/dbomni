@@ -15,11 +15,25 @@ class Recipe extends Model
         'material_id',
         'quantity',
         'kind', // Gói 8c: ingredient | packaging
+        // Spec định mức đơn vị quy đổi (2026-11-05): đơn vị hiển thị đã chọn
+        // + hệ số chụp tại lúc lưu (NULL = nhập theo cơ sở).
+        'display_unit_name',
+        'display_factor',
     ];
 
     protected $casts = [
-        'quantity' => 'decimal:2',
+        // Spec định mức đơn vị quy đổi: nới lên decimal:4 (cast 2 số lẻ sẽ
+        // âm thầm làm tròn lại ngay khi đọc — ca 5 Gram = 0,0050 Kg chết).
+        'quantity' => 'decimal:4',
     ];
+
+    protected $appends = ['display_qty'];
+
+    // Số hiển thị (độ mịn đọc 6 số lẻ, spec 1.3): số cơ sở ÷ hệ số chụp.
+    public function getDisplayQtyAttribute(): float
+    {
+        return \App\Support\RecipeUnitResolver::displayQty($this->quantity, $this->display_factor);
+    }
 
     public function product(): BelongsTo
     {

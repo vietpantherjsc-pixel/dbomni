@@ -146,7 +146,10 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
                     </div>
                   )}
                 </div>
-                <span className="font-mono">{Number(it.line_total || 0).toLocaleString('vi-VN')}đ</span>
+                {/* Lát 2g (2026-11-04): đơn online lưu tiền dòng ở total_price, không có
+                    line_total → trước đây hiện 0đ. Chuỗi dự phòng: total_price →
+                    line_total → đơn giá (unit_price gồm phụ phí tùy chọn) × số lượng. */}
+                <span className="font-mono">{Number(it.total_price ?? it.line_total ?? (it.unit_price || it.price || 0) * (it.quantity || 1)).toLocaleString('vi-VN')}đ</span>
               </div>
             );
           })}
@@ -238,7 +241,14 @@ export default function KdsScreen({ onBackToClient }) {
   // tiên trong danh sách — tên CN luôn hiện rõ ở ô chọn trên đầu màn hình.
   const { branchId, setBranchId } = useBranch();
   const selectedBranch = branchId !== '0' ? Number(branchId) : (branches[0]?.id || 1);
-  const setSelectedBranch = (id) => setBranchId(String(id));
+  // Vá đổi CN (2026-11-04, RUNTIME sống 23:06): đổi CN xong hàng đợi vẫn giữ
+  // đơn CN cũ tới khi bấm Làm mới. Từ nay CN đang xem được giữ trong ref cập
+  // nhật NGAY khi chọn (không chờ chu trình render/effect), và lần chọn mới
+  // kích hoạt nạp lại tường minh — nhịp poll cũng đọc ref nên không thể kẹt
+  // ở CN cũ vì bất kỳ độ trễ effect nào.
+  const branchRef = useRef(selectedBranch);
+  useEffect(() => { branchRef.current = selectedBranch; }, [selectedBranch]);
+  const setSelectedBranch = (id) => { branchRef.current = id; setBranchId(String(id)); };
   const [detailOrd, setDetailOrd] = useState(null);
   const [reprintOrd, setReprintOrd] = useState(null);
   const [printedTem, setPrintedTem] = useState({}); // orderId -> true
@@ -264,9 +274,9 @@ export default function KdsScreen({ onBackToClient }) {
   };
 
   const [pollFails, setPollFails] = useState(0); // UX 2026-10-26 (🟠8): trước đây poll lỗi bị nuốt im lặng — bếp không biết đang xem dữ liệu cũ
-  const fetchKdsOrders = async () => {
+  const fetchKdsOrders = async (branchOverride) => {
     try {
-      const res = await axios.get(`${API_BASE}/kds/orders?branch_id=${selectedBranch}`);
+      const res = await axios.get(`${API_BASE}/kds/orders?branch_id=${branchOverride ?? branchRef.current}`);
       if (res.data.success) {
         setPollFails(0);
         const newOrders = res.data.data;
@@ -287,6 +297,14 @@ export default function KdsScreen({ onBackToClient }) {
     const timer = setInterval(fetchKdsOrders, 3000);
     return () => clearInterval(timer);
   }, [selectedBranch, branchesLoaded]);
+
+  // Lát 2g (2026-11-04): đổi chi nhánh thì đóng popup chi tiết/in lại đang mở —
+  // popup giữ bản chụp của đơn thuộc chi nhánh cũ, không tự cập nhật theo nhịp
+  // poll nên người dùng tưởng dữ liệu chi nhánh mới không nạp.
+  useEffect(() => {
+    setDetailOrd(null);
+    setReprintOrd(null);
+  }, [selectedBranch]);
 
   useEffect(() => {
     axios.get(`${API_BASE}/branches`)
@@ -365,7 +383,7 @@ export default function KdsScreen({ onBackToClient }) {
             <Store className="w-3.5 h-3.5 text-emerald-500" />
             <select
               value={selectedBranch}
-              onChange={(e) => setSelectedBranch(Number(e.target.value))}
+              onChange={(e) => { const id = Number(e.target.value); setSelectedBranch(id); fetchKdsOrders(id); }}
               className="bg-transparent outline-none cursor-pointer text-slate-200 font-semibold [&>option]:text-slate-900"
             >
               {branches.length > 0 ? branches.map((b) => (
@@ -391,7 +409,7 @@ export default function KdsScreen({ onBackToClient }) {
           ) : (
             <span className="px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-400 text-xs">● Trực tuyến</span>
           )}
-          <button onClick={fetchKdsOrders} className="p-2 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 text-xs">
+          <button onClick={() => fetchKdsOrders()} className="p-2 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 text-xs">
             <RefreshCw className="w-4 h-4" />
             <span className="hidden sm:inline">Làm mới</span>
           </button>
@@ -510,7 +528,8 @@ export default function KdsScreen({ onBackToClient }) {
         </section>
       </main>
 
-      <OrderDetailPop ord={detailOrd} onClose={() => setDetailOrd(null)} typeLabel={detailOrd ? orderTypeLabel(detailOrd) : ''} />
+      {/* Lát 2g: popup đọc bản đơn MỚI NHẤT theo id từ danh sách đang poll (trước đây là bản chụp lúc bấm mở — đứng yên trong khi bảng ngoài cập nhật 3s/lần) */}
+      <OrderDetailPop ord={detailOrd ? (orders.find((o) => o.id === detailOrd.id) || detailOrd) : null} onClose={() => setDetailOrd(null)} typeLabel={detailOrd ? orderTypeLabel(orders.find((o) => o.id === detailOrd.id) || detailOrd) : ''} />
       <ReprintPop ord={reprintOrd} onClose={() => setReprintOrd(null)} />
     </div>
   );

@@ -163,10 +163,52 @@ class ReportController extends Controller
         // Gói 55 p11af: tái dùng $foodCostValue đã tính ở trên (tránh tính giá vốn 2 lần)
         $costs = $this->costs($cur, $foodCostValue);
         $refCosts = $this->costs($ref);
+        // Lát 1d (2026-11-04): THỐNG NHẤT cơ số lợi nhuận với trang P&L chi
+        // tiết (pnl()) — trước đây khối này THIẾU "thu khác" ở vế thu và thiếu
+        // chiết khấu kênh + phí marketing sàn + chi phí phân bổ ở vế chi, nên
+        // hai bề mặt lệch đúng bằng các khoản đó (sống: lệch 105.000đ = phiếu
+        // thu tay của kỳ). Nay dùng đúng cùng một chồng thu/chi như pnl().
+        $otherIncomeOf = function (Carbon $f, Carbon $t) use ($branchId): float {
+            return (float) Transaction::query()
+                ->where('type', 'income')
+                ->where('status', 'paid')
+                ->whereNull('rejected_at')
+                ->whereBetween('paid_at', [$f->toDateTimeString(), $t->toDateTimeString()])
+                ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+                ->sum('amount');
+        };
+        $otherIncome = $otherIncomeOf($from, $to);
+        $refOtherIncome = $otherIncomeOf($cFrom, $cTo);
+        $commCur = array_sum(array_column($this->commissions($cur), 'cost'));
+        $commRef = array_sum(array_column($this->commissions($ref), 'cost'));
+        if ($commCur > 0) {
+            $costs[] = ['name' => 'Chiết khấu kênh', 'value' => $commCur, 'color' => '#9B59B6'];
+        }
+        if ($commRef > 0) {
+            $refCosts[] = ['name' => 'Chiết khấu kênh', 'value' => $commRef, 'color' => '#9B59B6'];
+        }
+        if ($mkt['total'] > 0) {
+            $costs[] = ['name' => 'Phí marketing kênh sàn', 'value' => $mkt['total'], 'color' => '#E5646E'];
+        }
+        $refMkt = $this->marketingAdjustments($cFrom, $cTo, $branchId);
+        if ($refMkt['total'] > 0) {
+            $refCosts[] = ['name' => 'Phí marketing kênh sàn', 'value' => $refMkt['total'], 'color' => '#E5646E'];
+        }
+        $allocCur = $this->allocatedExpenses($branchId, $from, $to);
+        if ($allocCur['total'] > 0) {
+            $costs[] = ['name' => 'Chi phí phân bổ', 'value' => $allocCur['total'], 'color' => '#8E44AD',
+                'note' => 'Tiền thuê trả trước / CAPEX chia đều theo tháng'];
+        }
+        $allocRef = $this->allocatedExpenses($branchId, $cFrom, $cTo);
+        if ($allocRef['total'] > 0) {
+            $refCosts[] = ['name' => 'Chi phí phân bổ', 'value' => $allocRef['total'], 'color' => '#8E44AD'];
+        }
         $costTotal = array_sum(array_column($costs, 'value'));
         $refCostTotal = array_sum(array_column($refCosts, 'value'));
-        $profit = $revDisplayed - $costTotal;
-        $refProfit = $refDisplayed - $refCostTotal;
+        $profitRevenue = $revDisplayed + $otherIncome;
+        $refProfitRevenue = $refDisplayed + $refOtherIncome;
+        $profit = $profitRevenue - $costTotal;
+        $refProfit = $refProfitRevenue - $refCostTotal;
         // Gói 57: Prime Cost = Giá vốn NL + Lương; cảnh báo đỏ khi > 55% Net Revenue
         $laborCost = 0.0;
         foreach ($costs as $c) {
@@ -175,19 +217,20 @@ class ReportController extends Controller
         $primeCost = $foodCostValue + $laborCost;
         $primeCostPct = $netRevenue > 0 ? round($primeCost / $netRevenue * 100, 1) : 0;
         $profitData = [
-            'revenue' => $this->r2($revDisplayed),
+            'revenue' => $this->r2($profitRevenue), // Lát 1d: đã gồm thu khác — khớp pnl()
+            'other_income' => $this->r2($otherIncome),
             'costs' => array_map(fn($c) => [
                 'name' => $c['name'], 'value' => $this->r2($c['value']), 'color' => $c['color'],
             ], $costs),
             'cost_total' => $this->r2($costTotal),
             'profit' => $this->r2($profit),
-            'margin' => $revDisplayed > 0 ? $this->r2($profit / $revDisplayed * 100) : 0,
+            'margin' => $profitRevenue > 0 ? $this->r2($profit / $profitRevenue * 100) : 0,
             'prime_cost' => $this->r2($primeCost),
             'prime_cost_pct' => $primeCostPct,
             'prime_cost_alert' => $primeCostPct > 55,
             'delta_profit' => $this->pct($profit, $refProfit),
             'delta_cost' => $this->pct($costTotal, $refCostTotal),
-            'delta_revenue' => $this->pct($revDisplayed, $refDisplayed),
+            'delta_revenue' => $this->pct($profitRevenue, $refProfitRevenue),
             'groups' => $this->profitGroups($period, $branchId, $from, $to, $vatRate, $tz, $disp),
         ];
 
@@ -298,13 +341,23 @@ class ReportController extends Controller
     }
 
     /**
+     * Biểu thức SQL doanh thu ghi nhận (TIỀN HÀNG) — vá phí ship THU HỘ
+     * 2026-11-04, cùng quy tắc Order::revenueAmount(): đơn Mini App (zalo)
+     * trừ shipping_fee (tiền thu hộ hãng giao), kênh khác giữ total_amount.
+     */
+    private function revSql(string $prefix = ''): string
+    {
+        return "({$prefix}total_amount - CASE WHEN {$prefix}online_channel = 'zalo' THEN {$prefix}shipping_fee ELSE 0 END)";
+    }
+
+    /**
      * Gom toàn bộ dữ liệu thô của 1 kỳ: đơn, dòng món, VAT, kênh, tồn theo giờ.
      * Trả về mảng để các tab dùng chung, tránh truy vấn lặp.
      */
     private function buildPeriod(int $branchId, Carbon $from, Carbon $to, float $vatRate, string $tz): array
     {
         $orderIds = $this->baseOrders($branchId, $from, $to)->pluck('id');
-        $gross = (float) $this->baseOrders($branchId, $from, $to)->sum('total_amount');
+        $gross = (float) $this->baseOrders($branchId, $from, $to)->sum(DB::raw($this->revSql())); // Vá phí ship thu hộ 2026-11-04
         $orderCount = $orderIds->count();
 
         $items = collect();
@@ -353,7 +406,7 @@ class ReportController extends Controller
         // Kênh bán: gom theo đơn — Gói 56 (2026-10-14): kênh ĐỘNG từ price_lists
         // (tất cả code active) + 'pos' + 'zalo', không gộp cứng 3 nhóm như trước.
         $orders = $this->baseOrders($branchId, $from, $to)
-            ->select('id', 'online_channel', 'payment_method', 'total_amount', 'created_at')
+            ->select('id', 'online_channel', 'payment_method', 'total_amount', 'shipping_fee', 'created_at')
             ->get();
         $channelCodes = ['pos', 'zalo'];
         if (Schema::hasTable('price_lists')) {
@@ -366,15 +419,28 @@ class ReportController extends Controller
             }
         }
         $channelCodes = array_values(array_unique(array_filter($channelCodes)));
+        // F1 (phân xử chiến dịch 4 vai, 2026-11-05): 'online' là MÃ BẢNG GIÁ của
+        // kênh Zalo Mini App, không phải một kênh riêng — đơn thật luôn mang
+        // online_channel 'zalo'. Trước đây vũ trụ kênh nạp cả hai khóa nên báo
+        // cáo lãi lỗ theo kênh hiện 2 dòng cùng tên "Zalo Mini App" (dòng
+        // 'online' 0đ vĩnh viễn). Chuẩn hóa alias -> khóa chuẩn 'zalo' ngay tại
+        // đây (cùng bảng alias commissionFor đã dùng: zalo -> [online, zalo]):
+        // một kênh một dòng, dữ kiện lịch sử giữ nguyên (không sửa DB), tổng
+        // không đổi. Cấu hình tích điểm theo kênh KHÔNG qua đường này
+        // (LoyaltyService đọc online_channel thô) nên không bị ảnh hưởng.
+        $canonChannel = ['online' => 'zalo'];
+        $channelCodes = array_values(array_unique(array_map(
+            fn($c) => $canonChannel[$c] ?? $c, $channelCodes)));
         $channels = array_fill_keys($channelCodes, 0.0);
         $orderChannels = [];
         foreach ($orders as $o) {
             $key = $this->channelKey($o);
+            $key = $canonChannel[$key] ?? $key;
             if (!array_key_exists($key, $channels)) {
                 // Kênh phát sinh từ đơn nhưng price_lists chưa có — vẫn ghi nhận
                 $channels[$key] = 0.0;
             }
-            $channels[$key] += (float) $o->total_amount;
+            $channels[$key] += $o->revenueAmount(); // Vá phí ship thu hộ 2026-11-04: kênh zalo chỉ tính tiền hàng (chiết khấu sàn tính trên số này — xem map gói)
             $orderChannels[$o->id] = $key;
         }
 
@@ -529,7 +595,10 @@ class ReportController extends Controller
      */
     private function channelLabelMap(): array
     {
-        $map = ['pos' => 'Tại quầy', 'zalo' => 'Zalo Mini App'];
+        // F1b-2 (2026-11-05): 'nha_hang' là cùng kênh tại quầy với 'pos' —
+        // ghim nhãn KÊNH ở đây để tên BẢNG GIÁ ("Giá tại nhà hàng") không
+        // lọt làm tên kênh như trước; khóa + số liệu của dòng giữ nguyên.
+        $map = ['pos' => 'Tại quầy', 'zalo' => 'Zalo Mini App', 'nha_hang' => 'Tại quầy'];
         if (Schema::hasTable('price_lists')) {
             foreach (DB::table('price_lists')->select('code', 'name')->get() as $pl) {
                 $code = strtolower(trim((string) $pl->code));
@@ -563,7 +632,7 @@ class ReportController extends Controller
     private function hourly(int $branchId, Carbon $from, Carbon $to, float $taxRatio): array
     {
         $rows = $this->baseOrders($branchId, $from, $to)
-            ->select(DB::raw('HOUR(created_at) AS h'), DB::raw('SUM(total_amount) AS v'))
+            ->select(DB::raw('HOUR(created_at) AS h'), DB::raw('SUM(' . $this->revSql() . ') AS v')) // Vá phí ship thu hộ 2026-11-04
             ->groupBy('h')
             ->pluck('v', 'h');
         $map = [];
@@ -583,7 +652,7 @@ class ReportController extends Controller
         $defs = $this->bucketDefs($period, $from, $to, $tz);
         $out = [];
         foreach ($defs as $d) {
-            $gross = (float) $this->baseOrders($branchId, $d['from'], $d['to'])->sum('total_amount');
+            $gross = (float) $this->baseOrders($branchId, $d['from'], $d['to'])->sum(DB::raw($this->revSql())); // Vá phí ship thu hộ 2026-11-04
             $out[] = ['label' => $d['label'], 'value' => $this->r2($gross * $taxRatio)];
         }
         return $out;
@@ -854,6 +923,23 @@ class ReportController extends Controller
         foreach ($defs as $d) {
             $p = $this->buildPeriod($branchId, $d['from'], $d['to'], $vatRate, $tz);
             $rev = $disp($p['gross'], $p['vat']);
+            if ($withCommission) {
+                // F2 (phân xử chiến dịch 4 vai, 2026-11-05): số đầu trang PNL đã
+                // gồm "Thu khác" (phiếu thu tay — chủ đích Gói 55 p11ac) nhưng
+                // chuỗi biểu đồ thì không, cùng màn lệch nhau đúng số đó
+                // (mẫu vật 133.000đ). Cộng Thu khác của từng cột vào 'thu' với
+                // ĐÚNG điều kiện của số đầu trang (paid + chưa bị từ chối +
+                // paid_at trong cửa sổ cột + lọc CN) để tổng các cột khớp số
+                // đầu trang. Đường overview (withCommission=false) giữ nguyên:
+                // đầu trang bên đó không gồm Thu khác.
+                $rev += (float) Transaction::query()
+                    ->where('type', 'income')
+                    ->where('status', 'paid')
+                    ->whereNull('rejected_at')
+                    ->whereBetween('paid_at', [$d['from']->toDateTimeString(), $d['to']->toDateTimeString()])
+                    ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+                    ->sum('amount');
+            }
             $costs = $this->costs($p);
             $cost = array_sum(array_column($costs, 'value'));
             if ($withCommission) {
@@ -1085,7 +1171,7 @@ class ReportController extends Controller
     private function paymentAgg(int $branchId, Carbon $from, Carbon $to): array
     {
         $rows = $this->baseOrders($branchId, $from, $to)
-            ->select('payment_method', DB::raw('SUM(total_amount) AS v'), DB::raw('COUNT(*) AS c'))
+            ->select('payment_method', DB::raw('SUM(' . $this->revSql() . ') AS v'), DB::raw('COUNT(*) AS c')) // Vá phí ship thu hộ 2026-11-04
             ->groupBy('payment_method')
             ->orderByDesc('v')
             ->get();
@@ -1142,10 +1228,10 @@ class ReportController extends Controller
         // lấy thẳng tên người mở ca từ shifts.
         $rows = $this->baseOrders($branchId, $from, $to)
             ->leftJoin('shifts', 'shifts.id', '=', 'orders.shift_id')
-            ->selectRaw('COALESCE(shifts.id, 0) as sid, shifts.opened_at as opened, COALESCE(shifts.opened_by_name, shifts.cashier_name) as cashier, COUNT(*) as c, SUM(orders.total_amount) as v')
+            ->selectRaw('COALESCE(shifts.id, 0) as sid, shifts.opened_at as opened, COALESCE(shifts.opened_by_name, shifts.cashier_name) as cashier, COUNT(*) as c, SUM(' . $this->revSql('orders.') . ') as v') // Vá phí ship thu hộ 2026-11-04
             ->groupBy('sid', 'opened', 'cashier')->orderByDesc('v')->get();
         $total = (float) $rows->sum('v');
-        return $rows->map(function ($r) {
+        return $rows->map(function ($r) use ($taxRatio, $total) { // FIX 2026-11-04: closure dùng 2 biến ngoài ($taxRatio + $total cho 'share') — v1 chỉ bắt $taxRatio nên lỗi $total nổ tiếp khi có hàng theo ca; bản này bắt đủ cả hai
             $label = $r->sid
                 ? ('Ca #' . $r->sid . ($r->opened ? ' — ' . Carbon::parse($r->opened)->format('d/m H:i') : '') . ($r->cashier ? ' (' . $r->cashier . ')' : ''))
                 : 'Không rõ ca';
@@ -1165,7 +1251,7 @@ class ReportController extends Controller
     {
         $rows = $this->baseOrders($branchId, $from, $to)
             ->leftJoin('users', 'users.id', '=', 'orders.user_id')
-            ->selectRaw('COALESCE(users.id, 0) as uid, COALESCE(users.name, ?) as uname, COUNT(*) as c, SUM(orders.total_amount) as v', ['Không rõ NV'])
+            ->selectRaw('COALESCE(users.id, 0) as uid, COALESCE(users.name, ?) as uname, COUNT(*) as c, SUM(' . $this->revSql('orders.') . ') as v', ['Không rõ NV']) // Vá phí ship thu hộ 2026-11-04
             ->groupBy('uid', 'uname')->orderByDesc('v')->get();
         $total = (float) $rows->sum('v');
         return $rows->map(fn ($r) => [
@@ -1551,6 +1637,25 @@ class ReportController extends Controller
             ->selectRaw('employee_id, branch_id, SUM(hours) as hours, COUNT(DISTINCT date) as workdays')
             ->groupBy('employee_id', 'branch_id')->get();
 
+        // Lát 2j (2026-11-04): giờ công chỉ chảy vào bảng lương qua bước "Đổ giờ
+        // công" (thiết kế 2 bước) — tháng chưa đổ thì SalaryDay rỗng và tab hiện
+        // 0h/0 NV dù đã có chấm công. Khi SalaryDay trống HẲN, tạm tính từ chấm
+        // công (cùng nguồn với tab Vận hành) và ghi rõ nguồn để giao diện chú
+        // thích; SalaryDay có dữ liệu thì vẫn là nguồn chuẩn, không đổi.
+        $hoursSource = 'salary_days';
+        if ($days->isEmpty()) {
+            $att = DB::table('attendances')
+                ->whereBetween('date', [$start->toDateString(), $end->toDateString()])
+                ->whereNotNull('check_in')->whereNotNull('check_out')
+                ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+                ->selectRaw('employee_id, branch_id, SUM(TIMESTAMPDIFF(MINUTE, check_in, check_out)) / 60 as hours, COUNT(DISTINCT date) as workdays')
+                ->groupBy('employee_id', 'branch_id')->get();
+            if ($att->isNotEmpty()) {
+                $days = $att;
+                $hoursSource = 'attendance';
+            }
+        }
+
         $empIds = $days->pluck('employee_id')->unique()->all();
         $emps = \App\Models\Employee::with('branch:id,name')->whereIn('id', $empIds)->get()->keyBy('id');
 
@@ -1590,6 +1695,7 @@ class ReportController extends Controller
             'warnings' => array_values(array_filter($rows, fn ($r) => $r['over_hours'])),
             'total_hours' => round(array_sum(array_column($rows, 'hours')), 1),
             'total_net' => array_sum(array_filter(array_column($rows, 'net'), fn ($v) => $v !== null)),
+            'hours_source' => $hoursSource, // Lát 2j: 'salary_days' | 'attendance' (tạm tính)
         ]]);
     }
 
@@ -1614,6 +1720,10 @@ class ReportController extends Controller
         $txs = Transaction::with('category:id,name')
             ->where('status', 'paid')
             ->whereNull('rejected_at') // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu bị từ chối không tính vào báo cáo
+            // Lát 2j (2026-11-04): cùng cơ số TIỀN HIỆU LỰC với trang Thu-Chi
+            // (lát 1c) — trước đây tính cả phiếu đang chờ duyệt.
+            ->where(fn($w) => $w->where(fn($a) => $a->whereNotNull('approved_by')->orWhereNotNull('approved_by_employee_id'))
+                ->orWhereIn('related_type', ['inbound_receipt', 'batch']))
             ->whereBetween('occurred_at', [$from->toDateString(), $to->toDateString()])
             ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
             ->get(['id', 'type', 'category_id', 'amount', 'occurred_at']);
@@ -1732,18 +1842,22 @@ class ReportController extends Controller
         ])->values()->all();
 
         // Gói 57: gom đơn hủy theo lý do
+        // Lát 1d (2026-11-04): cộng cả TIỀN theo lý do — trước đây chỉ đếm số
+        // đơn, giao diện đọc trường total_amount không có nên bảng hiện 0₫
+        // trong khi chi tiết cộng đúng.
         $byReason = [];
         if (Schema::hasColumn('orders', 'cancel_reason')) {
             foreach ($orders as $o) {
                 $reason = trim((string) ($o->cancel_reason ?? ''));
                 if ($reason === '') $reason = '(không ghi lý do)';
-                if (!isset($byReason[$reason])) $byReason[$reason] = 0;
-                $byReason[$reason]++;
+                if (!isset($byReason[$reason])) $byReason[$reason] = ['count' => 0, 'total_amount' => 0.0];
+                $byReason[$reason]['count']++;
+                $byReason[$reason]['total_amount'] += (float) $o->total_amount;
             }
         }
         $byReasonOut = [];
-        foreach ($byReason as $reason => $count) {
-            $byReasonOut[] = ['reason' => $reason, 'count' => $count];
+        foreach ($byReason as $reason => $agg) {
+            $byReasonOut[] = ['reason' => $reason, 'count' => $agg['count'], 'total_amount' => $this->r2($agg['total_amount'])];
         }
         usort($byReasonOut, fn($a, $b) => $b['count'] <=> $a['count']);
 
@@ -2113,6 +2227,15 @@ class ReportController extends Controller
                 'staff_hours' => $staffHours,
                 'hourly' => $hourly,
                 'alerts' => $alerts,
+                // Lát 2j (2026-11-04): khối KPI đầu trang phía giao diện đọc qua
+                // 'kpis' — trước đây backend chỉ trả khóa phẳng nên 4 ô đầu trang
+                // luôn "—" trong khi cảnh báo bên dưới (đọc khóa phẳng) có số.
+                'kpis' => [
+                    'avg_prep_minutes' => $avgPrepMinutes,
+                    'cancel_rate_pct' => $cancelRate,
+                    'orders_per_hour_per_staff' => $ordersPerHourPerStaff,
+                    'understaffed_hours' => count(array_filter($hourly, fn($row) => $row['understaffed'])),
+                ],
             ],
         ]);
     }
@@ -2140,8 +2263,29 @@ class ReportController extends Controller
      */
     public function menuEngineering(Request $request): JsonResponse
     {
-        $from = $request->query('from', now()->startOfMonth()->toDateString());
-        $to = $request->query('to', now()->toDateString());
+        // Lát 1d (2026-11-04): trang Báo cáo gửi period+date như mọi tab khác —
+        // trước đây hàm chỉ đọc from/to nên kỳ chọn trên giao diện bị bỏ qua.
+        if ($request->filled('from') && $request->filled('to')) {
+            $from = $request->query('from');
+            $to = $request->query('to');
+        } elseif ($request->filled('period')) {
+            $tzMe = 'Asia/Ho_Chi_Minh';
+            $period = $request->query('period', 'month');
+            if (!in_array($period, ['day', 'week', 'month', 'year'], true)) $period = 'month';
+            try {
+                $anchor = $request->query('date')
+                    ? Carbon::parse($request->query('date'), $tzMe)->startOfDay()
+                    : Carbon::now($tzMe)->startOfDay();
+            } catch (\Exception $e) {
+                $anchor = Carbon::now($tzMe)->startOfDay();
+            }
+            [$wFrom, $wTo] = $this->window($period, $anchor);
+            $from = $wFrom->toDateString();
+            $to = $wTo->toDateString();
+        } else {
+            $from = now()->startOfMonth()->toDateString();
+            $to = now()->toDateString();
+        }
         if ($deny = $this->guardReportBranch($request)) return $deny;
         $branchId = $request->query('branch_id');
 
@@ -2201,8 +2345,30 @@ class ReportController extends Controller
 
         usort($items, fn($a, $b) => $b['gross_profit'] <=> $a['gross_profit']);
 
+        // Lát 1d (2026-11-04): bổ sung đúng hợp đồng giao diện Gói 58 đang đọc
+        // (matrix 4 ô + trường theo ly) — trước đây backend trả tên trường
+        // khác hẳn (product_name/qty_sold/quadrant, không có matrix) nên tab
+        // hiện tên trống và toàn 0 dù có dữ liệu bán. Giữ nguyên các trường cũ.
+        $matrix = ['stars' => [], 'puzzles' => [], 'plowhorses' => [], 'dogs' => []];
+        foreach ($items as &$it) {
+            $qty = $it['qty_sold'] > 0 ? $it['qty_sold'] : 0;
+            $profitPerUnit = $qty > 0 ? $it['gross_profit'] / $qty : 0;
+            $it['name'] = $it['product_name'];
+            $it['qty'] = $qty;
+            $it['price'] = $qty > 0 ? $this->r2($it['revenue'] / $qty) : 0;
+            $it['cogs_per_unit'] = $qty > 0 ? $this->r2($it['cogs'] / $qty) : 0;
+            $it['cost_pct'] = $it['revenue'] > 0 ? $this->r2($it['cogs'] / $it['revenue'] * 100) : 0;
+            $it['profit_per_unit'] = $this->r2($profitPerUnit);
+            $it['total_profit'] = $it['gross_profit'];
+            $it['category'] = $it['quadrant'];
+            $bucket = ['star' => 'stars', 'puzzle' => 'puzzles', 'plowhorse' => 'plowhorses', 'dog' => 'dogs'][$it['quadrant']] ?? 'dogs';
+            $matrix[$bucket][] = ['name' => $it['product_name'], 'qty' => $qty, 'profit_per_unit' => $this->r2($profitPerUnit)];
+        }
+        unset($it);
+
         return response()->json(['success' => true, 'data' => [
             'items' => $items,
+            'matrix' => $matrix,
             'summary' => $summary,
             'avg_margin' => $avgMargin,
             'meta' => ['from' => $from, 'to' => $to, 'branch_id' => $branchId],

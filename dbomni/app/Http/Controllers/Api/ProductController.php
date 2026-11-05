@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Material;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\ProductCategoryPrice;
 use App\Models\Recipe;
+use App\Support\RecipeUnitResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -70,13 +72,23 @@ class ProductController extends Controller
             'category_prices.*.price' => 'required|numeric|min:0',
             'recipes' => 'nullable|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
-            'recipes.*.quantity' => 'required|numeric|min:0',
+            'recipes.*.quantity' => 'nullable|numeric|min:0', // Spec định mức đơn vị quy đổi: client mới chỉ gửi display_* (không gửi quantity)
+            'recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'recipes.*.kind' => 'nullable|in:ingredient,packaging', // Gói 8c
             // Gói 8c: định mức theo món cho nhóm per_product
             'option_recipes' => 'nullable|array',
             'option_recipes.*.product_option_id' => 'required|exists:product_options,id',
             'option_recipes.*.material_id' => 'required|exists:materials,id',
-            'option_recipes.*.quantity' => 'required|numeric|min:0',
+            'option_recipes.*.quantity' => 'nullable|numeric|min:0', // Spec định mức đơn vị quy đổi: xem ghi chú ở recipes
+            'option_recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'option_recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'option_recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'option_recipes.*.kind' => 'nullable|in:ingredient,packaging',
         ]);
 
@@ -136,13 +148,23 @@ class ProductController extends Controller
             'category_prices.*.price' => 'required|numeric|min:0',
             'recipes' => 'nullable|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
-            'recipes.*.quantity' => 'required|numeric|min:0',
+            'recipes.*.quantity' => 'nullable|numeric|min:0', // Spec định mức đơn vị quy đổi: client mới chỉ gửi display_* (không gửi quantity)
+            'recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'recipes.*.kind' => 'nullable|in:ingredient,packaging', // Gói 8c
             // Gói 8c: định mức theo món cho nhóm per_product
             'option_recipes' => 'nullable|array',
             'option_recipes.*.product_option_id' => 'required|exists:product_options,id',
             'option_recipes.*.material_id' => 'required|exists:materials,id',
-            'option_recipes.*.quantity' => 'required|numeric|min:0',
+            'option_recipes.*.quantity' => 'nullable|numeric|min:0', // Spec định mức đơn vị quy đổi: xem ghi chú ở recipes
+            'option_recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'option_recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'option_recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'option_recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'option_recipes.*.kind' => 'nullable|in:ingredient,packaging',
         ]);
 
@@ -413,19 +435,39 @@ class ProductController extends Controller
             ->delete();
     }
 
+    // Spec định mức đơn vị quy đổi (2.1): dòng có display_qty thì SERVER quy
+    // đổi duy nhất (kèm giao thức chống trôi orig_*); dòng kiểu cũ (chỉ
+    // quantity) giữ hành vi hiện tại, 2 cột hiển thị NULL.
+    private function recipeLineValues(array $r): array
+    {
+        if (RecipeUnitResolver::usesDisplay($r)) {
+            $material = Material::with('units')->findOrFail($r['material_id']);
+            $resolved = RecipeUnitResolver::resolve($r, $material);
+            return [
+                'quantity' => $resolved['quantity'],
+                'display_unit_name' => $resolved['display_unit_name'],
+                'display_factor' => $resolved['display_factor'],
+            ];
+        }
+        return [
+            'quantity' => $r['quantity'],
+            'display_unit_name' => null,
+            'display_factor' => null,
+        ];
+    }
+
     private function syncRecipes(Product $product, array $recipes): void
     {
         // Định mức CƠ BẢN của món (product_option_id = null), gồm nguyên liệu + bao bì
         Recipe::where('product_id', $product->id)->whereNull('product_option_id')->delete();
         foreach ($recipes as $r) {
-            if ((float) $r['quantity'] <= 0) continue;
-            Recipe::create([
+            if (!RecipeUnitResolver::usesDisplay($r) && (float) ($r['quantity'] ?? 0) <= 0) continue;
+            Recipe::create(array_merge([
                 'product_id' => $product->id,
                 'product_option_id' => null,
                 'material_id' => $r['material_id'],
-                'quantity' => $r['quantity'],
                 'kind' => $r['kind'] ?? 'ingredient',
-            ]);
+            ], $this->recipeLineValues($r)));
         }
     }
 
@@ -434,14 +476,13 @@ class ProductController extends Controller
     {
         Recipe::where('product_id', $product->id)->whereNotNull('product_option_id')->delete();
         foreach ($recipes as $r) {
-            if ((float) $r['quantity'] <= 0) continue;
-            Recipe::create([
+            if (!RecipeUnitResolver::usesDisplay($r) && (float) ($r['quantity'] ?? 0) <= 0) continue;
+            Recipe::create(array_merge([
                 'product_id' => $product->id,
                 'product_option_id' => $r['product_option_id'],
                 'material_id' => $r['material_id'],
-                'quantity' => $r['quantity'],
                 'kind' => $r['kind'] ?? 'ingredient',
-            ]);
+            ], $this->recipeLineValues($r)));
         }
     }
 

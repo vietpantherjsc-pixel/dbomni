@@ -42,13 +42,14 @@ class AdminDashboardController extends Controller
         }
         $todayOrders = $todayOrdersQuery->get();
 
-        $todayRevenue = $todayOrders->sum('total_amount');
+        // Vá phí ship thu hộ 2026-11-04: doanh thu = tiền hàng (revenueAmount)
+        $todayRevenue = $todayOrders->sum(fn ($o) => $o->revenueAmount());
         $totalOrdersCount = $todayOrders->count();
         $averageOrderValue = $totalOrdersCount > 0 ? round($todayRevenue / $totalOrdersCount) : 0;
 
         // Doanh thu theo phương thức thanh toán
-        $cashTotal = $todayOrders->where('payment_method', 'cash')->sum('total_amount');
-        $transferTotal = $todayOrders->where('payment_method', 'transfer')->sum('total_amount');
+        $cashTotal = $todayOrders->where('payment_method', 'cash')->sum(fn ($o) => $o->revenueAmount());
+        $transferTotal = $todayOrders->where('payment_method', 'transfer')->sum(fn ($o) => $o->revenueAmount());
 
         // 2. Top 5 sản phẩm bán chạy nhất
         $topProducts = OrderItem::select('product_id', DB::raw('SUM(quantity) as total_quantity'))
@@ -130,7 +131,7 @@ class AdminDashboardController extends Controller
         $validOrders = (clone $baseQuery)->where('status', '!=', 'cancelled')->where('payment_status', 'paid')->get(); // Gói 55 p11ac: khớp ReportController
         $cancelledTotal = (clone $baseQuery)->where('status', 'cancelled')->sum('total_amount');
 
-        $grossSales = (float) $validOrders->sum('total_amount');
+        $grossSales = (float) $validOrders->sum(fn ($o) => $o->revenueAmount()); // Vá phí ship thu hộ 2026-11-04: đúng nhãn "Tiền hàng" của field này
         $ordersCount = $validOrders->count();
         $totalItems = $ordersCount > 0
             ? (float) OrderItem::whereIn('order_id', $validOrders->pluck('id'))->sum('quantity')
@@ -153,7 +154,7 @@ class AdminDashboardController extends Controller
             for ($h = 0; $h < 24; $h++) {
                 $hourRevenue = $validOrders
                     ->filter(fn($o) => (int) $o->created_at->format('H') === $h)
-                    ->sum('total_amount');
+                    ->sum(fn ($o) => $o->revenueAmount());
                 $chartData[] = [
                     'label' => sprintf('%02d:00', $h),
                     'revenue' => (float) $hourRevenue,
@@ -165,7 +166,7 @@ class AdminDashboardController extends Controller
                 $date = now()->subDays($d)->startOfDay();
                 $dayRevenue = $validOrders
                     ->filter(fn($o) => $o->created_at >= $date && $o->created_at < $date->copy()->addDay())
-                    ->sum('total_amount');
+                    ->sum(fn ($o) => $o->revenueAmount());
                 $chartData[] = [
                     'label' => $date->format('d/m'),
                     'revenue' => (float) $dayRevenue,

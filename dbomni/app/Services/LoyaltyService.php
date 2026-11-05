@@ -75,6 +75,13 @@ class LoyaltyService
      */
     public function earnForOrder(Customer $customer, Order $order, float $paidAmount): int
     {
+        // Phí ship THU HỘ (Phương án B, chốt 2026-10-30; vá 2026-11-04): đơn
+        // Mini App (zalo) — cơ số tích điểm + total_spent chỉ gồm TIỀN HÀNG,
+        // trừ shipping_fee (phí đã lưu là phí khách thực trả sau KM phí ship).
+        // Cùng quy tắc với Order::revenueAmount(); kênh khác giữ nguyên.
+        if ($order->online_channel === 'zalo') {
+            $paidAmount = max(0, $paidAmount - (float) $order->shipping_fee);
+        }
         $customer = Customer::lockForUpdate()->findOrFail($customer->id);
 
         $tier = $customer->tier;
@@ -93,8 +100,10 @@ class LoyaltyService
 
         if ($earned > 0) {
             $lot = $this->createLot($customer, $earned, 'earn', $order->id);
-            $chNote = ($ch['is_platform'] && $ch['factor'] != 1.0)
-                ? ' · kênh sàn ×' . rtrim(rtrim(number_format($ch['factor'], 4, '.', ''), '0'), '.')
+            // Hệ số theo kênh 2026-11-04 (spec mục 3.5): ghi chú cho MỌI kênh
+            // có factor ≠ 1 (kể cả kênh riêng được Admin đặt ≠ 1), không chỉ sàn.
+            $chNote = ($ch['channel'] !== '' && $ch['factor'] != 1.0)
+                ? ' · kênh ' . $ch['channel'] . ' ×' . rtrim(rtrim(number_format($ch['factor'], 4, '.', ''), '0'), '.')
                 : '';
             PointTransaction::create([
                 'customer_id' => $customer->id,
@@ -111,30 +120,6 @@ class LoyaltyService
         $this->evaluateUpgrade($customer);
 
         return $earned;
-    }
-
-    /**
-     * Gói 9: thưởng điểm giới thiệu cho người share link (affiliate).
-     * Loyalty 2.0: tạo lô riêng source_type = referral, HSD như điểm thường.
-     */
-    public function awardReferral(Customer $referrer, Order $order, int $points): void
-    {
-        if ($points <= 0) {
-            return;
-        }
-        $referrer = Customer::lockForUpdate()->findOrFail($referrer->id);
-        $referrer->points += $points;
-        $referrer->save();
-
-        $lot = $this->createLot($referrer, $points, 'referral', $order->id);
-        PointTransaction::create([
-            'customer_id' => $referrer->id,
-            'order_id' => $order->id,
-            'point_lot_id' => $lot->id,
-            'change' => $points,
-            'type' => 'earn',
-            'note' => "Thưởng giới thiệu đơn {$order->code}",
-        ]);
     }
 
     /**
@@ -178,7 +163,10 @@ class LoyaltyService
         // Trừ lại tổng chi tiêu đã cộng lúc tích điểm. Loyalty 2.0: hủy đơn KHÔNG
         // hạ hạng tức thì nữa — chi tiêu cửa sổ giảm sẽ được cron đêm xét theo
         // đúng quy trình báo trước (spec mục 3.3); recalculateTier cũ đã bỏ.
-        $customer->total_spent = max(0, (float) $customer->total_spent - (float) $order->total_amount);
+        // Vá phí ship thu hộ 2026-11-04: trừ lại đúng cơ số ĐÃ CỘNG ở
+        // earnForOrder (đơn zalo chỉ cộng tiền hàng) — dùng revenueAmount()
+        // làm gương; kênh khác revenueAmount = total_amount như cũ.
+        $customer->total_spent = max(0, (float) $customer->total_spent - $order->revenueAmount());
 
         if ($order->points_earned > 0) {
             // Gói SEC: cho phép số dư âm (đúng bản chất kế toán) — chống gian lận tích → tiêu → hủy
@@ -396,6 +384,8 @@ class LoyaltyService
     {
         $at = $at ?? now();
         $days = $this->config()['window_days'];
+        // Vá phí ship thu hộ 2026-11-04: chi tiêu cửa sổ tính theo tiền hàng
+        // (revenueAmount) — khớp cơ số earnForOrder/total_spent.
         return (float) Order::where('customer_id', $customer->id)
             ->where('payment_status', 'paid')
             ->where('status', '!=', 'cancelled')
@@ -407,7 +397,8 @@ class LoyaltyService
                     $q2->whereNull('paid_at')->whereBetween('updated_at', [$from, $at]);
                 });
             })
-            ->sum('total_amount');
+            ->get(['total_amount', 'shipping_fee', 'online_channel'])
+            ->sum(fn ($o) => $o->revenueAmount());
     }
 
     /** Thứ hạng so sánh của 1 hạng (theo sort_order, dự phòng min_spent_window). */
@@ -493,8 +484,8 @@ class LoyaltyService
                     $q2->whereNull('paid_at')->where('updated_at', '>=', $from);
                 });
             })
-            ->get(['total_amount', 'paid_at', 'updated_at'])
-            ->map(fn ($o) => ['amount' => (float) $o->total_amount, 'at' => $o->paid_at ?? $o->updated_at])
+            ->get(['total_amount', 'shipping_fee', 'online_channel', 'paid_at', 'updated_at'])
+            ->map(fn ($o) => ['amount' => $o->revenueAmount(), 'at' => $o->paid_at ?? $o->updated_at]) // Vá phí ship thu hộ 2026-11-04: tiền hàng, khớp windowSpent
             ->sortBy('at')
             ->values();
         $spent = (float) $orders->sum('amount');
@@ -567,10 +558,12 @@ class LoyaltyService
             'points_expire_next_date' => $expiring['next_date'],
             'point_value' => $cfg['point_value'],
             'points_event' => $this->activeDoubleDaysEvent($tier),
-            // Chênh hệ số kênh: Mini App hiện dòng chú thích theo cấu hình này
+            // Hệ số theo kênh 2026-11-04 (spec mục 5): trả hệ số hiệu dụng
+            // của kênh zalo (sau công tắc tổng + quy tắc), thay khóa cũ
+            // platform_multiplier — client cùng gói đọc khóa mới này.
             'points_channel' => [
                 'enabled' => self::channelPointsSettings()['enabled'],
-                'platform_multiplier' => self::channelPointsSettings()['platform_multiplier'],
+                'own_channel_factor' => $this->channelFactor(new Order(['online_channel' => 'zalo']))['factor'],
             ],
             'window_days' => $cfg['window_days'],
             'window_spent' => (int) round($spent),
@@ -600,44 +593,111 @@ class LoyaltyService
     }
 
     /**
-     * Chênh hệ số tích điểm theo kênh (Đại Vương chốt 2026-10-28: hệ số sàn
-     * ×0,5 + Hướng A chỉ làm cơ chế). 3 khóa settings, đọc kèm mặc định:
-     * công tắc tổng (mặc định BẬT) · hệ số kênh sàn (mặc định 0,5) · danh
-     * sách mã kênh RIÊNG (mặc định pos, zalo, online, nha_hang, dbomni).
-     * Phân loại theo luật loại trừ: mã không thuộc danh sách riêng = sàn,
-     * vì mã sàn sinh động theo đối tác khi import.
+     * Hệ số tích điểm theo TỪNG kênh (Đại Vương chốt 2026-11-04, spec mục 1–3).
+     * Khóa mới points_channel_rules (JSON: mã → {enabled, factor}) + khóa mới
+     * points_channel_default_factor (kênh chưa có quy tắc, mặc định 0,5).
+     * Chưa có 2 khóa mới → TỰ SUY từ 3 khóa cũ, giữ nguyên hành vi đang chạy:
+     * mã trong points_own_channels cũ → {enabled: true, factor: 1};
+     * points_platform_multiplier cũ → hệ số mặc định. Từ lần Admin lưu đầu
+     * tiên sau gói này, 2 khóa cũ ngừng được đọc (giữ trong DB như dữ liệu
+     * trơ, không xóa, không migration). Các khóa legacy platform_multiplier /
+     * own_channels vẫn trả để tương thích ngược: platform_multiplier = hệ số
+     * mặc định; own_channels = mã có quy tắc enabled + factor 1.
      */
     public static function channelPointsSettings(): array
     {
-        $own = Setting::get('points_own_channels');
-        $channels = [];
-        foreach (explode(',', (string) ($own ?: 'pos,zalo,online,nha_hang,dbomni')) as $c) {
+        $enabled = filter_var(Setting::get('points_channel_multiplier_enabled', '1'), FILTER_VALIDATE_BOOLEAN);
+        $rawRules = Setting::get('points_channel_rules');
+        $decoded = ($rawRules === null || $rawRules === '') ? null : json_decode((string) $rawRules, true);
+        if (is_array($decoded)) {
+            $rules = [];
+            foreach ($decoded as $code => $rule) {
+                $code = strtolower(trim((string) $code));
+                if ($code === '' || !is_array($rule)) {
+                    continue;
+                }
+                $rules[$code] = [
+                    'enabled' => array_key_exists('enabled', $rule) ? filter_var($rule['enabled'], FILTER_VALIDATE_BOOLEAN) : true,
+                    'factor' => isset($rule['factor']) ? (float) $rule['factor'] : 1.0,
+                ];
+            }
+            // F1b (2026-11-05, cùng gốc F1): 'online' là mã BẢNG GIÁ của kênh
+            // Zalo Mini App — quy tắc lưu dưới khóa 'online' không bao giờ
+            // khớp đơn thật ('zalo') nên bất hoạt lặng lẽ. Gập về khóa chuẩn
+            // 'zalo' ngay khi đọc: chỉ có 'online' -> thành quy tắc 'zalo'
+            // (không mồ côi cấu hình cũ); có cả hai -> 'zalo' thắng (vốn là
+            // khóa đơn thật + giao diện cũ vẫn đọc trước), 'online' bỏ.
+            if (isset($rules['online'])) {
+                if (!isset($rules['zalo'])) {
+                    $rules['zalo'] = $rules['online'];
+                }
+                unset($rules['online']);
+            }
+            $defaultRaw = Setting::get('points_channel_default_factor');
+            $defaultFactor = ($defaultRaw === null || $defaultRaw === '') ? 0.5 : (float) $defaultRaw;
+            $own = [];
+            foreach ($rules as $code => $rule) {
+                if ($rule['enabled'] && $rule['factor'] == 1.0) {
+                    $own[] = $code;
+                }
+            }
+            return [
+                'enabled' => $enabled,
+                'platform_multiplier' => $defaultFactor,
+                'own_channels' => $own,
+                'rules' => $rules,
+                'default_factor' => $defaultFactor,
+                'has_rules' => true,
+            ];
+        }
+        // Di trú từ khóa cũ (chưa từng lưu cấu hình mới).
+        $own = [];
+        foreach (explode(',', (string) (Setting::get('points_own_channels') ?: 'pos,zalo,online,nha_hang,dbomni')) as $c) {
             $c = strtolower(trim($c));
-            if ($c !== '' && !in_array($c, $channels, true)) {
-                $channels[] = $c;
+            if ($c === 'online') $c = 'zalo'; // F1b: alias -> khóa chuẩn như ở nhánh quy tắc JSON
+            if ($c !== '' && !in_array($c, $own, true)) {
+                $own[] = $c;
             }
         }
         $mult = Setting::get('points_platform_multiplier');
+        $defaultFactor = ($mult === null || $mult === '') ? 0.5 : (float) $mult;
+        $rules = [];
+        foreach ($own as $code) {
+            $rules[$code] = ['enabled' => true, 'factor' => 1.0];
+        }
         return [
-            'enabled' => filter_var(Setting::get('points_channel_multiplier_enabled', '1'), FILTER_VALIDATE_BOOLEAN),
-            'platform_multiplier' => ($mult === null || $mult === '') ? 0.5 : (float) $mult,
-            'own_channels' => $channels,
+            'enabled' => $enabled,
+            'platform_multiplier' => $defaultFactor,
+            'own_channels' => $own,
+            'rules' => $rules,
+            'default_factor' => $defaultFactor,
+            'has_rules' => false,
         ];
     }
 
     /**
-     * Hệ số kênh của 1 đơn: kênh riêng → 1; kênh sàn → hệ số cấu hình.
-     * Tắt công tắc tổng hoặc đơn không mang mã kênh → 1 (không chênh).
-     * @return array{factor: float, is_platform: bool}
+     * Hệ số kênh của 1 đơn — thứ tự ưu tiên chốt (spec mục 3):
+     * 1. Kênh có quy tắc enabled = false → 0, thắng mọi công tắc khác.
+     * 2. Công tắc tổng tắt, hoặc đơn không mang mã kênh → 1.
+     * 3. Có quy tắc (đang enabled) → hệ số của quy tắc.
+     * 4. Không có quy tắc → points_channel_default_factor (kênh lạ mặc định enabled).
+     * @return array{factor: float, is_platform: bool, channel: string}
      */
     public function channelFactor(Order $order): array
     {
         $cfg = self::channelPointsSettings();
         $channel = strtolower(trim((string) ($order->online_channel ?? '')));
-        if (!$cfg['enabled'] || $channel === '' || in_array($channel, $cfg['own_channels'], true)) {
-            return ['factor' => 1.0, 'is_platform' => false];
+        $rule = ($channel !== '' && isset($cfg['rules'][$channel])) ? $cfg['rules'][$channel] : null;
+        if ($rule !== null && !$rule['enabled']) {
+            return ['factor' => 0.0, 'is_platform' => false, 'channel' => $channel];
         }
-        return ['factor' => (float) $cfg['platform_multiplier'], 'is_platform' => true];
+        if (!$cfg['enabled'] || $channel === '') {
+            return ['factor' => 1.0, 'is_platform' => false, 'channel' => $channel];
+        }
+        if ($rule !== null) {
+            return ['factor' => (float) $rule['factor'], 'is_platform' => !in_array($channel, $cfg['own_channels'], true), 'channel' => $channel];
+        }
+        return ['factor' => (float) $cfg['default_factor'], 'is_platform' => true, 'channel' => $channel];
     }
 
     /**

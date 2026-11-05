@@ -3,9 +3,13 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { api, fmt, getProfile, setProfile, getRef, setRef } from '../api';
 import { storage } from '../utils/storage';
 import SearchSelect from '../components/SearchSelect';
+import SearchInput from '../components/SearchInput';
+import ZmIcon from '../components/ZmIcon';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
+import { findPlaceByName } from '../utils/placeName'; // Sổ #69: khớp tên tỉnh/phường có chuẩn hóa
 import { DateField, TimeField, toApiDate, validTime, formatPhone } from '../utils/checkoutFields.jsx';
+import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4: ô đồng ý dùng chung với mặt tiền đăng ký
 import { useShop } from '../store';
 
 // Gói 50d: luồng 2 bước — (1) nhập thông tin, (2) tóm tắt đơn hàng rồi mới đặt.
@@ -78,6 +82,12 @@ export default function Checkout() {
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Đợt fix rà soát VPS (S8): "Trả tại quán" không áp dụng cho đơn Giao hàng —
+  // đang chọn mà khách chuyển sang Giao hàng thì đưa lựa chọn về Chuyển khoản,
+  // tránh gửi payment_method không hợp lệ lên server.
+  useEffect(() => {
+    if (type === 'delivery' && payment === 'pay_at_store') setPayment('transfer');
+  }, [type, payment]);
   // Gói Ưu đãi hợp nhất (2026-10-31): danh sách hợp nhất từ server (chế độ
   // unified) + lựa chọn phía A của khách (KM chung HOẶC coupon ví — radio).
   // Khách không chọn = không giảm: bỏ hẳn tự áp ở bề mặt Mini App.
@@ -100,8 +110,40 @@ export default function Checkout() {
   const [formErr, setFormErr] = useState('');
   const [voucherErr, setVoucherErr] = useState('');
   const [customerId, setCustomerId] = useState(null);
+  // Spec mật khẩu §5.4/§7.3: email tự nguyện + ô đồng ý NĐ 13 ở đơn đầu.
+  const [email, setEmail] = useState('');
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [hasConsented, setHasConsented] = useState(null); // null = chưa rõ
+  const [consentNeeded, setConsentNeeded] = useState(false);
   const [addrBook, setAddrBook] = useState([]);
   const [addrId, setAddrId] = useState('');
+  // Lát 3g (2026-11-04, #39): tự áp địa chỉ MẶC ĐỊNH khi sổ địa chỉ tải xong —
+  // trước đây addrId khởi tạo rỗng và không ai tự chọn, khách có sẵn địa chỉ
+  // mặc định vẫn phải chọn lại tay. Chỉ tự áp khi khách CHƯA tự đụng vào ô
+  // chọn (addrTouched) để không giật lại lựa chọn "nhập địa chỉ mới".
+  const addrTouched = useRef(false);
+  const fillFromAddress = (a) => {
+    // Sổ #69 (2026-11-04): khớp tên tỉnh/phường qua findPlaceByName (có chuẩn
+    // hóa viết tắt/dấu) — khớp chính xác cũ trượt khi sổ lưu "TP. Hồ Chí Minh"
+    // mà danh mục là "Thành phố Hồ Chí Minh", kéo theo phường không nạp.
+    const pc = findPlaceByName(provinces, a.province)?.code;
+    if (pc) {
+      setProvince(String(pc));
+      loadWards(pc).then((ws) => {
+        setWards(ws || []);
+        const wc = findPlaceByName(ws || [], a.ward)?.code;
+        setWard(wc ? String(wc) : '');
+      });
+    }
+    setStreet(a.street || '');
+    setPickedCoord(null);
+  };
+  useEffect(() => {
+    if (addrTouched.current || addrId || !addrBook.length) return;
+    const d = addrBook.find((a) => a.is_default);
+    if (d) { setAddrId(String(d.id)); fillFromAddress(d); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addrBook]);
   const [saveAddr, setSaveAddr] = useState(false);
   const [addrLabel, setAddrLabel] = useState('Nhà');
   // Gói 55 p3: popup thông tin nhận hàng + vị trí hiện tại
@@ -340,10 +382,15 @@ export default function Checkout() {
         if (c) {
           setPoints(c.loyalty?.points ?? c.points ?? 0);
           setCustomerId(c.id);
+          // Spec mật khẩu §5.4/§7.3: khách đã đồng ý thì không hiện lại ô;
+          // chưa đồng ý thì hiện ô ở đơn đầu. Email hồ sơ có sẵn thì điền sẵn.
+          setHasConsented(!!c.has_consented);
+          if (c.has_consented === false) setConsentNeeded(true);
+          if (c.email) setEmail((prev) => prev || c.email);
           // Gói Đón Bình Minh: khách đã từng có đơn (đã tích lũy chi tiêu hoặc
           // còn đơn gần đây) → ẩn ô mã người giới thiệu ở form bên dưới.
           setHasPriorOrders((Number(c.total_spent) || 0) > 0 || (c.orders || []).length > 0);
-          api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(r?.data || [])).catch(() => {});
+          api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: r là mảng thuần (req đã bóc phong bì)
           return api.eligiblePromotions({ ...payload, customer_id: c.id, phone: formatPhone(phone), member_code: getProfile()?.member_code || '' });
         }
         return api.eligiblePromotions({ ...payload, channel: 'online' });
@@ -607,6 +654,13 @@ export default function Checkout() {
         return;
       }
       ckGateOkRef.current = false;
+      // Spec mật khẩu §5.4: đơn đầu chưa tích ô đồng ý thì khóa nút đặt đơn
+      // ngay ở client (cổng cứng thật vẫn ở server — 422 consent_required).
+      if (consentNeeded && !consentChecked) {
+        setFormErr('Bạn cần tích ô đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+        setStep(1);
+        return;
+      }
       // 🟠11 (phòng race): kênh đã chọn không còn khả dụng theo cấu hình vừa tải → tự đổi
       let effChannel = payChannel;
       if (useZaloPay) {
@@ -623,6 +677,9 @@ export default function Checkout() {
         customer_phone: formatPhone(phone),
         // Spec KM chống mã Phần B: mã TV để server xác thực quyền lợi (điểm/coupon/hạng)
         member_code: getProfile()?.member_code || null,
+        // Spec mật khẩu §7.3/§5.4: email tự nguyện + cờ đồng ý NĐ 13 ở đơn đầu.
+        email: email.trim() || null,
+        consent_agreed: !!consentChecked,
         delivery_address: type === 'delivery' ? fullAddress() : null,
         province: type === 'delivery' ? provName() : null,
         ward: type === 'delivery' ? wardName() : null,
@@ -731,13 +788,21 @@ export default function Checkout() {
         nav(`/success/${order.code}`);
       }
     } catch (e) {
-      setFormErr(e.message || 'Đặt hàng thất bại. Vui lòng thử lại.');
+      // Spec mật khẩu §5.4: server từ chối vì thiếu đồng ý → hiện ô đồng ý
+      // ở bước 1 và cho khách đặt lại.
+      if (e.code === 'consent_required') {
+        setConsentNeeded(true);
+        setFormErr(e.message || 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+        setStep(1);
+      } else {
+        setFormErr(e.message || 'Đặt hàng thất bại. Vui lòng thử lại.');
+      }
     } finally { setPlacing(false); }
   };
 
   const typeLabel = type === 'delivery'
-    ? (deliveryMode === 'scheduled' ? '📅 Hẹn giờ giao' : '🛵 Giao hàng')
-    : type === 'takeaway' ? '🏃 Mang đi' : '⏰ Hẹn giờ lấy';
+    ? (deliveryMode === 'scheduled' ? 'Hẹn giờ giao' : 'Giao hàng')
+    : type === 'takeaway' ? 'Mang đi' : 'Hẹn giờ lấy';
 
   return (
     <div className="zm-page">
@@ -758,9 +823,9 @@ export default function Checkout() {
         <>
           <div style={{ padding: '12px 16px 0' }}>
             <div className="zm-seg">
-              <button className={type === 'delivery' ? 'on' : ''} disabled={isClosed} onClick={() => { switchType('delivery'); if (isClosed) setDeliveryMode('scheduled'); }}>🛵 Giao hàng</button>
-              <button className={type === 'takeaway' ? 'on' : ''} disabled={isClosed} onClick={() => switchType('takeaway')}>🏃 Mang đi</button>
-              <button className={type === 'scheduled' ? 'on' : ''} onClick={() => switchType('scheduled')}>⏰ Hẹn giờ lấy</button>
+              <button className={type === 'delivery' ? 'on' : ''} onClick={() => { switchType('delivery'); if (isClosed) setDeliveryMode('scheduled'); }}><ZmIcon name="bike" size={16} />Giao hàng</button>
+              <button className={type === 'takeaway' ? 'on' : ''} disabled={isClosed} onClick={() => switchType('takeaway')}><ZmIcon name="bag" size={16} />Mang đi</button>
+              <button className={type === 'scheduled' ? 'on' : ''} onClick={() => switchType('scheduled')}><ZmIcon name="clock" size={16} />Hẹn giờ lấy</button>
             </div>
           </div>
 
@@ -773,6 +838,19 @@ export default function Checkout() {
               <label>Số điện thoại * <span style={{ color: '#888', fontWeight: 400 }}>(để tích điểm thành viên)</span></label>
               <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
             </div>
+            {/* Spec mật khẩu §7.3: email tự nguyện ở checkout — chỉ điền vào
+                hồ sơ khi hồ sơ đang trống (server quyết), không bắt buộc. */}
+            <div className="zm-field">
+              <label>Email <span style={{ color: '#888', fontWeight: 400 }}>(không bắt buộc — chỉ dùng cho thông báo bảo mật)</span></label>
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email của bạn" type="email" maxLength={150} />
+            </div>
+            {/* Spec mật khẩu §5.4: ô đồng ý NĐ 13 ở đơn đầu — chưa tích thì
+                nút đặt đơn khóa (cổng cứng ở server, xem place()). */}
+            {consentNeeded && (
+              <div style={{ margin: '4px 0 8px' }}>
+                <ConsentCheck checked={consentChecked} onChange={setConsentChecked} />
+              </div>
+            )}
             {/* Gói Đón Bình Minh (2026-10-28): mã người giới thiệu — chỉ hiện với
                 khách chưa có đơn; đến từ link thì hiện sẵn mã đã gắn, xóa/sửa được */}
             {!hasPriorOrders && (
@@ -782,7 +860,7 @@ export default function Checkout() {
                   <input value={refCode} onChange={(e) => updateRefCode(e.target.value.toUpperCase())} placeholder="Nhập mã của người giới thiệu" maxLength={20} style={{ flex: 1 }} />
                   {refCode && (
                     <button type="button" onClick={() => updateRefCode('')} aria-label="Xóa mã người giới thiệu"
-                      style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}>✕</button>
+                      style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}><ZmIcon name="x" size={16} /></button>
                   )}
                 </div>
                 {refFromLink && refCode && (
@@ -803,7 +881,7 @@ export default function Checkout() {
                     borderRadius: 12, padding: 12, marginBottom: 8, cursor: isClosed ? 'not-allowed' : 'pointer',
                     display: 'flex', alignItems: 'center', gap: 10, opacity: isClosed ? 0.5 : 1,
                   }}>
-                  <span style={{ fontSize: 24 }}>⚡</span>
+                  <span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="zap" size={24} /></span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>Giao ngay</div>
                     <div style={{ fontSize: 12, color: '#888' }}>{isClosed ? 'Không khả dụng khi quán đóng cửa' : 'Shipper giao luôn trong ~30 phút'}</div>
@@ -818,7 +896,7 @@ export default function Checkout() {
                     borderRadius: 12, padding: 12, marginBottom: 12, cursor: 'pointer',
                     display: 'flex', alignItems: 'center', gap: 10,
                   }}>
-                  <span style={{ fontSize: 24 }}>📅</span>
+                  <span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="calendar" size={24} /></span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>Hẹn giờ giao</div>
                     <div style={{ fontSize: 12, color: '#888' }}>Chọn ngày giờ muốn nhận hàng</div>
@@ -848,12 +926,12 @@ export default function Checkout() {
                 {/* Gói 55 p3: card gọn thông tin nhận hàng — bấm mở popup */}
                 <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
                   <div className="zm-deliv-top">
-                    <div className="zm-deliv-ic">📍</div>
+                    <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
                     <div className="zm-deliv-t">Thông tin nhận hàng</div>
                     <div className="zm-deliv-chg">Thay đổi</div>
                   </div>
                   <div className="zm-deliv-mid">
-                    <div className="zm-deliv-uic">👤</div>
+                    <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
                     <div style={{ flex: 1 }}>
                       <div className="zm-deliv-nm">
                         {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
@@ -873,24 +951,15 @@ export default function Checkout() {
                       <h3>Thông tin nhận hàng</h3>
   {addrBook.length > 0 && (
     <div className="zm-field">
-      <label>📒 Sổ địa chỉ</label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
       <select value={addrId} onChange={(e) => {
+        addrTouched.current = true;
         const id = e.target.value;
         setAddrId(id);
         if (!id) return;
         const a = addrBook.find((x) => String(x.id) === id);
         if (!a) return;
-        const pc = provinces.find((p) => p.name === a.province)?.code;
-        if (pc) {
-          setProvince(String(pc));
-          loadWards(pc).then((ws) => {
-            setWards(ws || []);
-            const wc = (ws || []).find((w) => w.name === a.ward)?.code;
-            setWard(wc ? String(wc) : '');
-          });
-        }
-        setStreet(a.street || '');
-        setPickedCoord(null);
+        fillFromAddress(a);
       }}>
         <option value="">— Nhập địa chỉ mới —</option>
         {addrBook.map((a) => (
@@ -929,23 +998,23 @@ export default function Checkout() {
         background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10,
         boxShadow: '0 8px 24px rgba(0,0,0,.12)', maxHeight: 220, overflowY: 'auto',
       }}>
-        {suggestLoading && <div style={{ padding: 12, fontSize: 13, color: '#999' }}>🔍 Đang tìm địa chỉ...</div>}
+        {suggestLoading && <div style={{ padding: 12, fontSize: 13, color: '#999' }}>Đang tìm địa chỉ...</div>}
         {suggests.map((s, i) => (
           <div
             key={i}
             onClick={() => pickSuggest(s)}
             style={{ padding: '10px 12px', fontSize: 13, borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}
           >
-            <div style={{ fontWeight: 600 }}>📍 {s.short}</div>
+            <div style={{ fontWeight: 600 }}>{s.short}</div>
             <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{s.label}</div>
           </div>
         ))}
       </div>
     )}
   </div>
-  {geoLoading && <div className="zm-note">📍 Đang tự động tính khoảng cách...</div>}
+  {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
   {km != null && shipCfg && (
-    <div className="zm-alert">📏 Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
+    <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
   )}
   {geoError && (
     <div className="zm-alert" style={{ background: '#fef3c7', borderColor: '#fcd34d' }}>
@@ -955,7 +1024,7 @@ export default function Checkout() {
   )}
   {/* Gói 60: chọn gói giao hàng từ báo giá live của hãng */}
   {type === 'delivery' && quoteLoading && (
-    <div className="zm-note">🛵 Đang tính phí ship từ hãng giao hàng...</div>
+    <div className="zm-note">Đang tính phí ship từ hãng giao hàng...</div>
   )}
   {type === 'delivery' && !quoteLoading && quote?.packages?.length > 0 && (
     <div className="zm-field">
@@ -974,7 +1043,7 @@ export default function Checkout() {
             }}
           >
             <div>
-              <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? '🛵 Nhanh' : '⚡ Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
+              <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
               <div style={{ color: '#666', fontSize: 12 }}>{p.eta_text}{p.shop_support > 0 ? ` · Quán hỗ trợ ${fmt(p.shop_support)}đ` : ''}</div>
             </div>
             <div style={{ fontWeight: 700, color: '#24305E' }}>{fmt(p.customer_pays)}đ</div>
@@ -1005,7 +1074,7 @@ export default function Checkout() {
   )}
                       {/* Gói 55 p3: nút vị trí hiện tại */}
                       <button type="button" className="zm-loc-btn" onClick={useCurrentLocation} disabled={locLoading}>
-                        📍 {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
+                        {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
                       </button>
                       <p className="zm-loc-hint">Bấm "Vị trí hiện tại" để tự điền địa chỉ và tính phí ship chính xác, hoặc nhập tay rồi bấm Lưu.</p>
                       <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
@@ -1029,8 +1098,8 @@ export default function Checkout() {
               <label>Phương thức thanh toán</label>
             </div>
             {/* SPEC-01: Thanh toán qua Checkout SDK (BANK/COD) */}
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-              🔒 Thanh toán an toàn qua Zalo
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ZmIcon name="lock" size={14} />Thanh toán an toàn qua Zalo
             </div>
             {zaloCfg ? (
               <>
@@ -1060,11 +1129,18 @@ export default function Checkout() {
               (payMethods.length ? payMethods : [
                 { value: 'transfer', label: 'Chuyển khoản / QR', desc: 'Quán xác nhận đã nhận tiền rồi mới làm món' },
                 { value: 'pay_at_store', label: 'Thanh toán tại quán', desc: 'Trả tiền khi nhận món' },
-              ]).map((m) => (
-                <div key={m.value} className={`zm-pay-opt ${payment === m.value ? 'on' : ''}`} onClick={() => setPayment(m.value)}>
-                  <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{m.desc}</div></div>
-                </div>
-              ))
+              ]).map((m) => {
+                // S8: khóa "Trả tại quán" khi đang Giao hàng (như đường cấu hình Zalo ở trên)
+                const mLocked = m.value === 'pay_at_store' && type === 'delivery';
+                return (
+                  <div key={m.value}
+                    className={`zm-pay-opt ${payment === m.value ? 'on' : ''} ${mLocked ? 'disabled' : ''}`}
+                    onClick={() => { if (!mLocked) setPayment(m.value); }}
+                    style={mLocked ? { opacity: 0.5 } : {}}>
+                    <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{mLocked ? 'Chỉ áp dụng khi nhận tại quán' : m.desc}</div></div>
+                  </div>
+                );
+              })
             )}
 
             {/* Gói 64: bỏ tick xuất VAT trên Mini App (hóa đơn đã kèm mã QR cho khách quét nhập thông tin) */}
@@ -1127,7 +1203,7 @@ export default function Checkout() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px 8px' }}>
                     <b style={{ fontSize: 16 }}>🎁 Ưu đãi</b>
                     <button type="button" onClick={() => setPanelOpen(false)}
-                      style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 20, color: '#666', cursor: 'pointer' }}>✕</button>
+                      style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 20, color: '#666', cursor: 'pointer' }}><ZmIcon name="x" size={16} /></button>
                   </div>
                   <div style={{ overflowY: 'auto', padding: '0 16px 8px' }}>
                     {/* Phía B: ô nhập voucher gõ tay */}
@@ -1152,16 +1228,16 @@ export default function Checkout() {
                         </span>
                         <button type="button" aria-label="Gỡ voucher"
                           onClick={() => { setVoucherInfo(null); setVoucher(''); setVoucherMsg(''); }}
-                          style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 16, color: '#999', cursor: 'pointer' }}>✕</button>
+                          style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 16, color: '#999', cursor: 'pointer' }}><ZmIcon name="x" size={16} /></button>
                       </div>
                     )}
                     {/* L4-B (2026-10-31): dòng gợi ý tương thích voucher KHÔNG còn nằm dưới ô nhập
                         (đọc như lỗi của ô nhập) — đã chuyển vào dòng của mã đang chọn trong danh sách dưới đây.
                         Dưới ô nhập chỉ còn thông báo khi khách thật sự nhập mã bị chặn (voucherMsg ở trên). */}
                     {/* Ô tìm kiếm: CHỈ lọc danh sách, không áp mã (phát triển sau) */}
-                    <input value={offerSearch} onChange={(e) => setOfferSearch(e.target.value)}
-                      placeholder="🔍 Tìm ưu đãi theo tên hoặc mã…"
-                      style={{ width: '100%', minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', fontSize: 14, marginTop: 14, boxSizing: 'border-box' }} />
+                    <SearchInput value={offerSearch} onChange={(e) => setOfferSearch(e.target.value)} onSearch={(v) => setOfferSearch(v)}
+                      placeholder="Tìm ưu đãi theo tên hoặc mã…"
+                      style={{ marginTop: 14 }} inputStyle={{ minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', fontSize: 14 }} />
                     {/* Phía A: danh sách hợp nhất, chọn 1 */}
                     <div style={{ fontWeight: 700, fontSize: 13.5, margin: '14px 0 4px' }}>Ưu đãi chính — chọn 1 trong các mã này</div>
                     {/* L1a (2026-10-31): khi KHÔNG mã tiền hàng nào cộng dồn được với voucher, huy hiệu
@@ -1304,7 +1380,7 @@ export default function Checkout() {
         <div style={{ padding: '12px 16px 100px' }}>
           {/* Món đã đặt */}
           <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>🧾 Món đã đặt ({cart.reduce((s, l) => s + l.qty, 0)})</div>
+            <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="receipt" size={14} />Món đã đặt ({cart.reduce((s, l) => s + l.qty, 0)})</div>
             {cart.map((l, i) => (
               <div key={i} style={{ padding: '6px 0', borderTop: i ? '1px dashed #f0f0f0' : 'none' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
@@ -1320,7 +1396,7 @@ export default function Checkout() {
                     ))
                   : l.optText && <div style={{ fontSize: 12, color: '#888', paddingLeft: 12 }}>+ {l.optText}</div>
                 }
-                {l.note && <div style={{ fontSize: 12, color: '#888', paddingLeft: 12, fontStyle: 'italic' }}>📝 {l.note}</div>}
+                {l.note && <div style={{ fontSize: 12, color: '#888', paddingLeft: 12, fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="note" size={12} />{l.note}</div>}
               </div>
             ))}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, paddingTop: 8, borderTop: '1px solid #eee', marginTop: 4 }}>
@@ -1332,25 +1408,25 @@ export default function Checkout() {
           <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12, marginBottom: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8 }}>{typeLabel}</div>
             <div style={{ fontSize: 13, lineHeight: 1.7, color: '#444' }}>
-              <div>👤 {name} · {phone}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="user" size={14} />{name} · {phone}</div>
               {type === 'delivery' && (
                 <>
-                  <div>📍 {fullAddress()}</div>
-                  {deliveryNote.trim() && <div>📝 {deliveryNote.trim()}</div>}
-                  <div>📏 Khoảng cách: {km != null ? `~${km}km` : 'quán xác nhận'}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="mapPin" size={14} />{fullAddress()}</div>
+                  {deliveryNote.trim() && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="note" size={14} />{deliveryNote.trim()}</div>}
+                  <div>Khoảng cách: {km != null ? `~${km}km` : 'quán xác nhận'}</div>
                 </>
               )}
               {type === 'scheduled' && <div>⏰ Hẹn lấy: {schedDate} {schedTime}</div>}
-              {type === 'delivery' && deliveryMode === 'scheduled' && <div>📅 Hẹn giao: {schedDate} {schedTime}</div>}
-              {type === 'takeaway' && <div>🏪 Nhận tại: {branch.name}</div>}
-              <div>💳 {(zaloCfg ? payChannel === 'BANK' : payment === 'transfer') ? 'Chuyển khoản / QR' : 'Thanh toán tại quán'}</div> {/* UX 2026-10-26 (MA-❓3): trước đây đọc biến payment của nhánh dự phòng -> hiện sai kênh khi khách chọn qua payChannel (BANK/COD) */}
+              {type === 'delivery' && deliveryMode === 'scheduled' && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="calendar" size={14} />Hẹn giao: {schedDate} {schedTime}</div>}
+              {type === 'takeaway' && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="store" size={14} />Nhận tại: {branch.name}</div>}
+              <div>{(zaloCfg ? payChannel === 'BANK' : payment === 'transfer') ? 'Chuyển khoản / QR' : 'Thanh toán tại quán'}</div> {/* UX 2026-10-26 (MA-❓3): trước đây đọc biến payment của nhánh dự phòng -> hiện sai kênh khi khách chọn qua payChannel (BANK/COD) */}
               {/* Gói 64: bỏ hiển thị VAT trên tóm tắt đơn */}
             </div>
           </div>
 
           {/* Phí & tổng */}
           <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>💰 Chi tiết thanh toán</div>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết thanh toán</div>
             {type === 'delivery' && (
               <div className="zm-total-row">
                 <span>Phí vận chuyển{quotePkg ? ` (${quotePkg.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} · ${quotePkg.provider_label})` : km != null ? ` (~${km}km)` : ''}</span>
@@ -1358,7 +1434,7 @@ export default function Checkout() {
               </div>
             )}
             {type === 'delivery' && shipShopSupport > 0 && (
-              <div className="zm-total-row disc"><span>🏪 Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>
+              <div className="zm-total-row disc"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="store" size={14} />Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>
             )}
             {/* Gói Ưu đãi hợp nhất (2026-10-31): các dòng giảm do hàm phân xử §5d
                 sinh ra — chỉ ưu đãi ĐANG ÁP mới có dòng ở khối tổng */}

@@ -16,6 +16,7 @@ export default function Roles() {
     const [perms, setPerms] = useState([]);
     const [showForm, setShowForm] = useState(false);
     const [loadError, setLoadError] = useState('');
+    const [loading, setLoading] = useState(true); // S10: lần mở đầu chưa tải xong phải hiện trạng thái tải, không hiện bảng rỗng
 
     const fetchAll = async () => {
         try {
@@ -24,7 +25,19 @@ export default function Roles() {
             setRoles(r.data?.data || []); setMatrix(m.data?.data || []);
         } catch (e) {
             setLoadError(e.response?.data?.message || 'Không tải được danh sách chức vụ. Kiểm tra backend/migrate.');
-        }
+        } finally { setLoading(false); }
+    };
+
+    // S10: đếm quyền theo DỮ LIỆU THẬT của ma trận — số ô quyền mà vai này thực có
+    // trong ma trận (khóa lá hoặc wildcard module.*). Trước đây đếm độ dài mảng thô
+    // nên khóa ngoài ma trận (VD inventory.manage) làm nhãn phình hơn thực tế (11 vs 10).
+    const countRealPerms = (r) => {
+        const p = r.permissions || [];
+        let n = 0;
+        matrix.forEach((m) => (m.actions || []).forEach((a) => {
+            if (p.includes(m.key + '.*') || p.includes(m.key + '.' + a)) n += 1;
+        }));
+        return n;
     };
     useEffect(() => { fetchAll(); }, []);
 
@@ -53,11 +66,12 @@ export default function Roles() {
                     <div className="m-card p-4 h-fit">
                         <h3 className="font-bold mb-3 text-[14px]">Danh sách chức vụ</h3>
                         {loadError && <p className="text-red-500 text-[12px] mb-2">{loadError}</p>}
+                        {loading && roles.length === 0 && <p className="text-gray-400 text-[12px] mb-2">Đang tải danh sách chức vụ…</p>}
                         {roles.map((r) => (
                             <div key={r.id} className={'flex items-center justify-between px-3 py-2.5 rounded-lg mb-1 ' + (editing?.id === r.id ? 'bg-[#24305E] text-white' : 'bg-gray-50')}>
                                 <button onClick={() => openEdit(r)} className="text-left flex-1">
                                     <div className="font-medium text-[13px]">{r.name}</div>
-                                    <div className={'text-[11px] ' + (editing?.id === r.id ? 'text-gray-300' : 'text-gray-400')}>{r.employees_count} nhân viên · {r.permissions?.includes('*') ? 'full quyền' : (r.permissions?.length || 0) + ' quyền'}</div>
+                                    <div className={'text-[11px] ' + (editing?.id === r.id ? 'text-gray-300' : 'text-gray-400')}>{r.employees_count} nhân viên · {r.permissions?.includes('*') ? 'full quyền' : countRealPerms(r) + ' quyền'}</div>
                                 </button>
                                 {editable && <button onClick={() => remove(r.id)} className={'text-[12px] ml-2 ' + (editing?.id === r.id ? 'text-red-300' : 'text-red-500')}>Xóa</button>}
                             </div>

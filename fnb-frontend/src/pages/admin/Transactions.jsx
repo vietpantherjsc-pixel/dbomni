@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate as fmtDateShared } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { confirmInApp } from '../../utils/confirmInApp'; // Sổ #23: xác nhận nội bộ thay confirm() trình duyệt
 
 // =====================================================================
 // Gói 27 (2026-10-09): Trang Thu-Chi hoàn thiện.
@@ -18,7 +20,7 @@ const TABS = [
     { key: 'expense', label: 'Phiếu chi' },
     { key: 'income', label: 'Phiếu thu' },
 ];
-const STATUS_LABEL = { paid: 'Đã thanh toán', pending: 'Chờ thanh toán' };
+const STATUS_LABEL = { paid: 'Đã thanh toán', pending: 'Chờ thanh toán', cancelled: 'Đã hủy' }; // F4 (2026-11-05): trước đây thiếu 'cancelled' nên phiếu hủy (gồm phiếu bị từ chối duyệt sau F4) hiện chip trạng thái TRỐNG
 const METHOD_LABEL = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', card: 'Thẻ' };
 
 const fmtMoney = (n) => new Intl.NumberFormat('vi-VN').format(n || 0) + 'đ';
@@ -47,6 +49,7 @@ const Transactions = () => {
     const [page, setPage] = useState(1);
     const [loading, setLoading] = useState(true);
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1) — vòng bổ sung B: bổ sung khai báo bị thiếu (TESTER bắt hỏng lan)
+    const [expired, setExpired] = useState(false); // S5: 401 = hết phiên → hiện câu chuẩn thay cho "Không tải được…"
     const [categories, setCategories] = useState([]);
     const [branches, setBranches] = useState([]);
     const [fCat, setFCat] = useState('');
@@ -114,12 +117,14 @@ const Transactions = () => {
             if (search) params.append('search', search);
             const res = await axios.get(`${API}/transactions?${params}`);
             if (res.data?.success) {
-                setRows(res.data.data || []); setLoadErr(false);
+                setRows(res.data.data || []); setLoadErr(false); setExpired(false);
                 setPagination(res.data.pagination || null);
                 setSummary(res.data.summary || { total_income: 0, total_expense: 0, balance: 0 });
             }
-        } catch {
-            setLoadErr(true); // UX 2026-10-26 (🟠T1)
+        } catch (e) {
+            // S5: tách 401 (hết phiên) khỏi lỗi tải thường
+            if (e?.response?.status === 401) { setExpired(true); setLoadErr(false); }
+            else setLoadErr(true); // UX 2026-10-26 (🟠T1)
         } finally {
             setLoading(false);
         }
@@ -226,7 +231,7 @@ const Transactions = () => {
 
     // Gói "Chờ duyệt trên Hub" (2026-10-21): duyệt/từ chối phiếu chờ ngay trong Admin (ngang hàng Hub)
     const handleApprove = async (row) => {
-        if (!window.confirm(`Duyệt phiếu ${row.code} (${fmtMoney(row.amount)}đ)?`)) return;
+        if (!(await confirmInApp(`Duyệt phiếu ${row.code} (${fmtMoney(row.amount)})?`))) return; // Sổ #23 · Lát 2d: fmtMoney đã có hậu tố đ — trước đây thêm 1 chữ đ nữa thành "đđ"
         setActionBusy(true);
         try {
             await axios.post(`${API}/transactions/${row.id}/approve`);
@@ -321,6 +326,7 @@ const Transactions = () => {
                             <option value="">Mọi trạng thái</option>
                             <option value="paid">Đã thanh toán</option>
                             <option value="pending">Chờ thanh toán</option>
+                            <option value="cancelled">Đã hủy</option>
                         </select>
                         {/* Gói "Chờ duyệt trên Hub" (2026-10-21): lọc theo trạng thái duyệt */}
                         <select value={fApproval} onChange={(e) => setFApproval(e.target.value)}
@@ -331,13 +337,11 @@ const Transactions = () => {
                             <option value="rejected">Đã từ chối</option>
                         </select>
                         <div className="flex-1 relative min-w-[200px]">
-                            <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && setSearch(searchInput)}
+                            <SearchInput value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                                onSearch={() => setSearch(searchInput)}
                                 placeholder="Tìm theo mã phiếu / ghi chú"
-                                className="w-full text-[13px] border border-gray-300 rounded pl-9 pr-3 py-2 min-h-[40px]" />
-                            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                                <path d="M21 21l-4.35-4.35M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0z" />
-                            </svg>
+                                wrapperStyle={{ display: 'flex', width: '100%' }}
+                                className="w-full text-[13px] border border-gray-300 rounded pl-3 pr-3 py-2 min-h-[40px]" />
                         </div>
                         <button onClick={() => setSearch(searchInput)}
                             className="px-4 py-2 rounded-lg bg-[#24305E] text-white text-[13px] min-h-[40px]">Tìm</button>
@@ -365,7 +369,7 @@ const Transactions = () => {
                                 {loading ? (
                                     <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : rows.length === 0 ? (
-                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu.<button onClick={fetchRows} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có phiếu nào.'}</td></tr>
+                                    <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">{expired ? (<span style={{ color: 'var(--m-danger)' }}>Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.</span>) : loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách phiếu.<button onClick={fetchRows} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : (branchId !== '0' ? 'Chưa có phiếu nào ở chi nhánh đang xem. Thử đổi phạm vi chi nhánh ở thanh bên để xem phiếu của chi nhánh khác.' : 'Chưa có phiếu nào.')}</td></tr>
                                 ) : rows.map((r) => (
                                     <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
                                         <td className="px-3 py-3 font-medium text-[#24305E] whitespace-nowrap">{r.code}</td>
@@ -379,6 +383,10 @@ const Transactions = () => {
                                         </td>
                                         <td className="px-3 py-3 text-right whitespace-nowrap text-gray-600">{r.running_balance != null ? fmtMoney(r.running_balance) : '-'}</td> {/* Gói 56 */}
                                         <td className="px-3 py-3 whitespace-nowrap">
+                                            {/* Lát 2g (2026-11-04): 2 huy hiệu nằm trong hộp flex có khoảng
+                                                cách rõ — trước đây chỉ cách nhau 4px nên nhìn dính liền
+                                                ("Đã thanh toánĐã duyệt"). */}
+                                            <span className="inline-flex items-center gap-1.5">
                                             <span className={`px-2.5 py-1 rounded-full text-[11.5px] font-medium border ${
                                                 r.status === 'paid'
                                                     ? 'bg-green-50 text-green-700 border-green-200'
@@ -386,12 +394,13 @@ const Transactions = () => {
                                             }`}>{STATUS_LABEL[r.status]}</span>
                                             {/* Gói "Chờ duyệt trên Hub" (2026-10-21): badge trạng thái duyệt — đủ 3 badge theo spec §4.3 */}
                                             {r.is_rejected ? (
-                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-red-50 text-red-700 border-red-200">Đã từ chối</span>
+                                                <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-red-50 text-red-700 border-red-200">Đã từ chối</span>
                                             ) : r.is_approved ? (
-                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-green-50 text-green-700 border-green-200">Đã duyệt</span>
+                                                <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-green-50 text-green-700 border-green-200">Đã duyệt</span>
                                             ) : (
-                                                <span className="ml-1 px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-amber-50 text-amber-700 border-amber-200">Chờ duyệt</span>
+                                                <span className="px-2.5 py-1 rounded-full text-[11.5px] font-medium border bg-amber-50 text-amber-700 border-amber-200">Chờ duyệt</span>
                                             )}
+                                            </span>
                                         </td>
                                         <td className="px-3 py-3 max-w-[220px]">
                                             {r.related_type === 'inbound' && (

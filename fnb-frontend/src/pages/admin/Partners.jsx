@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate as fmtDateShared } from '../../utils/format';
 import { API } from '../../utils/api';
@@ -175,9 +176,11 @@ const Partners = () => {
 
                 <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
                     <div className="p-4 border-b border-gray-100 flex gap-2 flex-wrap">
-                        <input value={search} onChange={(e) => setSearch(e.target.value)}
+                        <SearchInput value={search} onChange={(e) => setSearch(e.target.value)}
+                            onSearch={(v) => setSearch(v)}
                             placeholder="Tìm tên/mã/SĐT..."
-                            className="flex-1 min-w-[180px] text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]" />
+                            wrapperStyle={{ flex: 1, minWidth: 180 }}
+                            className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]" />
                         <select value={fType} onChange={(e) => setFType(e.target.value)}
                             className="text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]">
                             <option value="">Tất cả loại</option>

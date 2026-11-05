@@ -1,4 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,6 +18,7 @@ import DateInput from '../../components/DateInput';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // UX 2026-10-26 (🟠17): ô giờ vào/ra theo chuẩn 24h tự chế
 import MonthInput from '../../components/MonthInput';
 import { API } from '../../utils/api';
+import { confirmInApp } from '../../utils/confirmInApp'; // Sổ #23: xác nhận nội bộ thay confirm() trình duyệt
 import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // Spec danh mục dùng chung: fallback khi API lỗi/chưa migrate
@@ -114,11 +125,11 @@ function PayrollLockBar({ month }) {
     const [showUnlock, setShowUnlock] = useState(false);
 
     const load = () => axios.get(API + '/salary-lock/status', { params: { month } })
-        .then((r) => setSt(r.data?.data)).catch(() => {});
+        .then((r) => setSt(r.data?.data)).catch((e) => noteExpired(e));
     useEffect(() => { load(); }, [month]);
 
     const doLock = async () => {
-        if (!confirm('Chốt lương tháng ' + month + '? Sau khi chốt sẽ khóa toàn bộ giờ công/mức lương/thưởng/trừ/BHXH của kỳ và tự sinh 1 phiếu chi.')) return;
+        if (!(await confirmInApp('Chốt lương tháng ' + month + '? Sau khi chốt sẽ khóa toàn bộ giờ công/mức lương/thưởng/trừ/BHXH của kỳ và tự sinh 1 phiếu chi.'))) return; // Sổ #23
         try {
             const r = await axios.post(API + '/salary-lock/lock', { month });
             alert('Đã chốt lương tháng ' + month + ' — tổng thực nhận ' + Number(r.data.data.net_total).toLocaleString('vi-VN') + 'đ'
@@ -192,7 +203,7 @@ function TotalSalaryTab({ month }) {
     const [branches, setBranches] = useState([]);
 
     const loadBranches = () => {
-        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch(() => {});
+        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch((e) => noteExpired(e));
     };
 
     const load = async (branchId) => {
@@ -434,7 +445,7 @@ export default function Salary() {
     useEffect(() => { fetchEmployees(); }, [fetchEmployees]);
     useEffect(() => { fetchPayroll(); }, [fetchPayroll]);
     useEffect(() => {
-        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch(() => {});
+        axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch((e) => noteExpired(e));
     }, []);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
@@ -877,8 +888,8 @@ function AllowanceManager({ empId, month, editable, btn, inp }) {
     const [form, setForm] = useState({ allowance_type_id: '', amount: '', month: '', onlyMonth: false });
 
     const load = () => {
-        axios.get(API + '/allowance-types').then((r) => setTypes(r.data?.data || [])).catch(() => {});
-        if (empId) axios.get(API + '/salary/' + empId + '/allowances').then((r) => setRows(r.data?.data || [])).catch(() => {});
+        axios.get(API + '/allowance-types').then((r) => setTypes(r.data?.data || [])).catch((e) => noteExpired(e));
+        if (empId) axios.get(API + '/salary/' + empId + '/allowances').then((r) => setRows(r.data?.data || [])).catch((e) => noteExpired(e));
     };
     useEffect(() => { load(); }, [empId]); // eslint-disable-line
 

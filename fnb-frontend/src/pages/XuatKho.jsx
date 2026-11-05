@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import SearchInput from '../components/SearchInput';
 import axios from 'axios';
 import { API } from '../utils/api';
+import { getStaffSession, clearStaffSession, staffSessionExpired } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05)
 import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub)
 import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
 
 // Trang nhân viên tạo phiếu xuất kho bằng điện thoại (public, KHÔNG cần đăng nhập admin)
-// Token riêng: localStorage['xuatkho_token'] / ['xuatkho_emp']
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/staff_branch_id — đăng nhập 1 lần tại /nhan-vien
 // API (PENDING — cần backend bổ sung):
 // - POST /employee/outbound-receipts {reason, note, items:[{material_id, quantity}]}
 // Phiếu tạo ở trạng thái nháp, admin chốt sau (trừ kho FIFO khi chốt).
@@ -56,10 +58,8 @@ const CSS = `
 .xk-note{margin:12px 16px 0;padding:11px 14px;border-radius:12px;font-size:13px;line-height:1.55;background:#fffbeb;border:1px solid #f5dfae;color:#8a5a00;}
 `;
 
-function auth(token, hubT) {
-  const h = { headers: { Authorization: 'Bearer ' + token } };
-  if (hubT) h.params = { t: hubT };
-  return h;
+function auth(token) { // Gói phiên Hub 2026-11-05: bỏ tham số cổng ?t=
+  return { headers: { Authorization: 'Bearer ' + token } };
 }
 function errMsg(err, fallback) {
   if (err && err.response && err.response.data && err.response.data.message) return err.response.data.message;
@@ -71,25 +71,23 @@ function qtyNum(s) {
 }
 
 export default function XuatKho({ embed } = {}) {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: điều hướng không gắn ?t=
+  // Gói phiên Hub (2026-11-05): phiên chung của Hub — embed hoặc khóa staff_* khi mở trực tiếp; hết đọc khóa đảo riêng.
+  const sess = getStaffSession();
   // Spec danh mục dùng chung: lý do xuất kho đọc từ API, fallback cứng
   const REASONS = useSharedCategories('outbound_reasons', REASONS_FB);
-  const hubT = (embed && embed.hubT) || '';
-  const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('xuatkho_token') || '');
+  const [token, setToken] = useState(() => (embed && embed.token) || (sess && sess.token) || '');
   const [emp, setEmp] = useState(() => {
     if (embed && embed.emp) return embed.emp;
-    try { return JSON.parse(localStorage.getItem('xuatkho_emp') || 'null'); } catch (e) { return null; }
+    return sess && sess.emp ? sess.emp : null;
   });
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
   // Gói 60: đồng bộ emp khi hub đổi chi nhánh
   useEffect(() => {
     if (embed && embed.emp) setEmp(embed.emp);
   }, [embed && embed.emp, embed && embed.branchId]);
   const curBranchName = (() => {
-    const bid = embed && embed.branchId;
+    const bid = (embed && embed.branchId) || (sess && sess.branchId) || 0;
     const list = (emp && emp.branches) || [];
     if (bid) {
       const b = list.find((x) => (x.id || x) === bid);
@@ -122,49 +120,28 @@ export default function XuatKho({ embed } = {}) {
   };
   const toastErr = (m) => toast(m, true);
 
-  const logout = () => {
-    localStorage.removeItem('xuatkho_token');
-    localStorage.removeItem('xuatkho_emp');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setMaterials([]); setItems([]); setSuccess(null); setToastOn(false);
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung rồi về Hub
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  const expired = (e) => {
+  const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub, không tự xóa khóa ở trang con
     if (e && e.response && e.response.status === 401) {
       if (embed && embed.onExpired) { embed.onExpired(); }
-      else logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      else staffSessionExpired();
       return true;
     }
     return false;
   };
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('xuatkho_token', tk);
-      localStorage.setItem('xuatkho_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   const loadAll = async (tk) => {
     setLoading(true);
     try {
       const [m, c] = await Promise.all([
-        axios.get(API + '/employee/materials', auth(tk, hubT)),
-        axios.get(API + '/employee/stocktake-meta', auth(tk, hubT)).catch(() => ({ data: { data: {} } })),
+        axios.get(API + '/employee/materials', auth(tk)),
+        axios.get(API + '/employee/stocktake-meta', auth(tk)).catch(() => ({ data: { data: {} } })),
       ]);
       setMaterials((m.data && m.data.data) || []);
       setCategories(((c.data && c.data.data) || {}).categories || []);
@@ -227,14 +204,14 @@ export default function XuatKho({ embed } = {}) {
     try {
       // PENDING: cần backend POST /employee/outbound-receipts
       const r = await axios.post(API + '/employee/outbound-receipts', {
-        branch_id: (embed && embed.branchId) || null, // Gói 60: CN đang thao tác
+        branch_id: (embed && embed.branchId) || (sess && sess.branchId) || null, // Gói 60: CN đang thao tác
         reason,
         note: note.trim() || null,
         items: validItems.map((it) => ({
           material_id: it.materialId,
           quantity: qtyNum(it.qty),
         })),
-      }, auth(token, hubT));
+      }, auth(token));
       const d = (r.data && r.data.data) || {};
       setSuccess({ code: d.code || '', reason: reasonLabel });
       setItems([]); setNote('');
@@ -245,24 +222,20 @@ export default function XuatKho({ embed } = {}) {
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
 
-  if (!token && !embed) {
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng từng trang —
+  // chưa có phiên chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
+  if (!token) {
     return (
       <div className="xk-wrap">
         <style>{CSS}</style>
         <div className="xk-login">
-          <div className="xk-login-hd">
-            <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>📤 Xuất kho</h2>
-            <p style={{ opacity: .8, fontSize: 14 }}>Đăng nhập bằng SĐT + mã PIN 6 số</p>
+          <div className="xk-hd" style={{ borderRadius: 12 }}>
+            <div className="xk-title">📤 Xuất kho</div>
+            <div className="xk-sub">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <div className="xk-login-card">
-          <form onSubmit={doLogin}>
-            <label className="xk-label">Số điện thoại</label>
-            <input className="xk-field" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="09xxxxxxxx" />
-            <label className="xk-label">Mã PIN</label>
-            <input className="xk-field xk-pin" type="password" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/[^\d]/g, ''))} placeholder="••••••" />
-            {err && <div className="xk-msg">{err}</div>}
-            <button className="xk-send" disabled={loginBusy}>{loginBusy ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
-          </form>
+          <div className="xk-card">
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="xk-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
           </div>
         </div>
       </div>
@@ -289,7 +262,9 @@ export default function XuatKho({ embed } = {}) {
           <div className="xk-check-big">✓</div>
           <div style={{ fontSize: 17, fontWeight: 800 }}>Tạo phiếu thành công!</div>
           <div className="xk-code">{success.code}</div>
-          <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8 }}>Lý do: {success.reason} · Chờ quản lý chốt</div>
+          <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8 }}>Lý do: {success.reason}</div>
+          {/* S11: dòng trạng thái phiếu như màn hình thu/chi */}
+          <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8, lineHeight: 1.6 }}>Phiếu ở trạng thái <b>Chờ duyệt</b> — quản lý xác nhận trong admin mới có hiệu lực.</div>
           <button className="xk-submit" onClick={() => setSuccess(null)}>＋ Tạo phiếu mới</button>
         </div>
       </div>
@@ -432,12 +407,14 @@ function MaterialMultiPicker({ materials, categories, excludeIds, search, setSea
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
       <div style={{ background: '#fff', borderRadius: '18px 18px 0 0', width: '100%', maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: 18 }} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ fontSize: 16, fontWeight: 800, color: '#24305E', marginBottom: 12 }}>Chọn nguyên liệu</h3>
-        <input
-          style={{ width: '100%', minHeight: 48, border: '1.5px solid #F5A623', borderRadius: 12, padding: '10px 12px', fontSize: 15, marginBottom: 12, boxSizing: 'border-box' }}
+        <SearchInput
+          style={{ width: '100%', minHeight: 48, border: '1.5px solid #F5A623', borderRadius: 12, padding: '10px 12px', fontSize: 15, boxSizing: 'border-box' }}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onSearch={(v) => setSearch(v)}
           placeholder="Tìm nguyên liệu..."
           autoFocus
+          wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }}
         />
         <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>
           {groups.length === 0 && <div style={{ textAlign: 'center', color: '#6b7280', padding: 18 }}>Không có nguyên liệu nào.</div>}

@@ -34,7 +34,7 @@ class OutboundController extends Controller
             'per_page' => 'nullable|integer|min:1|max:200',
         ]);
 
-        $q = OutboundReceipt::with(['branch:id,name', 'employee:id,name'])
+        $q = OutboundReceipt::with(['branch:id,name', 'employee:id,full_name']) // FIX 2026-11-04: employees không có cột name (đúng là full_name) — chọn name làm 500 toàn bộ danh sách xuất
             ->withCount('items')
             ->orderByDesc('id');
 
@@ -81,8 +81,13 @@ class OutboundController extends Controller
             ? $this->resolveEmployeeBranch($actor, $v['branch_id'] ?? null)
             : (int) $v['branch_id'];
         $employeeId = $isEmployee ? (int) $actor->id : ($v['employee_id'] ?? null);
+        // Sổ #22 (2026-11-04): created_by là khóa ngoại sang users — NV tạo qua Hub
+        // mà ghi id NHÂN VIÊN vào đây là vỡ FK 1452 → 500 (log VPS 17:54:31).
+        // Người tạo phía NV đã nằm ở employee_id (mọi nơi hiển thị đều đọc cột đó,
+        // created_by không có nơi đọc) → actor là Employee thì để null, Admin giữ nguyên.
+        $createdBy = $isEmployee ? null : $request->user()?->id;
 
-        $receipt = DB::transaction(function () use ($v, $request, $branchId, $employeeId) {
+        $receipt = DB::transaction(function () use ($v, $request, $branchId, $employeeId, $createdBy) {
             $r = OutboundReceipt::create([
                 'code' => OutboundReceipt::nextCode(),
                 'branch_id' => $branchId,
@@ -91,7 +96,7 @@ class OutboundController extends Controller
                 'note' => $v['note'] ?? null,
                 'status' => 'draft',
                 'total_quantity' => 0,
-                'created_by' => $request->user()?->id,
+                'created_by' => $createdBy,
             ]);
 
             $total = 0;
@@ -125,7 +130,7 @@ class OutboundController extends Controller
         $receipt = OutboundReceipt::with([
             'items.material' => fn ($q) => $q->withTrashed(),
             'branch:id,name',
-            'employee:id,name',
+            'employee:id,full_name',
         ])->findOrFail($id);
 
         if ($deny = $this->denyReceiptBranch($request, $receipt->branch_id)) return $deny;
@@ -151,8 +156,16 @@ class OutboundController extends Controller
             ], 422);
         }
 
+        // Sổ #97 (2026-11-05): lấy actor TRƯỚC closure — bản cũ gọi
+        // $request->user() trong thân mà use không bắt $request → nổ
+        // "Undefined variable $request" khi duyệt qua Hub (đúng họ produce).
+        [$confirmUserId, $confirmEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        if ($confirmUserId === null && $confirmEmployeeId === null) {
+            $confirmUserId = auth()->id();
+        }
+
         try {
-            $deducted = DB::transaction(function () use ($receipt) {
+            $deducted = DB::transaction(function () use ($receipt, $confirmUserId, $confirmEmployeeId) {
                 // Khóa phiếu để 2 request không chốt trùng
                 $locked = OutboundReceipt::where('id', $receipt->id)->lockForUpdate()->first();
                 if ($locked->status !== 'draft') {
@@ -175,10 +188,7 @@ class OutboundController extends Controller
                 // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người chốt (User hoặc Employee).
                 // TESTER fix: chỉ fallback auth()->id() khi CẢ 2 đều null — ở Hub,
                 // auth()->id() trả mã NV, ghi vào cột FK users sẽ vi phạm FK/sai người.
-                [$confirmUserId, $confirmEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
-                if ($confirmUserId === null && $confirmEmployeeId === null) {
-                    $confirmUserId = auth()->id();
-                }
+                // ($confirmUserId/$confirmEmployeeId lấy trước closure — sổ #97.)
                 $locked->update([
                     'status' => 'confirmed',
                     'confirmed_by' => $confirmUserId,
@@ -223,7 +233,8 @@ class OutboundController extends Controller
         }
 
         // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
-        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
+        // Sổ #77 (2026-11-04): truyền $request->user() — NV hủy TRỰC TIẾP cũng có vết.
+        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
         $receipt->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
 
         return response()->json([

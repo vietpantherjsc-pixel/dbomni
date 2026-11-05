@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import SearchInput from '../components/SearchInput';
 import axios from 'axios';
-import { API } from '../utils/api'; // base API tương đối — chạy được trên điện thoại (IP LAN)
+import { API } from '../utils/api';
+import { getStaffSession, clearStaffSession, staffSessionExpired } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05) // base API tương đối — chạy được trên điện thoại (IP LAN)
 import DateInput from '../components/DateInput'; // ô ngày dd/mm/yyyy
 import HubConfirm from '../components/HubConfirm'; // UX 2026-10-26 (🟡 Hub): xác nhận tự chế thay window.confirm
 
 // Trang nhân viên nhập hàng bằng điện thoại (public, KHÔNG cần đăng nhập admin)
-// Token riêng: localStorage['nhapkho_token'] / ['nhapkho_emp']
-// API: POST /employee/phone-login, GET /employee/me,
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): localStorage['staff_token'] / ['staff_emp'] / ['staff_branch_id'] — đăng nhập 1 lần tại /nhan-vien
+// API: GET /employee/me,
 //      GET /employee/suppliers, GET /employee/materials,
 //      POST /employee/inbound-receipts
 
@@ -80,10 +82,8 @@ const CSS = `
 .nk-grand{font-size:30px;font-weight:800;color:${ORANGE};margin-top:6px;}
 `;
 
-function auth(token, hubT) {
-  const h = { headers: { Authorization: 'Bearer ' + token } };
-  if (hubT) h.params = { t: hubT };
-  return h;
+function auth(token) { // Gói phiên Hub 2026-11-05: bỏ tham số cổng ?t=
+  return { headers: { Authorization: 'Bearer ' + token } };
 }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 function isoToday() {
@@ -114,12 +114,13 @@ function errMsg(err, fallback) {
 }
 
 export default function NhapKho({ embed } = {}) {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-  const hubT = (embed && embed.hubT) || '';
-  const [token, setToken] = useState(() => (embed && embed.token) || localStorage.getItem('nhapkho_token') || '');
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: điều hướng không gắn ?t=
+  // Gói phiên Hub (2026-11-05): phiên chung của Hub — embed hoặc khóa staff_* khi mở trực tiếp; hết đọc khóa đảo riêng.
+  const sess = getStaffSession();
+  const [token, setToken] = useState(() => (embed && embed.token) || (sess && sess.token) || '');
   const [emp, setEmp] = useState(() => {
     if (embed && embed.emp) return embed.emp;
-    try { return JSON.parse(localStorage.getItem('nhapkho_emp') || 'null'); } catch (e) { return null; }
+    return sess && sess.emp ? sess.emp : null;
   });
   // Gói 60: đồng bộ emp khi hub đổi chi nhánh (embed.emp/branchId thay đổi)
   useEffect(() => {
@@ -127,7 +128,7 @@ export default function NhapKho({ embed } = {}) {
   }, [embed && embed.emp, embed && embed.branchId]);
   // Tên CN đang thao tác: ưu tiên branchId từ hub, fallback về emp.branch_name
   const curBranchName = (() => {
-    const bid = embed && embed.branchId;
+    const bid = (embed && embed.branchId) || (sess && sess.branchId) || 0;
     const list = (emp && emp.branches) || [];
     if (bid) {
       const b = list.find((x) => (x.id || x) === bid);
@@ -135,10 +136,7 @@ export default function NhapKho({ embed } = {}) {
     }
     return (emp && emp.branch_name) || '';
   })();
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
 
   const [suppliers, setSuppliers] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -176,7 +174,7 @@ export default function NhapKho({ embed } = {}) {
   const fetchMyReceipts = async () => {
     setMyLoading(true);
     try {
-      const r = await axios.get(API + '/employee/inbound-receipts', auth(token, hubT));
+      const r = await axios.get(API + '/employee/inbound-receipts', auth(token));
       setMyReceipts(r.data?.data?.data || r.data?.data || []);
       setMyErr(false);
     } catch { setMyErr(true); }
@@ -196,20 +194,16 @@ export default function NhapKho({ embed } = {}) {
   };
   const toastErr = (m) => toast(m, true);
 
-  const logout = () => {
-    localStorage.removeItem('nhapkho_token');
-    localStorage.removeItem('nhapkho_emp');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setSuppliers([]); setMaterials([]);
-    resetForm(true);
-    setSuccess(null); setToastOn(false);
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung rồi về Hub
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  const expired = (e) => {
+  const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub, không tự xóa khóa ở trang con
     if (e && e.response && e.response.status === 401) {
       if (embed && embed.onExpired) { embed.onExpired(); }
-      else logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      else staffSessionExpired();
       return true;
     }
     return false;
@@ -230,10 +224,10 @@ export default function NhapKho({ embed } = {}) {
     setLoading(true);
     try {
       const [s, m, u, c] = await Promise.all([
-        axios.get(API + '/employee/suppliers', auth(tk, hubT)),
-        axios.get(API + '/employee/materials', auth(tk, hubT)),
-        axios.get(API + '/employee/units', auth(tk, hubT)).catch(() => ({ data: { data: [] } })),
-        axios.get(API + '/employee/stocktake-meta', auth(tk, hubT)).catch(() => ({ data: { data: {} } })),
+        axios.get(API + '/employee/suppliers', auth(tk)),
+        axios.get(API + '/employee/materials', auth(tk)),
+        axios.get(API + '/employee/units', auth(tk)).catch(() => ({ data: { data: [] } })),
+        axios.get(API + '/employee/stocktake-meta', auth(tk)).catch(() => ({ data: { data: {} } })),
       ]);
       setSuppliers((s.data && s.data.data) || []);
       setMaterials((m.data && m.data.data) || []);
@@ -250,25 +244,6 @@ export default function NhapKho({ embed } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('nhapkho_token', tk);
-      localStorage.setItem('nhapkho_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   const removeItem = (key) => {
     setItems((prev) => prev.filter((it) => it.key !== key));
@@ -349,7 +324,7 @@ export default function NhapKho({ embed } = {}) {
     setSaving(true);
     try {
       const r = await axios.post(API + '/employee/inbound-receipts', {
-        branch_id: (embed && embed.branchId) || null, // Gói 60: CN đang thao tác
+        branch_id: (embed && embed.branchId) || (sess && sess.branchId) || null, // Gói 60: CN đang thao tác
         partner_id: supplierId ? Number(supplierId) : null,
         invoice_no: invoiceNo.trim() || null,
         receipt_date: receiptDate,
@@ -366,7 +341,7 @@ export default function NhapKho({ embed } = {}) {
           unit_cost: num(it.unitCost),
           expired_at: it.expiredAt || null,
         })),
-      }, auth(token, hubT));
+      }, auth(token));
       const d = (r.data && r.data.data) || {};
       setSuccess({
         code: d.code || '',
@@ -385,45 +360,21 @@ export default function NhapKho({ embed } = {}) {
 
   // ================= MÀN HÌNH ĐĂNG NHẬP =================
   // Gói 59: khi nhúng trong StaffHub (embed) thì dùng token/emp của hub, bỏ qua login riêng
-  if (!token && !embed) {
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng từng trang —
+  // chưa có phiên chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
+  if (!token) {
     return (
       <div className="nk-wrap">
         <style>{CSS}</style>
         <div className="nk-login">
           <div className="nk-hd" style={{ borderRadius: 12 }}>
-            <button onClick={goHub} aria-label="Quay lại hub"
-              style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="nk-title">📦 Nhập hàng</div>
-            <div className="nk-sub">Đăng nhập để tiếp tục</div>
+            <div className="nk-sub">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <form className="nk-card" onSubmit={doLogin}>
-            <label className="nk-label" style={{ marginTop: 4 }}>Số điện thoại</label>
-            <input
-              className="nk-field"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, ''))}
-              placeholder="09xxxxxxxx"
-              autoComplete="tel"
-            />
-            <label className="nk-label">Mã PIN 6 số</label>
-            <input
-              className="nk-field nk-pin"
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              autoComplete="off"
-            />
-            {err && <div className="nk-msg" style={{ margin: '12px 0 0' }}>{err}</div>}
-            <button className="nk-send" type="submit" disabled={loginBusy}>
-              {loginBusy ? 'Đang xử lý...' : 'Đăng nhập'}
-            </button>
-          </form>
+          <div className="nk-card">
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="nk-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
+          </div>
         </div>
       </div>
     );
@@ -454,6 +405,10 @@ export default function NhapKho({ embed } = {}) {
           <div className="nk-grand">{fmtVND(success.grand)}</div>
           <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8, lineHeight: 1.6 }}>
             {success.supplierName} · {success.payLabel}
+          </div>
+          {/* Đợt fix rà soát VPS (S11): dòng trạng thái phiếu như màn hình thu/chi */}
+          <div style={{ fontSize: 13.5, color: '#6b7280', marginTop: 8, lineHeight: 1.6 }}>
+            Phiếu ở trạng thái <b>Chờ duyệt</b> — quản lý xác nhận trong admin mới có hiệu lực.
           </div>
           {/* Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất */}
           {success.priceWarnings && success.priceWarnings.length > 0 && (
@@ -806,12 +761,14 @@ function MaterialMultiPicker({ materials, categories, excludeIds, search, setSea
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
       <div style={{ background: '#fff', borderRadius: '18px 18px 0 0', width: '100%', maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: 18 }} onClick={(e) => e.stopPropagation()}>
         <h3 style={{ fontSize: 16, fontWeight: 800, color: '#24305E', marginBottom: 12 }}>Chọn nguyên liệu</h3>
-        <input
-          style={{ width: '100%', minHeight: 48, border: '1.5px solid #F5A623', borderRadius: 12, padding: '10px 12px', fontSize: 15, marginBottom: 12, boxSizing: 'border-box' }}
+        <SearchInput
+          style={{ width: '100%', minHeight: 48, border: '1.5px solid #F5A623', borderRadius: 12, padding: '10px 12px', fontSize: 15, boxSizing: 'border-box' }}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onSearch={(v) => setSearch(v)}
           placeholder="Tìm nguyên liệu..."
           autoFocus
+          wrapperStyle={{ display: 'flex', width: '100%', marginBottom: 12 }}
         />
         <div style={{ flex: 1, overflowY: 'auto', marginBottom: 12 }}>
           {groups.length === 0 && <div style={{ textAlign: 'center', color: '#6b7280', padding: 18 }}>Không có nguyên liệu nào.</div>}

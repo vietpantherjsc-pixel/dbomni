@@ -6,10 +6,13 @@ import NhapKho from './NhapKho';
 import XuatKho from './XuatKho';
 import ChuyenKho from './ChuyenKho';
 import { ApprovalCluster, ApprovalsFlow } from './hub/Approvals'; // Gói "Chờ duyệt trên Hub" (2026-10-21)
+import { saveStaffSession, clearStaffSession } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05)
 
-// Gói 59: Hub nhân viên (/nhan-vien) — 1 link + QR chung cho NV.
-// - Đăng nhập PIN 1 lần (lưu localStorage['staff_token'] / ['staff_emp'])
-// - ?t= : mã QR hub, lưu localStorage['staff_hub_t'], gắn vào mọi API call
+// Gói 59: Hub nhân viên (/nhan-vien) — cổng chung cho NV.
+// - Gói phiên Hub (2026-11-05, phán Đại Vương): đăng nhập SĐT+PIN 1 lần
+//   duy nhất, chọn CN ngay lúc đăng nhập (staff_token/staff_emp/
+//   staff_branch_id); mọi trang con đọc chung phiên này. Cổng QR Hub
+//   (?t=/staff_hub_token) ĐÃ GỠ — đổi CN = đăng xuất rồi đăng nhập lại.
 // - 4 cụm nút: Kho / Chế biến / Thu chi / Cá nhân
 // - Nhập/Xuất/Chuyển kho: nhúng form có sẵn (embed prop)
 // - Phiếu thu/chi: form rút gọn ngay trong hub → POST /api/employee/transactions (chờ duyệt)
@@ -58,10 +61,8 @@ const CSS = `
 .sh-submit:disabled{opacity:.45;}
 `;
 
-function auth(token, hubT) {
-  const h = { headers: { Authorization: 'Bearer ' + token } };
-  if (hubT) h.params = { t: hubT };
-  return h;
+function auth(token) { // Gói phiên Hub 2026-11-05: bỏ tham số cổng ?t= — phiên Bearer là đủ
+  return { headers: { Authorization: 'Bearer ' + token } };
 }
 function errMsg(err, fallback) {
   if (err && err.response && err.response.data && err.response.data.message) return err.response.data.message;
@@ -77,7 +78,7 @@ function fmtVND(n) {
 }
 
 // ---- Form phiếu thu/chi rút gọn (dùng trong hub) ----
-function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
+function TxnForm({ token, emp, kind, onBack, onExpired, branchId, branchName }) {
   const isIncome = kind === 'income';
   const [cats, setCats] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -93,18 +94,22 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
   const [catErr, setCatErr] = useState(false); // UX 2026-10-26 (🟠T1 Hub)
   const loadCats = async () => {
     try {
-      const r = await axios.get(API + '/transaction-categories', auth(token, hubT));
+      const r = await axios.get(API + '/transaction-categories', auth(token));
       const list = r.data && r.data.data ? r.data.data : [];
       setCats(list.filter((c) => c.type === (isIncome ? 'income' : 'expense')));
       setCatErr(false);
-    } catch (e) { setCatErr(true); }
+    } catch (e) {
+      // S5: 401 = hết phiên → về đăng nhập kèm câu chuẩn, không hiện "Không tải được danh mục…"
+      if (e && e.response && e.response.status === 401) { onExpired(); return; }
+      setCatErr(true);
+    }
   };
 
   useEffect(() => {
     (async () => {
       await loadCats();
       try {
-        const r2 = await axios.get(API + '/accounts', auth(token, hubT));
+        const r2 = await axios.get(API + '/accounts', auth(token));
         const list2 = r2.data && r2.data.data ? r2.data.data : (Array.isArray(r2.data) ? r2.data : []);
         setAccounts(Array.isArray(list2) ? list2 : []);
       } catch (e) { setAccounts([]); /* NV không có quyền xem quỹ → ẩn field */ }
@@ -127,7 +132,7 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
         occurred_at: date || null,
         note: note.trim() || null,
         branch_id: branchId || null, // Gói 60: CN đang thao tác
-      }, auth(token, hubT));
+      }, auth(token));
       const d = r.data && r.data.data ? r.data.data : {};
       setDone({ code: d.code || '', amount: amt });
     } catch (e) {
@@ -145,7 +150,7 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
           <div style={{ flex: 1 }} />
         </div>
         <div className="sh-title">{isIncome ? '🧾 Tạo phiếu thu' : '💸 Tạo phiếu chi'}</div>
-        <div className="sh-sub">{(emp && emp.full_name) || ''} · {(emp && emp.branch_name) || ''}</div>
+        <div className="sh-sub">{(emp && emp.full_name) || ''} · {branchName || (emp && emp.branch_name) || ''}</div>
       </header>
 
       {done ? (
@@ -201,14 +206,6 @@ function TxnForm({ token, hubT, emp, kind, onBack, onExpired, branchId }) {
 
 // ---- Trang hub chính ----
 export default function StaffHub() {
-  const [hubT, setHubT] = useState(() => {
-    try {
-      const q = new URLSearchParams(window.location.search);
-      const t = q.get('t') || '';
-      if (t) localStorage.setItem('staff_hub_t', t);
-      return t || localStorage.getItem('staff_hub_t') || '';
-    } catch (e) { return ''; }
-  });
   const [token, setToken] = useState(() => localStorage.getItem('staff_token') || '');
   const [emp, setEmp] = useState(() => {
     try { return JSON.parse(localStorage.getItem('staff_emp') || 'null'); } catch (e) { return null; }
@@ -220,6 +217,16 @@ export default function StaffHub() {
   const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi | choduyet
   const [approvalType, setApprovalType] = useState('inbound'); // loại phiếu mở từ cụm Chờ duyệt
 
+  // Gói phiên Hub (2026-11-05): đăng nhập 2 pha trong cùng 1 luồng —
+  // pha 1 SĐT+PIN lấy phiên + danh sách CN được phân công; NV nhiều CN thì
+  // chọn CN ngay tại đây (server kiểm lại phân công qua branch_id), 1 CN
+  // thì tự khóa luôn. CN là một phần của phiên: đổi CN = đăng xuất.
+  const [pendingLogin, setPendingLogin] = useState(null); // { tk, info } chờ chọn CN
+  const finishLogin = (tk, info, bid) => {
+    saveStaffSession(tk, info, bid);
+    setToken(tk); setEmp(info); setBranchId(bid || 0);
+    setPendingLogin(null); setPhone(''); setPin('');
+  };
   const doLogin = async (e) => {
     e.preventDefault();
     setErr('');
@@ -229,35 +236,45 @@ export default function StaffHub() {
     if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
     setLoginBusy(true);
     try {
-      const cfg = hubT ? { params: { t: hubT } } : {};
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin }, cfg);
+      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, surface: 'hub' }); // S5: phiên riêng của Hub
       const tk = r.data.access_token;
       const info = r.data.employee || {};
-      localStorage.setItem('staff_token', tk);
-      localStorage.setItem('staff_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
+      const list = info.branches || [];
+      if (list.length > 1) { setPendingLogin({ tk, info }); return; }
+      finishLogin(tk, info, (list[0] && (list[0].id || list[0])) || info.branch_id || 0);
     } catch (e2) {
       setErr(errMsg(e2, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
     } finally { setLoginBusy(false); }
   };
-
-  const logout = () => {
-    localStorage.removeItem('staff_token');
-    localStorage.removeItem('staff_emp');
-    setToken(''); setEmp(null); setScreen('hub');
-  };
-  const onExpired = () => { logout(); };
-  const back = () => setScreen('hub');
-  // Gói 60: chi nhánh đang thao tác (NV nhiều CN được đổi)
-  const empBranches = (emp && emp.branches) || [];
-  const [branchId, setBranchId] = useState(() => {
+  const pickBranch = async (bid) => {
+    if (!pendingLogin) return;
+    setErr('');
+    let p = phone.trim().replace(/\s+/g, '');
+    if (p.startsWith('+84')) p = '0' + p.slice(3);
+    setLoginBusy(true);
     try {
-      const saved = parseInt(localStorage.getItem('staff_branch_id') || '0', 10);
-      if (saved > 0 && empBranches.some((b) => (b.id || b) === saved) !== false) return saved;
-    } catch (e) { /* ignore */ }
-    return 0;
-  });
-  // Đồng bộ branchId khi emp thay đổi (đăng nhập mới)
+      // Gọi lại phone-login kèm branch_id: server kiểm CN thuộc phân công
+      // (422 nếu không) và cấp token mới của chính phiên này.
+      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, surface: 'hub', branch_id: bid });
+      finishLogin(r.data.access_token, r.data.employee || pendingLogin.info, r.data.session_branch_id || bid);
+    } catch (e2) {
+      setErr(errMsg(e2, 'Không chọn được chi nhánh.'));
+    } finally { setLoginBusy(false); }
+  };
+
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất là lối duy nhất đổi CN
+    clearStaffSession();
+    setToken(''); setEmp(null); setScreen('hub'); setBranchId(0); setPendingLogin(null);
+  };
+  // S5: hết phiên → về màn hình đăng nhập KÈM câu chuẩn (mẫu trang chấm công chi nhánh),
+  // thay vì đăng xuất câm khiến NV tưởng lỗi tải. doLogin xóa err khi đăng nhập lại.
+  const onExpired = () => { logout(); setErr('Phiên đăng nhập đã hết hạn. Vui lòng nhập PIN để đăng nhập lại.'); };
+  const back = () => setScreen('hub');
+  // Gói phiên Hub (2026-11-05): CN của phiên — khóa lúc đăng nhập, chỉ hiển
+  // thị, KHÔNG đổi tại Hub (đổi CN = đăng xuất rồi đăng nhập lại).
+  const empBranches = (emp && emp.branches) || [];
+  const [branchId, setBranchId] = useState(() => parseInt(localStorage.getItem('staff_branch_id') || '0', 10) || 0);
+  // Đồng bộ branchId khi emp thay đổi (đăng nhập mới / tải lại trang)
   useEffect(() => {
     if (!emp) return;
     const list = (emp.branches) || [];
@@ -271,16 +288,11 @@ export default function StaffHub() {
       try { localStorage.setItem('staff_branch_id', String(primary)); } catch (e) { /* ignore */ }
     }
   }, [emp && emp.id]);
-  const changeBranch = (id) => {
-    const nid = parseInt(id, 10) || 0;
-    setBranchId(nid);
-    try { localStorage.setItem('staff_branch_id', String(nid)); } catch (e) { /* ignore */ }
-  };
   const branchName = (() => {
     const b = empBranches.find((x) => (x.id || x) === branchId);
     return (b && b.name) || (emp && emp.branch_name) || '';
   })();
-  const embed = { token, emp, hubT, onBack: back, onExpired, branchId };
+  const embed = { token, emp, onBack: back, onExpired, branchId };
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
 
@@ -305,10 +317,39 @@ export default function StaffHub() {
     ]},
   ];
 
-  const openBtn = (b) => {
-    if (b.href) { window.location.href = b.href + (hubT ? (b.href.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(hubT) : ''); return; }
+  const openBtn = (b) => { // Gói phiên Hub 2026-11-05: điều hướng không còn gắn ?t=
+    if (b.href) { window.location.href = b.href; return; }
     setScreen(b.key);
   };
+
+  // ---- Màn hình chọn chi nhánh (pha 2 của đăng nhập) ----
+  if (!token && pendingLogin) {
+    const list = pendingLogin.info.branches || [];
+    return (
+      <div className="sh-wrap">
+        <style>{CSS}</style>
+        <div className="sh-login">
+          <div className="sh-hd" style={{ borderRadius: 12 }}>
+            <div className="sh-title">🏬 Chọn chi nhánh làm việc</div>
+            <div className="sh-sub">{pendingLogin.info.full_name || ''} — chọn 1 lần cho cả phiên, muốn đổi chi nhánh thì đăng xuất rồi đăng nhập lại</div>
+          </div>
+          <div className="sh-card">
+            {list.map((b) => (
+              <button key={b.id || b} className="sh-send" style={{ marginTop: 10 }} disabled={loginBusy}
+                onClick={() => pickBranch(b.id || b)}>
+                {b.name || b}
+              </button>
+            ))}
+            {err && <div className="sh-msg">{err}</div>}
+            <button className="sh-send" style={{ background: '#e5e7eb', color: '#24305E' }} disabled={loginBusy}
+              onClick={() => { setPendingLogin(null); setPin(''); setErr(''); }}>
+              ‹ Quay lại đăng nhập
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ---- Màn hình đăng nhập ----
   if (!token) {
@@ -318,7 +359,7 @@ export default function StaffHub() {
         <div className="sh-login">
           <div className="sh-hd" style={{ borderRadius: 12 }}>
             <div className="sh-title">👥 Cổng nhân viên</div>
-            <div className="sh-sub">Quét QR tại quầy → nhập SĐT + PIN để làm việc</div>
+            <div className="sh-sub">Nhập SĐT + PIN để làm việc</div>
           </div>
           <form className="sh-card" onSubmit={doLogin}>
             <label className="sh-label" style={{ marginTop: 4 }}>Số điện thoại</label>
@@ -340,10 +381,10 @@ export default function StaffHub() {
   if (screen === 'nhap') return <NhapKho embed={embed} />;
   if (screen === 'xuat') return <XuatKho embed={embed} />;
   if (screen === 'chuyen') return <ChuyenKho embed={embed} />;
-  if (screen === 'thu') return <TxnForm token={token} hubT={hubT} emp={emp} kind="income" onBack={back} onExpired={onExpired} branchId={branchId} />;
-  if (screen === 'chi') return <TxnForm token={token} hubT={hubT} emp={emp} kind="expense" onBack={back} onExpired={onExpired} branchId={branchId} />;
+  if (screen === 'thu') return <TxnForm token={token} emp={emp} kind="income" onBack={back} onExpired={onExpired} branchId={branchId} branchName={branchName} />;
+  if (screen === 'chi') return <TxnForm token={token} emp={emp} kind="expense" onBack={back} onExpired={onExpired} branchId={branchId} branchName={branchName} />;
   // Gói "Chờ duyệt trên Hub" (2026-10-21): luồng duyệt phiếu chờ
-  if (screen === 'choduyet') return <ApprovalsFlow token={token} hubT={hubT} emp={emp} branchId={branchId} branchName={branchName} initialType={approvalType} onBack={back} />;
+  if (screen === 'choduyet') return <ApprovalsFlow token={token} emp={emp} branchId={branchId} branchName={branchName} initialType={approvalType} onBack={back} onExpired={onExpired} />;
 
   // ---- Trang hub ----
   return (
@@ -354,16 +395,7 @@ export default function StaffHub() {
           <div className="sh-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="sh-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            {empBranches.length > 1 ? (
-              <select className="sh-branchsel" value={branchId} onChange={(e) => changeBranch(e.target.value)}
-                aria-label="Chi nhánh thao tác">
-                {empBranches.map((b) => (
-                  <option key={b.id || b} value={b.id || b}>{b.name || b}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="sh-sub">{branchName}</div>
-            )}
+            <div className="sh-sub">🏬 {branchName}{empBranches.length > 1 ? ' · đổi CN: đăng xuất rồi đăng nhập lại' : ''}</div>
           </div>
           <button className="sh-logout" onClick={logout}>Đăng xuất</button>
         </div>
@@ -371,7 +403,7 @@ export default function StaffHub() {
       </header>
 
       {/* Gói "Chờ duyệt trên Hub" (2026-10-21): cụm Chờ duyệt ngay dưới header, trên 4 cụm cũ */}
-      <ApprovalCluster token={token} hubT={hubT} branchId={branchId}
+      <ApprovalCluster token={token} branchId={branchId} onExpired={onExpired}
         onOpen={(t) => { setApprovalType(t); setScreen('choduyet'); }} />
 
       {BTNS.map((g) => (

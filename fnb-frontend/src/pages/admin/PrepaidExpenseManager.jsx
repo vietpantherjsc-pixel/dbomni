@@ -1,4 +1,14 @@
 import React, { useEffect, useState } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import { API } from '../../utils/api';
 import DateInput from '../../components/DateInput';
@@ -31,7 +41,7 @@ export default function PrepaidExpenseManager() {
     };
     useEffect(() => { load(); }, []);
     useEffect(() => {
-        axios.get(`${API}/branches`).then((r) => setBranches(r.data?.data || [])).catch(() => {});
+        axios.get(`${API}/branches`).then((r) => setBranches(r.data?.data || [])).catch((e) => noteExpired(e));
     }, []);
 
     const resetForm = () => {

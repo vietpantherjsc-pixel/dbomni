@@ -10,14 +10,38 @@ export const MINI_APP_ID = appConfig?.app?.id || '';
 export const miniAppLink = (refCode) => `https://zalo.me/s/${MINI_APP_ID}${refCode ? `?ref=${encodeURIComponent(refCode)}` : ''}`;
 export const GREEN = '#24305E'; // fallback; màu thật lấy từ /theme qua loadTheme()
 
+// Spec đăng nhập SĐT + mật khẩu §3.1: phiên token (khóa zm_session) gửi
+// qua header Authorization: Bearer — không đưa token vào URL.
 async function req(path, opts = {}) {
+  const headers = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+  const sess = getSession();
+  if (sess?.token) headers['Authorization'] = `Bearer ${sess.token}`;
   const res = await fetch(`${API}${path}`, {
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    headers,
     ...opts,
   });
   const data = await res.json();
-  if (!data.success) throw new Error(data.message || 'Có lỗi xảy ra');
+  if (!data.success) {
+    const e = new Error(data.message || 'Có lỗi xảy ra');
+    e.code = data.code || null; // vd consent_required, account_locked
+    e.status = res.status;
+    e.errors = data.errors || null; // danh sách lỗi validator mật khẩu
+    throw e;
+  }
   return data.data;
+}
+
+// Như req() nhưng trả nguyên JSON (kể cả lỗi) — cho các luồng mật khẩu cần
+// đọc mã lỗi / danh sách lỗi / số phút khóa.
+async function reqRaw(path, opts = {}) {
+  const headers = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+  const sess = getSession();
+  if (sess?.token) headers['Authorization'] = `Bearer ${sess.token}`;
+  const res = await fetch(`${API}${path}`, {
+    headers,
+    ...opts,
+  });
+  return res.json();
 }
 
 export const api = {
@@ -68,6 +92,19 @@ export const api = {
   updateAddress: (id, payload) => req(`/addresses/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteAddress: (id, customerId, phone, memberCode) => req(`/addresses/${id}?customer_id=${customerId}&phone=${encodeURIComponent(phone || '')}&member_code=${encodeURIComponent(memberCode || '')}`, { method: 'DELETE' }),
   customerByPhone: (phone, memberCode) => req(`/customer?phone=${encodeURIComponent(phone)}&member_code=${encodeURIComponent(memberCode)}`),
+  // Spec đăng nhập SĐT + mật khẩu §3–§4: hồ sơ theo phiên token hiện tại.
+  customerMe: () => req('/customer'),
+  // Spec đăng nhập SĐT + mật khẩu §4: các endpoint mật khẩu/phiên — dùng
+  // reqRaw để phía gọi đọc được mã lỗi (account_locked, weak_password…)
+  // và danh sách lỗi validator.
+  passwordLogin: (payload) => reqRaw('/customer/password/login', { method: 'POST', body: JSON.stringify(payload) }),
+  passwordZaloSet: (payload) => reqRaw('/customer/password/zalo-set', { method: 'POST', body: JSON.stringify(payload) }),
+  passwordSet: (payload) => reqRaw('/customer/password/set', { method: 'POST', body: JSON.stringify(payload) }),
+  passwordChange: (payload) => reqRaw('/customer/password/change', { method: 'PATCH', body: JSON.stringify(payload) }),
+  passwordCounterSet: (payload) => reqRaw('/customer/password/counter-set', { method: 'POST', body: JSON.stringify(payload) }),
+  codeLogin: (payload) => reqRaw('/customer/session/code-login', { method: 'POST', body: JSON.stringify(payload) }),
+  sessionLogout: () => reqRaw('/customer/session/logout', { method: 'POST' }),
+  updateProfileEmail: (payload) => reqRaw('/customer/profile/email', { method: 'PATCH', body: JSON.stringify(payload) }),
   createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
   trackOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}?phone=${encodeURIComponent(phone || '')}`),
   cancelOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST', body: JSON.stringify({ phone }) }),
@@ -125,6 +162,14 @@ export const getProfile = () => {
 };
 export const setProfile = (p) => storage.set('zm_profile', p);
 
+// Spec đăng nhập SĐT + mật khẩu §3.1: token phiên lưu ở khóa riêng
+// (zm_session), không đưa vào URL, không lưu cùng hồ sơ hiển thị.
+export const getSession = () => {
+  return storage.getJSON('zm_session', null);
+};
+export const setSession = (s) => storage.set('zm_session', s);
+export const clearSession = () => storage.remove('zm_session');
+
 // Gói 49i: giá bán — ưu tiên giá kênh online, fallback về giá gốc
 export const priceOf = (p) => Number(p?.online_price ?? p?.base_price ?? 0);
 
@@ -151,6 +196,58 @@ export const imgUrl = (u) => {
 export const getRef = () => {
   return storage.get('zm_ref') || '';
 };
+// Spec đăng ký Zalo B §2.1 + spec mật khẩu §5.1(b)/§5.2: lấy token Zalo
+// (access_token + phone_token) qua zmp-sdk — dùng chung cho /zalo/auth
+// và /customer/password/zalo-set, không viết luồng thứ hai.
+export const getZaloTokens = async () => {
+  if (!storage.isZalo()) return { ok: false, code: 'not_zalo' };
+  const { getUserInfo, getAccessToken, getPhoneNumber } = await import('zmp-sdk/apis');
+  const { userInfo } = await getUserInfo({});
+  const accessToken = await getAccessToken({});
+  let phoneToken = null;
+  try {
+    const ph = await getPhoneNumber({});
+    phoneToken = ph?.token || null;
+  } catch { /* từ chối SĐT → server trả B3 nếu cần tạo mới */ }
+  return { ok: true, accessToken, phoneToken, userInfo };
+};
+
+// Spec đăng ký Zalo B §2.1: HÀM XÁC THỰC ZALO DÙNG CHUNG — trang Tài khoản
+// (thẻ đăng ký mới + mục Quản lý quyền) và trang Minigame đều gọi đúng hàm này,
+// không viết luồng thứ hai. Trả về json thô của /zalo/auth (success/code/data)
+// để phía gọi tự chọn UI (chào mừng/B3/thông báo mã mới); từ chối hộp thoại
+// quyền Zalo → ném lỗi cho phía gọi xử lý im lặng như trước.
+// Spec mật khẩu §3.4: thành công kèm session_token → lưu phiên token
+// (member_code chỉ còn để hiển thị, không làm chứng thực nữa).
+export const authWithZalo = async () => {
+  const tk = await getZaloTokens();
+  if (!tk.ok) return { success: false, code: 'not_zalo' };
+  const res = await fetch(`${API}/zalo/auth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      access_token: tk.accessToken,
+      phone_token: tk.phoneToken,
+      name: tk.userInfo?.name,
+      avatar: tk.userInfo?.avatar,
+      referred_by: getRef() || null,
+    }),
+  });
+  const json = await res.json();
+  if (json.success) {
+    storage.set('zm_zalo_profile', { zalo_id: json.data.zalo_id, name: json.data.name });
+    if (json.data.session_token) {
+      setSession({ token: json.data.session_token, expires_at: json.data.session_expires_at || null });
+    }
+    // Audit 2026-10-23 BM-01/BM-02: server đã xác thực phone_token — lưu SĐT +
+    // mã TV server trả vào hồ sơ (để hiển thị thẻ thành viên).
+    if (json.data.phone && json.data.member_code) {
+      setProfile({ ...(getProfile() || {}), phone: json.data.phone, member_code: json.data.member_code, customer_id: json.data.customer_id, zalo_id: json.data.zalo_id });
+    }
+  }
+  return json;
+};
+
 // Gói Đón Bình Minh (2026-10-28): ghi/gỡ mã mời từ ô nhập tay ở Checkout —
 // đi cùng 1 kho zm_ref với đường link để payload đặt đơn không đổi.
 export const setRef = (code) => {

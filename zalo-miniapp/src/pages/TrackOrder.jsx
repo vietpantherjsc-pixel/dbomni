@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api, fmt, getProfile } from '../api';
 import TransferGuide from '../components/TransferGuide';
+import ZmIcon from '../components/ZmIcon';
 import { storage } from '../utils/storage';
 import { fmtDateTime } from '../utils/format';
 import { TabBar } from './Home';
@@ -126,7 +127,7 @@ export default function TrackOrder() {
               </span>
             </div>
             <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>
-              {order.order_type === 'delivery' ? '🛵 Giao hàng' : '🏃 Mang đi'} · {order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Trả tại quán'}
+              {order.order_type === 'delivery' ? 'Giao hàng' : 'Mang đi'} · {order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Trả tại quán'}
               {order.payment_status === 'pending' && order.payment_method === 'transfer' && ' · ⏳ Chờ quán xác nhận tiền'}
               {order.scheduled_at && ` · ⏰ Lấy lúc ${fmtDateTime(order.scheduled_at)}`}
             </div>
@@ -135,7 +136,7 @@ export default function TrackOrder() {
           {/* Spec QR 2026-10-21: đơn BANK chưa xác nhận tiền → hiện lại khối CK
               (backend chỉ trả transfer khi đang chờ tiền; NV xác nhận xong khối tự biến mất nhờ poll 5s) */}
           {order.transfer && (
-            <TransferGuide code={order.code} transfer={order.transfer} notifiedAt={order.customer_notified_at} />
+            <TransferGuide code={order.code} transfer={order.transfer} notifiedAt={order.customer_notified_at} shopPhone={order.branch_phone} />
           )}
 
           {order.status !== 'cancelled' && (
@@ -149,11 +150,19 @@ export default function TrackOrder() {
             </div>
           )}
 
+          {/* S15: địa chỉ giao hàng khách đã nhập — hiện độc lập với trạng thái dispatch
+              để khách kiểm lại được ngay từ lúc đặt xong (chỉ đơn giao hàng) */}
+          {order.order_type === 'delivery' && order.delivery?.address && (
+            <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12, fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ZmIcon name="mapPin" size={14} /><b style={{ color: '#333' }}>Địa chỉ giao hàng:</b> {order.delivery.address}
+            </div>
+          )}
+
           {/* Gói 60: trạng thái giao hàng live */}
           {order.delivery?.status && !['failed', 'cancelled'].includes(order.delivery.status) && (
             <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>
-                🛵 Giao hàng · {order.delivery.provider_label || ''}
+              <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <ZmIcon name="bike" size={14} />Giao hàng · {order.delivery.provider_label || ''}
                 {order.delivery.failover_from && (
                   <span style={{ marginLeft: 6, fontSize: 11, background: '#fff7e6', color: '#b45309', border: '1px solid #fcd34d', borderRadius: 10, padding: '2px 8px' }}>
                     Đã chuyển hãng
@@ -173,15 +182,15 @@ export default function TrackOrder() {
               </div>
               {order.delivery.driver_name && (
                 <div style={{ fontSize: 13, color: '#555', marginTop: 8 }}>
-                  👤 Tài xế: <b>{order.delivery.driver_name}</b>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="user" size={14} />Tài xế: <b>{order.delivery.driver_name}</b></span>
                   {order.delivery.driver_phone && <> · <a href={`tel:${order.delivery.driver_phone}`}>{order.delivery.driver_phone}</a></>}
-                  {order.delivery.driver_plate && <> · 🚗 {order.delivery.driver_plate}</>}
+                  {order.delivery.driver_plate && <> · <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="car" size={14} />{order.delivery.driver_plate}</span></>}
                 </div>
               )}
               {order.delivery.tracking_url && (
                 <a href={order.delivery.tracking_url} target="_blank" rel="noreferrer"
-                  style={{ display: 'inline-block', marginTop: 8, fontSize: 13, color: '#24305E', fontWeight: 700 }}>
-                  📍 Theo dõi vị trí tài xế →
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 13, color: '#24305E', fontWeight: 700 }}>
+                  <ZmIcon name="mapPin" size={14} />Theo dõi vị trí tài xế →
                 </a>
               )}
             </div>
@@ -210,7 +219,7 @@ export default function TrackOrder() {
                   <span className="c-name">
                     <b>{it.name}</b>
                     {options.map((o, j) => <span key={j} className="zm-ot-opt">• {o}</span>)}
-                    {freeNote && <span className="zm-ot-note">📝 {freeNote}</span>}
+                    {freeNote && <span className="zm-ot-note" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="note" size={14} />{freeNote}</span>}
                   </span>
                   <span className="c-qty">{it.quantity}</span>
                   <span className="c-price">{fmt(it.unit_price)}đ</span>
@@ -222,8 +231,10 @@ export default function TrackOrder() {
           </div>
 
           {/* Audit 2026-10-21 🟠12: hiện nút hủy cho cả đơn chờ CK (BANK) + COD chờ xử lý,
-              khớp điều kiện backend cancel() — trước đây chỉ đơn 'pending/pending' mới thấy. */}
-          {['pending', 'confirmed'].includes(order.status) && ['pending', 'pending_payment', 'transfer_notified', 'confirmed'].includes(order.payment_status) && (
+              khớp điều kiện backend cancel() — trước đây chỉ đơn 'pending/pending' mới thấy.
+              Chính sách 2026-10-26: BỎ 'transfer_notified' — đơn đã báo chuyển khoản
+              không hủy online nữa (gọi quán để hoàn tiền), khớp tuyệt đối backend. */}
+          {['pending', 'confirmed'].includes(order.status) && ['pending', 'pending_payment', 'confirmed'].includes(order.payment_status) && (
             <div style={{ padding: '8px 16px' }}>
               {!showCancel ? (
                 <button className="zm-btn-outline" onClick={() => setShowCancel(true)}>Hủy đơn</button>

@@ -7,6 +7,7 @@ import { fmtTime, fmtDate, startOfWeek } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Gói 36: dùng chung
 import { API } from '../../utils/api';
+import { confirmInApp } from '../../utils/confirmInApp'; // Sổ #23: xác nhận nội bộ thay confirm() trình duyệt
 
 const WD = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'CN'];
 const WD_FULL = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
@@ -512,7 +513,7 @@ export default function Scheduling() {
     const approveAllRegs = async (assign) => {
         const list = pendingRegs;
         if (!list.length || bulkApproving) return;
-        if (!window.confirm(`Duyệt tất cả ${list.length} đăng ký đang chờ trong tuần này${assign ? ' và xếp luôn vào ca' : ''}?`)) return;
+        if (!(await confirmInApp(`Duyệt tất cả ${list.length} đăng ký đang chờ trong tuần này${assign ? ' và xếp luôn vào ca' : ''}?`))) return; // Sổ #23
         setBulkApproving(true);
         let ok = 0, fail = 0;
         for (const r of list) {

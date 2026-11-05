@@ -71,7 +71,15 @@ class ShiftLeaveController extends Controller
         $emp = $request->user();
         $items = ShiftLeaveRequest::with('workShift:id,name,start_time,end_time')
             ->where('employee_id', $emp->id)
-            ->orderByDesc('created_at')->get();
+            ->orderByDesc('created_at')->get()
+            ->map(function ($m) {
+                // Sổ #28 (bản làm lại): map sang MẢNG THUẦN như myShifts rồi ép
+                // 'date' về Y-m-d. Bản vá đầu dùng setAttribute lên model —
+                // kiểm sống phán NO-OP: serialize áp lại cast 'date' thành ISO UTC.
+                $a = $m->toArray();
+                $a['date'] = $m->date?->toDateString();
+                return $a;
+            });
         return response()->json(['success' => true, 'data' => $items]);
     }
 
@@ -155,7 +163,13 @@ class ShiftLeaveController extends Controller
         if ($actor instanceof Employee) {
             $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
         }
-        return response()->json(['success' => true, 'data' => $q->get()]);
+        $items = $q->get()->map(function ($m) {
+            // Sổ #28 (bản làm lại): mảng thuần + ép 'date' Y-m-d (xem myList).
+            $a = $m->toArray();
+            $a['date'] = $m->date?->toDateString();
+            return $a;
+        });
+        return response()->json(['success' => true, 'data' => $items]);
     }
 
     // Admin: tạo trực tiếp cho NV (bỏ qua 48h) — tạo là duyệt luôn + gỡ ca
@@ -213,6 +227,8 @@ class ShiftLeaveController extends Controller
 
     public function reject(Request $request, int $id): JsonResponse
     {
+        // F5 (2026-11-05): cùng mẫu lý do từ chối với LeaveRequestController.
+        $v = $request->validate(['reason' => 'nullable|string|max:500']);
         $lr = ShiftLeaveRequest::findOrFail($id);
         if ($deny = $this->denyLeaveBranch($request, $lr)) return $deny;
         if ($lr->status !== 'pending') {
@@ -220,7 +236,7 @@ class ShiftLeaveController extends Controller
         }
         // Audit 2026-10-23 A1-10: ghi vết người từ chối
         [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
-        $lr->update(['status' => 'rejected', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
+        $lr->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

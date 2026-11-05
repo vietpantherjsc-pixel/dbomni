@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -25,13 +25,39 @@ export default function WorkShifts() {
     const [dragIdx, setDragIdx] = useState(null);
     const [saving, setSaving] = useState(false); // chống bấm Lưu 2 lần tạo trùng ca
 
+    // S5: fetchAll trước đây KHÔNG bắt lỗi — 401 (hết phiên) làm trang/hộp mẫu ca
+    // trống câm. Nay bắt lỗi: 401 → hiện câu chuẩn đúng 1 lần; lỗi khác giữ im lặng như cũ.
+    const expiredRef = useRef(false);
+    const noteExpired = (e) => {
+        if (e?.response?.status !== 401) return false;
+        if (!expiredRef.current) {
+            expiredRef.current = true;
+            alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        }
+        return true;
+    };
+
+    // Lát 2b (2026-11-04, #24): trạng thái đang tải + toast thành công — trước
+    // đây lưu xong im lặng và danh sách lóe "Chưa có ca làm việc nào." khi đang nạp.
+    const [loading, setLoading] = useState(true);
+    const [toast, setToast] = useState('');
+    const toastTimer = useRef(null);
+    const showToast = (msg) => {
+        setToast(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setToast(''), 2600);
+    };
     const fetchAll = useCallback(async () => {
-        const [s, b] = await Promise.all([
-            axios.get(API + '/work-shifts', { params: { branch_id: branchId || undefined } }),
-            axios.get(API + '/branches'),
-        ]);
-        setList(s.data?.data || []);
-        setBranches(b.data?.data || b.data || []);
+        setLoading(true);
+        try {
+            const [s, b] = await Promise.all([
+                axios.get(API + '/work-shifts', { params: { branch_id: branchId || undefined } }),
+                axios.get(API + '/branches'),
+            ]);
+            setList(s.data?.data || []);
+            setBranches(b.data?.data || b.data || []);
+        } catch (e) { noteExpired(e); }
+        finally { setLoading(false); }
     }, [branchId]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -66,7 +92,8 @@ export default function WorkShifts() {
             if (editing) await axios.put(API + '/work-shifts/' + editing.id, payload);
             else await axios.post(API + '/work-shifts', payload);
             setShowForm(false); fetchAll();
-        } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại. Kiểm tra lại các ô bắt buộc rồi thử lại.'); }
+            showToast(editing ? 'Đã cập nhật mẫu ca.' : 'Đã thêm mẫu ca mới.');
+        } catch (e) { if (!noteExpired(e)) alert(e.response?.data?.message || 'Lưu thất bại. Kiểm tra lại các ô bắt buộc rồi thử lại.'); }
         setSaving(false);
     };
     const remove = async (id) => { if (!window.confirm('Xóa ca làm việc này?')) return; try { await axios.delete(API + '/work-shifts/' + id); fetchAll(); } catch (e) { alert(e.response?.data?.message || 'Xóa thất bại'); } };
@@ -146,10 +173,15 @@ export default function WorkShifts() {
                                     </td>}
                                 </tr>
                             ))}
-                            {list.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Chưa có ca làm việc nào.</td></tr>}
+                            {loading && list.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Đang tải ca…</td></tr>}
+                            {!loading && list.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Chưa có ca làm việc nào.</td></tr>}
                         </tbody>
                     </table>
                 </div>
+
+                {toast && (
+                    <div style={{ position: 'fixed', left: '50%', bottom: 28, transform: 'translateX(-50%)', background: 'rgba(26,29,38,.94)', color: '#fff', fontSize: 13.5, fontWeight: 600, padding: '11px 18px', borderRadius: 16, zIndex: 70, maxWidth: '92vw', textAlign: 'center' }}>{toast}</div>
+                )}
 
                 {showForm && (
                     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>

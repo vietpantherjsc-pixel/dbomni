@@ -18,11 +18,18 @@ class CustomerAddressController extends Controller
     private function resolveCustomer(Request $request): ?int
     {
         $id = (int) $request->input('customer_id', $request->query('customer_id', 0));
+        // Spec mật khẩu §3.1: phiên token của đúng khách = đã xác thực.
+        if ($id > 0) {
+            $tokenCustomer = \App\Services\CustomerSessionService::resolveFromToken($request->bearerToken());
+            if ($tokenCustomer && (int) $tokenCustomer->id === $id) return $id;
+        }
         $phone = trim((string) $request->input('phone', $request->query('phone', '')));
         $memberCode = trim((string) $request->input('member_code', $request->query('member_code', '')));
         if ($id <= 0 || $phone === '' || $memberCode === '') return null;
         $customer = \App\Models\Customer::whereKey($id)->first();
         if (!$customer) return null;
+        // Spec mật khẩu §3.2: cặp chết khi tài khoản đã đặt mật khẩu hoặc mã IMP.
+        if (!\App\Services\CustomerIdentityService::pairUsable($customer)) return null;
         if (empty($customer->member_code) || !hash_equals((string) $customer->member_code, $memberCode)) return null;
         // So sánh SĐT đã chuẩn hóa (bỏ ký tự không phải số)
         // Chuẩn hóa SĐT: bỏ ký tự lạ, đổi đầu 84 -> 0 để +84... khớp 0...
@@ -39,9 +46,14 @@ class CustomerAddressController extends Controller
     // Audit 2026-10-23 BM-08: kèm member_code khớp mới coi là chủ sở hữu.
     private function verifyCustomerPhone(int $customerId, ?string $phone, ?string $memberCode = null): bool
     {
+        // Spec mật khẩu §3.1: phiên token của đúng khách = đã xác thực.
+        $tokenCustomer = \App\Services\CustomerSessionService::resolveFromToken(request()->bearerToken());
+        if ($tokenCustomer && (int) $tokenCustomer->id === $customerId) return true;
         if (!$phone || !$memberCode) return false;
         $customer = \App\Models\Customer::whereKey($customerId)->first();
         if (!$customer) return false;
+        // Spec mật khẩu §3.2: cặp chết khi tài khoản đã đặt mật khẩu hoặc mã IMP.
+        if (!\App\Services\CustomerIdentityService::pairUsable($customer)) return false;
         if (empty($customer->member_code) || !hash_equals((string) $customer->member_code, trim($memberCode))) return false;
         // Chuẩn hóa SĐT: bỏ ký tự lạ, đổi đầu 84 -> 0 để +84... khớp 0...
         $normalize = function ($p) {

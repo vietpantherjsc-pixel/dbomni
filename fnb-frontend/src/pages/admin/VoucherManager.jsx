@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import { API } from '../../utils/api';
 import { fmtDateTime } from '../../utils/format';
 import DateTimeInput from '../../components/DateTimeInput';
@@ -205,7 +206,7 @@ export default function VoucherManager() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && fetchList(1)}
+        <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onSearch={() => fetchList(1)}
           placeholder="Tìm theo mã / tên..." className="m-input" style={{ width: 220 }} />
         <select value={statusF} onChange={(e) => setStatusF(e.target.value)} className="m-input" style={{ width: 150 }}>
           <option value="">Mọi trạng thái</option>

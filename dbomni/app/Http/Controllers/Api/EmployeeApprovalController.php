@@ -144,10 +144,17 @@ class EmployeeApprovalController extends Controller
     public function counts(Request $request): JsonResponse
     {
         $emp = $this->employee($request);
+        $visible = $this->visibleTypes($emp);
+        // Đợt fix rà soát VPS (S6): vai không có bất kỳ quyền duyệt nào → 403 để
+        // frontend ẩn HẲN mục Chờ duyệt theo mô hình quyền. Trước đây trả 200 rỗng —
+        // cụm chỉ ẩn khi đường tải thành công, hở thẻ "Không tải được" cho vai không quyền.
+        if ($visible === []) {
+            return response()->json(['success' => false, 'message' => 'Vai của bạn không có quyền duyệt phiếu.'], 403);
+        }
         $bid = $this->branchId($request, $emp);
         $types = [];
         $total = 0;
-        foreach ($this->visibleTypes($emp) as $type => $cfg) {
+        foreach ($visible as $type => $cfg) {
             $q = $this->pendingQuery($type, $bid);
             $count = (clone $q)->count();
             $oldest = $count > 0 ? (clone $q)->orderBy('created_at')->value('created_at') : null;
@@ -263,8 +270,15 @@ class EmployeeApprovalController extends Controller
     }
 
     /** GET /employee/approvals/{type}/{id} — chi tiết phiếu + tên CN của phiếu. */
-    public function show(Request $request, string $type, int $id): JsonResponse
+    public function show(Request $request, string $type, string $id): JsonResponse
     {
+        // S1 lớp 2 (vá khẩn 2026-11-04): route chỉ mang {id} trên URI, type đến từ
+        // ->defaults() — Laravel xếp {id} trước, type sau, mà callAction truyền tham
+        // số THEO VỊ TRÍ nên $type/$id ở chữ ký bị hoán đổi ($type nhận id, $id nhận
+        // 'transaction' → bản int sập TypeError 500, bản string lọt qua thì
+        // typeConfig(id) 404 oan). Đọc tham số THEO TÊN từ route — miễn nhiễm thứ tự.
+        $type = (string) $request->route('type');
+        $id = (int) $request->route('id');
         $this->typeConfig($type);
         $emp = $this->employee($request);
         $bid = $this->branchId($request, $emp);
@@ -312,15 +326,15 @@ class EmployeeApprovalController extends Controller
         ApprovalActor::set($this->employee($request));
         try {
             return match ([$type, $action]) {
-                ['inbound', 'approve'] => app(InboundReceiptController::class)->approve($id),
-                ['inbound', 'reject'] => app(InboundReceiptController::class)->cancel($id),
+                ['inbound', 'approve'] => app(InboundReceiptController::class)->approve($request, $id),
+                ['inbound', 'reject'] => app(InboundReceiptController::class)->cancel($request, $id),
                 ['outbound', 'approve'] => app(OutboundController::class)->confirm($request, $id),
-                ['outbound', 'reject'] => app(OutboundController::class)->cancel($id),
+                ['outbound', 'reject'] => app(OutboundController::class)->cancel($request, $id),
                 ['transfer', 'approve'] => app(StockTransferController::class)->confirm($id, $request, app(InventoryService::class)),
-                ['transfer', 'reject'] => app(StockTransferController::class)->cancel($id),
+                ['transfer', 'reject'] => app(StockTransferController::class)->cancel($request, $id),
                 ['stocktake_adjustment', 'approve'] => app(StocktakeAdjustmentController::class)->approve($request, $id),
                 ['stocktake_adjustment', 'reject'] => app(StocktakeAdjustmentController::class)->reject($request, $id),
-                ['transaction', 'approve'] => app(TransactionController::class)->approve($id),
+                ['transaction', 'approve'] => app(TransactionController::class)->approve($request, $id),
                 ['transaction', 'reject'] => app(TransactionController::class)->reject($request, $id),
                 ['shift_registration', 'approve'] => app(ShiftRegistrationController::class)->approve($request, $id),
                 ['shift_registration', 'reject'] => app(ShiftRegistrationController::class)->reject($request, $id),
@@ -334,8 +348,11 @@ class EmployeeApprovalController extends Controller
     }
 
     /** POST /employee/approvals/{type}/{id}/approve */
-    public function approve(Request $request, string $type, int $id): JsonResponse
+    public function approve(Request $request, string $type, string $id): JsonResponse
     {
+        // S1 lớp 2: đọc tham số theo tên từ route (lý do ở show()).
+        $type = (string) $request->route('type');
+        $id = (int) $request->route('id');
         $this->typeConfig($type);
         $emp = $this->employee($request);
         $bid = $this->branchId($request, $emp);
@@ -348,8 +365,11 @@ class EmployeeApprovalController extends Controller
     }
 
     /** POST /employee/approvals/{type}/{id}/reject — note/reason tùy loại (mục 4 spec). */
-    public function reject(Request $request, string $type, int $id): JsonResponse
+    public function reject(Request $request, string $type, string $id): JsonResponse
     {
+        // S1 lớp 2: đọc tham số theo tên từ route (lý do ở show()).
+        $type = (string) $request->route('type');
+        $id = (int) $request->route('id');
         $this->typeConfig($type);
         $emp = $this->employee($request);
         $bid = $this->branchId($request, $emp);

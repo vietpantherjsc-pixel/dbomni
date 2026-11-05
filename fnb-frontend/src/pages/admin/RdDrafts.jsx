@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { rdGet, rdPost, rdPut, rdDelete } from './rdApi';
+import { unitsFor, factorOf, trimNum, convertDisplay, baseQtyOf, lineFromServer, emptyLine, lineToPayload } from '../../utils/recipeUnits'; // Spec định mức đơn vị quy đổi (2026-11-05)
+import SearchInput from '../../components/SearchInput';
 
 // SPEC R&D — Tab 1: Món nháp (bảng riêng rd_products, không lọt ra hệ thống bán hàng).
 // Giá vốn tính ĐÚNG logic calcCost của món thật; giá vốn chạy trực tiếp trong form.
@@ -43,8 +45,10 @@ export default function RdDrafts({ meta }) {
 
   useEffect(() => { fetchList(); }, [fetchList]);
 
-  const matCost = (mid) => Number(meta.materials.find((m) => m.id === Number(mid))?.cost_per_base || 0);
-  const liveCost = (form?.recipes || []).reduce((s, r) => s + (Number(r.quantity) || 0) * matCost(r.material_id), 0);
+  const matOf = (mid) => meta.materials.find((m) => m.id === Number(mid));
+  const matCost = (mid) => Number(matOf(mid)?.cost_per_base || 0);
+  // Spec định mức đơn vị quy đổi: giá vốn tính theo số CƠ SỞ (hiển thị × hệ số).
+  const liveCost = (form?.recipes || []).reduce((s, r) => s + baseQtyOf(r.display_qty, factorOf(matOf(r.material_id), r.display_unit_name)) * matCost(r.material_id), 0);
 
   const openCreate = () => { const f = emptyForm(meta); setForm(f); snapForm(f); setModal({ mode: 'create' }); };
 
@@ -61,8 +65,8 @@ export default function RdDrafts({ meta }) {
           const found = (d.prices || []).find((p) => p.price_list_id === pl.id);
           return { price_list_id: pl.id, price: found ? found.price : '' };
         }),
-        recipes: (d.recipes || []).map((r) => ({ material_id: r.material_id, quantity: r.quantity, kind: r.kind })),
-        option_recipes: (d.option_recipes || []).map((r) => ({ product_option_id: r.product_option_id, material_id: r.material_id, quantity: r.quantity, kind: r.kind })),
+        recipes: (d.recipes || []).map((r) => ({ ...lineFromServer(r, matOf(r.material_id)), kind: r.kind })),
+        option_recipes: (d.option_recipes || []).map((r) => ({ ...lineFromServer(r, matOf(r.material_id)), product_option_id: r.product_option_id, kind: r.kind })),
       };
       setForm(f0); snapForm(f0);
       setModal({ mode: 'edit', id });
@@ -80,8 +84,10 @@ export default function RdDrafts({ meta }) {
       option_group_ids: form.option_group_ids,
       prices: form.prices.filter((p) => p.price !== '' && Number(p.price) > 0)
         .map((p) => ({ price_list_id: p.price_list_id, price: Number(p.price) })),
-      recipes: form.recipes.filter((r) => r.material_id && Number(r.quantity) > 0),
-      option_recipes: form.option_recipes.filter((r) => r.product_option_id && r.material_id && Number(r.quantity) > 0),
+      recipes: form.recipes.filter((r) => r.material_id && Number(r.display_qty) > 0)
+        .map((r) => ({ ...lineToPayload(r), material_id: Number(r.material_id), kind: r.kind || 'ingredient' })),
+      option_recipes: form.option_recipes.filter((r) => r.product_option_id && r.material_id && Number(r.display_qty) > 0)
+        .map((r) => ({ ...lineToPayload(r), product_option_id: Number(r.product_option_id), material_id: Number(r.material_id), kind: r.kind || 'ingredient' })),
     };
     setSaving(true);
     try {
@@ -136,20 +142,25 @@ export default function RdDrafts({ meta }) {
             </select>
           )}
           <select value={r.material_id || ''} className="m-input" style={{ width: 220 }}
-            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], material_id: Number(e.target.value) || '' }; onChange(n); }}>
+            onChange={(e) => { const n = [...rows]; const m = matOf(Number(e.target.value)); n[i] = { ...n[i], material_id: Number(e.target.value) || '', display_qty: '', display_unit_name: m?.unit || '', orig_quantity: null, orig_display_unit_name: null, orig_display_factor: null }; onChange(n); }}>
             <option value="">— Chọn nguyên liệu —</option>
             {meta.materials.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit || 'đv'})</option>)}
           </select>
-          <input type="number" min={0} step="0.01" value={r.quantity} placeholder="Định lượng"
+          <input type="number" min={0} step="any" value={r.display_qty ?? ''} placeholder="Định lượng"
             className="m-input" style={{ width: 110 }}
-            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], quantity: e.target.value }; onChange(n); }} />
+            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], display_qty: e.target.value }; onChange(n); }} />
+          <select value={r.display_unit_name || matOf(r.material_id)?.unit || ''} className="m-input" style={{ width: 92 }}
+            disabled={!r.material_id} title="Đơn vị nhập"
+            onChange={(e) => { const n = [...rows]; const m = matOf(r.material_id); const from = factorOf(m, r.display_unit_name || m?.unit); const to = factorOf(m, e.target.value); n[i] = { ...n[i], display_qty: r.display_qty === '' ? '' : trimNum(convertDisplay(r.display_qty, from, to)), display_unit_name: e.target.value }; onChange(n); }}>
+            {unitsFor(matOf(r.material_id)).map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+          </select>
           <select value={r.kind || 'ingredient'} className="m-input" style={{ width: 120 }}
             onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], kind: e.target.value }; onChange(n); }}>
             <option value="ingredient">Nguyên liệu</option>
             <option value="packaging">Bao bì</option>
           </select>
           <span className="text-xs" style={{ color: 'var(--m-ink-soft)', minWidth: 90 }}>
-            {r.material_id ? fmt((Number(r.quantity) || 0) * matCost(r.material_id)) : ''}
+            {r.material_id ? fmt(baseQtyOf(r.display_qty, factorOf(matOf(r.material_id), r.display_unit_name)) * matCost(r.material_id)) : ''}
           </span>
           <button type="button" onClick={() => onChange(rows.filter((_, j) => j !== i))}
             className="text-xs font-semibold" style={{ color: 'var(--m-danger)' }}>✕</button>
@@ -157,8 +168,8 @@ export default function RdDrafts({ meta }) {
       ))}
       <button type="button" className="m-btn m-btn-sm m-btn-ghost"
         onClick={() => onChange([...rows, withOption
-          ? { product_option_id: '', material_id: '', quantity: '', kind: 'ingredient' }
-          : { material_id: '', quantity: '', kind: 'ingredient' }])}>
+          ? emptyLine({ product_option_id: '', kind: 'ingredient' })
+          : emptyLine({ kind: 'ingredient' })])}>
         + Thêm dòng
       </button>
     </div>
@@ -167,7 +178,7 @@ export default function RdDrafts({ meta }) {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm theo tên món..."
+        <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} onSearch={(v) => setSearch(v)} placeholder="Tìm theo tên món..."
           className="m-input" style={{ width: 210 }} />
         <select value={statusF} onChange={(e) => setStatusF(e.target.value)} className="m-input" style={{ width: 140 }}>
           <option value="draft">Nháp</option>

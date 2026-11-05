@@ -7,10 +7,12 @@ use App\Models\Material;
 use App\Models\Production;
 use App\Models\ProductionRecipe;
 use App\Services\InventoryService;
+use App\Support\RecipeUnitResolver;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 // Gói 4 (2026-10-04): Định mức + phiếu chế biến bán thành phẩm
 // (ủ cốt cà phê/trà, nấu trân châu, làm kem...).
@@ -19,7 +21,9 @@ class ProductionController extends Controller
     // Danh sách định mức chế biến (kèm tên nguyên liệu)
     public function recipes(Request $request): JsonResponse
     {
-        $query = ProductionRecipe::with(['material', 'rawMaterial'])->orderBy('material_id');
+        // Spec định mức đơn vị quy đổi: kèm units của BTP + NL thô để form
+        // dựng ô chọn đơn vị; display_* đi kèm qua $appends của model.
+        $query = ProductionRecipe::with(['material.units', 'rawMaterial.units'])->orderBy('material_id');
         if ($request->filled('material_id')) {
             $query->where('material_id', $request->query('material_id'));
         }
@@ -32,25 +36,65 @@ class ProductionController extends Controller
         $validated = $request->validate([
             'material_id' => 'required|exists:materials,id',
             'raw_material_id' => 'required|exists:materials,id|different:material_id',
-            'quantity' => 'required|numeric|min:0.0001',
+            // Spec định mức đơn vị quy đổi: client mới chỉ gửi display_*
+            // (không gửi quantity) — quantity nullable, xem ProductController.
+            'quantity' => 'nullable|numeric|min:0.0001',
+            'display_qty' => 'nullable|numeric|min:0',
+            'display_unit_name' => 'nullable|string|max:30',
+            'orig_quantity' => 'nullable|numeric|min:0',
+            'orig_display_unit_name' => 'nullable|string|max:30',
+            'orig_display_factor' => 'nullable|numeric|min:0',
             'batch_output_qty' => 'nullable|numeric|min:0.0001', // Gói 55 p11c: SL BTP mỗi mẻ
+            'batch_display_qty' => 'nullable|numeric|min:0',
+            'batch_display_unit_name' => 'nullable|string|max:30',
+            'orig_batch_output_qty' => 'nullable|numeric|min:0',
+            'orig_batch_display_unit_name' => 'nullable|string|max:30',
+            'orig_batch_display_factor' => 'nullable|numeric|min:0',
         ]);
 
-        $material = Material::findOrFail($validated['material_id']);
+        $material = Material::with('units')->findOrFail($validated['material_id']);
+        $rawMaterial = Material::with('units')->findOrFail($validated['raw_material_id']);
         // Gói 55 p11o: bỏ gate type cũ — NL nào có định mức chế biến thì được coi là BTP
+
+        // Dòng nguyên liệu thô: display mới thì server quy đổi duy nhất.
+        if (RecipeUnitResolver::usesDisplay($validated)) {
+            $line = RecipeUnitResolver::resolve($validated, $rawMaterial);
+        } else {
+            if (!isset($validated['quantity'])) {
+                throw ValidationException::withMessages(['quantity' => 'Thiếu số lượng.']);
+            }
+            $line = [
+                'quantity' => $validated['quantity'],
+                'display_unit_name' => null,
+                'display_factor' => null,
+            ];
+        }
+
+        // Ô sản lượng mẻ (spec mục 3): quy đổi theo đơn vị của CHÍNH BTP.
+        $batch = null;
+        if (array_key_exists('batch_display_qty', $validated) && $validated['batch_display_qty'] !== null && $validated['batch_display_qty'] !== '') {
+            $batch = RecipeUnitResolver::resolveBatch($validated, $material);
+        } elseif (isset($validated['batch_output_qty'])) {
+            $batch = [
+                'batch_output_qty' => $validated['batch_output_qty'],
+                'batch_display_unit_name' => null,
+                'batch_display_factor' => null,
+            ];
+        }
 
         $recipe = ProductionRecipe::updateOrCreate(
             ['material_id' => $validated['material_id'], 'raw_material_id' => $validated['raw_material_id']],
-            [
-                'quantity' => $validated['quantity'],
-                'batch_output_qty' => $validated['batch_output_qty'] ?? null,
-            ]
+            array_merge([
+                'quantity' => $line['quantity'],
+                'display_unit_name' => $line['display_unit_name'],
+                'display_factor' => $line['display_factor'],
+            ], $batch ?? [])
         );
 
-        // Đồng bộ batch_output_qty cho tất cả dòng cùng BTP (định mức theo mẻ)
-        if (isset($validated['batch_output_qty'])) {
+        // Đồng bộ batch_* cho tất cả dòng cùng BTP (định mức theo mẻ)
+        if ($batch !== null) {
             ProductionRecipe::where('material_id', $validated['material_id'])
-                ->update(['batch_output_qty' => $validated['batch_output_qty']]);
+                ->update($batch);
         }
 
         return response()->json(['success' => true, 'data' => $recipe->load(['material', 'rawMaterial'])], 201);
@@ -102,7 +146,12 @@ class ProductionController extends Controller
 
         try {
             $movementIds = []; // Gói 55 p11af: nhận id nhật ký xuất kho để gắn production_id sau
-            $production = DB::transaction(function () use ($validated, $inventoryService, &$movementIds) {
+            // Sổ #78 (2026-11-04, cùng họ #75/#76): tính phần User của actor
+            // TRƯỚC closure rồi đưa qua use — bản cũ đọc $request->user()->id
+            // ngay trong closure (vừa ghi mã NV vào FK users khi NV chế biến,
+            // vừa là biến không được bắt vào closure).
+            [$productionUserId] = \App\Support\ApprovalActor::ids($request->user());
+            $production = DB::transaction(function () use ($validated, $inventoryService, &$movementIds, $productionUserId) {
                 $material = Material::findOrFail($validated['material_id']);
                 // Gói 55 p11o: bỏ gate type cũ — check định mức bên dưới đã đủ
 
@@ -145,7 +194,7 @@ class ProductionController extends Controller
                     'branch_id' => $validated['branch_id'],
                     'material_id' => $material->id,
                     'quantity' => $qty,
-                    'user_id' => $request->user()->id,
+                    'user_id' => $productionUserId,
                     'note' => $validated['note'] ?? null,
                     'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
                 ]);

@@ -21,7 +21,9 @@ return [
 
     // Gói 55 p11ae: bỏ '*' (trước đây mọi website đều gọi được API). Chỉ giữ localhost dev.
     // Khi deploy production, thêm domain thật của frontend/Mini App vào đây.
-    'allowed_origins' => ['http://localhost:5174', 'http://localhost:3000'],
+    // Đợt fix 2026-11-04: 2 origin Zalo của Mini App (LAUNCH đã khai trên VPS từ
+    // trước — nay đưa vào repo để khép sổ delta; kiểm sống CORS Zalo đạt 8/8).
+    'allowed_origins' => ['http://localhost:5174', 'http://localhost:3000', 'https://h5.zdn.vn', 'https://zma.daybreak.vn'],
 
     'allowed_origins_patterns' => [],
 

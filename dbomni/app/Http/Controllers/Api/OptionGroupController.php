@@ -8,6 +8,7 @@ use App\Models\OptionGroup;
 use App\Models\Product;
 use App\Models\ProductOption;
 use App\Models\Recipe;
+use App\Support\RecipeUnitResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -150,7 +151,12 @@ class OptionGroupController extends Controller
             'option' => $opt,
             'quantity_mode' => $opt->group->quantity_mode ?? 'fixed',
             'recipes' => $recipes,
-            'materials' => Material::orderBy('name')->get(['id', 'name', 'unit', 'type']),
+            // Spec định mức đơn vị quy đổi: trả kèm danh sách đơn vị chọn
+            // được của từng nguyên liệu (cơ sở + quy đổi, hệ số = DB factor).
+            'materials' => Material::with('units')->orderBy('name')->get()->map(fn($m) => [
+                'id' => $m->id, 'name' => $m->name, 'unit' => $m->unit, 'type' => $m->type,
+                'units' => RecipeUnitResolver::unitsFor($m),
+            ]),
         ]]);
     }
 
@@ -160,7 +166,14 @@ class OptionGroupController extends Controller
         $v = $request->validate([
             'recipes' => 'required|array',
             'recipes.*.material_id' => 'required|exists:materials,id',
-            'recipes.*.quantity' => 'required|numeric|min:0',
+            // Spec định mức đơn vị quy đổi: client mới chỉ gửi display_*
+            // (không gửi quantity) — quantity nullable, xem ProductController.
+            'recipes.*.quantity' => 'nullable|numeric|min:0',
+            'recipes.*.display_qty' => 'nullable|numeric|min:0',
+            'recipes.*.display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_quantity' => 'nullable|numeric|min:0',
+            'recipes.*.orig_display_unit_name' => 'nullable|string|max:30',
+            'recipes.*.orig_display_factor' => 'nullable|numeric|min:0',
             'recipes.*.kind' => 'nullable|in:ingredient,packaging',
         ]);
 
@@ -168,7 +181,21 @@ class OptionGroupController extends Controller
             // Chỉ xóa dòng chung (product_id null); giữ dòng theo món (Gói 8c)
             Recipe::where('product_option_id', $id)->whereNull('product_id')->delete();
             foreach ($v['recipes'] as $r) {
-                if ((float) $r['quantity'] <= 0) continue;
+                if (RecipeUnitResolver::usesDisplay($r)) {
+                    $material = Material::with('units')->findOrFail($r['material_id']);
+                    $resolved = RecipeUnitResolver::resolve($r, $material);
+                    Recipe::create([
+                        'product_id' => null,
+                        'product_option_id' => $id,
+                        'material_id' => $r['material_id'],
+                        'quantity' => $resolved['quantity'],
+                        'display_unit_name' => $resolved['display_unit_name'],
+                        'display_factor' => $resolved['display_factor'],
+                        'kind' => $r['kind'] ?? 'ingredient',
+                    ]);
+                    continue;
+                }
+                if ((float) ($r['quantity'] ?? 0) <= 0) continue;
                 Recipe::create([
                     'product_id' => null,
                     'product_option_id' => $id,

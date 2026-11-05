@@ -1,4 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
@@ -234,6 +244,10 @@ const GLOSSARY = {
     gross: ['Gross Sales (Doanh thu gộp)', 'Tổng tiền hàng nguyên giá trước mọi giảm giá, gồm VAT nếu có.'],
     net: ['Net Revenue (Doanh thu thuần)', 'Gross − Giảm giá − Phí sàn. Mốc 100% để tính mọi tỷ trọng chi phí.'],
     aov: ['AOV (Average Order Value)', 'Giá trị đơn trung bình = Net Revenue / số đơn thành công.'],
+    // Riêng tab Doanh thu (2026-11-04): thẻ "Trung bình / đơn" ở tab này tính
+    // theo doanh thu ĐANG HIỂN THỊ (công tắc thuế) sau lát 2h — chú thích phải
+    // nói đúng cơ số đó; key 'aov' (theo Net) giữ cho tab Tổng quan.
+    aov_display: ['AOV (Average Order Value)', 'Giá trị đơn trung bình = Doanh thu đang hiển thị ở thẻ Doanh thu của tab này (theo công tắc Đã gồm thuế / Chưa gồm thuế) / số đơn thành công.'],
     cogs: ['COGS (Cost of Goods Sold)', 'Giá vốn hàng bán — tính theo FIFO từ snapshot lúc bán.'],
     foodcost: ['Food cost %', 'Tỷ lệ giá vốn nguyên liệu / Doanh thu thuần. Chuẩn F&B: 25–32%.'],
     prime: ['Prime Cost', 'COGS + Chi phí nhân sự. "Chỉ số sống còn" — phải dưới 55%.'],
@@ -294,7 +308,7 @@ export default function Reports() {
     useEffect(() => {
         axios.get(API + '/branches')
             .then((r) => { if (r.data?.success) setBranches(r.data.data || []); })
-            .catch(() => {});
+            .catch((e) => noteExpired(e));
     }, []);
 
     const load = useCallback(async (pg, append) => {
@@ -376,7 +390,10 @@ export default function Reports() {
         setCashLoading(true);
         try {
             const res = await axios.get(API + '/transactions', {
-                params: { branch_id: branchId, per_page: 50, status: 'paid' },
+                // Lát 2j (2026-11-04): '0' = Tất cả chi nhánh — KHÔNG gửi branch_id,
+                // gửi nguyên '0' làm backend lọc branch_id = 0 và sổ luôn rỗng
+                // trong khi khối tổng (hiểu 0 = tất cả) vẫn có số.
+                params: { ...(branchId !== '0' ? { branch_id: branchId } : {}), per_page: 50, status: 'paid' },
             });
             const raw = res.data?.data || res.data?.items || [];
             const items = Array.isArray(raw) ? [...raw].reverse() : [];
@@ -561,7 +578,10 @@ export default function Reports() {
                                     <div className="v">{fmtVND(p.profit)}</div>
                                     <span dangerouslySetInnerHTML={{ __html: deltaBadge(p.delta_profit) }} />
                                 </div>
-                                {kpi('Đơn hủy', fmtInt(cancelData?.summary?.total_cancelled ?? 0) + ' đơn', cancelData ? fmtVND(cancelData.summary.total_amount) : '<span class="delta flat">—</span>')}
+                                {/* #70 (2026-11-04): đang tải mà chưa có dữ liệu thì hiện "—" —
+                                    trước đây ?? 0 làm thẻ hiện "0 đơn" giả trong lúc nạp
+                                    (cùng họ bịt cửa sổ số giả như các vá trạng thái tải). */}
+                                {kpi('Đơn hủy', (cancelLoading && !cancelData) ? '—' : fmtInt(cancelData?.summary?.total_cancelled ?? 0) + ' đơn', cancelData ? fmtVND(cancelData.summary.total_amount) : '<span class="delta flat">—</span>')}
                             </div>
                             <div className="explain"><b>Cách đọc:</b> mọi tỷ trọng % trên P&amp;L đều lấy <b>Doanh thu thuần (Net Revenue)</b> làm mốc 100%. Prime Cost = Giá vốn + Chi phí nhân sự — "chỉ số sống còn" của quán.</div>
                         </div>
@@ -592,7 +612,10 @@ export default function Reports() {
                             <div className="kpis">
                                 {kpi('Doanh thu', fmtVND(r.displayed), deltaBadge(r.delta_revenue))}
                                 {kpi('Số đơn', fmtInt(r.orders), deltaBadge(r.delta_orders))}
-                                {kpi('Trung bình / đơn', fmtVND(r.avg), deltaBadge(r.delta_avg))}
+                                {/* Lát 2h (2026-11-04): AOV của thẻ này phải cùng cơ số với số
+                                    Doanh thu ngay bên trái (displayed theo công tắc thuế) —
+                                    trước đây lấy r.avg tính trên Net nên 2 số cạnh nhau 2 cơ số. */}
+                                {kpi('Trung bình / đơn', fmtVND(r.orders > 0 ? (Number(r.displayed) || 0) / r.orders : 0), deltaBadge(r.delta_avg))}
                                 {kpi('Tổng thuế GTGT', fmtVND(r.vat), deltaBadge(r.delta_vat))}
                             </div>
                         </div>
@@ -735,7 +758,7 @@ export default function Reports() {
                             ))}
                             {(r.by_staff || []).length === 0 && <div className="sub">Chưa có số liệu.</div>}
                         </div>
-                        <Glossary keys={['gross', 'net', 'aov', 'commission']} />
+                        <Glossary keys={['gross', 'net', 'aov_display', 'commission']} />
                     </section>
                     )}
                     {/* TAB 3: THU-CHI & GIAO CA (theo demo v4) */}
@@ -828,9 +851,14 @@ export default function Reports() {
                                 {kpi('Doanh thu thuần (Net)', fmtVND(netVal), deltaBadge(r.delta_revenue))}
                                 {kpi('Giá vốn (COGS)', fmtVND(cogsVal), '<span class="delta flat">' + trimN(netVal > 0 ? cogsVal / netVal * 100 : 0) + '% / Net</span>')}
                                 <div className="kpi hero">
-                                    <div className="lb">Lợi nhuận gộp (Net − COGS)</div>
-                                    <div className="v">{fmtVND(netVal - cogsVal)}</div>
-                                    <span className="delta flat">{trimN(netVal > 0 ? (netVal - cogsVal) / netVal * 100 : 0)}% / Net</span>
+                                    {/* Lát 2h (2026-11-04): lãi gộp tính trên CÙNG cơ số doanh thu
+                                        với "Lợi nhuận ròng" bên dưới (p.revenue — đã gồm thu khác,
+                                        theo công tắc thuế) trừ giá vốn. Trước đây gộp tính trên
+                                        Net trong khi ròng tính trên cơ số hiển thị → ròng > gộp
+                                        dù chi phí = 0. */}
+                                    <div className="lb">Lợi nhuận gộp (Thu − COGS)</div>
+                                    <div className="v">{fmtVND((Number(p?.revenue) || 0) - cogsVal)}</div>
+                                    <span className="delta flat">{trimN((Number(p?.revenue) || 0) > 0 ? ((Number(p?.revenue) || 0) - cogsVal) / (Number(p?.revenue) || 0) * 100 : 0)}% / Thu</span>
                                 </div>
                                 {kpi('Lợi nhuận ròng', fmtVND(p.profit), deltaBadge(p.delta_profit))}
                             </div>
@@ -1154,7 +1182,7 @@ export function CashSummary({ branchId }) {
     const [period, setPeriod] = useState('month');
     const loadCash = () => {
         axios.get(API + '/reports/cash-summary', { params: { branch_id: branchId, period } })
-            .then((r) => { setData(r.data?.data); setErr(false); }).catch(() => setErr(true));
+            .then((r) => { setData(r.data?.data); setErr(false); }).catch((e) => { noteExpired(e); setErr(true); });
     };
     useEffect(() => { loadCash(); }, [branchId, period]);
     if (err) return (<div className="card"><h3>Tổng hợp thu/chi theo danh mục</h3><p style={{ color: 'var(--m-danger)', fontSize: 13 }}>⚠ Không tải được dữ liệu thu/chi. <button onClick={loadCash} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></p></div>);
@@ -1221,7 +1249,7 @@ function HrTab({ branchId }) {
     const [month, setMonth] = useState(() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); });
     useEffect(() => {
         axios.get(API + '/reports/hr-summary', { params: { month, branch_id: branchId } })
-            .then((r) => { setData(r.data?.data); setHrErr(false); }).catch(() => setHrErr(true));
+            .then((r) => { setData(r.data?.data); setHrErr(false); }).catch((e) => { noteExpired(e); setHrErr(true); });
     }, [month, branchId, hrTick]);
     if (hrErr) return <section><div className="card"><div className="sub" style={{ color: 'var(--m-danger)' }}>⚠ Không tải được báo cáo nhân sự. <button onClick={() => setHrTick((t) => t + 1)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div></div></section>;
     if (!data) return <section><div className="card"><div className="sub">Đang tải…</div></div></section>;
@@ -1233,6 +1261,7 @@ function HrTab({ branchId }) {
                     <MonthInput value={month} onChange={(v) => { if (validMonth(v)) setMonth(v); }} className="m-select" style={{ width: 120 }} />
                 </div>
                 {!data.locked && <div className="sub" style={{ color: '#b45309', marginBottom: 8 }}>⚠ Kỳ lương chưa chốt — cột lương thực nhận chưa có số liệu.</div>}
+                {data.hours_source === 'attendance' && <div className="sub" style={{ color: '#b45309', marginBottom: 8 }}>ℹ Giờ công đang tạm tính từ chấm công — tháng này chưa "Đổ giờ công" vào bảng lương nên chưa có số chính thức.</div>}
                 <div className="kpis" style={{ marginBottom: 12 }}>
                     <div className="kpi"><div className="lb">Tổng giờ công</div><div className="v">{data.total_hours}h</div></div>
                     <div className="kpi"><div className="lb">Tổng lương thực nhận</div><div className="v">{fmtVND(data.total_net)}</div></div>

@@ -188,10 +188,14 @@ export default function MemberTiers() {
                 double_points_start: datePart(cfg.double_points_start) ? `${datePart(cfg.double_points_start)} ${tStart}` : null,
                 double_points_end: datePart(cfg.double_points_end) ? `${datePart(cfg.double_points_end)} ${tEnd}` : null,
                 double_points_multiplier: cfg.double_points_multiplier === '' || cfg.double_points_multiplier === null || cfg.double_points_multiplier === undefined ? null : Number(cfg.double_points_multiplier),
-                // Chênh hệ số kênh (2026-10-28)
+                // Hệ số theo từng kênh (2026-11-04): chỉ gửi khóa mới; khóa
+                // cũ để undefined để JSON bỏ qua — backend giữ nguyên làm dữ
+                // liệu trơ, không ghi đè.
                 points_channel_multiplier_enabled: !!cfg.points_channel_multiplier_enabled,
-                points_platform_multiplier: cfg.points_platform_multiplier === '' || cfg.points_platform_multiplier === null || cfg.points_platform_multiplier === undefined ? null : Number(cfg.points_platform_multiplier),
-                points_own_channels: cfg.points_own_channels ?? '',
+                points_channel_rules: cfg.points_channel_rules || {},
+                points_channel_default_factor: cfg.points_channel_default_factor === '' || cfg.points_channel_default_factor === null || cfg.points_channel_default_factor === undefined ? null : Number(cfg.points_channel_default_factor),
+                points_platform_multiplier: undefined,
+                points_own_channels: undefined,
             });
             if (res.data?.success) { alert(res.data.message); if (res.data.loyalty_config) setCfg(res.data.loyalty_config); }
         } catch (err) { alert(err.response?.data?.message || 'Lưu thất bại'); }
@@ -199,6 +203,55 @@ export default function MemberTiers() {
 
     const inp = 'w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]';
     const num = (v) => Number(v || 0).toLocaleString('vi-VN');
+    // Bảng quy tắc theo kênh (2026-11-04, spec mục 4): dòng sinh từ
+    // points_channels (backend). F1b (2026-11-05): backend đã khử trùng
+    // alias online -> zalo ngay ở nguồn nên danh sách chỉ còn 1 dòng zalo;
+    // khối gộp zalo/online phía dưới chỉ còn là lưới an toàn cho dữ liệu
+    // cấu hình cũ (quy tắc lưu dưới khóa 'online' được backend gập về
+    // 'zalo' khi đọc). Kênh có trong price_lists mà chưa có quy tắc thì
+    // hiển thị với hệ số mặc định, lưu lần đầu sẽ thành quy tắc riêng;
+    // quy tắc của kênh không còn trong danh sách vẫn giữ 1 dòng để không
+    // mất cấu hình.
+    const CH_CAT_LABEL = { store: 'Tại quán', online: 'Online', partner: 'Đối tác' };
+    const channelRows = () => {
+        if (!cfg) return [];
+        const rules = cfg.points_channel_rules || {};
+        const rows = [];
+        const seen = new Set();
+        for (const s of (cfg.points_channels || [])) {
+            const code = String(s.code || '').toLowerCase();
+            if (!code || seen.has(code)) continue;
+            if (code === 'zalo' || code === 'online') {
+                seen.add('zalo'); seen.add('online');
+                rows.push({ codes: ['zalo', 'online'], name: 'Zalo Mini App (zalo/online)', category: 'online' });
+            } else {
+                seen.add(code);
+                rows.push({ codes: [code], name: s.name || code, category: s.category || '' });
+            }
+        }
+        for (const code of Object.keys(rules)) {
+            if (!seen.has(String(code).toLowerCase())) {
+                seen.add(String(code).toLowerCase());
+                rows.push({ codes: [String(code).toLowerCase()], name: String(code).toLowerCase(), category: '' });
+            }
+        }
+        return rows;
+    };
+    const ruleForRow = (row) => {
+        const rules = cfg.points_channel_rules || {};
+        for (const code of row.codes) {
+            if (rules[code]) return rules[code];
+        }
+        return { enabled: true, factor: cfg.points_channel_default_factor ?? 0.5 };
+    };
+    const setRowRule = (row, patch) => {
+        const rules = { ...(cfg.points_channel_rules || {}) };
+        for (const code of row.codes) {
+            const cur = rules[code] || { enabled: true, factor: cfg.points_channel_default_factor ?? 0.5 };
+            rules[code] = { ...cur, ...patch };
+        }
+        setCfg({ ...cfg, points_channel_rules: rules });
+    };
 
     return (
         <AdminLayout>
@@ -274,19 +327,54 @@ export default function MemberTiers() {
                         </div>
                         <div className="mt-4 pt-3 border-t border-gray-100">
                             <div className="flex flex-wrap items-center gap-3 mb-2">
-                                <div className="text-[13px] font-medium text-gray-700">Chênh tích điểm theo kênh — đơn qua sàn tích chậm hơn kênh riêng</div>
-                                <label className="flex items-center gap-2 text-[13px] font-medium">
+                                <div className="text-[13px] font-medium text-gray-700">Hệ số tích điểm theo từng kênh</div>
+                                <label className="flex items-center gap-2 text-[13px] font-medium min-h-[40px]">
                                     <input type="checkbox" checked={!!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_channel_multiplier_enabled: e.target.checked })} className="accent-[#24305E] w-4 h-4" />
-                                    Bật chính sách
+                                    Bật chênh lệch theo kênh
                                 </label>
                             </div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                <div><label className="text-xs text-gray-500">Hệ số kênh sàn (0–1, VD: 0,5)</label>
-                                    <input type="number" min="0" max="1" step="0.05" value={cfg.points_platform_multiplier ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_platform_multiplier: e.target.value })} className={inp} /></div>
-                                <div className="col-span-2 md:col-span-3"><label className="text-xs text-gray-500">Mã kênh riêng (cách nhau dấu phẩy) — mã không có trong danh sách này tính là kênh sàn</label>
-                                    <input type="text" value={cfg.points_own_channels ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_own_channels: e.target.value })} className={inp} /></div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-[13px] border-collapse min-w-[520px]">
+                                    <thead><tr className="text-left text-gray-500 border-b">
+                                        <th className="py-2 pr-2 font-medium">Kênh</th>
+                                        <th className="py-2 pr-2 font-medium">Tích điểm</th>
+                                        <th className="py-2 font-medium">Hệ số (0–2)</th>
+                                    </tr></thead>
+                                    <tbody>
+                                        {channelRows().map((row) => {
+                                            const rule = ruleForRow(row);
+                                            return (
+                                                <tr key={row.codes.join('/')} className="border-b border-gray-100">
+                                                    <td className="py-2 pr-2">
+                                                        <div className="font-medium text-gray-800">{row.name}</div>
+                                                        <div className="text-[11px] text-gray-400">{row.codes.join(' / ')}{row.category ? ` · ${CH_CAT_LABEL[row.category] || row.category}` : ''}</div>
+                                                    </td>
+                                                    <td className="py-2 pr-2">
+                                                        <label className="flex items-center gap-2 min-h-[40px]">
+                                                            <input type="checkbox" checked={!!rule.enabled} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setRowRule(row, { enabled: e.target.checked })} className="accent-[#24305E] w-4 h-4" />
+                                                            {rule.enabled ? 'Đang tích' : 'Đã tắt'}
+                                                        </label>
+                                                    </td>
+                                                    <td className="py-2">
+                                                        <input type="number" min="0" max="2" step="0.05" value={rule.factor ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setRowRule(row, { factor: e.target.value })} className={`${inp} min-h-[40px] max-w-[140px]`} />
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                        <tr>
+                                            <td className="py-2 pr-2">
+                                                <div className="font-medium text-gray-800">Kênh chưa có trong bảng (kênh mới/sàn mới)</div>
+                                                <div className="text-[11px] text-gray-400">Hệ số mặc định cho mọi mã kênh chưa có dòng riêng</div>
+                                            </td>
+                                            <td className="py-2 pr-2 text-gray-400">Luôn tích</td>
+                                            <td className="py-2">
+                                                <input type="number" min="0" max="2" step="0.05" value={cfg.points_channel_default_factor ?? ''} disabled={!cfg.points_channel_multiplier_enabled} onChange={(e) => setCfg({ ...cfg, points_channel_default_factor: e.target.value })} className={`${inp} min-h-[40px] max-w-[140px]`} />
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
-                            <p className="text-[11px] text-gray-400 mt-2">Kênh riêng tích nguyên tốc độ hiện tại; tổng chi tiêu xét hạng vẫn tính đủ ở mọi kênh. Cấu hình áp cho đơn tích điểm từ lúc lưu trở đi, không tính lại đơn cũ.</p>
+                            <p className="text-[11px] text-gray-400 mt-2">Công tắc tổng (Bật chênh lệch theo kênh): tắt = mọi kênh ×1, trừ kênh đã tắt riêng vẫn 0 điểm. Công tắc từng kênh: tắt = kênh đó 0 điểm, thắng mọi công tắc khác. Tắt tích điểm của kênh không ảnh hưởng chi tiêu xét hạng. Kênh mới tạo ở trang Kênh bán hàng sẽ tự xuất hiện thành dòng riêng ở lần tải trang kế tiếp. Cấu hình áp cho đơn tích điểm từ lúc lưu trở đi, không tính lại đơn cũ.</p>
                         </div>
                         <button onClick={handleSaveCfg} className="mt-4 px-4 py-2 bg-gray-800 text-white text-[13px] rounded hover:bg-gray-700">Lưu cấu hình</button>
                     </div>

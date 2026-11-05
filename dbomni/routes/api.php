@@ -28,6 +28,8 @@ use App\Http\Controllers\Api\PromotionController;
 use App\Http\Controllers\Api\PaymentMethodController; // Gói 52
 use App\Http\Controllers\Api\PaymentController; // SPEC-01: thanh toán Zalo
 use App\Http\Controllers\Api\ZaloAuthController; // Spec P4-P5: định danh user Zalo
+use App\Http\Controllers\Api\CustomerPasswordController; // Spec mật khẩu khách (2026-11-05)
+use App\Http\Controllers\Api\CustomerSessionController; // Spec mật khẩu khách §3.3/§7.3
 use App\Http\Controllers\Api\CouponController; // SPEC-02: ví coupon
 use App\Http\Controllers\Api\ProductAliasController; // Gói 55
 use App\Http\Controllers\Api\UnitController; // Gói 52
@@ -109,21 +111,25 @@ Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->pref
     Route::post('/shift-swaps/{id}/confirm', [ShiftSwapController::class, 'confirm']);
     // Audit 2026-10-23 A3-4/BM-11: cụm thao tác TẠI QUẦY (kho NV, thu/chi, hub)
     // bắt buộc kèm mã QR hub ?t= như thiết kế Gói 59 — frontend hub đã gắn sẵn.
+    // → Gói phiên Hub 2026-11-05: cổng ?t= ĐÃ GỠ theo phán của Đại Vương.
     // Cụm tự phục vụ từ xa (đăng ký ca/xin nghỉ/chấm công) KHÔNG gắn để NV
     // còn dùng được ngoài quán như quyết định đã chốt Gói 35/46.
-    Route::middleware('staff_hub_token')->group(function () {
+    // Gói phiên Hub 2026-11-05: bỏ hẳn wrapper staff_hub_token, nâng cụm kho NV
+    // lên thẳng nhóm cha — phiên NV đăng nhập là đủ (phán Đại Vương 05/11).
+    // (Bài học 2026-11-05: Route::group() trần không kèm mảng attributes sẽ
+    // TypeError lúc đăng ký route — gỡ cổng là BỎ wrapper, không thay group rỗng.)
         // Gói 43: kho cho NV (3 trang mobile /kiem-ke, /che-bien, /nhap-kho)
         Route::get('/materials', [EmployeeInventoryController::class, 'materials']);
         Route::get('/suppliers', [EmployeeInventoryController::class, 'suppliers']);
         Route::get('/stocktakes', [EmployeeInventoryController::class, 'stocktakes']);
         Route::get('/stocktake-meta', [EmployeeInventoryController::class, 'branches']); // Gói 55 p11t
-        Route::post('/stocktakes/{id}/items', [EmployeeInventoryController::class, 'addStocktakeItems']); // Gói 55 p11w
-        Route::delete('/stocktakes/{id}/items/{itemId}', [EmployeeInventoryController::class, 'removeStocktakeItem']); // Gói 55 p11w
-        Route::delete('/stocktakes/{id}', [EmployeeInventoryController::class, 'deleteStocktake']); // Gói 55 p11w
+        Route::post('/stocktakes/{id}/items', [EmployeeInventoryController::class, 'addStocktakeItems'])->whereNumber('id'); // Gói 55 p11w
+        Route::delete('/stocktakes/{id}/items/{itemId}', [EmployeeInventoryController::class, 'removeStocktakeItem'])->whereNumber('id')->whereNumber('itemId'); // Gói 55 p11w
+        Route::delete('/stocktakes/{id}', [EmployeeInventoryController::class, 'deleteStocktake'])->whereNumber('id'); // Gói 55 p11w
         Route::post('/stocktakes', [EmployeeInventoryController::class, 'storeStocktake']);
-        Route::get('/stocktakes/{id}', [EmployeeInventoryController::class, 'showStocktake']);
-        Route::patch('/stocktakes/{id}/counts', [EmployeeInventoryController::class, 'updateStocktakeCounts']);
-        Route::post('/stocktakes/{id}/confirm', [EmployeeInventoryController::class, 'confirmStocktake']);
+        Route::get('/stocktakes/{id}', [EmployeeInventoryController::class, 'showStocktake'])->whereNumber('id');
+        Route::patch('/stocktakes/{id}/counts', [EmployeeInventoryController::class, 'updateStocktakeCounts'])->whereNumber('id');
+        Route::post('/stocktakes/{id}/confirm', [EmployeeInventoryController::class, 'confirmStocktake'])->whereNumber('id');
         Route::get('/production-materials', [EmployeeInventoryController::class, 'productionMaterials']);
         Route::get('/production-recipes', [EmployeeInventoryController::class, 'productionRecipes']);
         Route::post('/productions', [EmployeeInventoryController::class, 'storeProduction']);
@@ -135,13 +141,12 @@ Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->pref
         Route::post('/stock-transfers', [EmployeeInventoryController::class, 'storeStockTransfer']); // Gói 55 p11aa
         Route::get('/units', [UnitController::class, 'index']); // Gói 55 p11z: đơn vị tính cho NV chọn
         Route::post('/transactions', [TransactionController::class, 'store']); // Gói 59: NV tạo phiếu thu/chi (chờ duyệt)
-    });
 
     // Gói "Chờ duyệt trên Hub" (2026-10-21): cụm Chờ duyệt cho quản lý trực ca.
     // Quyền kiểm bằng đúng middleware permission (mirror CheckPermission) theo từng nhóm loại.
-    Route::get('/approvals/counts', [EmployeeApprovalController::class, 'counts'])->middleware('staff_hub_token');
-    Route::get('/approvals/processed-today', [EmployeeApprovalController::class, 'processedToday'])->middleware('staff_hub_token');
-    Route::middleware(['permission:inventory.manage', 'staff_hub_token'])->prefix('approvals')->group(function () {
+    Route::get('/approvals/counts', [EmployeeApprovalController::class, 'counts']);
+    Route::get('/approvals/processed-today', [EmployeeApprovalController::class, 'processedToday']);
+    Route::middleware(['permission:inventory.manage'])->prefix('approvals')->group(function () {
         foreach (['inbound', 'outbound', 'transfer', 'stocktake_adjustment'] as $t) {
             Route::get("/$t", [EmployeeApprovalController::class, 'index'])->defaults('type', $t);
             Route::get("/$t/{id}", [EmployeeApprovalController::class, 'show'])->defaults('type', $t);
@@ -149,13 +154,13 @@ Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->pref
             Route::post("/$t/{id}/reject", [EmployeeApprovalController::class, 'reject'])->defaults('type', $t);
         }
     });
-    Route::middleware(['permission:finance.manage', 'staff_hub_token'])->prefix('approvals')->group(function () {
+    Route::middleware(['permission:finance.manage'])->prefix('approvals')->group(function () {
         Route::get('/transaction', [EmployeeApprovalController::class, 'index'])->defaults('type', 'transaction');
         Route::get('/transaction/{id}', [EmployeeApprovalController::class, 'show'])->defaults('type', 'transaction');
         Route::post('/transaction/{id}/approve', [EmployeeApprovalController::class, 'approve'])->defaults('type', 'transaction');
         Route::post('/transaction/{id}/reject', [EmployeeApprovalController::class, 'reject'])->defaults('type', 'transaction');
     });
-    Route::middleware(['permission:staff.edit', 'staff_hub_token'])->prefix('approvals')->group(function () {
+    Route::middleware(['permission:staff.edit'])->prefix('approvals')->group(function () {
         foreach (['shift_registration', 'leave_request'] as $t) {
             Route::get("/$t", [EmployeeApprovalController::class, 'index'])->defaults('type', $t);
             Route::get("/$t/{id}", [EmployeeApprovalController::class, 'show'])->defaults('type', $t);
@@ -322,8 +327,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/inbound/bulk', [InboundController::class, 'storeBulk']);
         // Gói 55 p11b: duyệt đề xuất điều chỉnh kho từ chênh lệch kiểm kê
         Route::get('/stocktake-adjustments', [StocktakeAdjustmentController::class, 'index']);
-        Route::post('/stocktake-adjustments/{id}/approve', [StocktakeAdjustmentController::class, 'approve']);
-        Route::post('/stocktake-adjustments/{id}/reject', [StocktakeAdjustmentController::class, 'reject']);
+        Route::post('/stocktake-adjustments/{id}/approve', [StocktakeAdjustmentController::class, 'approve'])->whereNumber('id');
+        Route::post('/stocktake-adjustments/{id}/reject', [StocktakeAdjustmentController::class, 'reject'])->whereNumber('id');
     });
 
     // Gói 27 (2026-10-09): Thu-Chi — Gói SEC: chỉ role có finance.manage
@@ -339,7 +344,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/transaction-categories/{id}', [TransactionController::class, 'updateCategory']); // Gói 29
         Route::delete('/transaction-categories/{id}', [TransactionController::class, 'destroyCategory']);
         // Gói 57: quỹ/tài khoản + chi phí trả trước
-        Route::apiResource('accounts', AccountController::class);
+        Route::apiResource('accounts', AccountController::class)->whereNumber('account');
         Route::apiResource('prepaid-expenses', PrepaidExpenseController::class);
         // Gói PNL kênh sàn (2026-10-31): đối soát phí marketing sàn theo (kênh × CN × tháng)
         // — cùng nhóm quyền finance.manage như thu-chi vì là số tài chính chốt kỳ.
@@ -356,12 +361,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // Gói 55 p11ae: ghi cần inventory.manage (NCC phục vụ nhập hàng)
     Route::get('/partners', [PartnerController::class, 'index']);
     Route::get('/partners/debt-summary', [PartnerController::class, 'debtSummary']);
-    Route::get('/partners/{id}', [PartnerController::class, 'show']);
-    Route::get('/partners/{id}/payments', [PartnerController::class, 'payments']);
+    Route::get('/partners/{id}', [PartnerController::class, 'show'])->whereNumber('id');
+    Route::get('/partners/{id}/payments', [PartnerController::class, 'payments'])->whereNumber('id');
     Route::middleware('permission:inventory.manage')->group(function () {
         Route::post('/partners', [PartnerController::class, 'store']);
-        Route::put('/partners/{id}', [PartnerController::class, 'update']);
-        Route::delete('/partners/{id}', [PartnerController::class, 'destroy']);
+        Route::put('/partners/{id}', [PartnerController::class, 'update'])->whereNumber('id');
+        Route::delete('/partners/{id}', [PartnerController::class, 'destroy'])->whereNumber('id');
     });
 
     // Gói 4: nguyên vật liệu — Gói 55 p11ae: ghi cần inventory.manage
@@ -398,49 +403,53 @@ Route::middleware('auth:sanctum')->group(function () {
     // Gói 4: kiểm kê kho — Gói SEC: chỉ role có inventory.manage
     Route::middleware('permission:inventory.manage')->group(function () {
         Route::get('/stocktakes', [StocktakeController::class, 'index']);
-        Route::get('/stocktakes/{id}', [StocktakeController::class, 'show']);
+        Route::get('/stocktakes/{id}', [StocktakeController::class, 'show'])->whereNumber('id');
         Route::post('/stocktakes', [StocktakeController::class, 'store']);
-        Route::patch('/stocktakes/{id}/counts', [StocktakeController::class, 'updateCounts']);
-        Route::post('/stocktakes/{id}/confirm', [StocktakeController::class, 'confirm']);
+        Route::patch('/stocktakes/{id}/counts', [StocktakeController::class, 'updateCounts'])->whereNumber('id');
+        Route::post('/stocktakes/{id}/confirm', [StocktakeController::class, 'confirm'])->whereNumber('id');
     });
 
     // Gói 43: chuyển kho giữa các chi nhánh — Gói SEC
     Route::middleware('permission:inventory.manage')->group(function () {
         Route::get('/stock-transfers', [StockTransferController::class, 'index']);
-        Route::get('/stock-transfers/{id}', [StockTransferController::class, 'show']);
+        Route::get('/stock-transfers/{id}', [StockTransferController::class, 'show'])->whereNumber('id');
         Route::post('/stock-transfers', [StockTransferController::class, 'store']);
-        Route::post('/stock-transfers/{id}/confirm', [StockTransferController::class, 'confirm']);
-        Route::post('/stock-transfers/{id}/cancel', [StockTransferController::class, 'cancel']);
+        Route::post('/stock-transfers/{id}/confirm', [StockTransferController::class, 'confirm'])->whereNumber('id');
+        Route::post('/stock-transfers/{id}/cancel', [StockTransferController::class, 'cancel'])->whereNumber('id');
         Route::get('/stock-transfer-stock', [StockTransferController::class, 'stock']);
     });
     // Gói 43: phiếu nhập hàng theo hóa đơn — Gói SEC
     Route::middleware('permission:inventory.manage')->group(function () {
         Route::get('/inbound-receipts', [InboundReceiptController::class, 'index']);
-        Route::get('/inbound-receipts/{id}', [InboundReceiptController::class, 'show']);
+        Route::get('/inbound-receipts/{id}', [InboundReceiptController::class, 'show'])->whereNumber('id');
         Route::post('/inbound-receipts', [InboundReceiptController::class, 'store']);
-        Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update']);
-        Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel']);
+        Route::patch('/inbound-receipts/{id}', [InboundReceiptController::class, 'update'])->whereNumber('id');
+        Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel'])->whereNumber('id');
         // K-R1: duyệt phiếu nhập nháp của NV (cần inventory.manage)
-        Route::post('/inbound-receipts/{id}/approve', [InboundReceiptController::class, 'approve']);
+        Route::post('/inbound-receipts/{id}/approve', [InboundReceiptController::class, 'approve'])->whereNumber('id');
     });
     // Gói 55 p11z: phiếu xuất kho (trừ kho FIFO khi chốt) — Gói SEC
     Route::middleware('permission:inventory.manage')->group(function () {
         Route::get('/outbound-receipts', [OutboundController::class, 'index']);
         Route::post('/outbound-receipts', [OutboundController::class, 'store']);
-        Route::get('/outbound-receipts/{id}', [OutboundController::class, 'show']);
-        Route::post('/outbound-receipts/{id}/confirm', [OutboundController::class, 'confirm']);
-        Route::post('/outbound-receipts/{id}/cancel', [OutboundController::class, 'cancel']);
+        Route::get('/outbound-receipts/{id}', [OutboundController::class, 'show'])->whereNumber('id');
+        Route::post('/outbound-receipts/{id}/confirm', [OutboundController::class, 'confirm'])->whereNumber('id');
+        Route::post('/outbound-receipts/{id}/cancel', [OutboundController::class, 'cancel'])->whereNumber('id');
     });
 
     // Gói 5: CRM — khách hàng — Gói 55 p11ae: ghi cần customers.manage (chống NV tự cộng điểm/nâng hạng)
     Route::get('/customers', [CustomerController::class, 'index'])->middleware('permission:customers.view');
-    Route::get('/customers/{id}', [CustomerController::class, 'show'])->middleware('permission:customers.view');
+    Route::get('/customers/{id}', [CustomerController::class, 'show'])->middleware('permission:customers.view')->whereNumber('id');
     Route::middleware('permission:customers.manage')->group(function () {
         Route::post('/customers', [CustomerController::class, 'store']);
-        Route::patch('/customers/{id}', [CustomerController::class, 'update']);
-        Route::post('/customers/{id}/adjust-points', [CustomerController::class, 'adjustPoints']);
+        Route::patch('/customers/{id}', [CustomerController::class, 'update'])->whereNumber('id');
+        // Spec mật khẩu khách §5.3/§7.4: cửa sổ đặt mật khẩu tại quầy + cấp lại mã TV.
+        Route::post('/customers/{id}/password-setup-window', [CustomerController::class, 'openPasswordSetupWindow'])->whereNumber('id');
+        Route::delete('/customers/{id}/password-setup-window', [CustomerController::class, 'closePasswordSetupWindow'])->whereNumber('id');
+        Route::post('/customers/{id}/regenerate-member-code', [CustomerController::class, 'regenerateMemberCode'])->whereNumber('id');
+        Route::post('/customers/{id}/adjust-points', [CustomerController::class, 'adjustPoints'])->whereNumber('id');
         // Loyalty 2.0: thu hồi coupon trong ví (hoàn điểm về lô gốc nếu coupon do đổi điểm phát)
-        Route::post('/customers/{id}/coupons/{couponId}/revoke', [CustomerController::class, 'revokeCoupon']);
+        Route::post('/customers/{id}/coupons/{couponId}/revoke', [CustomerController::class, 'revokeCoupon'])->whereNumber('id')->whereNumber('couponId');
     });
 
     // Gói 5: hạng thành viên + cấu hình quy đổi điểm — Gói 55 p11ae: ghi cần customers.manage
@@ -619,12 +628,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:staff.view')->group(function () {
         Route::get('/roles/matrix', [RoleController::class, 'matrix']);
         Route::apiResource('roles', RoleController::class)->only(['index', 'show'])->parameters(['roles' => 'id']);
-        Route::apiResource('employees', EmployeeController::class)->only(['index', 'show'])->parameters(['employees' => 'id']);
+        Route::apiResource('employees', EmployeeController::class)->only(['index', 'show'])->parameters(['employees' => 'id'])->whereNumber('id');
         Route::get('/salary/{id}', [SalaryController::class, 'show']);
         Route::get('/salary-summary', [SalaryController::class, 'summary']); // Gói 55: tổng hợp lương toàn NV
         Route::get('/salary/{id}/history', [SalaryController::class, 'history']);
         Route::get('/salary/{id}/days', [SalaryController::class, 'getDays']);
-        Route::get('/employees/{id}/insurance', [SalaryController::class, 'getInsurance']);
+        Route::get('/employees/{id}/insurance', [SalaryController::class, 'getInsurance'])->whereNumber('id');
         Route::get('/holidays', [SalaryController::class, 'holidays']);
         Route::get('/salary-policies', [SalaryController::class, 'getPolicies']); // Gói 30
 
@@ -656,9 +665,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Gói 26: Nhân sự — ghi (quyền staff.edit)
     Route::middleware('permission:staff.edit')->group(function () {
         Route::apiResource('roles', RoleController::class)->only(['store', 'update', 'destroy'])->parameters(['roles' => 'id']);
-        Route::apiResource('employees', EmployeeController::class)->only(['store', 'update', 'destroy'])->parameters(['employees' => 'id']);
-        Route::post('/employees/{id}/reset-pin', [EmployeeController::class, 'resetPin']);
-        Route::post('/employees/{id}/reset-password', [EmployeeController::class, 'resetPassword']);
+        Route::apiResource('employees', EmployeeController::class)->only(['store', 'update', 'destroy'])->parameters(['employees' => 'id'])->whereNumber('id');
+        Route::post('/employees/{id}/reset-pin', [EmployeeController::class, 'resetPin'])->whereNumber('id');
+        Route::post('/employees/{id}/reset-password', [EmployeeController::class, 'resetPassword'])->whereNumber('id');
         Route::post('/salary/{id}/record', [SalaryController::class, 'saveRecord']);
         Route::post('/salary/{id}/days', [SalaryController::class, 'saveDays']);
         Route::post('/salary/import-attendance', [SalaryController::class, 'importAttendance']); // Đổ giờ công từ chấm công
@@ -670,8 +679,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/salary/advances/{id}', [SalaryController::class, 'deleteAdvance']);
         Route::post('/salary/{id}/bonuses', [SalaryController::class, 'addBonus']);
         Route::delete('/salary/bonuses/{id}', [SalaryController::class, 'deleteBonus']);
-        Route::post('/employees/{id}/insurance', [SalaryController::class, 'saveInsurance']);
-        Route::delete('/employees/{id}/insurance', [SalaryController::class, 'deleteInsurance']);
+        Route::post('/employees/{id}/insurance', [SalaryController::class, 'saveInsurance'])->whereNumber('id');
+        Route::delete('/employees/{id}/insurance', [SalaryController::class, 'deleteInsurance'])->whereNumber('id');
         // Spec P4-B1/B2: chốt + khóa kỳ lương (quyền quản lý)
         Route::get('/salary-lock/status', [SalaryController::class, 'lockStatus']);
         Route::post('/salary-lock/lock', [SalaryController::class, 'lock']);
@@ -794,6 +803,15 @@ Route::prefix('online')->group(function () {
     Route::post('/minigame/best', [MinigameController::class, 'best'])->middleware('throttle:order-action');
     Route::post('/minigame/share-card', [MinigameController::class, 'shareCard'])->middleware('throttle:30,1');
     Route::get('/customer', [OnlineOrderController::class, 'customer'])->middleware('throttle:online-read');
+    // Spec đăng nhập SĐT + mật khẩu §4: đường phụ đăng nhập + phiên hợp nhất.
+    Route::post('/customer/password/login', [CustomerPasswordController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('/customer/password/zalo-set', [CustomerPasswordController::class, 'zaloSet'])->middleware('throttle:10,1');
+    Route::post('/customer/password/set', [CustomerPasswordController::class, 'set'])->middleware('throttle:30,1');
+    Route::patch('/customer/password/change', [CustomerPasswordController::class, 'change'])->middleware('throttle:30,1');
+    Route::post('/customer/password/counter-set', [CustomerPasswordController::class, 'counterSet'])->middleware('throttle:5,1');
+    Route::post('/customer/session/code-login', [CustomerSessionController::class, 'codeLogin'])->middleware('throttle:30,1');
+    Route::post('/customer/session/logout', [CustomerSessionController::class, 'logout'])->middleware('throttle:30,1');
+    Route::patch('/customer/profile/email', [CustomerSessionController::class, 'updateEmail'])->middleware('throttle:30,1');
     Route::post('/orders', [OnlineOrderController::class, 'store'])->middleware('throttle:60,1');
     Route::get('/orders/{code}', [OnlineOrderController::class, 'track'])->middleware('throttle:online-read');
     Route::post('/orders/{code}/transfer-notified', [OnlineOrderController::class, 'transferNotified'])->middleware('throttle:order-action'); // Spec QR 2026-10-21: khách báo đã CK — F17: limiter theo mã đơn

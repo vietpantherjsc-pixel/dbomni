@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import SearchInput from './SearchInput';
 import {
   DollarSign,
   CreditCard,
@@ -78,6 +79,11 @@ export default function PosScreen({ onBackToApp }) {
     || (effBranchId ? 'CN ' + effBranchId : '—');
   // ---- Ca làm việc ----
   const [shift, setShift] = useState(null);
+  // F3 (phân xử chiến dịch 4 vai, 2026-11-05): shift=null dùng chung cho cả
+  // "chưa tải xong" lẫn "chưa có ca" nên nút Mở ca hiện ngay trong cửa sổ
+  // kiểm tra — cờ này tách hai trạng thái: chỉ khi đã kiểm xong mới kết luận
+  // được là chưa có ca.
+  const [shiftChecked, setShiftChecked] = useState(false);
   const [isOpenShiftModal, setIsOpenShiftModal] = useState(false);
   const [isCloseShiftModal, setIsCloseShiftModal] = useState(false);
   const [isExpenseModal, setIsExpenseModal] = useState(false);
@@ -130,6 +136,12 @@ export default function PosScreen({ onBackToApp }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [btpShortage, setBtpShortage] = useState(null); // Spec P4-A1: BTP thiếu khi bán
   const [lastOrderCompleted, setLastOrderCompleted] = useState(null);
+  // Gói 11: QR tích điểm — khách quét để gán TV vào đơn.
+  // S4 (2026-11-04): 2 khai báo này PHẢI đứng trước effect successTouched bên
+  // dưới — mảng phụ thuộc [qrClaim, qrLoading] được tính ngay khi render, để
+  // khai báo sau effect là lỗi TDZ (trắng trang POS, đã tái hiện bằng Chrome thật).
+  const [qrClaim, setQrClaim] = useState(null); // {id, code, token, expires_at, member}
+  const [qrLoading, setQrLoading] = useState(false);
   // Audit UX 2026-10-21 (hạng 5): popup thành công tự đóng sau 8s để bán đơn kế ngay;
   // đang mở QR tích điểm / có tương tác trên popup thì hoãn tự đóng; in xong cũng tự đóng.
   const successTouchedRef = useRef(false);
@@ -144,9 +156,6 @@ export default function PosScreen({ onBackToApp }) {
   useEffect(() => {
     if (qrClaim || qrLoading) successTouchedRef.current = true;
   }, [qrClaim, qrLoading]);
-  // Gói 11: QR tích điểm — khách quét để gán TV vào đơn
-  const [qrClaim, setQrClaim] = useState(null); // {id, code, token, expires_at, member}
-  const [qrLoading, setQrLoading] = useState(false);
 
   // Gói 53: chuông báo + badge KDS — poll 10s
   const [kdsCount, setKdsCount] = useState(0);
@@ -309,6 +318,7 @@ export default function PosScreen({ onBackToApp }) {
       const data = await res.json();
       setShift(data.success && data.is_open ? data.data : null);
     } catch (err) { console.error('Lỗi kiểm tra ca:', err); }
+    finally { setShiftChecked(true); }
   };
 
   const fetchMenu = async (bid) => {
@@ -1146,14 +1156,16 @@ export default function PosScreen({ onBackToApp }) {
 
         <div className="flex-1 flex justify-center">
           <div className="relative w-full max-w-md">
-            <Search className="absolute left-3 top-2.5 text-slate-500" size={16} />
-            <input
+            <SearchInput
               ref={searchRef}
               type="text"
               placeholder="Tìm món (F3)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-emerald-400"
+              onSearch={(v) => setSearchQuery(v)}
+              iconColor="#94a3b8"
+              wrapperStyle={{ display: 'flex', width: '100%' }}
+              className="w-full pl-3 pr-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm placeholder-slate-500 focus:outline-none focus:border-emerald-400"
             />
           </div>
         </div>
@@ -1193,10 +1205,12 @@ export default function PosScreen({ onBackToApp }) {
             <button onClick={() => setIsExpenseModal(true)} className="text-[11px] bg-white/10 px-2 py-1 rounded text-slate-200 hover:bg-white/20">+ Chi</button>
             <button onClick={() => setIsCloseShiftModal(true)} className="text-[11px] bg-red-500/80 px-2 py-1 rounded text-white hover:bg-red-500">Chốt ca</button>
           </div>
-        ) : (
+        ) : shiftChecked ? (
           <button onClick={() => setIsOpenShiftModal(true)} className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg text-xs font-semibold">
             <Lock size={14} /> Mở ca
           </button>
+        ) : (
+          <span className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-400">Đang kiểm tra ca…</span>
         )}
 
         <button className="p-2 hover:bg-white/10 rounded-lg text-slate-400"><LayoutGrid size={18} /></button>

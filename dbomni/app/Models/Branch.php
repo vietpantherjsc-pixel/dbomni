@@ -12,6 +12,12 @@ class Branch extends Model
 {
     protected $guarded = [];
 
+    // Sổ #98 (2026-11-05): token QR chấm công là bằng chứng có mặt tại quầy —
+    // ẩn khỏi MỌI serialize để không lộ qua các payload nhúng branch (phiếu
+    // thu-chi, chi tiết duyệt Hub…). AttendanceQrController đọc thuộc tính
+    // trực tiếp từ model nên bề mặt QR cho quản lý không bị ảnh hưởng.
+    protected $hidden = ['attendance_qr_token'];
+
     protected $casts = [
         'opening_hours' => 'array', // Gói 55 p2: giờ mở cửa JSON
     ];

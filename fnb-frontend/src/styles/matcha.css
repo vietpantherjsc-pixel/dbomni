@@ -67,6 +67,11 @@ body.m-theme {
 /* ---- Nút ---- */
 .m-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  /* U-03 (2026-11-05): nút trong hàng flex (tiêu đề trang) bị đoạn chữ dài
+     ép co tới mức chữ rớt 2-4 dòng, nút phình cao — chuẩn nút Admin là
+     1 dòng, không co (trang Mặt hàng là mẫu vật; PriceLists/Promotions
+     từng phải vá lẻ bằng class shrink-0 + whitespace-nowrap). */
+  flex-shrink: 0; white-space: nowrap;
   border-radius: var(--m-radius);
   font-size: 13px; font-weight: 600;
   min-height: 40px; /* UX 2026-10-26: vùng chạm tối thiểu (trước ~35px) */

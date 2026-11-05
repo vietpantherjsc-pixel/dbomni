@@ -36,7 +36,15 @@ class LeaveRequestController extends Controller
     {
         /** @var Employee $emp */
         $emp = $request->user();
-        $items = LeaveRequest::where('employee_id', $emp->id)->orderBy('created_at', 'desc')->get();
+        $items = LeaveRequest::where('employee_id', $emp->id)->orderBy('created_at', 'desc')->get()
+            ->map(function ($m) {
+                // Họ #28: ép ngày về chuỗi Y-m-d trong MẢNG THUẦN (setAttribute
+                // lên model là no-op — serialize áp lại cast 'date' ra ISO UTC).
+                $a = $m->toArray();
+                $a['date_from'] = $m->date_from?->toDateString();
+                $a['date_to'] = $m->date_to?->toDateString();
+                return $a;
+            });
         return response()->json(['success' => true, 'data' => $items]);
     }
 
@@ -50,7 +58,14 @@ class LeaveRequestController extends Controller
         if ($actor instanceof Employee) {
             $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
         }
-        return response()->json(['success' => true, 'data' => $q->get()]);
+        $items = $q->get()->map(function ($m) {
+            // Họ #28: ngày thuần Y-m-d trong mảng thuần (xem myList).
+            $a = $m->toArray();
+            $a['date_from'] = $m->date_from?->toDateString();
+            $a['date_to'] = $m->date_to?->toDateString();
+            return $a;
+        });
+        return response()->json(['success' => true, 'data' => $items]);
     }
 
     // Audit 2026-10-23 A1-2: kiểm phạm vi CN trước khi duyệt/từ chối
@@ -92,6 +107,9 @@ class LeaveRequestController extends Controller
 
     public function reject(Request $request, int $id): JsonResponse
     {
+        // F5 (2026-11-05): nhận lý do từ chối như đơn đổi ca — không gửi thì
+        // ghi mặc định "Quản lý từ chối" (đúng mẫu ShiftSwapController::reject).
+        $v = $request->validate(['reason' => 'nullable|string|max:500']);
         $lr = LeaveRequest::findOrFail($id);
         if ($deny = $this->denyLeaveBranch($request, $lr)) return $deny;
         // Audit 2026-10-23 A1-3: chỉ từ chối yêu cầu đang chờ
@@ -102,7 +120,7 @@ class LeaveRequestController extends Controller
         $actor = $request->user();
         // Gói "Chờ duyệt trên Hub" (2026-10-21): Employee từ chối → ghi handled_by_employee_id
         [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($actor);
-        $lr->update(['status' => 'rejected', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
+        $lr->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

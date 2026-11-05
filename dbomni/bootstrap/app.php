@@ -15,6 +15,20 @@ $app = Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Đợt fix rà soát VPS (S13, phương án A): app chạy sau reverse proxy TLS
+        // (nginx trên VPS) — không khai trusted proxies thì Laravel bỏ qua
+        // X-Forwarded-Proto, scheme đọc thành http nên MỌI URL tuyệt đối sinh ra
+        // (ảnh món/cover/banner/thẻ chia sẻ/URL trả khi upload) đều mang http://
+        // trên miền https, kèm IP khách bị đọc thành IP của proxy (rate-limit).
+        // An toàn vì backend chỉ phơi qua proxy, không lộ cổng trực tiếp.
+        // Local không qua proxy -> không có header X-Forwarded -> hành vi y như cũ.
+        $middleware->trustProxies(
+            at: '*',
+            headers: Request::HEADER_X_FORWARDED_FOR
+                | Request::HEADER_X_FORWARDED_HOST
+                | Request::HEADER_X_FORWARDED_PORT
+                | Request::HEADER_X_FORWARDED_PROTO,
+        );
         // Gói 1: ép mọi request /api/* trả JSON (kể cả khi client quên header Accept).
         $middleware->api(append: [
             \App\Http\Middleware\ForceJsonResponse::class,

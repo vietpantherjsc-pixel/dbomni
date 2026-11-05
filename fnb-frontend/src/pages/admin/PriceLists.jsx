@@ -1,4 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 
@@ -40,7 +50,7 @@ function AdjustTab() {
     }
     setLoading(false);
   };
-  useEffect(() => { loadAdj().catch(() => {}); }, [month, branchId]); // eslint-disable-line
+  useEffect(() => { loadAdj().catch((e) => noteExpired(e)); }, [month, branchId]); // eslint-disable-line
 
   const rowOf = (code, bid) => rows.find((r) => r.channel_code === code && r.branch_id === bid);
   const scopeBranches = branchId > 0 ? meta.branches.filter((b) => b.id === branchId) : meta.branches;
@@ -184,7 +194,7 @@ export default function PriceLists() {
       setLoadErr(false);
     } catch { setLoadErr(true); } // UX 2026-10-26 (🟠T1): trước đây lỗi tải bị nuốt ở useEffect, bảng hiện "Chưa có kênh nào" giả
   };
-  useEffect(() => { load().catch(() => {}); }, []);
+  useEffect(() => { load().catch((e) => noteExpired(e)); }, []);
 
   const create = async () => {
     if (!name.trim()) { alert('Nhập tên kênh.'); return; }

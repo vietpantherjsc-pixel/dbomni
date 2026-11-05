@@ -16,7 +16,7 @@ const imgSrc = (u) => {
   catch { return u; }
 };
 
-const TYPE_LABELS_FB = { percent: 'Theo phần trăm', fixed: 'Theo số tiền', fixed_price: 'Đồng giá', gift: 'Tặng món', shipping: '🚚 Giảm/miễn phí vận chuyển' };
+const TYPE_LABELS_FB = { percent: 'Theo phần trăm', fixed: 'Theo số tiền', fixed_price: 'Đồng giá', gift: 'Tặng món', shipping: ' Giảm/miễn phí vận chuyển' };
 const SCOPE_LABELS_FB = { order: 'Hóa đơn', category: 'Danh mục', menu: 'Thực đơn', product: 'Mặt hàng' };
 const DAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 
@@ -534,7 +534,7 @@ export default function Promotions() {
                                 </div>
                                 {form.auto_trigger && TRIGGER_HELP[form.auto_trigger] && (
                                     <div className="mt-3 rounded-lg p-3 text-[12px] leading-relaxed" style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }}>
-                                        <div className="font-semibold mb-1">📌 {TRIGGER_HELP[form.auto_trigger].label}</div>
+                                        <div className="font-semibold mb-1">{TRIGGER_HELP[form.auto_trigger].label}</div>
                                         <div style={{ color: 'var(--m-ink-soft)' }}>{TRIGGER_HELP[form.auto_trigger].desc}</div>
                                         <div className="mt-1" style={{ color: 'var(--m-ink-soft)' }}>{TRIGGER_HELP[form.auto_trigger].sample_note}</div>
                                     </div>
@@ -544,7 +544,7 @@ export default function Promotions() {
                                     <div className="mt-3 rounded-lg p-3" style={{ background: 'var(--m-bg-soft)', border: '1px solid var(--m-line)' }}>
                                         <div className="flex items-center justify-between mb-2">
                                             <span className="text-[12px] font-semibold">Thông số cho trigger này</span>
-                                            <button type="button" className="m-btn m-btn-sm" onClick={applySample}>📋 Chèn mẫu</button>
+                                            <button type="button" className="m-btn m-btn-sm" onClick={applySample}>Chèn mẫu</button>
                                         </div>
                                         <div className="grid grid-cols-2 gap-3">
                                             {TRIGGER_FIELDS[form.auto_trigger].map((f) => (
@@ -608,7 +608,7 @@ export default function Promotions() {
                                 )}
                                 <div className="flex items-center gap-3">
                                     <label className="m-btn m-btn-sm cursor-pointer">
-                                        📤 Tải ảnh lên
+                                        Tải ảnh lên
                                         <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
                                             onChange={async (e) => {
                                                 const file = e.target.files?.[0];
@@ -737,7 +737,7 @@ export default function Promotions() {
                             <div className="m-card p-4">
                                 <h3 className="text-xs font-bold uppercase mb-3" style={{ color: 'var(--m-ink-soft)' }}>Áp dụng với</h3>
                                 {form.type === 'shipping' ? (
-                                    <div className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>🚚 KM phí vận chuyển luôn áp dụng cho <b>cả hóa đơn</b> (không chọn phạm vi).</div>
+                                    <div className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>KM phí vận chuyển luôn áp dụng cho <b>cả hóa đơn</b> (không chọn phạm vi).</div>
                                 ) : (
                                 <div className="space-y-2">
                                     {Object.entries(SCOPE_LABELS).map(([k, v]) => (
@@ -874,7 +874,7 @@ export default function Promotions() {
                         <h1 className="text-xl font-bold" style={{ color: 'var(--m-ink)' }}>Khuyến mại</h1>
                         <p className="text-sm" style={{ color: 'var(--m-ink-soft)' }}>Tự động áp dụng khi đơn hàng đủ điều kiện.</p>
                         <p className="text-xs mt-1" style={{ color: 'var(--m-ink-faint)' }}>
-                            📌 Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>
+                            Lưu ý: <b>Voucher</b> (mã giảm giá nhập tay khi thanh toán) có giới hạn lượt dùng <b>theo toàn hệ thống</b>
                             và có thể đặt thêm <b>giới hạn mỗi khách hàng</b>. Mỗi lượt dùng được ghi log theo khách để truy vết khi mã bị share. Hủy đơn sẽ hoàn lại lượt dùng.
                         </p>
                     </div>

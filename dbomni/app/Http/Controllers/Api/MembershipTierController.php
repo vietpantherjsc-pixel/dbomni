@@ -49,7 +49,39 @@ class MembershipTierController extends Controller
             'points_channel_multiplier_enabled' => $ch['enabled'],
             'points_platform_multiplier' => $ch['platform_multiplier'],
             'points_own_channels' => implode(', ', $ch['own_channels']),
+            // Hệ số theo từng kênh (2026-11-04, spec mục 1 + 4): quy tắc JSON
+            // (đã suy từ khóa cũ khi chưa từng lưu mới) + hệ số mặc định +
+            // danh sách kênh để Admin dựng bảng: price_lists đang active +
+            // 3 mã đặc thù không có ở đó (zalo/pos/dbomni), khớp mã lowercase.
+            'points_channel_rules' => $ch['rules'],
+            'points_channel_default_factor' => $ch['default_factor'],
+            'points_channels' => $this->channelRuleSources(),
         ];
+    }
+
+    /** Nguồn dòng bảng quy tắc theo kênh (spec mục 4). */
+    private function channelRuleSources(): array
+    {
+        $channels = [];
+        foreach (\App\Models\PriceList::where('is_active', true)->orderBy('sort_order')->orderBy('id')->get(['code', 'name', 'category']) as $pl) {
+            $code = strtolower(trim((string) $pl->code));
+            // F1b (2026-11-05): khử trùng theo alias như F1 — mã bảng giá
+            // 'online' gập về kênh chuẩn 'zalo', danh sách nguồn chỉ còn
+            // MỘT dòng Zalo Mini App (trước đây liệt kê cả hai dòng).
+            if ($code === 'online') {
+                $code = 'zalo';
+            }
+            if ($code === '' || isset($channels[$code])) {
+                continue;
+            }
+            $channels[$code] = ['code' => $code, 'name' => (string) $pl->name, 'category' => (string) ($pl->category ?? '')];
+        }
+        foreach (['zalo' => ['Zalo Mini App', 'online'], 'pos' => ['Tại quầy (POS)', 'store'], 'dbomni' => ['DBOMNI', 'store']] as $code => [$name, $category]) {
+            if (!isset($channels[$code])) {
+                $channels[$code] = ['code' => $code, 'name' => $name, 'category' => $category];
+            }
+        }
+        return array_values($channels);
     }
 
     /** Lưu cấu hình Loyalty (trang Thẻ thành viên — khu Cấu hình Loyalty). */
@@ -72,6 +104,11 @@ class MembershipTierController extends Controller
             'points_channel_multiplier_enabled' => 'nullable|boolean',
             'points_platform_multiplier' => 'nullable|numeric|min:0|max:1',
             'points_own_channels' => 'nullable|string|max:500',
+            // Hệ số theo từng kênh (2026-11-04): quy tắc JSON + hệ số mặc định (0–2)
+            'points_channel_rules' => 'nullable|array',
+            'points_channel_rules.*.enabled' => 'nullable|boolean',
+            'points_channel_rules.*.factor' => 'nullable|numeric|min:0|max:2',
+            'points_channel_default_factor' => 'nullable|numeric|min:0|max:2',
         ]);
         Setting::set('tier_window_days', $validated['tier_window_days']);
         Setting::set('tier_downgrade_notice_days', $validated['tier_downgrade_notice_days']);
@@ -103,6 +140,36 @@ class MembershipTierController extends Controller
                 }
             }
             Setting::set('points_own_channels', implode(',', $ownList));
+        }
+        // Hệ số theo từng kênh (2026-11-04): chỉ ghi khi request có gửi khóa
+        // mới; thiếu khóa → giữ nguyên giá trị đang có, không ghi đè rỗng.
+        // Setting::set ép về chuỗi nên quy tắc JSON phải json_encode trước.
+        // F1b (2026-11-05) thay cơ chế "lưu cả 2 mã" cũ: nguồn kênh đã khử
+        // trùng theo alias nên chỉ còn khóa chuẩn; khóa 'online' lỡ gửi lên
+        // (giao diện cũ còn cache) được GẬP về 'zalo' — 'zalo' gửi kèm thì
+        // thắng — thay vì nhân đôi sang 'online' như trước.
+        if (array_key_exists('points_channel_rules', $validated) && is_array($validated['points_channel_rules'])) {
+            $rules = [];
+            foreach ($validated['points_channel_rules'] as $code => $rule) {
+                $code = strtolower(trim((string) $code));
+                if ($code === '' || !is_array($rule)) {
+                    continue;
+                }
+                $rules[$code] = [
+                    'enabled' => array_key_exists('enabled', $rule) ? (bool) $rule['enabled'] : true,
+                    'factor' => isset($rule['factor']) ? (float) $rule['factor'] : 1.0,
+                ];
+            }
+            if (isset($rules['online'])) {
+                if (!isset($rules['zalo'])) {
+                    $rules['zalo'] = $rules['online'];
+                }
+                unset($rules['online']);
+            }
+            Setting::set('points_channel_rules', json_encode($rules));
+        }
+        if (array_key_exists('points_channel_default_factor', $validated) && $validated['points_channel_default_factor'] !== null) {
+            Setting::set('points_channel_default_factor', $validated['points_channel_default_factor']);
         }
         return response()->json(['success' => true, 'message' => 'Đã lưu cấu hình Loyalty', 'loyalty_config' => $this->loyaltyConfig()]);
     }

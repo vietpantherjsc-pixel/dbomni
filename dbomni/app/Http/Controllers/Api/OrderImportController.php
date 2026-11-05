@@ -242,7 +242,9 @@ class OrderImportController extends Controller
         $deductStock = $request->boolean('deduct_stock', false);
         $addPoints = $request->boolean('add_points', true);
         $branchId = (int) ($request->input('branch_id') ?: DB::table('branches')->orderBy('id')->value('id'));
-        $authUserId = $request->user()->id;
+        // Sổ #82 (2026-11-04, họ actor/FK): id fallback khi tên thu ngân trong
+        // file không map được User — lấy theo actor (NV → null, User → id mình).
+        $authUserId = \App\Support\ApprovalActor::ids($request->user())[0];
 
         // Validate lại toàn bộ (không tin frontend)
         $this->productCache = [];

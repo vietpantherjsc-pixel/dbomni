@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Html5Qrcode } from 'html5-qrcode';
 import { api, getProfile } from '../api';
 import { TabBar } from './Home';
+import ZmIcon from '../components/ZmIcon';
 
 // Gói 11: quét QR tích điểm tại quầy — khách quét mã trên màn hình POS
 // để gán đơn vào tài khoản thành viên (cần đăng nhập Tài khoản trước).
@@ -65,7 +66,7 @@ export default function ScanClaim() {
       <div style={{ padding: 16 }}>
         {done ? (
           <div className="zm-note" style={{ textAlign: 'center', padding: 24 }}>
-            <div style={{ fontSize: 40 }}>✅</div>
+            <div style={{ color: '#16a34a', display: 'flex', justifyContent: 'center' }}><ZmIcon name="checkCircle" size={40} /></div>
             <div style={{ fontWeight: 800, margin: '8px 0' }}>Đã gán đơn vào tài khoản!</div>
             <div>{done.name} · {done.member_code}{done.tier ? ` · Hạng ${done.tier}` : ''}</div>
             <div style={{ fontSize: 13, color: '#888', marginTop: 8 }}>Điểm sẽ được cộng khi đơn hoàn tất.</div>

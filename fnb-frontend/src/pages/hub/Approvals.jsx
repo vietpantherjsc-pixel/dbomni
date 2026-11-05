@@ -65,14 +65,12 @@ const CSS = `
 .ap-req{color:#dc2626;}
 `;
 
-function auth(token, hubT) {
-  const h = { headers: { Authorization: 'Bearer ' + token } };
-  if (hubT) h.params = { t: hubT };
-  return h;
+function auth(token) { // Gói phiên Hub 2026-11-05: bỏ tham số cổng ?t=
+  return { headers: { Authorization: 'Bearer ' + token } };
 }
-function cfg(token, hubT, params) {
-  const h = auth(token, hubT);
-  if (params) h.params = { ...(h.params || {}), ...params };
+function cfg(token, params) {
+  const h = auth(token);
+  if (params) h.params = { ...params };
   return h;
 }
 function errMsg(err, fallback) {
@@ -108,7 +106,7 @@ const TYPES_META = {
   leave_request: { label: 'Xin nghỉ phép', icon: '🏖️', rejectLabel: 'Từ chối' },
 };
 // Lý do ở hộp xác nhận: bắt buộc / tùy chọn / không có — theo mục 4 spec
-const REASON_MODE = { transaction: 'required', stocktake_adjustment: 'optional', shift_registration: 'optional' };
+const REASON_MODE = { transaction: 'required', stocktake_adjustment: 'optional', shift_registration: 'optional', leave_request: 'optional' }; // F5 (2026-11-05): từ chối đơn xin nghỉ có ô lý do như đổi ca
 
 // Cache approval_token 5 phút phía client (miễn nhập lại PIN — mục 5b spec)
 let approvalTokenCache = { token: '', ts: 0, empId: 0 };
@@ -131,32 +129,48 @@ async function ensureApprovalToken(authCfg, empId, pin) {
 }
 
 // ---------------- Cụm "Chờ duyệt" trên trang chủ Hub (mục 6.1 spec) ----------------
-export function ApprovalCluster({ token, hubT, branchId, onOpen }) {
+export function ApprovalCluster({ token, branchId, onOpen, onExpired }) {
   const [counts, setCounts] = useState(null);
-  const [processedCount, setProcessedCount] = useState(0);
+  // S1 lớp 3 (mục 🟡, Cách 1): null = chưa có số thật (đang tải) — KHÔNG khởi tạo 0,
+  // tránh thẻ in "0" sai trong cửa sổ chờ response processed (await thứ hai của load()).
+  const [processedCount, setProcessedCount] = useState(null);
   const [hidden, setHidden] = useState(false);
   const [countErr, setCountErr] = useState(false); // UX 2026-10-26 (🟠22): lỗi tải (không phải 403) trước đây làm cả cụm biến mất, mất lối vào duyệt
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
+    const load = async () => {
       try {
-        const r = await axios.get(API + '/employee/approvals/counts', cfg(token, hubT, { branch_id: branchId }));
+        const r = await axios.get(API + '/employee/approvals/counts', cfg(token, { branch_id: branchId }));
         if (!alive) return;
         setCounts(r.data && r.data.data ? r.data.data : { types: {}, total: 0 });
         setHidden(false);
         setCountErr(false);
       } catch (e) {
+        // S5: 401 = hết phiên → về đăng nhập kèm câu chuẩn (qua onExpired của Hub), không hiện "Không tải được…"
+        if (alive && e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
         if (alive && e && e.response && e.response.status === 403) setHidden(true);
         else if (alive) setCountErr(true);
       }
       try {
-        const r2 = await axios.get(API + '/employee/approvals/processed-today', cfg(token, hubT, { branch_id: branchId }));
+        const r2 = await axios.get(API + '/employee/approvals/processed-today', cfg(token, { branch_id: branchId }));
         if (alive && r2.data && r2.data.success) setProcessedCount((r2.data.data || []).length);
-      } catch (e) { /* bỏ qua */ }
-    })();
-    return () => { alive = false; };
+      } catch (e) { /* bỏ qua — Cách 1: lỗi thì GIỮ trạng thái chờ (null) hoặc số thật gần nhất, tuyệt đối không rơi về 0 */ }
+    };
+    load();
+    // S1 lớp 3 (mục 🟡): số đếm "Đã xử lý hôm nay" trước đây chỉ chụp 1 lần lúc
+    // dựng cụm — thao tác duyệt/từ chối ở tab/phiên khác (hoặc app bị đưa xuống
+    // nền rồi quay lại) khiến thẻ đứng ở số cũ trong khi danh sách mở vào đã mới.
+    // Tải lại mỗi khi cửa sổ lấy lại focus / trang hiện lại.
+    const onVis = () => { if (document.visibilityState === 'visible') load(); };
+    window.addEventListener('focus', load);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      alive = false;
+      window.removeEventListener('focus', load);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [branchId, token, retryTick]);
 
   if (hidden) return null;
@@ -188,18 +202,18 @@ export function ApprovalCluster({ token, hubT, branchId, onOpen }) {
       ))}
       {(counts.total || 0) === 0 && <div className="ap-empty">Không có phiếu chờ duyệt 🎉</div>}
       <button className="ap-done" onClick={() => onOpen('__processed')}>
-        <span>Đã xử lý hôm nay</span><span>({processedCount}) ›</span>
+        <span>Đã xử lý hôm nay</span><span>({processedCount === null ? '…' : processedCount}) ›</span>
       </button>
     </div>
   );
 }
 
 // ---------------- Luồng duyệt: danh sách / chi tiết / đã xử lý ----------------
-export function ApprovalsFlow({ token, hubT, emp, branchId, branchName, initialType, onBack }) {
+export function ApprovalsFlow({ token, emp, branchId, branchName, initialType, onBack, onExpired }) {
   const [route, setRoute] = useState(
     initialType === '__processed' ? { v: 'processed' } : { v: 'list', type: initialType || 'inbound' }
   );
-  const A = cfg(token, hubT, { branch_id: branchId });
+  const A = cfg(token, { branch_id: branchId });
   const [notice, setNotice] = useState('');
   // Sau duyệt/từ chối thành công: thông báo kết quả + quay về danh sách, phiếu biến mất (mục 6.3 spec)
   const backToList = (type, msg) => {
@@ -214,22 +228,22 @@ export function ApprovalsFlow({ token, hubT, emp, branchId, branchName, initialT
 
       {route.v === 'list' && (
         <ListView key={'l' + route.type + branchId} A={A} type={route.type} branchName={branchName}
-          onBack={onBack} onOpen={(id) => setRoute({ v: 'detail', type: route.type, id })} />
+          onBack={onBack} onOpen={(id) => setRoute({ v: 'detail', type: route.type, id })} onExpired={onExpired} />
       )}
       {route.v === 'detail' && (
-        <DetailView key={'d' + route.type + route.id} A={A} token={token} hubT={hubT} emp={emp}
+        <DetailView key={'d' + route.type + route.id} A={A} token={token} emp={emp}
           type={route.type} id={route.id} onBack={() => setRoute({ v: 'list', type: route.type })}
-          onActed={(msg) => backToList(route.type, msg)} />
+          onActed={(msg) => backToList(route.type, msg)} onExpired={onExpired} />
       )}
       {route.v === 'processed' && (
         <ProcessedView key={'p' + branchId} A={A} onBack={onBack}
-          onOpen={(type, id) => setRoute({ v: 'detail', type, id })} />
+          onOpen={(type, id) => setRoute({ v: 'detail', type, id })} onExpired={onExpired} />
       )}
     </div>
   );
 }
 
-function ListView({ A, type, branchName, onBack, onOpen }) {
+function ListView({ A, type, branchName, onBack, onOpen, onExpired }) {
   const meta = TYPES_META[type] || {};
   const [items, setItems] = useState([]);
   const [listErr, setListErr] = useState(false); // UX 2026-10-26 (🟠T1)
@@ -246,7 +260,11 @@ function ListView({ A, type, branchName, onBack, onOpen }) {
       setLastPage((r.data && r.data.pagination && r.data.pagination.last_page) || 1);
       setPage(p);
       setListErr(false);
-    } catch (e) { setListErr(true); } // UX 2026-10-26 (🟠T1): trước đây nuốt lỗi, danh sách trống/kẹt cũ mà không dấu vết
+    } catch (e) {
+      // S5: 401 = hết phiên → về đăng nhập kèm câu chuẩn, không hiện "Không tải được danh sách…"
+      if (e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
+      setListErr(true); // UX 2026-10-26 (🟠T1): trước đây nuốt lỗi, danh sách trống/kẹt cũ mà không dấu vết
+    }
     finally { setLoading(false); }
   };
   useEffect(() => { load(1); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -282,7 +300,7 @@ function ListView({ A, type, branchName, onBack, onOpen }) {
   );
 }
 
-function ProcessedView({ A, onBack, onOpen }) {
+function ProcessedView({ A, onBack, onOpen, onExpired }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -290,7 +308,10 @@ function ProcessedView({ A, onBack, onOpen }) {
       try {
         const r = await axios.get(API + '/employee/approvals/processed-today', A);
         setItems((r.data && r.data.data) || []);
-      } catch (e) { /* bỏ qua */ }
+      } catch (e) {
+        // S5: 401 = hết phiên → về đăng nhập kèm câu chuẩn; lỗi khác giữ im lặng như cũ
+        if (e && e.response && e.response.status === 401 && onExpired) onExpired();
+      }
       finally { setLoading(false); }
     })();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
@@ -321,7 +342,7 @@ function ProcessedView({ A, onBack, onOpen }) {
 }
 
 // ---------------- Chi tiết phiếu ----------------
-function DetailView({ A, token, hubT, emp, type, id, onBack, onActed }) {
+function DetailView({ A, token, emp, type, id, onBack, onActed, onExpired }) {
   const meta = TYPES_META[type] || {};
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -333,7 +354,11 @@ function DetailView({ A, token, hubT, emp, type, id, onBack, onActed }) {
     try {
       const r = await axios.get(`${API}/employee/approvals/${type}/${id}`, A);
       setData(r.data && r.data.data ? r.data.data : null);
-    } catch (e) { setErr(errMsg(e, 'Không tải được chi tiết phiếu.')); }
+    } catch (e) {
+      // S5: 401 = hết phiên → về đăng nhập kèm câu chuẩn, không hiện "Không tải được chi tiết…"
+      if (e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
+      setErr(errMsg(e, 'Không tải được chi tiết phiếu.'));
+    }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -370,7 +395,7 @@ function DetailView({ A, token, hubT, emp, type, id, onBack, onActed }) {
         <div className="ap-warn">Phiếu này đã được xử lý — chỉ xem lại, không thể duyệt/từ chối lại.</div>
       )}
       {confirm && (
-        <ConfirmDialog A={A} token={token} hubT={hubT} emp={emp} type={type} id={id}
+        <ConfirmDialog A={A} token={token} emp={emp} type={type} id={id}
           action={confirm} rec={rec} branchNames={branchNames}
           onClose={() => setConfirm(null)} onDone={doneAction} />
       )}
@@ -529,14 +554,14 @@ function DetailBody({ type, rec }) {
 }
 
 // ---------------- Hộp xác nhận duyệt/từ chối (mục 4.4 + 5b spec) ----------------
-function ConfirmDialog({ A, token, hubT, emp, type, id, action, rec, branchNames, onClose, onDone }) {
+function ConfirmDialog({ A, token, emp, type, id, action, rec, branchNames, onClose, onDone }) {
   const meta = TYPES_META[type] || {};
   const reasonMode = REASON_MODE[type] || 'none';
   const [reason, setReason] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const authCfg = cfg(token, hubT);
+  const authCfg = cfg(token);
 
   const branchLine = type === 'transfer'
     ? `📍 Chi nhánh của phiếu: ${(branchNames[0] || '')} → ${(branchNames[1] || '')}`
@@ -580,6 +605,8 @@ function ConfirmDialog({ A, token, hubT, emp, type, id, action, rec, branchNames
       }
       else { setErr(errMsg(r, 'Thao tác thất bại.')); }
     } catch (e) {
+      // S5: 401 = phiên NV đã chết → về đăng nhập kèm câu chuẩn (khác PIN_REQUIRED là hết phiên xác nhận duyệt)
+      if (e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
       if (e && e.response && e.response.data && e.response.data.code === 'PIN_REQUIRED') {
         approvalTokenCache = { token: '', ts: 0, empId: 0 };
         setErr('Phiên xác nhận PIN đã hết hạn — nhập lại PIN.');

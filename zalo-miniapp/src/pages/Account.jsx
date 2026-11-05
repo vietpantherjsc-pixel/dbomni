@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, API, fmt, imgUrl, getProfile, setProfile, profileIdentity } from '../api';
+import { api, API, fmt, imgUrl, getProfile, setProfile, profileIdentity, authWithZalo, getSession, setSession, clearSession, getZaloTokens } from '../api';
 import { fmtDate } from '../utils/format';
 import { TabBar } from './Home';
 import { storage } from '../utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk)
-import PrivacyPolicy from '../components/PrivacyPolicy'; // Spec P4-P5: popup chính sách riêng tư
+import ConsentCheck from '../components/ConsentCheck'; // Spec đăng ký Zalo B: ô đồng ý dùng chung
+import ZmIcon from '../components/ZmIcon';
 
 // Gói 55 p5: Mục thu gọn — mặc định đóng, bấm mới xổ xuống (tránh trang dài)
 function Collapsible({ icon, title, badge, children, defaultOpen = false }) {
@@ -73,44 +74,17 @@ function PermissionManager() {
     }
   };
 
-  // Spec P4-P5: xin quyền thông tin Zalo THẬT qua zmp-sdk (thay alert stub).
-  // Quyền phải được khai báo trong Mini App Center trước. Từ chối → vẫn dùng app bình thường.
+  // Spec đăng ký Zalo B §2.1: lối vào Quản lý quyền dùng chung hàm authWithZalo
+  // (SDK + /zalo/auth + lưu hồ sơ) với thẻ đăng ký mới và trang Minigame.
+  // Hành vi lối vào này giữ nguyên: liên kết + thông báo, từ chối quyền → im lặng.
   const requestZalo = async () => {
-    const inZalo = storage.isZalo();
-    if (!inZalo) {
-      alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.\nHiện tại hãy đăng nhập bằng SĐT + mã thành viên ở trên.');
-      return;
-    }
     try {
-      const { getUserInfo, getAccessToken, getPhoneNumber } = await import('zmp-sdk/apis');
-      const { userInfo } = await getUserInfo({});
-      const accessToken = await getAccessToken({});
-      // Lấy SĐT (token mã hóa — server giải mã bằng app secret khi cần)
-      let phoneToken = null;
-      try {
-        const ph = await getPhoneNumber({});
-        phoneToken = ph?.token || null;
-      } catch { /* từ chối SĐT → vẫn tiếp tục với thông tin cơ bản */ }
-      // Gửi server xác thực qua graph.zalo.me + appsecret_proof
-      const res = await fetch(API + '/zalo/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          access_token: accessToken,
-          phone_token: phoneToken,
-          name: userInfo?.name,
-          avatar: userInfo?.avatar,
-        }),
-      });
-      const json = await res.json();
+      const json = await authWithZalo();
+      if (json.code === 'not_zalo') {
+        alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.\nHiện tại hãy đăng nhập bằng SĐT + mật khẩu ở trên.');
+        return;
+      }
       if (json.success) {
-        storage.set('zm_zalo_profile', { zalo_id: json.data.zalo_id, name: json.data.name });
-        // Audit 2026-10-23 BM-01/BM-02: server đã xác thực phone_token — lưu SĐT +
-        // mã TV server trả vào hồ sơ để các endpoint quyền lợi (ví/điểm) xác thực
-        // bằng cặp SĐT + mã TV (zalo_id trần không còn được chấp nhận).
-        if (json.data.phone && json.data.member_code) {
-          setProfile({ ...(getProfile() || {}), phone: json.data.phone, member_code: json.data.member_code, customer_id: json.data.customer_id, zalo_id: json.data.zalo_id });
-        }
         setPerms((p) => ({ ...p, zalo: 'granted' }));
         alert('Đã liên kết tài khoản Zalo: ' + json.data.name + '.\nSĐT ' + (json.data.phone || 'chưa có') + ' sẽ tự điền khi đặt hàng.');
       } else {
@@ -123,9 +97,9 @@ function PermissionManager() {
   };
 
   const items = [
-    { key: 'zalo', icon: '👤', name: 'Thông tin Zalo', desc: 'Tên và số điện thoại để tự điền khi đặt hàng', action: requestZalo },
-    { key: 'location', icon: '📍', name: 'Vị trí', desc: 'Để tính phí ship chính xác theo khoảng cách', action: requestLocation },
-    { key: 'camera', icon: '📷', name: 'Camera', desc: 'Để quét QR tích điểm tại quầy', action: requestCamera },
+    { key: 'zalo', icon: 'user', name: 'Thông tin Zalo', desc: 'Tên và số điện thoại để tự điền khi đặt hàng', action: requestZalo },
+    { key: 'location', icon: 'mapPin', name: 'Vị trí', desc: 'Để tính phí ship chính xác theo khoảng cách', action: requestLocation },
+    { key: 'camera', icon: 'camera', name: 'Camera', desc: 'Để quét QR tích điểm tại quầy', action: requestCamera },
   ];
 
   const statusLabel = { granted: ['✓ Đã cấp', 'status-granted'], denied: ['✕ Chưa cấp', 'status-denied'], unknown: ['? Chưa hỏi', 'status-unknown'] };
@@ -136,7 +110,7 @@ function PermissionManager() {
         const [label, cls] = statusLabel[perms[it.key]];
         return (
           <div key={it.key} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 14, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: '#f0f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{it.icon}</div>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: '#f0f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#24305E', flexShrink: 0 }}><ZmIcon name={it.icon} size={22} /></div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>{it.name}</div>
               <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{it.desc}</div>
@@ -185,8 +159,11 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   const identity = () => profileIdentity(getProfile());
 
   const loadShop = () => {
-    api.pointsExchangeItems(identity()).then((r) => setItems(r?.data || [])).catch(() => {});
-    api.pointsHistory(identity()).then((r) => setHistory(r?.data || null)).catch(() => {});
+    // Sổ #31: req() trong api.js đã bóc sẵn phong bì (trả data.data) — đọc r.data
+    // lần nữa sẽ ra undefined và nuốt sạch dữ liệu (lịch sử điểm + kệ đổi điểm
+    // luôn rỗng dù API có dữ liệu). Đọc thẳng r, giữ fallback phong bì như PromoCarousel.
+    api.pointsExchangeItems(identity()).then((r) => setItems(r?.data || r || [])).catch(() => {});
+    api.pointsHistory(identity()).then((r) => setHistory(r?.data || r || null)).catch(() => {});
   };
   useEffect(() => { if (L) loadShop(); }, [customer.id]);
   // Minigame: lỗi API/tắt công tắc → thẻ ẩn, trang không vỡ (bất biến hồi quy mục 12.3)
@@ -199,7 +176,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     setExchanging(item.id);
     try {
       const r = await api.pointsExchange(identity(), item.id);
-      alert((r?.message || 'Đổi điểm thành công!') + (r?.data?.coupon?.code ? `\nMã coupon: ${r.data.coupon.code}` : ''));
+      alert('Đổi điểm thành công!' + (r?.coupon?.code ? `\nMã coupon: ${r.coupon.code}` : '')); // Sổ phụ #31: req() chỉ trả data — message nằm ở phong bì (không lấy lại được, dùng câu mặc định); mã nằm ở r.coupon.code
       loadShop();
       if (onChanged) onChanged();
     } catch (e) { alert(e.message); }
@@ -225,14 +202,19 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   }
   const barColor = keepMode ? (atRisk ? '#dc2626' : '#16a34a') : 'var(--zm-primary)';
 
-  // Chênh tích điểm theo kênh (spec 2026-10-28, mục 4): dòng chú thích chỉ hiện
-  // khi chính sách BẬT và kênh sàn thực sự tích chậm hơn (hệ số < 1). Hệ số 0,5
-  // → câu "gấp đôi" đúng tỉ lệ thật; hệ số khác → câu trung tính, không nói gấp đôi.
-  const chMult = Number(L.points_channel?.platform_multiplier);
-  const chNote = !L.points_channel?.enabled || !(chMult > 0 && chMult < 1) ? null
-    : Math.abs(chMult - 0.5) < 1e-9
-      ? 'Đặt qua Mini App tích điểm nhanh gấp đôi so với đặt qua app giao đồ ăn.'
-      : 'Đặt qua Mini App tích điểm nhanh hơn so với đặt qua app giao đồ ăn.';
+  // Hệ số tích điểm theo kênh (spec 2026-11-04, mục 5): chú thích theo hệ số
+  // hiệu dụng của kênh zalo — hiện khi chính sách BẬT và hệ số < 1; 0,5 giữ
+  // câu "gấp đôi" đúng tỉ lệ thật, hệ số khác hiện đúng ×hệ số (dấu phẩy
+  // thập phân theo cách viết tiếng Việt, như spec T-06: ×0,8).
+  const chOwnRaw = L.points_channel?.own_channel_factor ?? L.points_channel?.platform_multiplier;
+  const chOwn = Number(chOwnRaw);
+  const chOwnText = Number.isFinite(chOwn) ? String(chOwn).replace(/\.?0+$/, '').replace('.', ',') : '';
+  const chNote = !L.points_channel?.enabled || !Number.isFinite(chOwn) || chOwn >= 1 ? null
+    : chOwn === 0
+      ? 'Kênh này hiện không tích điểm.'
+      : Math.abs(chOwn - 0.5) < 1e-9
+        ? 'Đặt qua Mini App tích điểm nhanh gấp đôi so với đặt qua app giao đồ ăn.'
+        : `Đơn qua kênh này tích điểm ×${chOwnText}.`;
 
   // Hàng mốc hạng: mỗi mốc = 1 cột (vòng tròn + tên căn giữa ngay dưới) — cùng
   // một đơn vị bố cục nên mốc và nhãn KHÔNG THỂ lệch nhau (sửa P0).
@@ -247,7 +229,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   if (L.just_upgraded_to) {
     strips = [(
       <div key="up" style={{ ...stripBase, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#3f4756' }}>
-        <span>🎉</span>
+        <span style={{ color: '#059669', display: 'flex' }}><ZmIcon name="checkCircle" size={16} /></span>
         <div><b style={{ color: '#065f46' }}>Bạn vừa lên hạng {L.just_upgraded_to}!</b> Quyền lợi mới đã được áp dụng.</div>
       </div>
     )];
@@ -256,7 +238,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     if (atRisk) {
       strips.push(
         <div key="risk" style={{ ...stripBase, background: '#fef2f2', border: '1px solid #fecaca', color: '#3f4756' }}>
-          <span>⚠</span>
+          <span style={{ color: '#b45309', display: 'flex' }}><ZmIcon name="alert" size={16} /></span>
           <div><b style={{ color: '#991b1b' }}>Sắp tụt hạng!</b> Chi thêm <b style={{ color: '#991b1b' }}>{fmt(L.keep.remaining)}đ</b>{L.keep.deadline_date ? <> trước ngày <b style={{ color: '#991b1b' }}>{fmtDate(L.keep.deadline_date)}</b></> : ''} để giữ hạng {L.tier_name}.</div>
         </div>
       );
@@ -276,7 +258,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     if (!atRisk && L.points_event) {
       strips.push(
         <div key="dd" style={{ ...stripBase, background: '#fff7e6', border: '1px solid #F5A623', color: '#3f4756' }}>
-          <span>🔥</span>
+          <span style={{ color: '#F5A623', display: 'flex' }}><ZmIcon name="zap" size={16} /></span>
           <div><b style={{ color: '#7c4a03' }}>Double Days đang diễn ra!</b> Hạng {L.tier_name} được nhân <b>×{L.points_event.multiplier}</b> điểm cho mọi đơn thanh toán, đến hết {String(L.points_event.ends_at).slice(11, 16)} ngày {fmtDate(String(L.points_event.ends_at).slice(0, 10))}.</div>
         </div>
       );
@@ -356,7 +338,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
           <div style={{ fontSize: 12.5, color: '#8a93a6', marginTop: 4 }}>{chNote}</div>
         )}
         {!keepMode && L.keep?.status === 'safe' && L.keep?.threshold > 0 && (
-          <div style={{ fontSize: 12, color: '#059669', marginTop: 6 }}>🛡️ Bạn đã đủ điều kiện giữ hạng {L.tier_name}.</div>
+          <div style={{ fontSize: 12, color: '#059669', marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="shield" size={14} />Bạn đã đủ điều kiện giữ hạng {L.tier_name}.</div>
         )}
         {nT > 1 && (
           <div style={{ position: 'relative', display: 'flex', marginTop: 14 }}>
@@ -405,7 +387,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
                   )}
                 </div>
                 {it.locked_by_tier ? (
-                  <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6' }}>🔒 {it.min_tier_name || 'Theo hạng'}</button>
+                  <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6', display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="lock" size={13} />{it.min_tier_name || 'Theo hạng'}</button>
                 ) : noTurns ? (
                   <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6' }}>Hết lượt</button>
                 ) : !it.enough_points ? (
@@ -524,7 +506,7 @@ function PromoCarousel() {
   useEffect(() => {
     api.promoBanners().then((r) => setBanners(r?.data || r || [])).catch(() => {});
     // Lấy thời gian trượt từ cài đặt (cùng API theme)
-    fetch(`${API}/theme`, { headers: { Accept: 'application/json' } })
+    fetch(`${API}/theme`, { headers: { Accept: 'application/json' } }) // Sổ #25 lớp 2: hằng API phải có trong import của file này (thiếu là trắng trang sau khi đăng nhập)
       .then((r) => r.json()).then((d) => {
         const v = (d?.data || d)?.promo_slide_interval;
         if (v > 0) setIntervalSec(v);
@@ -562,7 +544,22 @@ function PromoCarousel() {
 export default function Account() {
   const nav = useNavigate();
   const [phone, setPhone] = useState(() => getProfile()?.phone || '');
-  const [memberCode, setMemberCode] = useState(() => getProfile()?.member_code || '');
+  // Spec đăng nhập SĐT + mật khẩu §5.4: form phụ dùng SĐT + mật khẩu
+  // (member_code không còn là chứng thực — chỉ hiển thị trên thẻ thành viên).
+  const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  // Sheet đặt/đổi mật khẩu: 'set' | 'change' | 'zalo-set' | 'counter-set'
+  const [pwSheet, setPwSheet] = useState(null);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [pwPhone, setPwPhone] = useState('');
+  const [showPwNew, setShowPwNew] = useState(false);
+  const [pwErrs, setPwErrs] = useState([]);
+  const [pwBusy, setPwBusy] = useState(false);
+  // Spec mật khẩu §7.3: email tự nguyện trong mục bảo mật.
+  const [email, setEmail] = useState('');
+  const [emailMsg, setEmailMsg] = useState('');
   // Gói 55 p10: cover trang Tài khoản — user tự custom, lưu qua module storage theo SĐT
   const [accountCover, setAccountCover] = useState(() => {
     return storage.get('zm_account_cover') || '';
@@ -612,9 +609,15 @@ export default function Account() {
     reader.readAsDataURL(f);
   };
   const [customer, setCustomer] = useState(null);
-  // Spec P4-P5: checkbox đồng ý NĐ 13/2023 (riêng biệt, KHÔNG tick sẵn) + popup chính sách
+  // Spec P4-P5: checkbox đồng ý NĐ 13/2023 (riêng biệt, KHÔNG tick sẵn).
+  // Spec đăng ký Zalo B §2.1: MỘT ô đồng ý duy nhất cho cả trang chưa đăng nhập
+  // (nằm trong thẻ đăng ký mới, form mã dùng chung state này qua cổng lookup cũ).
   const [agreeND13, setAgreeND13] = useState(false);
-  const [showPrivacy, setShowPrivacy] = useState(false);
+  // Spec đăng ký Zalo B: trạng thái thẻ đăng ký / chào mừng / mã mới sau xoay IMP.
+  const [zaloBusy, setZaloBusy] = useState(false);
+  const [zaloB3, setZaloB3] = useState(false);
+  const [welcome, setWelcome] = useState(null);
+  const [rotatedNotice, setRotatedNotice] = useState('');
   // SPEC-02: số coupon còn hiệu lực để hiện badge trên nút "Ưu đãi của tôi"
   const [couponCount, setCouponCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -622,53 +625,181 @@ export default function Account() {
   const [addrBook, setAddrBook] = useState([]);
 
   const loadAddrs = (cid, phone, memberCode) => {
-    api.addresses(cid, phone, memberCode).then((r) => setAddrBook(r?.data || [])).catch(() => {});
+    api.addresses(cid, phone, memberCode).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: req() đã bóc phong bì, r chính là MẢNG THUẦN từ backend — đọc r?.data là luôn rỗng
   };
 
-  const doLookup = async (ph, mc, silent) => {
+  // Spec đăng nhập SĐT + mật khẩu §3: nạp hồ sơ theo phiên token hiện tại.
+  const loadMe = async (silent) => {
     setLoading(true);
     try {
-      const c = await api.customerByPhone(ph.trim(), mc.trim());
+      const c = await api.customerMe();
       setCustomer(c);
       if (c) {
-        // Gói 49g: lưu phiên đăng nhập (kèm customer_id cho sổ địa chỉ)
         setProfile({ name: c.name, phone: c.phone, member_code: c.member_code, customer_id: c.id });
+        setEmail(c.email || '');
         loadAddrs(c.id, c.phone, c.member_code);
         // SPEC-02: nạp số coupon còn hiệu lực
         api.myCoupons({ phone: c.phone, member_code: c.member_code }, 'active').then((list) => setCouponCount((list || []).length)).catch(() => {});
       }
-      else if (!silent) alert('SĐT hoặc mã thành viên không đúng. Mã TV in trên thẻ thành viên của bạn.');
       return c;
     } catch (e) { if (!silent) alert(e.message); return null; }
     finally { setLoading(false); }
   };
 
-  const lookup = () => {
-    if (!phone.trim() || !memberCode.trim()) { alert('Nhập số điện thoại và mã thành viên.'); return; }
+  // Spec đăng nhập SĐT + mật khẩu §5.4: đăng nhập bằng SĐT + mật khẩu.
+  // Sai thông tin → một thông báo chung (không phân biệt sai SĐT hay sai
+  // mật khẩu, không lộ tài khoản có/không có mật khẩu).
+  const lookup = async () => {
+    if (!phone.trim()) { alert('Vui lòng nhập số điện thoại.'); return; }
+    if (!password) { alert('Vui lòng nhập mật khẩu.'); return; }
     // Spec P4-P5 (NĐ 13/2023): đăng nhập thành viên cần đồng ý xử lý dữ liệu.
     // Không đồng ý → vẫn xem menu/đặt món, chỉ không đăng nhập/tích điểm.
     if (!agreeND13) {
-      if (!window.confirm('Bạn chưa đồng ý cho Daybreak xử lý dữ liệu cá nhân.\n\nĐể đăng nhập thành viên và tích điểm, bạn cần đồng ý (tích vào ô phía dưới).\nBạn vẫn có thể xem thực đơn và đặt món mà không cần đăng nhập.\n\nBấm OK để quay lại tích ô đồng ý.')) return;
+      if (!window.confirm('Bạn chưa đồng ý cho Daybreak xử lý dữ liệu cá nhân.\n\nĐể đăng nhập thành viên và tích điểm, bạn cần đồng ý (tích vào ô phía trên).\nBạn vẫn có thể xem thực đơn và đặt món mà không cần đăng nhập.\n\nBấm OK để quay lại tích ô đồng ý.')) return;
       return;
     }
-    doLookup(phone, memberCode, false);
+    setLoading(true);
+    try {
+      const r = await api.passwordLogin({ phone: phone.trim(), password });
+      if (!r.success) {
+        if (r.code === 'account_locked') alert(r.message || 'Tài khoản đang bị khóa tạm thời.');
+        else alert('SĐT hoặc mật khẩu chưa đúng.');
+        return;
+      }
+      if (r.data?.session_token) setSession({ token: r.data.session_token, expires_at: r.data.session_expires_at || null });
+      setPassword('');
+      await loadMe(true);
+    } catch (e) { alert(e.message || 'Đăng nhập thất bại.'); }
+    finally { setLoading(false); }
   };
 
-  // Gói 49g: tự động đăng nhập lại từ phiên đã lưu
+  const openPwSheet = (mode) => {
+    setPwSheet(mode);
+    setPwCurrent(''); setPwNew(''); setPwConfirm('');
+    setPwPhone(phone || '');
+    setPwErrs([]); setShowPwNew(false);
+  };
+
+  // Gửi sheet đặt/đổi mật khẩu theo chế độ đang mở (spec §5.1–§5.3).
+  const submitPwSheet = async () => {
+    if (!pwNew || !pwConfirm) { setPwErrs(['Nhập mật khẩu mới và nhập lại để xác nhận.']); return; }
+    setPwBusy(true);
+    setPwErrs([]);
+    try {
+      let r;
+      if (pwSheet === 'set') {
+        r = await api.passwordSet({ new_password: pwNew, new_password_confirmation: pwConfirm });
+      } else if (pwSheet === 'change') {
+        if (!pwCurrent) { setPwErrs(['Nhập mật khẩu hiện tại.']); return; }
+        r = await api.passwordChange({ current_password: pwCurrent, new_password: pwNew, new_password_confirmation: pwConfirm });
+      } else if (pwSheet === 'zalo-set') {
+        const tk = await getZaloTokens();
+        if (!tk.ok) { alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.'); return; }
+        r = await api.passwordZaloSet({ access_token: tk.accessToken, phone_token: tk.phoneToken, new_password: pwNew, new_password_confirmation: pwConfirm });
+      } else if (pwSheet === 'counter-set') {
+        if (!pwPhone.trim()) { setPwErrs(['Nhập số điện thoại của tài khoản.']); return; }
+        r = await api.passwordCounterSet({ phone: pwPhone.trim(), new_password: pwNew, new_password_confirmation: pwConfirm });
+      }
+      if (!r.success) {
+        if (Array.isArray(r.errors) && r.errors.length) setPwErrs(r.errors);
+        else setPwErrs([r.message || 'Không đặt được mật khẩu.']);
+        return;
+      }
+      if (r.data?.session_token) setSession({ token: r.data.session_token, expires_at: r.data.session_expires_at || null });
+      if (r.data?.code_rotated) setRotatedNotice(r.data.member_code);
+      setPwSheet(null);
+      await loadMe(true);
+      alert('Đã đặt mật khẩu thành công.');
+    } catch (e) { setPwErrs([e.message || 'Không đặt được mật khẩu.']); }
+    finally { setPwBusy(false); }
+  };
+
+  // Spec mật khẩu §7.3: khách tự lưu/xóa email ở trang Tài khoản.
+  const saveEmail = async () => {
+    try {
+      const r = await api.updateProfileEmail({ email: email.trim() || null });
+      if (!r.success) { setEmailMsg(r.message || 'Không lưu được email.'); return; }
+      setEmail(r.data?.email || '');
+      setEmailMsg(email.trim() ? 'Đã lưu email.' : 'Đã xóa email.');
+      setCustomer((c) => (c ? { ...c, email: r.data?.email || null } : c));
+    } catch (e) { setEmailMsg(e.message || 'Không lưu được email.'); }
+  };
+
+  // Spec đăng ký Zalo B §2: thẻ đăng ký mới ở đầu trang chưa đăng nhập.
+  // Sổ #25 (2026-11-04): handler này TỪNG nằm trong PermissionManager — khác
+  // component với thẻ + state nó dùng (agreeND13/zaloBusy/loadMe đều ở Account)
+  // → ReferenceError render, trắng trang /account. Giữ handler CÙNG component
+  // với state và JSX của nó.
+  const handleZaloRegister = async () => {
+    if (!agreeND13) return; // nút đã khóa khi chưa tích; chặn thêm cho chắc
+    setZaloBusy(true);
+    try {
+      const json = await authWithZalo();
+      if (json.code === 'not_zalo') {
+        alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.\nHiện tại hãy đăng nhập bằng SĐT + mật khẩu ở trên.');
+        return;
+      }
+      if (!json.success) {
+        if (json.code === 'phone_permission_required') { setZaloB3(true); return; }
+        alert(json.message || 'Không đăng ký được bằng Zalo.');
+        return;
+      }
+      setZaloB3(false);
+      const d = json.data;
+      // Spec mật khẩu §3.4: /zalo/auth đã phát hành token phiên — nạp hồ
+      // sơ theo token, không dùng cặp SĐT + mã để tra cứu nữa.
+      if (d.is_new) {
+        // Khách mới → nạp hồ sơ đầy đủ (hạng/điểm) rồi hiện màn chào mừng 1 lần.
+        const c = await loadMe(true);
+        if (c) setWelcome(c);
+        else setWelcome({ name: d.name, phone: d.phone, member_code: d.member_code, tier: '', loyalty: { points: 0 } });
+      } else {
+        if (d.code_rotated) setRotatedNotice(d.member_code);
+        await loadMe(true);
+      }
+    } catch {
+      // Từ chối hộp thoại quyền Zalo → giữ nguyên trang, không tạo gì.
+    } finally { setZaloBusy(false); }
+  };
+
+  // Gói 49g + spec mật khẩu §3.3: tự động đăng nhập lại từ phiên đã lưu.
+  // Ưu tiên token phiên; thiết bị cũ còn giữ cặp SĐT + mã thì đổi sang
+  // token một lần qua code-login; cặp không còn hiệu lực (đã đặt mật khẩu
+  // hoặc mã IMP) thì về trạng thái chưa đăng nhập.
   useEffect(() => {
-    const p = getProfile();
-    if (p?.phone && p?.member_code) {
-      setPhone(p.phone);
-      setMemberCode(p.member_code);
-      doLookup(p.phone, p.member_code, true);
-    }
+    const boot = async () => {
+      if (getSession()?.token) {
+        const c = await loadMe(true);
+        if (c) { setPhone(c.phone); return; }
+        clearSession();
+      }
+      const p = getProfile();
+      if (p?.phone && p?.member_code) {
+        setPhone(p.phone);
+        const r = await api.codeLogin({ phone: p.phone, member_code: p.member_code });
+        if (r.success && r.data?.session_token) {
+          setSession({ token: r.data.session_token, expires_at: r.data.session_expires_at || null });
+          const c = await loadMe(true);
+          if (c) return;
+        }
+        setProfile(null);
+      }
+    };
+    boot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const logout = () => {
+  const logout = async () => {
+    try { await api.sessionLogout(); } catch { /* thu hồi best-effort */ }
+    clearSession();
     setProfile(null);
     setCustomer(null);
     setPhone('');
-    setMemberCode('');
+    setPassword('');
+    setEmail('');
+    setWelcome(null);
+    setRotatedNotice('');
+    setZaloB3(false);
   };
 
   return (
@@ -685,33 +816,96 @@ export default function Account() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         </button>
       </div>
-      {/* Gói nén cover (2026-10-30): nói rõ phạm vi lưu của ảnh bìa cá nhân */}
-      <div style={{ padding: '6px 16px 0', fontSize: 11.5, color: '#888', textAlign: 'right' }}>Ảnh chỉ lưu trên máy này</div>
       {!customer && (
         <>
+          {/* Spec đăng ký Zalo B §2: thẻ đăng ký mới, trên cùng */}
+          {!zaloB3 ? (
+            <div style={{ margin: '-30px 16px 12px', position: 'relative', zIndex: 2, background: '#fff', border: '1px solid #e3e8f2', borderRadius: 16, padding: 16, boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
+              {/* Bố cục gốc: card đầu tiên của trang ĐÈ lên cạnh dưới banner 30px — đồng nhất thẻ chào mừng/thẻ thành viên ở trạng thái đã đăng nhập */}
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#24305E' }}>Bạn mới tới Daybreak?</div>
+              <div style={{ fontSize: 13, color: '#555', marginTop: 4, lineHeight: 1.5 }}>Đăng ký thành viên bằng Zalo để tích điểm và nhận ưu đãi — không cần nhớ mã, không cần OTP.</div>
+              <div style={{ marginTop: 12 }}>
+                <ConsentCheck checked={agreeND13} onChange={setAgreeND13} />
+              </div>
+              <button className="zm-btn-primary" onClick={handleZaloRegister} disabled={!agreeND13 || zaloBusy}
+                style={{ marginTop: 12, minHeight: 48, background: !agreeND13 ? '#c3cadb' : '#0068FF' }}>
+                {zaloBusy ? 'Đang xử lý...' : 'Đăng ký / Đăng nhập bằng Zalo'}
+              </button>
+              {!agreeND13 && (
+                <div style={{ fontSize: 12.5, color: '#888', marginTop: 8 }}>Tích ô đồng ý ở trên để bật nút đăng ký.</div>
+              )}
+            </div>
+          ) : (
+            /* Spec đăng ký Zalo B §2.2 (B3): từ chối quyền SĐT → không tạo tài khoản */
+            <div style={{ margin: '-30px 16px 12px', position: 'relative', zIndex: 2, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 16, padding: 16, boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#9A3412' }}>Cần số điện thoại đã xác thực</div>
+              <div style={{ fontSize: 13, color: '#555', marginTop: 6, lineHeight: 1.5 }}>Daybreak cần số điện thoại đã xác thực từ Zalo để tạo tài khoản thành viên cho bạn. Không có dữ liệu nào được tạo từ lần thử vừa rồi.</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button className="zm-btn-primary" onClick={() => { setZaloB3(false); handleZaloRegister(); }} disabled={zaloBusy} style={{ flex: 1, minHeight: 44 }}>Thử lại</button>
+                <button className="zm-btn-outline" onClick={() => nav('/')} style={{ flex: 1, minHeight: 44 }}>Tiếp tục đặt món vãng lai</button>
+              </div>
+            </div>
+          )}
+          <div style={{ textAlign: 'center', fontSize: 12.5, color: '#888', margin: '0 16px 12px' }}>— đã có thẻ thành viên —</div>
+          {/* Spec đăng nhập SĐT + mật khẩu §5.4: form phụ SĐT + mật khẩu. */}
           <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
             <input placeholder="Số điện thoại" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
-            <input placeholder="Mã thành viên (VD: TV6BDAFA)" value={memberCode} onChange={(e) => setMemberCode(e.target.value)} style={{ textTransform: 'uppercase' }} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+              <input placeholder="Mật khẩu" type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+              <button type="button" onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 13, color: '#24305E' }}>{showPw ? 'Ẩn' : 'Hiện'}</button>
+            </div>
             <button className="zm-btn-primary" onClick={lookup} disabled={loading}>
               {loading ? '...' : 'Đăng nhập'}
             </button>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#555', cursor: 'pointer', lineHeight: 1.5 }}>
-              <input type="checkbox" checked={agreeND13} onChange={(e) => setAgreeND13(e.target.checked)} style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
-              <span>
-                Tôi đồng ý cho Daybreak xử lý dữ liệu cá nhân của tôi (SĐT, …) cho mục đích quản lý thành viên, tích điểm và gửi ưu đãi. Tôi có thể rút lại đồng ý bất cứ lúc nào.{' '}
-                <span onClick={(e) => { e.preventDefault(); setShowPrivacy(true); }} style={{ color: '#24305E', fontWeight: 700, textDecoration: 'underline' }}>Xem chính sách</span>
-              </span>
-            </label>
           </div>
-          <PrivacyPolicy open={showPrivacy} onClose={() => setShowPrivacy(false)} />
           <div className="zm-note" style={{ margin: '0 16px' }}>
-            Đăng nhập bằng SĐT + mã thành viên (in trên thẻ của bạn) để xem điểm, hạng và lịch sử đơn hàng.
+            Đăng nhập bằng SĐT + mật khẩu để xem điểm, hạng và lịch sử đơn hàng.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '8px 16px 0' }}>
+            <button type="button" onClick={() => openPwSheet('zalo-set')} style={{ background: 'none', border: 0, color: '#0d6efd', fontSize: 13, textAlign: 'left', padding: '6px 0', cursor: 'pointer' }}>Đặt mật khẩu lần đầu bằng Zalo</button>
+            <button type="button" onClick={() => openPwSheet('zalo-set')} style={{ background: 'none', border: 0, color: '#0d6efd', fontSize: 13, textAlign: 'left', padding: '6px 0', cursor: 'pointer' }}>Quên mật khẩu? Đặt lại bằng Zalo</button>
+            <button type="button" onClick={() => openPwSheet('counter-set')} style={{ background: 'none', border: 0, color: '#0d6efd', fontSize: 13, textAlign: 'left', padding: '6px 0', cursor: 'pointer' }}>Đặt mật khẩu tại quầy</button>
+          </div>
+          <div className="zm-note" style={{ margin: '8px 16px 0' }}>
+            Bạn vẫn xem thực đơn và đặt món được mà không cần tài khoản.
           </div>
         </>
       )}
 
-      {customer && (
+      {/* Spec đăng ký Zalo B §4: màn chào mừng — chỉ lần đăng ký này, các lần mở sau vào thẳng như thường */}
+      {customer && welcome && (
         <div style={{ padding: '4px 16px', marginTop: -30, position: 'relative', zIndex: 2 }}>
+          <div style={{ background: '#fff', border: '1px solid #e3e8f2', borderRadius: 16, padding: 20, boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: '#24305E' }}>Chào mừng bạn tới Daybreak! 🎉</div>
+            <div style={{ fontSize: 13, color: '#555', marginTop: 6 }}>Tài khoản thành viên của bạn đã được tạo.</div>
+            <div style={{ marginTop: 14, background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 12, padding: 16, color: '#fff' }}>
+              <div style={{ fontSize: 12, opacity: .85 }}>Thẻ thành viên</div>
+              <div style={{ fontSize: 18, fontWeight: 800, margin: '4px 0' }}>{welcome.name}</div>
+              <div style={{ fontSize: 13 }}>{welcome.phone ? welcome.phone.replace(/(\d{3})\d+(\d{2})$/, '$1****$2') : ''} · Hạng {welcome.loyalty?.tier_name || welcome.tier || 'Regular'} · 0 điểm</div>
+            </div>
+            <div style={{ marginTop: 14, textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: '#888' }}>MÃ THÀNH VIÊN của bạn</div>
+              <div style={{ fontSize: 26, fontWeight: 800, color: '#24305E', letterSpacing: 1 }}>{welcome.member_code}</div>
+              <div style={{ fontSize: 12.5, color: '#555', marginTop: 4 }}>Đây là MÃ THÀNH VIÊN của bạn — dùng để định danh và tra cứu khi cần. Đăng nhập trên thiết bị khác bằng Zalo hoặc mật khẩu.</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button className="zm-btn-primary" onClick={() => nav('/game')} style={{ flex: 1, minHeight: 44 }}>Chơi Hứng Trân Châu</button>
+              <button className="zm-btn-outline" onClick={() => nav('/coupons')} style={{ flex: 1, minHeight: 44 }}>Xem ưu đãi của tôi</button>
+            </div>
+            <button onClick={() => setWelcome(null)} style={{ display: 'block', margin: '12px auto 0', background: 'none', border: 0, color: '#888', fontSize: 13 }}>Để sau</button>
+          </div>
+        </div>
+      )}
+
+      {customer && !welcome && (
+        <div style={{ padding: '4px 16px', marginTop: -30, position: 'relative', zIndex: 2 }}>
+          {/* Spec đăng ký Zalo B §4: mã IMP vừa xoay → thông báo mã mới, không chặn thao tác khác */}
+          {rotatedNotice && (
+            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 12, padding: '10px 12px', fontSize: 13, color: '#9A3412', marginBottom: 12 }}>
+              Mã thành viên của bạn đã được cấp mới: <b>{rotatedNotice}</b> — hãy dùng mã này từ nay.
+            </div>
+          )}
           <div style={{ background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 16, padding: 20, color: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
             <div style={{ fontSize: 13, opacity: .85 }}>Thẻ thành viên</div>
             <div style={{ fontSize: 20, fontWeight: 800, margin: '4px 0' }}>{customer.name}</div>
@@ -724,7 +918,7 @@ export default function Account() {
 
           {/* Loyalty 2.0 + Phương án A: dải trạng thái → tiến trình → Cửa hàng điểm →
               [children: PromoCarousel + hành động nhanh] → bảng lợi ích → lịch sử điểm */}
-          <LoyaltyBlocks customer={customer} onChanged={() => { const p = getProfile(); if (p?.phone && p?.member_code) doLookup(p.phone, p.member_code, true); }}>
+          <LoyaltyBlocks customer={customer} onChanged={() => { loadMe(true); }}>
           <PromoCarousel />
 
           {/* Gói 53: quét QR tích điểm tại quầy — Gói Mini App 2026-10-30: chỉ
@@ -733,9 +927,9 @@ export default function Account() {
             <button
               onClick={() => nav('/scan')}
               className="zm-btn-primary"
-              style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+              style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
             >
-              📷 Quét QR tích điểm tại quầy
+              <ZmIcon name="camera" size={16} />Quét QR tích điểm tại quầy
             </button>
           )}
 
@@ -769,7 +963,7 @@ export default function Account() {
           </LoyaltyBlocks>
 
           {/* Gói 49: sổ địa chỉ — dạng thu gọn */}
-          <Collapsible icon="📒" title="Sổ địa chỉ" badge={addrBook.length > 0 ? `${addrBook.length}` : null}>
+          <Collapsible icon={<ZmIcon name="book" size={20} />} title="Sổ địa chỉ" badge={addrBook.length > 0 ? `${addrBook.length}` : null}>
           {addrBook.length === 0 && <div className="zm-empty" style={{ padding: 16 }}>Chưa có địa chỉ nào. Địa chỉ sẽ tự lưu khi đặt hàng.</div>}
           {addrBook.map((a) => (
             <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
@@ -793,8 +987,37 @@ export default function Account() {
           </Collapsible>
 
           {/* Gói 55 p5: quản lý quyền — dạng thu gọn */}
-          <Collapsible icon="🔐" title="Quản lý quyền">
+          <Collapsible icon={<ZmIcon name="lock" size={20} />} title="Quản lý quyền">
             <PermissionManager />
+          </Collapsible>
+
+          {/* Spec đăng nhập SĐT + mật khẩu §5.1(a)/§7.3: mục bảo mật — trạng
+              thái mật khẩu + đặt/đổi mật khẩu + email tự nguyện. */}
+          <Collapsible icon={<ZmIcon name="shield" size={20} />} title="Mật khẩu đăng nhập" badge={customer.has_password ? 'Đã đặt' : 'Chưa đặt'}>
+            <div style={{ fontSize: 13, color: '#555', lineHeight: 1.5 }}>
+              {customer.has_password
+                ? 'Tài khoản của bạn đã có mật khẩu — đăng nhập trên thiết bị khác bằng SĐT + mật khẩu.'
+                : 'Bạn chưa đặt mật khẩu — đăng nhập trên thiết bị khác hiện dùng Zalo.'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              {customer.has_password ? (
+                <button className="zm-btn-outline" onClick={() => openPwSheet('change')} style={{ flex: 1, minHeight: 44 }}>Đổi mật khẩu</button>
+              ) : (
+                <button className="zm-btn-primary" onClick={() => openPwSheet('set')} style={{ flex: 1, minHeight: 44 }}>Đặt mật khẩu</button>
+              )}
+            </div>
+            {customer.has_password && (
+              <div style={{ fontSize: 12.5, color: '#888', marginTop: 8 }}>Quên mật khẩu hiện tại? Đăng xuất và chọn “Đặt lại bằng Zalo”.</div>
+            )}
+            <div style={{ borderTop: '1px solid #f5f5f5', marginTop: 14, paddingTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#24305E' }}>Email (không bắt buộc)</div>
+              <div style={{ fontSize: 12.5, color: '#888', marginTop: 2, lineHeight: 1.5 }}>Không bắt buộc — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'stretch' }}>
+                <input placeholder="Email của bạn" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setEmailMsg(''); }} style={{ flex: 1, minWidth: 0 }} />
+                <button className="zm-btn-outline" onClick={saveEmail} style={{ minHeight: 44, padding: '0 14px' }}>Lưu</button>
+              </div>
+              {emailMsg && <div style={{ fontSize: 12.5, color: '#16a34a', marginTop: 6 }}>{emailMsg}</div>}
+            </div>
           </Collapsible>
 
           <div className="zm-section-title" style={{ padding: '16px 0 8px' }}>Đơn gần đây</div>
@@ -803,7 +1026,15 @@ export default function Account() {
             <div key={o.id} className="zm-total-row"
               onClick={() => nav(`/track?code=${encodeURIComponent(o.code)}`)}
               style={{ padding: '10px 0', borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}>
-              <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{fmtDate(o.created_at)} · {o.status}</span></span>
+              {/* Lát 3d (2026-11-04): trước đây in nguyên mã trạng thái tiếng Anh
+                  (processing/pending…) — nay dịch sang nhãn tiếng Việt, ưu tiên
+                  trạng thái thanh toán khi đơn còn chờ tiền/đã báo CK. */}
+              <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{fmtDate(o.created_at)} · {
+                o.status === 'cancelled' ? 'Đã hủy'
+                : o.payment_status === 'transfer_notified' ? 'Đã báo chuyển khoản — chờ quán xác nhận'
+                : (o.status === 'pending' && ['pending', 'pending_payment'].includes(o.payment_status)) ? 'Chờ thanh toán'
+                : ({ pending: 'Đã đặt đơn', confirmed: 'Quán đã xác nhận', processing: 'Quán đang chuẩn bị', ready: 'Món đã sẵn sàng', completed: 'Hoàn thành' }[o.status] || 'Đang xử lý')
+              }</span></span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <b>{fmt(o.total_amount)}đ</b>
                 <span style={{ color: '#0d6efd', fontSize: 16 }}>›</span>
@@ -811,6 +1042,49 @@ export default function Account() {
             </div>
           ))}
           <button className="zm-btn-outline" style={{ margin: '20px 0 8px' }} onClick={logout}>Đăng xuất</button>
+        </div>
+      )}
+
+      {/* Spec đăng nhập SĐT + mật khẩu §5.1–§5.3: sheet đặt/đổi mật khẩu. */}
+      {pwSheet && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={() => setPwSheet(null)}>
+          <div style={{ background: '#fff', borderRadius: '16px 16px 0 0', padding: 20, width: '100%', maxWidth: 480, maxHeight: '85vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#24305E' }}>
+              {pwSheet === 'set' ? 'Đặt mật khẩu đăng nhập'
+                : pwSheet === 'change' ? 'Đổi mật khẩu'
+                : pwSheet === 'zalo-set' ? 'Đặt mật khẩu bằng Zalo'
+                : 'Đặt mật khẩu tại quầy'}
+            </div>
+            {pwSheet === 'zalo-set' && (
+              <div style={{ fontSize: 13, color: '#555', marginTop: 6, lineHeight: 1.5 }}>Nhập mật khẩu mới trước, rồi bấm xác thực — Zalo sẽ xác nhận đây đúng là số điện thoại của bạn.</div>
+            )}
+            {pwSheet === 'counter-set' && (
+              <div style={{ fontSize: 13, color: '#555', marginTop: 6, lineHeight: 1.5 }}>Nhân viên đã mở cửa sổ hỗ trợ tại quầy (15 phút). Nhập SĐT của tài khoản và mật khẩu mới trên máy của bạn.</div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+              {pwSheet === 'change' && (
+                <input placeholder="Mật khẩu hiện tại" type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} />
+              )}
+              {pwSheet === 'counter-set' && (
+                <input placeholder="Số điện thoại của tài khoản" value={pwPhone} onChange={(e) => setPwPhone(e.target.value)} inputMode="tel" />
+              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <input placeholder="Mật khẩu mới" type={showPwNew ? 'text' : 'password'} value={pwNew} onChange={(e) => setPwNew(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+                <button type="button" onClick={() => setShowPwNew(!showPwNew)} style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 13, color: '#24305E' }}>{showPwNew ? 'Ẩn' : 'Hiện'}</button>
+              </div>
+              <input placeholder="Nhập lại mật khẩu mới" type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} />
+            </div>
+            <div style={{ fontSize: 12.5, color: '#888', marginTop: 10, lineHeight: 1.5 }}>Mật khẩu tối thiểu 8 ký tự, có chữ in hoa và ký tự đặc biệt, không trùng SĐT, không chứa chuỗi liên tiếp (1234, abcd, qwer).</div>
+            {pwErrs.length > 0 && (
+              <div style={{ marginTop: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#991b1b' }}>
+                {pwErrs.map((m, i) => (<div key={i}>• {m}</div>))}
+              </div>
+            )}
+            <button className="zm-btn-primary" onClick={submitPwSheet} disabled={pwBusy} style={{ marginTop: 14, minHeight: 48 }}>
+              {pwBusy ? 'Đang xử lý...' : pwSheet === 'zalo-set' ? 'Xác thực Zalo và đặt mật khẩu' : pwSheet === 'change' ? 'Đổi mật khẩu' : 'Đặt mật khẩu'}
+            </button>
+            <button onClick={() => setPwSheet(null)} style={{ display: 'block', margin: '10px auto 0', background: 'none', border: 0, color: '#888', fontSize: 13 }}>Hủy</button>
+          </div>
         </div>
       )}
       <TabBar />

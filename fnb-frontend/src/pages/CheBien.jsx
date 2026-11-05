@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { API } from '../utils/api'; // API tương đối — chạy được trên điện thoại (IP LAN)
+import HubPinPrompt from '../components/HubPinPrompt'; // Gói phiên Hub (2026-11-05): PIN step-up chạy sản xuất
+import { getStaffSession, clearStaffSession, staffSessionExpired, staffBranchName } from '../utils/staffSession';
+import { ensurePinToken, cachedPinToken, clearPinToken } from '../utils/staffPin';
 
 // Trang nhân viên nhập phiếu Chế biến (bán thành phẩm) trên điện thoại (public, KHÔNG cần đăng nhập admin)
-// Token riêng: localStorage['chebien_token'] / ['chebien_emp'] (không đụng token trang khác)
-// API: POST /employee/phone-login, GET /employee/me, GET /employee/production-materials,
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/staff_branch_id — đăng nhập 1 lần tại /nhan-vien
+// API: GET /employee/me, GET /employee/production-materials,
 //      GET /employee/production-recipes?material_id=, POST /employee/productions, GET /employee/productions
 
 const NAVY = '#24305E';
@@ -84,15 +87,10 @@ function errMsg(err, fallback) {
 }
 
 export default function CheBien() {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-  const [token, setToken] = useState(() => localStorage.getItem('chebien_token') || '');
-  const [emp, setEmp] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('chebien_emp') || 'null'); } catch (e) { return null; }
-  });
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
-  const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: không gắn ?t=
+  const session = getStaffSession();
+  const [token, setToken] = useState(() => (session ? session.token : ''));
+  const [emp, setEmp] = useState(() => (session ? session.emp : null));
 
   const [materials, setMaterials] = useState([]); // [{id, name, unit}]
   const [hist, setHist] = useState([]);
@@ -124,19 +122,15 @@ export default function CheBien() {
   };
   const toastErr = (m) => toast(m, true);
 
-  const logout = () => {
-    localStorage.removeItem('chebien_token');
-    localStorage.removeItem('chebien_emp');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setMaterials([]); setHist([]);
-    setMaterialId(''); setRecipe(null); setQty(''); setNote('');
-    setToastOn(false);
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung tại Hub
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  const expired = (e) => {
+  const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub
     if (e && e.response && e.response.status === 401) {
-      logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      staffSessionExpired();
       return true;
     }
     return false;
@@ -162,25 +156,6 @@ export default function CheBien() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('chebien_token', tk);
-      localStorage.setItem('chebien_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   const onPickMaterial = async (id) => {
     setMaterialId(id);
@@ -209,7 +184,29 @@ export default function CheBien() {
   const canConfirm = materialId && qtyNum > 0 && rows.length > 0 && !anyShort && !saving;
 
   const [confirming, setConfirming] = useState(false); // UX 2026-10-26 (🟠27): bước xác nhận riêng trước khi trừ kho FIFO thật (trước đây bấm 1 nút là trừ ngay)
-  const submit = async () => {
+  // Gói phiên Hub (2026-11-05): chạy sản xuất chạy thẳng không qua duyệt →
+  // PIN step-up (purpose 'production', token Cache 5 phút phía server).
+  const [pinPrompt, setPinPrompt] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinErr, setPinErr] = useState('');
+  const onConfirmProduce = () => {
+    if (!canConfirm) return;
+    const cached = cachedPinToken('production');
+    if (cached) { submit(cached); return; }
+    setPinErr(''); setPinPrompt(true);
+  };
+  const submitPin = async (pinCode) => {
+    setPinBusy(true); setPinErr('');
+    try {
+      const t = await ensurePinToken(token, 'production', pinCode);
+      setPinPrompt(false);
+      await submit(t);
+    } catch (e) {
+      if (e && e.response && e.response.status === 401) { expired(e); return; }
+      setPinErr(errMsg(e, 'Mã PIN không đúng.'));
+    } finally { setPinBusy(false); }
+  };
+  const submit = async (pinToken) => {
     if (!canConfirm) return;
     setSaving(true);
     try {
@@ -217,6 +214,7 @@ export default function CheBien() {
         material_id: parseInt(materialId, 10),
         quantity: qtyNum,
         note: note.trim() || undefined,
+        pin_token: pinToken,
       }, auth(token));
       toast((r.data && r.data.message) || 'Đã tạo phiếu chế biến ✓');
       setConfirming(false);
@@ -224,6 +222,12 @@ export default function CheBien() {
       loadBase(token);
     } catch (e) {
       if (expired(e)) return;
+      if (e && e.response && e.response.data && e.response.data.code === 'PIN_REQUIRED') {
+        clearPinToken('production');
+        setPinErr(''); setPinPrompt(true);
+        toast('Cần xác nhận PIN để chạy sản xuất.');
+        return;
+      }
       toastErr(errMsg(e, 'Tạo phiếu thất bại.'));
     } finally { setSaving(false); }
   };
@@ -231,6 +235,8 @@ export default function CheBien() {
   const todayHist = hist.filter((h) => String(h.created_at || '').slice(0, 10) === todayIso());
   const selMat = materials.find((m) => String(m.id) === String(materialId));
 
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng — chưa có phiên
+  // chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
   if (!token) {
     return (
       <div className="cb-wrap">
@@ -240,36 +246,12 @@ export default function CheBien() {
             <button onClick={goHub} aria-label="Quay lại hub"
               style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="cb-title">🍳 Chế biến</div>
-            <div className="cb-sub">Đăng nhập để tiếp tục</div>
+            <div className="cb-sub">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <form className="cb-card" onSubmit={doLogin}>
-            <label className="cb-label" style={{ marginTop: 4 }}>Số điện thoại</label>
-            <input
-              className="cb-field"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, ''))}
-              placeholder="09xxxxxxxx"
-              autoComplete="tel"
-            />
-            <label className="cb-label">Mã PIN 6 số</label>
-            <input
-              className="cb-field cb-pin"
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              autoComplete="off"
-            />
-            {err && <div className="cb-msg" style={{ margin: '12px 0 0' }}>{err}</div>}
-            <button className="cb-send" type="submit" disabled={loginBusy}>
-              {loginBusy ? 'Đang xử lý...' : 'Đăng nhập'}
-            </button>
-          </form>
+          <div className="cb-card">
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="cb-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
+          </div>
         </div>
       </div>
     );
@@ -286,9 +268,9 @@ export default function CheBien() {
           <div className="cb-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="cb-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="cb-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="cb-sub">{staffBranchName(session) || (emp && emp.branch_name) || ''}</div>
           </div>
-          <button className="cb-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
+          <button className="cb-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
           <button className="cb-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="cb-title">🍳 Chế biến</div>
@@ -383,7 +365,7 @@ export default function CheBien() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   <button onClick={() => setConfirming(false)} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700, fontSize: 14.5 }}>Kiểm tra lại</button>
-                  <button onClick={submit} disabled={saving} style={{ flex: 1.4, minHeight: 48, borderRadius: 12, border: 'none', background: '#F5A623', color: '#24305E', fontWeight: 800, fontSize: 14.5, opacity: saving ? 0.5 : 1 }}>{saving ? 'Đang trừ kho…' : 'Trừ kho & chế biến'}</button>
+                  <button onClick={onConfirmProduce} disabled={saving} style={{ flex: 1.4, minHeight: 48, borderRadius: 12, border: 'none', background: '#F5A623', color: '#24305E', fontWeight: 800, fontSize: 14.5, opacity: saving ? 0.5 : 1 }}>{saving ? 'Đang trừ kho…' : 'Trừ kho & chế biến'}</button>
                 </div>
               </div>
             )}
@@ -414,6 +396,11 @@ export default function CheBien() {
         📌 <b>Lưu ý:</b> Bấm "Xác nhận chế biến" là kho nguyên liệu <b>trừ ngay</b> theo định mức (FIFO). Kiểm tra kỹ số lượng trước khi xác nhận.
       </div>
 
+      {pinPrompt && (
+        <HubPinPrompt title="🔐 Xác nhận PIN để chạy sản xuất"
+          message="Chế biến trừ kho ngay (không qua duyệt) nên cần nhập lại mã PIN của bạn."
+          busy={pinBusy} err={pinErr} onSubmit={submitPin} onClose={() => setPinPrompt(false)} />
+      )}
       <div className={'cb-toast' + (toastOn ? ' show' : '')}>{toastMsg}</div>
     </div>
   );

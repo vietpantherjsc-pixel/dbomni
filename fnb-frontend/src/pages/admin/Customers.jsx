@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import { QRCodeSVG } from 'qrcode.react';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate, fmtDateTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import { confirmInApp } from '../../utils/confirmInApp'; // Spec mật khẩu khách §5.3/§7.4
 
 
 // =====================================================================
@@ -21,6 +23,13 @@ export default function Customers() {
     const [form, setForm] = useState({ name: '', phone: '', birthday: '', note: '' });
     const [detail, setDetail] = useState(null);
     const [adjust, setAdjust] = useState({ change: '', note: '' });
+    // Spec mật khẩu khách §7.3/§5.3: email sửa trong modal + đếm ngược cửa sổ quầy.
+    const [emailEdit, setEmailEdit] = useState('');
+    const [nowTick, setNowTick] = useState(Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNowTick(Date.now()), 30000);
+        return () => clearInterval(t);
+    }, []);
 
     const fetchList = async (p = 1, s = search) => {
         try {
@@ -55,8 +64,56 @@ export default function Customers() {
     const openDetail = async (id) => {
         try {
             const res = await axios.get(`${API}/customers/${id}`);
-            if (res.data?.success) setDetail(res.data.data);
+            if (res.data?.success) {
+                setDetail(res.data.data);
+                setEmailEdit(res.data.data.email || '');
+            }
         } catch (err) { alert('Tải chi tiết thất bại'); }
+    };
+
+    // Spec mật khẩu §7.3: Admin sửa email (để trống = xóa; sửa ở Admin
+    // không ghi email_added_at — server giữ nguyên mốc đó).
+    const handleSaveEmail = async () => {
+        try {
+            const res = await axios.patch(`${API}/customers/${detail.id}`, { email: emailEdit.trim() || null });
+            if (res.data?.success) {
+                openDetail(detail.id);
+                alert(emailEdit.trim() ? 'Đã lưu email.' : 'Đã xóa email.');
+            }
+        } catch (err) { alert(err.response?.data?.message || 'Lưu email thất bại (kiểm tra định dạng email)'); }
+    };
+
+    // Spec mật khẩu §5.3: mở cửa sổ hỗ trợ đặt mật khẩu tại quầy (15 phút).
+    const handleOpenWindow = async () => {
+        const ok = await confirmInApp(`Mở đặt mật khẩu tại quầy cho khách ${detail.name} (SĐT ${detail.phone})?\n\nCửa sổ hỗ trợ mở trong 15 phút. Nhân viên KHÔNG nhập hộ và không thấy mật khẩu của khách — khách tự đặt trên máy của mình.`);
+        if (!ok) return;
+        try {
+            const res = await axios.post(`${API}/customers/${detail.id}/password-setup-window`);
+            if (res.data?.success) {
+                openDetail(detail.id);
+                alert('Đã mở cửa sổ hỗ trợ 15 phút. Khách đặt mật khẩu trong Mini App → "Đặt mật khẩu tại quầy".');
+            }
+        } catch (err) { alert(err.response?.data?.message || 'Mở cửa sổ thất bại'); }
+    };
+
+    const handleCloseWindow = async () => {
+        try {
+            await axios.delete(`${API}/customers/${detail.id}/password-setup-window`);
+            openDetail(detail.id);
+        } catch (err) { alert(err.response?.data?.message || 'Đóng cửa sổ thất bại'); }
+    };
+
+    // Spec mật khẩu §7.4: cấp lại mã thành viên (mã cũ chết ngay).
+    const handleRegenerate = async () => {
+        const ok = await confirmInApp('Mã cũ sẽ ngừng hoạt động ngay. Chỉ cấp lại khi khách cần in thẻ mới.');
+        if (!ok) return;
+        try {
+            const res = await axios.post(`${API}/customers/${detail.id}/regenerate-member-code`);
+            if (res.data?.success) {
+                openDetail(detail.id);
+                alert(`Mã thành viên mới: ${res.data.data.member_code}\n\nMã cũ đã ngừng hoạt động.`);
+            }
+        } catch (err) { alert(err.response?.data?.message || 'Cấp lại mã thất bại'); }
     };
 
     const handleAdjust = async () => {
@@ -90,15 +147,17 @@ export default function Customers() {
                         <h1 className="text-xl font-semibold text-gray-800">Khách hàng</h1>
                         <p className="text-[13px] text-[#6b7280] mt-0.5">SĐT là mã định danh. Mã TV dùng cho QR quét tích điểm.</p>
                     </div>
-                    <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
+                    <button onClick={() => setShowAdd(true)} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] shrink-0 whitespace-nowrap">
                         + Khách hàng
                     </button>
                 </div>
 
                 <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-                    <input value={search} onChange={(e) => setSearch(e.target.value)}
+                    <SearchInput value={search} onChange={(e) => setSearch(e.target.value)}
+                        onSearch={() => fetchList(1, search)}
                         placeholder="Tìm theo SĐT / tên / mã TV..."
-                        className="flex-1 min-w-0 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
+                        wrapperStyle={{ flex: 1, minWidth: 0 }}
+                        className="w-full min-w-0 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                     <button className="px-4 py-2 bg-gray-100 text-[13px] rounded hover:bg-gray-200 shrink-0">Tìm</button>
                 </form>
 
@@ -109,6 +168,7 @@ export default function Customers() {
                                 <th className="px-4 py-3 font-medium">Mã TV</th>
                                 <th className="px-3 py-3 font-medium">Tên</th>
                                 <th className="px-3 py-3 font-medium">SĐT</th>
+                                <th className="px-3 py-3 font-medium">Email</th>
                                 <th className="px-3 py-3 font-medium">Hạng</th>
                                 <th className="px-3 py-3 font-medium text-right">Điểm</th>
                                 <th className="px-3 py-3 font-medium text-right">Tổng đã mua</th>
@@ -121,6 +181,7 @@ export default function Customers() {
                                     <td className="px-4 py-3 font-mono text-xs">{c.member_code}</td>
                                     <td className="px-3 py-3 font-medium">{c.name}</td>
                                     <td className="px-3 py-3">{c.phone}</td>
+                                    <td className="px-3 py-3">{c.email || '—'}</td>
                                     <td className="px-3 py-3"><span className="px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 border border-violet-200">{c.tier?.name || '—'}</span></td>
                                     <td className="px-3 py-3 text-right font-bold text-amber-600">{Number(c.points).toLocaleString('vi-VN')}</td>
                                     <td className="px-3 py-3 text-right">{Number(c.total_spent).toLocaleString('vi-VN')}đ</td>
@@ -129,7 +190,7 @@ export default function Customers() {
                                     </td>
                                 </tr>
                             ))}
-                            {list.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách khách hàng.<button onClick={() => fetchList(page)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có khách hàng nào.'}</td></tr>}
+                            {list.length === 0 && <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">{loadErr ? (<span style={{ color: 'var(--m-danger)' }}>⚠ Không tải được danh sách khách hàng.<button onClick={() => fetchList(page)} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></span>) : 'Chưa có khách hàng nào.'}</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -190,6 +251,31 @@ export default function Customers() {
                                 </div>
                             </div>
 
+                            {/* Spec mật khẩu §7.3/§5.3/§7.4: email + cửa sổ quầy + cấp lại mã TV */}
+                            <div className="border-t pt-4 mb-4">
+                                <h4 className="font-medium text-[14px] mb-2">Email &amp; mật khẩu đăng nhập</h4>
+                                <div className="flex gap-2 items-center">
+                                    <input value={emailEdit} onChange={(e) => setEmailEdit(e.target.value)} placeholder="Email (không bắt buộc)" type="email" maxLength={150}
+                                        className="flex-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
+                                    <button onClick={handleSaveEmail} className="px-4 py-2 bg-[#24305E] text-white text-[13px] rounded hover:bg-[#1B2547] shrink-0 whitespace-nowrap">Lưu email</button>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1">Email tự nguyện — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản. Để trống rồi Lưu = xóa.</p>
+                                <div className="flex gap-2 mt-3 flex-wrap items-center">
+                                    {detail.password_setup_until && new Date(detail.password_setup_until).getTime() > nowTick ? (
+                                        <>
+                                            <span className="text-[13px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+                                                Cửa sổ đặt mật khẩu tại quầy đang mở — còn lại {Math.max(1, Math.ceil((new Date(detail.password_setup_until).getTime() - nowTick) / 60000))} phút
+                                            </span>
+                                            <button onClick={handleCloseWindow} className="px-4 py-2 bg-gray-100 text-[13px] rounded hover:bg-gray-200 shrink-0 whitespace-nowrap">Đóng cửa sổ</button>
+                                        </>
+                                    ) : (
+                                        <button onClick={handleOpenWindow} className="px-4 py-2 bg-gray-800 text-white text-[13px] rounded hover:bg-gray-700 shrink-0 whitespace-nowrap">Mở đặt mật khẩu tại quầy</button>
+                                    )}
+                                    <button onClick={handleRegenerate} className="px-4 py-2 bg-gray-100 text-[13px] rounded hover:bg-gray-200 shrink-0 whitespace-nowrap">Cấp lại mã thành viên</button>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-1">Cấp lại mã: mã cũ ngừng hoạt động ngay, chỉ cấp khi khách cần in thẻ mới.</p>
+                            </div>
+
                             <div className="border-t pt-4 mb-4">
                                 <h4 className="font-medium text-[14px] mb-2">Điều chỉnh điểm thủ công</h4>
                                 <div className="flex gap-2">
@@ -203,13 +289,13 @@ export default function Customers() {
 
                             <div className="border-t pt-4 mb-4">
                                 <h4 className="font-medium text-[14px] mb-2">Lịch sử điểm</h4>
-                                {(detail.pointTransactions || []).map((t) => (
+                                {(detail.point_transactions || []).map((t) => (
                                     <div key={t.id} className="flex justify-between text-[13px] border-b border-gray-50 py-1.5">
                                         <span className="text-gray-600">{t.note || t.type} <span className="text-gray-400 text-xs">· {fmtDateTime(t.created_at)}</span></span>
                                         <span className={`font-bold ${t.change > 0 ? 'text-emerald-600' : 'text-red-600'}`}>{t.change > 0 ? '+' : ''}{t.change}</span>
                                     </div>
                                 ))}
-                                {(detail.pointTransactions || []).length === 0 && <p className="text-xs text-gray-400">Chưa có giao dịch điểm.</p>}
+                                {(detail.point_transactions || []).length === 0 && <p className="text-xs text-gray-400">Chưa có giao dịch điểm.</p>}
                             </div>
 
                             {/* Loyalty 2.0: lô điểm còn hạn + lịch sử hạng + coupon ví */}

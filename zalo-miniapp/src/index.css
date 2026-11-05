@@ -93,7 +93,7 @@ button, input, select, textarea { font-family: inherit; }
 .zm-field input, .zm-field select, .zm-field textarea { width: 100%; border: 1px solid #e0e0e0; border-radius: 12px; padding: 12px; font-size: 14px; outline: none; }
 .zm-field input:focus { border-color: var(--zm-primary); }
 .zm-seg { display: flex; background: #f0f0f0; border-radius: 12px; padding: 4px; gap: 4px; margin-bottom: 14px; }
-.zm-seg button { flex: 1; border: none; background: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; color: #666; cursor: pointer; }
+.zm-seg button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 700; color: #666; cursor: pointer; }
 .zm-seg button.on { background: #fff; color: var(--zm-primary); box-shadow: 0 1px 4px rgba(0,0,0,.1); }
 .zm-seg button:disabled { opacity: .45; cursor: not-allowed; }
 
@@ -140,7 +140,7 @@ button, input, select, textarea { font-family: inherit; }
 .zm-cover { position: relative; height: 200px; background: #e8e8e8; overflow: hidden; }
 .zm-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .zm-cover-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 72px; background: linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 60%, #000)); }
-.zm-branch-pill { position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,.96); border: none; border-radius: 12px; padding: 12px 15px; min-height: 44px; font-size: 13px; font-weight: 700; color: #1a1a1a; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zm-branch-pill { display: flex; align-items: center; gap: 6px; position: absolute; top: 12px; right: 12px; background: rgba(255,255,255,.96); border: none; border-radius: 12px; padding: 12px 15px; min-height: 44px; font-size: 13px; font-weight: 700; color: #1a1a1a; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zm-branch-name { font-size: 20px; font-weight: 800; padding: 14px 16px 0; margin: 0; }
 
 /* Gói 55 p1: card thông tin chi nhánh theo style ảnh mẫu */
@@ -193,7 +193,7 @@ button, input, select, textarea { font-family: inherit; }
 /* Gói 55 p1: nút segmented giống bố cục Giao tận nơi/Đặt tới lấy */
 .zm-seg { display: flex; background: #eef1f6; border-radius: 12px; padding: 4px; margin: 12px 16px 4px; gap: 4px; }
 .zm-seg.in-card { margin: 12px 0 0; }
-.zm-seg-btn { flex: 1; border: none; border-radius: 8px; padding: 12px 8px; font-size: 14px; font-weight: 700; cursor: pointer; background: transparent; color: #6b7280; }
+.zm-seg-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; border-radius: 8px; padding: 12px 8px; font-size: 14px; font-weight: 700; cursor: pointer; background: transparent; color: #6b7280; }
 .zm-seg-btn.active { background: #fff; color: var(--zm-primary); /* UX 2026-10-26: navy thay xanh lá lệch hệ */ box-shadow: 0 1px 4px rgba(0,0,0,.1); }
 .zm-seg-btn:active { transform: scale(.97); }
 

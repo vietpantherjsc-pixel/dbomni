@@ -130,9 +130,7 @@ class AutoIssueCouponService
         // Gói 9 lưu referred_by = member_code, nhưng trang Mời bạn (SPEC-02)
         // chia sẻ referral_code — chỉ tra member_code như trước thì coupon
         // CP-02 không bao giờ kích hoạt qua link/mã của trang Mời bạn. Cả 2
-        // cột đều unique nên tra gộp không gây nhập nhằng. (Đường điểm
-        // affiliate awardReferral ở OnlineOrderController giữ nguyên
-        // member_code như cũ — không đổi hành vi.)
+        // cột đều unique nên tra gộp không gây nhập nhằng.
         $referrer = Customer::where('member_code', $customer->referred_by)
             ->orWhere('referral_code', $customer->referred_by)
             ->first();

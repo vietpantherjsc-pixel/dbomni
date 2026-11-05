@@ -6,11 +6,26 @@ import { api, fmt, getProfile } from '../api';
 // Khối hướng dẫn chuyển khoản dùng chung cho màn "Chờ thanh toán" (L15) và
 // trang Theo dõi đơn: VietQR sinh TẠI MÁY từ chuỗi EMV backend trả + STK sao
 // chép được + nút "Tôi đã chuyển khoản" gắn cờ cho NV đối chiếu sao kê.
-export default function TransferGuide({ code, transfer, notifiedAt, onNotified }) {
+export default function TransferGuide({ code, transfer, notifiedAt, onNotified, shopPhone }) {
+  // Lát 3c (2026-11-04): dòng hướng dẫn hủy cho đơn đã báo CK — luật 2026-10-26
+  // không cho hủy online nữa, khách phải gọi quán để hủy + hoàn tiền tay.
+  const cancelHint = (
+    <div style={{ fontSize: 12.5, color: '#065f46', marginTop: 8, lineHeight: 1.55 }}>
+      Cần hủy đơn? Đơn đã báo chuyển khoản không tự hủy online được —{' '}
+      {shopPhone
+        ? <>gọi quán <a href={`tel:${shopPhone}`} style={{ color: '#065f46', fontWeight: 800 }}>{shopPhone}</a> để quán hỗ trợ hủy &amp; hoàn tiền.</>
+        : <>hãy liên hệ quán để được hỗ trợ hủy &amp; hoàn tiền.</>}
+    </div>
+  );
   const canvasRef = useRef(null);
   const [copied, setCopied] = useState('');
   const [sending, setSending] = useState(false);
   const [notified, setNotified] = useState(!!notifiedAt);
+  // Thu gọn panel sau khi đã báo CK (Đại Vương yêu cầu 2026-11-04): panel VietQR
+  // chiếm gần trọn màn hình và vẫn mở nguyên sau khi khách báo đã chuyển khoản,
+  // che phần trạng thái đơn phía dưới. Đã báo → chỉ còn dải tóm tắt + nút xem lại;
+  // khách bấm xem lại thì mở full (vẽ lại QR), thu gọn lại được.
+  const [expanded, setExpanded] = useState(false);
   // UX 2026-10-26 (🟠3): bỏ prompt() — nhập SĐT ngay trong khối CK + lỗi hiện tại chỗ
   const [phoneForm, setPhoneForm] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
@@ -23,9 +38,20 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
       QRCode.toCanvas(canvasRef.current, transfer.vietqr_payload, { width: 224, margin: 1 })
         .catch(() => { /* không sinh được QR thì vẫn còn khối STK sao chép tay */ });
     }
-  }, [transfer?.vietqr_payload]);
+  }, [transfer?.vietqr_payload, notified, expanded]); // notified/expanded: canvas tháo ra khi thu gọn → mở lại phải vẽ lại QR
 
   if (!transfer) return null;
+  // Lát 3e (2026-11-04): notifiedAt === undefined nghĩa là trang cha CHƯA biết
+  // cờ đã-báo (đang chờ lượt tải đầu) — giữ khối ở trạng thái chờ gọn thay vì
+  // dựng panel đầy rồi gấp lại gây lóe như trước (WaitingPayment nạp transfer
+  // từ state điều hướng nhưng cờ báo CK phải chờ API).
+  if (notifiedAt === undefined) {
+    return (
+      <div style={{ margin: '12px 16px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 14, padding: '12px 16px', fontSize: 13.5, color: '#64748b', textAlign: 'center' }}>
+        Đang kiểm tra trạng thái chuyển khoản…
+      </div>
+    );
+  }
   const b = transfer.bank_info || {};
 
   const copy = async (key, text) => {
@@ -87,6 +113,22 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
     </div>
   );
 
+  // Đã báo CK và chưa bấm xem lại → dải tóm tắt gọn thay cho cả panel.
+  if (notified && !expanded) {
+    return (
+      <div style={{ margin: '12px 16px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '12px 16px' }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: '#065f46', lineHeight: 1.55 }}>
+          ✅ Đã báo chuyển khoản — quán đang đối chiếu. Đơn chỉ bắt đầu làm sau khi quán xác nhận thanh toán.
+        </div>
+        {cancelHint}
+        <button onClick={() => setExpanded(true)}
+          style={{ marginTop: 10, width: '100%', minHeight: 44, border: '1px solid #065f46', background: '#fff', color: '#065f46', borderRadius: 10, fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>
+          Xem lại thông tin chuyển khoản
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ margin: '12px 16px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, padding: 16 }}>
       <div style={{ fontWeight: 800, fontSize: 15, textAlign: 'center' }}>Quét mã VietQR để thanh toán</div>
@@ -120,8 +162,15 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified }
         </div>
       )}
       {notified ? (
-        <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
-          ✅ Đã báo chuyển khoản — chờ quán đối chiếu. Đơn chỉ bắt đầu làm sau khi quán xác nhận thanh toán.
+        <div>
+          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
+            ✅ Đã báo chuyển khoản — chờ quán đối chiếu. Đơn chỉ bắt đầu làm sau khi quán xác nhận thanh toán.
+          </div>
+          {cancelHint}
+          <button onClick={() => setExpanded(false)}
+            style={{ display: 'block', margin: '10px auto 0', minHeight: 44, padding: '0 16px', background: 'none', border: 'none', color: 'var(--zm-primary)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer' }}>
+            Thu gọn thông tin chuyển khoản
+          </button>
         </div>
       ) : (
         <button className="zm-btn-primary" onClick={markNotified} disabled={sending}>

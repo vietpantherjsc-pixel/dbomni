@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { api, fmt, priceOf, imgUrl, getProfile, captureRef, profileIdentity } from '../api';
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
+import SearchInput from '../components/SearchInput';
 
 // Gói 55 p1: tính trạng thái mở/đóng cửa từ giờ mở cửa chi nhánh.
 import { openStatus } from '../utils/openingHours';
@@ -27,7 +28,7 @@ export default function Home() {
   const [menu, setMenu] = useState([]);
   const [promos, setPromos] = useState([]);
   const [sales, setSales] = useState([]);
-  const [shopInfo, setShopInfo] = useState({ cover_url: '', ref_bonus_points: 100 });
+  const [shopInfo, setShopInfo] = useState({ cover_url: '' });
   const [topIds, setTopIds] = useState(new Set()); // Gói 34: ids top 10 bán chạy
   const [q, setQ] = useState('');
   const [sheet, setSheet] = useState(null);
@@ -48,8 +49,12 @@ export default function Home() {
   useEffect(() => { loadMenu(); }, [loadMenu]); // Gói 25: lọc theo CN
   useEffect(() => { api.shopInfo(branch?.id).then(setShopInfo).catch(() => {}); }, [branch]);
   // Gói 55 p2: làm mới thông tin chi nhánh (SĐT, giờ mở cửa) — tránh cache storage cũ thiếu dữ liệu
+  // Sổ #27 (2026-11-04): bỏ điều kiện "đã có opening_hours thì thôi" — cache storage
+  // ĐỦ trường nhưng LỆCH giá trị (giờ/địa chỉ cũ từ lần chọn chi nhánh xa xưa) không bao
+  // giờ tự lành, trang chủ hiện giờ mở cửa sai lệch hẳn API. Nay luôn làm mới khi vào
+  // trang chủ; tải lỗi thì giữ nguyên bản cache như cũ.
   useEffect(() => {
-    if (!branch?.id || branch.opening_hours !== undefined) return;
+    if (!branch?.id) return;
     api.branches().then((list) => {
       const fresh = (list || []).find((b) => String(b.id) === String(branch.id));
       if (fresh) setBranch(fresh);
@@ -131,7 +136,7 @@ export default function Home() {
     : menu;
 
   // SPEC-02: nút Chia sẻ — mở trang Mời bạn (luồng referral mới: cả 2 cùng được voucher CP-02)
-  // Luồng cũ copy link tính điểm affiliate đã bỏ ở nút này (backend awardReferral giữ nguyên)
+  // Luồng cũ copy link tính điểm affiliate đã bỏ ở nút này
   const share = () => {
     nav('/invite');
   };
@@ -172,7 +177,7 @@ export default function Home() {
           </div>
           {searchOpen && (
             <div className="zm-sticky-search">
-              <input placeholder="Tìm món..." value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+              <SearchInput placeholder="Tìm món..." value={q} onChange={(e) => setQ(e.target.value)} onSearch={(v) => setQ(v)} autoFocus />
             </div>
           )}
         </div>
@@ -185,24 +190,24 @@ export default function Home() {
           <div className="zm-cover-fallback">☕</div>
         )}
         <button className="zm-branch-pill" onClick={() => nav('/branches')}>
-          📍 {branch.name} ▾
+          <ZmIcon name="mapPin" size={14} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{branch.name}</span> ▾
         </button>
       </div>
       {/* Gói 55 p1: card thông tin chi nhánh theo style ảnh mẫu — SĐT + trạng thái mở cửa */}
       <div className="zm-branch-card">
         <div className="zm-branch-card-name">{branch.name}</div>
         {branch.address && (
-          <div className="zm-branch-card-row"><span>📍</span><span>{branch.address}</span></div>
+          <div className="zm-branch-card-row"><span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="mapPin" size={16} /></span><span>{branch.address}</span></div>
         )}
         {branch.phone && (
-          <div className="zm-branch-card-row"><span>📞</span><span>{branch.phone}</span></div>
+          <div className="zm-branch-card-row"><span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="phone" size={16} /></span><span>{branch.phone}</span></div>
         )}
         {(() => {
           const st = openStatus(branch);
           if (!st) return null;
           return (
             <div className="zm-branch-card-row">
-              <span>🕐</span>
+              <span style={{ color: '#24305E', display: 'flex' }}><ZmIcon name="clock" size={16} /></span>
               <span className={st.open ? 'zm-open' : 'zm-closed'}>
                 {st.open ? 'Đang mở cửa' : 'Đã đóng cửa'}
                 {st.hours && <span className="zm-hours"> · {st.hours}</span>}
@@ -213,10 +218,10 @@ export default function Home() {
         {/* Gói 55 p1: 2 nút segmented nằm TRONG card, giống demo */}
         <div className="zm-seg in-card">
           <button className="zm-seg-btn active" onClick={() => nav('/group/new')}>
-            👥 Đặt đơn nhóm
+            <ZmIcon name="users" size={16} />Đặt đơn nhóm
           </button>
           <button className="zm-seg-btn" onClick={share}>
-            🔗 Rủ bạn — Đón Bình Minh
+            <ZmIcon name="link" size={16} />Rủ bạn — Đón Bình Minh
           </button>
         </div>
       </div>
@@ -224,9 +229,7 @@ export default function Home() {
       {/* Demo "Quan tâm OA" v2 (Đại Vương chốt 2026-10-19): card OA dưới card thông tin quán */}
       <OACard />
 
-      <div className="zm-search">
-        <input placeholder="Tìm món..." value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
+      <SearchInput className="zm-search" placeholder="Tìm món..." value={q} onChange={(e) => setQ(e.target.value)} onSearch={(v) => setQ(v)} />
 
       {/* SPEC-02: Widget tích tem CP-03 */}
       <StampWidget />
@@ -331,7 +334,7 @@ export default function Home() {
       {!menuErr && q && filtered.length === 0 && (
         <div className="zm-empty">
           <div>Không tìm thấy món khớp “{q}”.</div>
-          <button className="zm-btn-inline" style={{ marginTop: 12 }} onClick={() => setQ('')}>✕ Xóa từ khóa</button>
+          <button className="zm-btn-inline" style={{ marginTop: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setQ('')}><ZmIcon name="x" size={14} />Xóa từ khóa</button>
         </div>
       )}
       {!menuErr && !q && filtered.length === 0 && <div className="zm-empty">Chưa có món nào.</div>}
@@ -375,8 +378,8 @@ function StampWidget() {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontWeight: 800, fontSize: 14, color: '#9A3412' }}>
-          🎫 Tích tem đổi quà
+        <div style={{ fontWeight: 800, fontSize: 14, color: '#9A3412', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <ZmIcon name="ticket" size={16} />Tích tem đổi quà
         </div>
         <div style={{ fontSize: 12, color: '#C2410C', fontWeight: 700 }}>
           {stamps.stamps}/{stamps.stamps_required} tem
@@ -407,6 +410,15 @@ const ZM_ICONS = {
   gift: (<><rect x="3" y="8" width="18" height="4" rx="1" /><path d="M12 8v13" /><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7" /><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5" /></>),
   zap: (<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />),
   heart: (<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />),
+  // Chuẩn hóa icon 2026-11-05: bổ sung glyph cho các vị trí từng dùng emoji
+  search: (<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>),
+  x: (<><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>),
+  mapPin: (<><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></>),
+  phone: (<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />),
+  clock: (<><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>),
+  users: (<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></>),
+  link: (<><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>),
+  ticket: (<><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /><path d="M13 5v2" /><path d="M13 11v2" /><path d="M13 17v2" /></>),
 };
 export function ZmIcon({ name, size = 22 }) {
   return (

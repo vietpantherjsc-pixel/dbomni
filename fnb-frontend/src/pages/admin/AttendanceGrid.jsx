@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -62,9 +62,23 @@ export default function AttendanceGrid() {
     // Gói 46: thống kê ca theo tháng cho cột "Tổng số ca"
     const [shiftStats, setShiftStats] = useState({});
 
+    // S5: 401 = hết phiên → hiện câu chuẩn đúng 1 lần (nhiều luồng tải chạy song song,
+    // trước đây fetchBranches không bắt lỗi còn fetchGrid thì alert "Unauthenticated.")
+    const expiredRef = useRef(false);
+    const noteExpired = (e) => {
+        if (e?.response?.status !== 401) return false;
+        if (!expiredRef.current) {
+            expiredRef.current = true;
+            alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        }
+        return true;
+    };
+
     const fetchBranches = useCallback(async () => {
-        const b = await axios.get(API + '/branches');
-        setBranches(b.data?.data || b.data || []);
+        try {
+            const b = await axios.get(API + '/branches');
+            setBranches(b.data?.data || b.data || []);
+        } catch (e) { noteExpired(e); }
     }, []);
     useEffect(() => { fetchBranches(); }, [fetchBranches]);
 
@@ -73,7 +87,7 @@ export default function AttendanceGrid() {
         try {
             const r = await axios.get(API + '/attendances/grid', { params: { week, branch_id: branchId || undefined } });
             setData(r.data?.data || { days: [], rows: [] });
-        } catch (e) { alert(e.response?.data?.message || 'Tải bảng chấm công thất bại'); }
+        } catch (e) { if (!noteExpired(e)) alert(e.response?.data?.message || 'Tải bảng chấm công thất bại'); }
         setLoading(false);
     }, [week, branchId]);
     useEffect(() => { fetchGrid(); }, [fetchGrid]);
@@ -87,7 +101,7 @@ export default function AttendanceGrid() {
                 (r.data?.data || []).forEach((s) => { m[s.employee_id] = s; });
                 setShiftStats(m);
             })
-            .catch(() => {});
+            .catch((e) => { noteExpired(e); });
     }, [week, branchId]);
     useEffect(() => { fetchStats(); }, [fetchStats]);
 

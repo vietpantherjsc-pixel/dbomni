@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { API } from '../utils/api'; // Gói 37e: API tương đối — chạy được trên điện thoại (IP LAN)
+import { API } from '../utils/api';
+import { getStaffSession, clearStaffSession, staffSessionExpired, staffBranchName } from '../utils/staffSession'; // Gói phiên Hub (2026-11-05) // Gói 37e: API tương đối — chạy được trên điện thoại (IP LAN)
 import DateInput from '../components/DateInput'; // Gói 36d: ô ngày dd/mm/yyyy
 
 // Trang nhân viên tự báo lỗi 3 Chuyên (public, KHÔNG cần đăng nhập admin)
 // Bám demo đã duyệt: ~/workspace/your_files/demo-loi-3-chuyen.html (tab "NV tự báo lỗi")
-// Token riêng: localStorage['viol_token'] / ['viol_emp'] (không đụng emp_token của đăng ký ca)
+// Phiên CHUNG của Hub (gói phiên Hub 2026-11-05): staff_token/staff_emp/staff_branch_id — đăng nhập 1 lần tại /nhan-vien
 // API: GET /employee/violation-types, GET /employee/my-violations?month=, POST /employee/my-violations
 
 const NAVY = '#24305E';
@@ -83,15 +84,10 @@ function badgeCls(category) {
 }
 
 export default function Loi3Chuyen() {
-  const goHub = () => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); };
-  const [token, setToken] = useState(() => localStorage.getItem('viol_token') || '');
-  const [emp, setEmp] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('viol_emp') || 'null'); } catch (e) { return null; }
-  });
-  const [phone, setPhone] = useState('');
-  const [pin, setPin] = useState('');
-  const [err, setErr] = useState('');
-  const [loginBusy, setLoginBusy] = useState(false);
+  const goHub = () => { window.location.href = '/nhan-vien'; }; // Gói phiên Hub 2026-11-05: không gắn ?t=
+  const session = getStaffSession();
+  const [token, setToken] = useState(() => (session ? session.token : ''));
+  const [emp, setEmp] = useState(() => (session ? session.emp : null));
 
   const [types, setTypes] = useState([]); // [{id, category, category_name, name, default_points}]
   const [mine, setMine] = useState([]);
@@ -128,19 +124,15 @@ export default function Loi3Chuyen() {
   };
   const toastErr = (m) => toast(m, true);
 
-  const logout = () => {
-    localStorage.removeItem('viol_token');
-    localStorage.removeItem('viol_emp');
-    setToken(''); setEmp(null); setPhone(''); setPin(''); setErr('');
-    setTypes([]); setMine([]);
-    setViolId(''); setDate(todayIso); setPoints(''); setNote('');
-    setToastOn(false);
+  const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất = hủy phiên chung tại Hub
+    clearStaffSession();
+    setToken(''); setEmp(null);
+    window.location.href = '/nhan-vien';
   };
 
-  const expired = (e) => {
+  const expired = (e) => { // Gói phiên Hub 2026-11-05: hết phiên xử lý tập trung tại Hub
     if (e && e.response && e.response.status === 401) {
-      logout();
-      toast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+      staffSessionExpired();
       return true;
     }
     return false;
@@ -166,26 +158,6 @@ export default function Loi3Chuyen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, monthStr]);
 
-  const doLogin = async (e) => {
-    e.preventDefault();
-    setErr('');
-    // Chuẩn hóa SĐT: trim, bỏ khoảng trắng, +84xxxxxxxxx → 0xxxxxxxxx
-    let p = phone.trim().replace(/\s+/g, '');
-    if (p.startsWith('+84')) p = '0' + p.slice(3);
-    if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
-    if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
-    setLoginBusy(true);
-    try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin });
-      const tk = r.data.access_token;
-      const info = r.data.employee || {};
-      localStorage.setItem('viol_token', tk);
-      localStorage.setItem('viol_emp', JSON.stringify(info));
-      setToken(tk); setEmp(info); setPhone(''); setPin('');
-    } catch (e) {
-      setErr(errMsg(e, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
-    } finally { setLoginBusy(false); }
-  };
 
   // nhóm loại lỗi theo category_name để render optgroup
   const typeGroups = useMemo(() => {
@@ -227,6 +199,8 @@ export default function Loi3Chuyen() {
     } finally { setSaving(false); }
   };
 
+  // Gói phiên Hub (2026-11-05): không còn đăng nhập riêng — chưa có phiên
+  // chung thì hướng NV về Cổng nhân viên đăng nhập 1 lần.
   if (!token) {
     return (
       <div className="l3c-wrap">
@@ -236,36 +210,12 @@ export default function Loi3Chuyen() {
             <button onClick={goHub} aria-label="Quay lại hub"
               style={{ background: 'rgba(255,255,255,.16)', border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 10, minHeight: 44, marginBottom: 8 }}>&#8249; Hub</button>
             <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>
-            <div className="l3c-sub">Đăng nhập để tiếp tục</div>
+            <div className="l3c-sub">Trang này dùng chung phiên đăng nhập của Cổng nhân viên</div>
           </div>
-          <form className="l3c-card" onSubmit={doLogin}>
-            <label className="l3c-label" style={{ marginTop: 4 }}>Số điện thoại</label>
-            <input
-              className="l3c-field"
-              type="tel"
-              inputMode="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, ''))}
-              placeholder="09xxxxxxxx"
-              autoComplete="tel"
-            />
-            <label className="l3c-label">Mã PIN 6 số</label>
-            <input
-              className="l3c-field l3c-pin"
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-              autoComplete="off"
-            />
-            {err && <div className="l3c-msg" style={{ margin: '12px 0 0' }}>{err}</div>}
-            <button className="l3c-send" type="submit" disabled={loginBusy}>
-              {loginBusy ? 'Đang xử lý...' : 'Đăng nhập'}
-            </button>
-          </form>
+          <div className="l3c-card">
+            <div style={{ fontSize: 14, lineHeight: 1.6 }}>Bạn chưa đăng nhập, hoặc phiên đã hết hạn. Đăng nhập 1 lần tại Cổng nhân viên là dùng được mọi mục (kho, chế biến, thu chi…), không cần đăng nhập lại ở từng trang.</div>
+            <button className="l3c-send" onClick={goHub}>Đến Cổng nhân viên đăng nhập</button>
+          </div>
         </div>
       </div>
     );
@@ -282,9 +232,9 @@ export default function Loi3Chuyen() {
           <div className="l3c-avatar">{avatarLetter}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="l3c-name">{(emp && emp.full_name) || 'Nhân viên'}</div>
-            <div className="l3c-sub">{(emp && emp.branch_name) || ''}</div>
+            <div className="l3c-sub">{staffBranchName(session) || (emp && emp.branch_name) || ''}</div>
           </div>
-          <button className="l3c-logout" onClick={() => { let t = ''; try { t = new URLSearchParams(window.location.search).get('t') || localStorage.getItem('staff_hub_t') || ''; } catch (e) {} window.location.href = '/nhan-vien' + (t ? '?t=' + encodeURIComponent(t) : ''); }} aria-label="Quay lại hub">‹ Hub</button>
+          <button className="l3c-logout" onClick={goHub} aria-label="Quay lại hub">‹ Hub</button>
           <button className="l3c-logout" onClick={logout} aria-label="Đăng xuất">Đăng xuất</button>
         </div>
         <div className="l3c-title">🚨 Tự báo lỗi 3 Chuyên</div>

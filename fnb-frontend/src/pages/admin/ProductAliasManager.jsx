@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
-import SearchIcon from '../../components/SearchIcon'; // Gói 55 p11x
+import SearchInput from '../../components/SearchInput';
 import { API } from '../../utils/api';
 
 
@@ -14,8 +24,8 @@ export default function ProductAliasManager() {
   const [search, setSearch] = useState('');
 
   const load = () => {
-    axios.get(`${API}/product-aliases`).then((r) => { setAliases(r.data?.data?.data || r.data?.data || []); setLoadErr(false); }).catch(() => setLoadErr(true));
-    axios.get(`${API}/products?per_page=200`).then((r) => setProducts(r.data?.data?.data || r.data?.data || [])).catch(() => {});
+    axios.get(`${API}/product-aliases`).then((r) => { setAliases(r.data?.data?.data || r.data?.data || []); setLoadErr(false); }).catch((e) => { noteExpired(e); setLoadErr(true); });
+    axios.get(`${API}/products?per_page=200`).then((r) => setProducts(r.data?.data?.data || r.data?.data || [])).catch((e) => noteExpired(e));
   };
   useEffect(() => { load(); }, []);
 
@@ -46,11 +56,9 @@ export default function ProductAliasManager() {
       </div>
       <div className="mb-3 flex gap-2 items-center">
         <div className="relative flex-1">
-          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#999', display: 'flex' }}>
-            <SearchIcon size={15} />
-          </span>
-          <input value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Tìm tên cũ / tên món..." className="m-input w-full" style={{ paddingLeft: 32 }} />
+          <SearchInput value={search} onChange={(e) => setSearch(e.target.value)}
+            onSearch={(v) => setSearch(v)}
+            placeholder="Tìm tên cũ / tên món..." className="m-input w-full" wrapperStyle={{ display: 'flex', width: '100%' }} />
         </div>
       </div>
       {filtered.map((a) => (

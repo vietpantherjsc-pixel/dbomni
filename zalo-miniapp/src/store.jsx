@@ -20,13 +20,16 @@ export function ShopProvider({ children }) {
   const setBranch = (b) => {
     const curId = branch && branch.id;
     const newId = b && b.id;
-    // Đổi chi nhánh khi giỏ còn món → hỏi trước, đồng ý thì xóa giỏ
+    // Lát 3b (2026-11-04): đổi chi nhánh khi giỏ còn món → CHẶN, trả false để
+    // trang chọn chi nhánh hiện thông báo lý do. Trước đây hỏi bằng
+    // window.confirm — hộp thoại nguyên thủy bị webview Zalo nuốt im lặng
+    // nên lần chọn "không dính" mà khách không hiểu vì sao (tái hiện #17).
     if (curId && newId && String(curId) !== String(newId) && cart.length > 0) {
-      if (!window.confirm('Đổi chi nhánh sẽ xóa giỏ hàng hiện tại. Tiếp tục?')) return;
-      setCart([]);
+      return false;
     }
     setBranchState(b);
     storage.set('zm_branch', b);
+    return true;
   };
 
   const addToCart = (line) => {

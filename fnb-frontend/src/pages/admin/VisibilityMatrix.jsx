@@ -3,6 +3,7 @@
 // Mặc định HIỆN ở tất cả CN — chỉ lưu override ẨN.
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import SearchInput from '../../components/SearchInput';
 import AdminLayout from '../../components/layout/AdminLayout';
 
 const BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -109,10 +110,12 @@ export default function VisibilityMatrix({
                 <div className="m-card overflow-hidden">
                     <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
                         <div className="relative flex-1 min-w-[200px] max-w-xs">
-                            <input
+                            <SearchInput
                                 value={q}
                                 onChange={(e) => setQ(e.target.value)}
+                                onSearch={(v) => setQ(v)}
                                 placeholder="Tìm kiếm theo tên..."
+                                wrapperStyle={{ display: 'flex', width: '100%' }}
                                 className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                             />
                         </div>

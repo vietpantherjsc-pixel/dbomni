@@ -145,7 +145,9 @@ class InboundReceiptController extends Controller
                 }
                 // K-R1: chỉ sinh phiếu chi khi đã confirmed
                 if (!$isEmployee) {
-                    $this->createExpense($receipt);
+                    // Sổ #75: truyền cặp actor của chính người tạo (điểm gọi này
+                    // chỉ chạy khi actor là User, giữ nguyên dấu như trước).
+                    $this->createExpense($receipt, [$actor instanceof \App\Models\User ? $actor->id : null, $isEmployee ? $actor->id : null]);
                 }
                 return $receipt;
             });
@@ -330,13 +332,16 @@ class InboundReceiptController extends Controller
         if ($txn && $txn->payments()->exists()) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã phát sinh thanh toán, không hủy được. Hãy xử lý thanh toán trước.'], 422);
         }
-        DB::transaction(function () use ($receipt) {
+        // Sổ #77 (2026-11-04): tính vết người hủy TRƯỚC, truyền $request->user()
+        // vào ids() — bản cũ gọi ids() không đối số nên NV hủy TRỰC TIẾP (không
+        // qua Hub) bị ghi cancelled_by_employee_id = null, thiếu vết người hủy.
+        [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        DB::transaction(function () use ($receipt, $cancelEmployeeId) {
             foreach ($receipt->items as $line) {
                 if ($line->batch) $line->batch->delete();
             }
             Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->delete();
             // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
-            [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids();
             $receipt->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
         });
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu nhập.']);
@@ -350,8 +355,16 @@ class InboundReceiptController extends Controller
     {
         $apprBranch = InboundReceipt::where('id', $id)->value('branch_id');
         if ($apprBranch !== null && ($deny = $this->denyReceiptBranch($request, $apprBranch))) return $deny;
+        // Sổ #75 (2026-11-04): tính cặp người duyệt TRƯỚC, truyền $request->user()
+        // vào ids() — bản cũ gọi ids() không đối số nên chỉ thấy override của
+        // đường Hub; duyệt TRỰC TIẾP bằng phiên NV thì rơi xuống fallback
+        // auth()->id() = mã NV → ghi vào cột FK users → lỗi 1452.
+        [$approveUserId, $approveEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        if ($approveUserId === null && $approveEmployeeId === null) {
+            $approveUserId = auth()->id();
+        }
         try {
-            $receipt = DB::transaction(function () use ($id) {
+            $receipt = DB::transaction(function () use ($id, $approveUserId, $approveEmployeeId) {
                 $receipt = InboundReceipt::with('items.material')->lockForUpdate()->findOrFail($id);
                 if ($receipt->status !== 'draft') {
                     throw new \Exception('Chỉ duyệt được phiếu đang ở trạng thái nháp.');
@@ -376,20 +389,16 @@ class InboundReceiptController extends Controller
                     ]);
                     $line->update(['batch_id' => $batch->id, 'batch_code' => $batch->batch_code]);
                 }
-                // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết người duyệt (User hoặc Employee).
-                // TESTER fix: chỉ fallback auth()->id() khi CẢ 2 đều null — ở Hub,
-                // auth()->id() trả mã NV, ghi vào cột FK users sẽ vi phạm FK/sai người.
-                [$approveUserId, $approveEmployeeId] = \App\Support\ApprovalActor::ids();
-                if ($approveUserId === null && $approveEmployeeId === null) {
-                    $approveUserId = auth()->id();
-                }
+                // Gói "Chờ duyệt trên Hub" (2026-10-21) + sổ #75 (2026-11-04):
+                // cặp người duyệt đã tính ở đầu hàm bằng ids($request->user())
+                // (override Hub vẫn được ưu tiên bên trong ApprovalActor).
                 $receipt->update([
                     'status' => 'confirmed',
                     'approved_by_user_id' => $approveUserId,
                     'approved_by_employee_id' => $approveEmployeeId,
                     'approved_at' => now(),
                 ]);
-                $this->createExpense($receipt);
+                $this->createExpense($receipt, [$approveUserId, $approveEmployeeId]);
                 return $receipt;
             });
         } catch (\Exception $e) {
@@ -452,13 +461,24 @@ class InboundReceiptController extends Controller
         ];
     }
 
-    private function createExpense(InboundReceipt $receipt): void
+    private function createExpense(InboundReceipt $receipt, ?array $actorIds = null): void
     {
         $cat = TransactionCategory::firstOrCreate(
             ['name' => 'Nhập hàng', 'type' => 'expense'],
             ['is_system' => true]
         );
         $isDebt = $receipt->payment_type === 'debt';
+        // Lát 1c: phiếu chi tự sinh TỪ hành động duyệt/tạo-đã-xác-nhận phiếu nhập
+        // → đóng dấu duyệt của chính người duyệt tại nguồn, để cơ số tiền hiệu
+        // lực phía Thu-Chi nhận diện được (trước đây approved_* trống khiến
+        // phiếu trông như đang chờ duyệt dù tiền đã hiệu lực).
+        // Sổ #75 (2026-11-04): ưu tiên cặp actor do điểm gọi truyền vào (đã
+        // tính bằng ids($request->user())) — tự gọi ids() không đối số ở đây
+        // sẽ mù với phiên NV đi đường trực tiếp như ở approve().
+        [$expUserId, $expEmployeeId] = $actorIds ?? \App\Support\ApprovalActor::ids();
+        if ($expUserId === null && $expEmployeeId === null) {
+            $expUserId = auth()->id();
+        }
         Transaction::create([
             'code' => Transaction::nextCode('expense'),
             'type' => 'expense',
@@ -469,6 +489,9 @@ class InboundReceiptController extends Controller
             'paid_amount' => $isDebt ? 0 : $receipt->grand_total,
             'paid_at' => $isDebt ? null : now()->toDateString(),
             'status' => $isDebt ? 'pending' : 'paid',
+            'approved_by' => $expUserId,
+            'approved_by_employee_id' => $expEmployeeId,
+            'approved_at' => now(),
             'related_type' => 'inbound_receipt',
             'related_id' => $receipt->id,
             'note' => 'Nhập hàng ' . $receipt->code . ($receipt->invoice_no ? ' (HĐ ' . $receipt->invoice_no . ')' : ''),

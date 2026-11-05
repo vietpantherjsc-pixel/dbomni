@@ -1,11 +1,18 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 // Spec P4-P5 (khắc phục kiểm duyệt Zalo): popup "Chính sách — Điều khoản Mini App Daybreak Đặt món".
 // KHÔNG link ngoài. Đủ 5 nội dung: đơn vị chủ quản, dữ liệu thu thập, mục đích,
 // thời gian lưu trữ, cách rút lại đồng ý + liên hệ.
 export default function PrivacyPolicy({ open, onClose }) {
     if (!open) return null;
-    return (
+    // Vá 2026-11-05 (lỗi bị thanh menu dưới che): popup PHẢI render qua portal
+    // ra document.body. Trước đây nó nằm trong thẻ đăng ký ở Account.jsx —
+    // thẻ đó là position:relative + zIndex:2, tạo stacking context nhốt toàn
+    // bộ con cháu ở mức 2, nên zIndex 9999 của tấm che vẫn thua .zm-tabbar
+    // (z-index 20 ở gốc) và đáy popup trượt xuống dưới thanh menu. Portal đưa
+    // tấm che về gốc, 9999 thắng mọi thanh cố định; nội dung không đổi.
+    return createPortal(
         <div
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', zIndex: 9999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
             onClick={onClose}
@@ -23,7 +30,7 @@ export default function PrivacyPolicy({ open, onClose }) {
                     <p style={{ margin: '0 0 12px' }}>Daybreak Tea &amp; Coffee — hệ thống cửa hàng trà &amp; cà phê. Mọi thông tin liên hệ hiển thị tại trang chủ ứng dụng theo từng chi nhánh.</p>
 
                     <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>2. Dữ liệu chúng tôi thu thập</h4>
-                    <p style={{ margin: '0 0 12px' }}>Khi bạn sử dụng ứng dụng, chúng tôi có thể thu thập: số điện thoại, tên, địa chỉ giao hàng, vị trí hiện tại (chỉ khi bạn cho phép, để tính phí giao hàng), lịch sử đơn hàng, điểm tích lũy và thông tin thiết bị cơ bản.</p>
+                    <p style={{ margin: '0 0 12px' }}>Khi bạn sử dụng ứng dụng, chúng tôi có thể thu thập: số điện thoại, tên, địa chỉ giao hàng, vị trí hiện tại (chỉ khi bạn cho phép, để tính phí giao hàng), lịch sử đơn hàng, điểm tích lũy và thông tin thiết bị cơ bản. Email chỉ được thu thập khi bạn tự nguyện cung cấp — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.</p>
 
                     <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>3. Mục đích sử dụng</h4>
                     <p style={{ margin: '0 0 12px' }}>Dữ liệu được dùng để: xử lý đơn đặt món, giao hàng, quản lý tài khoản thành viên, tích điểm &amp; đổi ưu đãi, gửi thông báo về đơn hàng và chương trình khuyến mại (nếu bạn đồng ý).</p>
@@ -37,6 +44,7 @@ export default function PrivacyPolicy({ open, onClose }) {
                     <p style={{ margin: '12px 0 0', fontSize: 12, color: '#888' }}>Cập nhật lần cuối: tháng 10/2026. Daybreak có thể cập nhật chính sách này; phiên bản mới nhất luôn hiển thị tại đây.</p>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }

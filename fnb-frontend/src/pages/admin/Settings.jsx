@@ -1,4 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+
+// S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
+// khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
+let __expiredAt = 0;
+const noteExpired = (e) => {
+    if (e?.response?.status === 401 && Date.now() - __expiredAt > 30000) {
+        __expiredAt = Date.now();
+        alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    }
+};
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { fmtDate } from '../../utils/format';
@@ -352,7 +362,7 @@ const Settings = () => {
                 payroll_voucher_status: d.payroll_voucher_status ?? 'paid',
                 hr_over_hours_threshold: d.hr_over_hours_threshold ?? 200,
             });
-        }).catch(() => {});
+        }).catch((e) => noteExpired(e));
     }, []);
     const [fontMsg, setFontMsg] = useState('');
     // Gói 55 p11af (P0-13/P0-14): chính sách khuyến mại + ngưỡng Food cost.
