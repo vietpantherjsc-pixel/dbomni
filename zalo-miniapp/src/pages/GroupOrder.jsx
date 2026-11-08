@@ -10,7 +10,7 @@ import ZmIcon from '../components/ZmIcon';
 import { TabBar } from './Home';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
-import { DateField, TimeField, toApiDate, validTime, formatPhone } from '../utils/checkoutFields.jsx';
+import { DateField, TimeField, toApiDate, validTime, formatPhone, validPhone } from '../utils/checkoutFields.jsx';
 import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4 (Q3): ô đồng ý dùng chung với Checkout đơn thường
 
 // Gói 9 (2026-10-05): Đặt đơn nhóm.
@@ -395,15 +395,7 @@ function GroupCheckout({ group, onDone, onBack }) {
   const [pickedCoord, setPickedCoord] = useState(null);
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
-  // Báo giá hãng giao hàng (như Checkout đơn thường)
-  const [quote, setQuote] = useState(null);
-  const [quoteError, setQuoteError] = useState('');
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [deliveryPkg, setDeliveryPkg] = useState('nhanh');
-  const [deliveryReady, setDeliveryReady] = useState(false);
-  const quoteTimer = useRef(null);
   const geoTimer = useRef(null);
-  const quoteLiveRef = useRef({ loading: false, pkg: null, code: 'nhanh' });
   // Chống trùng: client_key cố định theo phiên giỏ nhóm (đổi khi giỏ nhóm đổi)
   const newClientKey = () => (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
@@ -465,6 +457,12 @@ function GroupCheckout({ group, onDone, onBack }) {
       const g = await geocodeAddress(fullAddress() + ', Việt Nam');
       const d = haversineKm(Number(b.latitude), Number(b.longitude), g.lat, g.lng);
       setKm(Math.round(d * 10) / 10);
+      // Delta phí giao (TESTER §AS, 2026-11-06): GHIM luôn tọa độ vừa geocode
+      // được vào pickedCoord — như Checkout đơn thường: trước đây tọa độ chỉ
+      // dùng để hiển thị, payload không gửi kèm nên server chốt phí 0 dù
+      // khách đã thấy phí. Đổi địa chỉ tự xóa pickedCoord; geocode thất bại
+      // giữ nấc thiếu-tọa-độ như cũ.
+      setPickedCoord({ lat: g.lat, lng: g.lng });
     } catch (e) { setKm(null); setGeoError(true); }
     finally { setGeoLoading(false); }
   };
@@ -514,47 +512,13 @@ function GroupCheckout({ group, onDone, onBack }) {
     );
   };
 
-  // Báo giá hãng khi có địa chỉ đầy đủ (debounce 1s, timeout 8s — như đơn thường)
-  useEffect(() => {
-    if (type !== 'delivery') { setQuote(null); setQuoteError(''); return; }
-    if (!b?.id || !street.trim() || !ward || !province) { setQuote(null); setQuoteError(''); return; }
-    clearTimeout(quoteTimer.current);
-    quoteTimer.current = setTimeout(async () => {
-      setQuoteLoading(true); setQuoteError('');
-      try {
-        const data = await Promise.race([
-          api.deliveryQuote({
-            branch_id: b.id,
-            dropoff_address: fullAddress(),
-            dropoff_lat: pickedCoord?.lat || null,
-            dropoff_lng: pickedCoord?.lng || null,
-            subtotal: group.subtotal,
-            cod_amount: payment === 'pay_at_store' ? group.subtotal : 0,
-          }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
-        ]);
-        setQuote(data);
-        const hasNhanh = (data.packages || []).some((p) => p.code === 'nhanh');
-        setDeliveryPkg(hasNhanh ? 'nhanh' : (data.packages[0]?.code || 'nhanh'));
-      } catch (e) {
-        setQuote(null);
-        setQuoteError(e.message === 'timeout'
-          ? 'Đang tính phí ship — vui lòng đợi giây lát.'
-          : (e.message || 'Chưa giao được tới địa chỉ này.'));
-      } finally { setQuoteLoading(false); }
-    }, 1000);
-    return () => clearTimeout(quoteTimer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [street, ward, province, type, b?.id, group.subtotal, payment]);
+  // Spec phí giao MỘT NGUỒN (2026-11-06): như đơn thường — phí hiển thị =
+  // công thức nội bộ theo tọa độ ghim trừ phần quán hỗ trợ; không báo giá hãng.
+  const shipFeeGross = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
+  const shipShopSupport = type === 'delivery' && shipCfg && group.subtotal >= (Number(shipCfg.support_threshold) || 0)
+    ? Math.min(Number(shipCfg.support_amount) || 0, shipFeeGross) : 0;
+  const shipFee = Math.max(0, shipFeeGross - shipShopSupport);
 
-  const quotePkg = quote?.packages?.find((p) => p.code === deliveryPkg) || quote?.packages?.[0];
-  useEffect(() => {
-    quoteLiveRef.current = { loading: quoteLoading, pkg: quotePkg || null, code: deliveryPkg };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quoteLoading, quote, deliveryPkg]);
-  const shipFee = type === 'delivery'
-    ? (quotePkg ? quotePkg.customer_pays : (km != null && shipCfg ? calcShipFee(km, shipCfg) : 0))
-    : 0;
 
   // KM MỌI LOẠI + điểm của trưởng nhóm: tra khách theo SĐT đã chuẩn hóa như đơn thường
   useEffect(() => {
@@ -642,6 +606,8 @@ function GroupCheckout({ group, onDone, onBack }) {
   const place = async () => {
     if (placing) return;
     if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
+    // Luật SĐT 2026-11-07: bắt đầu bằng 0 thì phải đủ đúng 10 số.
+    if (!validPhone(phone)) { alert('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     if (type === 'delivery') {
       if (!province || !ward || !street.trim()) { alert('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường.'); return; }
       if (deliveryMode === 'scheduled' && !validateSchedule('muốn giao')) return;
@@ -661,21 +627,8 @@ function GroupCheckout({ group, onDone, onBack }) {
     }
     setPlacing(true);
     try {
-      // Đang tính phí ship → tự chờ quote xong (tối đa 10s) như đơn thường
-      if (type === 'delivery') {
-        let waited = 0;
-        while (quoteLiveRef.current.loading && waited < 10000) {
-          await new Promise((r) => setTimeout(r, 300));
-          waited += 300;
-        }
-      }
-      const livePkg = type === 'delivery' ? quoteLiveRef.current.pkg : null;
-      // Đã cấu hình hãng mà không báo giá được và không có km dự phòng → chặn (như đơn thường);
-      // geocode lỗi nhưng hãng không cấu hình → vẫn đặt, quán xác nhận phí ship sau.
-      if (type === 'delivery' && deliveryReady && !livePkg && km == null) {
-        alert('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
-        return;
-      }
+      // Spec phí giao MỘT NGUỒN: không còn chờ/báo giá hãng — thiếu tọa độ
+      // vẫn đặt được, phí để quán xác nhận.
       let scheduledAt = null;
       if (type === 'scheduled' || (type === 'delivery' && deliveryMode === 'scheduled')) {
         const d = toApiDate(schedDate);
@@ -702,9 +655,9 @@ function GroupCheckout({ group, onDone, onBack }) {
         // Loyalty 2.0: không gửi points_redeem nữa
         note: note.trim() || null,
         referred_by: getRef() || null,
-        delivery_package: type === 'delivery' ? (quoteLiveRef.current.code || deliveryPkg) : null,
-        delivery_quoted_fee: type === 'delivery' && livePkg ? livePkg.fee : null,
-        delivery_provider: type === 'delivery' ? livePkg?.provider || null : null,
+        delivery_package: null,
+        delivery_quoted_fee: null,
+        delivery_provider: null,
         delivery_dropoff_lat: type === 'delivery' ? pickedCoord?.lat || null : null,
         delivery_dropoff_lng: type === 'delivery' ? pickedCoord?.lng || null : null,
       });
@@ -738,7 +691,10 @@ function GroupCheckout({ group, onDone, onBack }) {
 
   return (
     <div style={{ padding: '0 16px 16px' }}>
-      <div className="zm-alert" style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="users" size={14} />Chốt đơn nhóm <b>{group.code}</b> — {group.total_qty} món · {fmt(group.subtotal)}đ. Tên từng người đã ghi trong ghi chú từng món.</div>
+      {/* Sửa 2026-11-07 (#8): trước đây icon + từng mẩu chữ là các flex item
+          rời → "Chốt đơn nhóm" bị bóp thành cột hẹp, chữ gãy vụn. Nay toàn
+          câu nằm trong MỘT span (1 flex item) nên xuôi dòng như đoạn văn. */}
+      <div className="zm-alert" style={{ margin: '12px 0', display: 'flex', alignItems: 'flex-start', gap: 6 }}><span style={{ display: 'flex', flexShrink: 0, marginTop: 1 }}><ZmIcon name="users" size={14} /></span><span style={{ flex: 1, minWidth: 0 }}>Chốt đơn nhóm <b>{group.code}</b> — {group.total_qty} món · {fmt(group.subtotal)}đ. Tên từng người đã ghi trong ghi chú từng món.</span></div>
 
       {isClosed && (
         <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '10px 12px', fontSize: 13, color: '#991b1b', marginBottom: 12 }}>
@@ -760,6 +716,9 @@ function GroupCheckout({ group, onDone, onBack }) {
       <div className="zm-field">
         <label>Số điện thoại * <span style={{ color: '#888', fontWeight: 400 }}>(để tích điểm thành viên)</span></label>
         <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
+        {phone && !validPhone(phone) && (
+          <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+        )}
       </div>
 
       {/* Spec mật khẩu §5.4 (Q3): ô đồng ý NĐ 13 ở đơn nhóm — chỉ hiện khi
@@ -903,38 +862,6 @@ function GroupCheckout({ group, onDone, onBack }) {
                     <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
                   </div>
                 )}
-                {quoteLoading && <div className="zm-note">Đang tính phí ship từ hãng giao hàng...</div>}
-                {!quoteLoading && quote?.packages?.length > 0 && (
-                  <div className="zm-field">
-                    <label>Chọn gói giao hàng</label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {quote.packages.map((p) => (
-                        <button
-                          key={p.code + p.provider}
-                          type="button"
-                          onClick={() => setDeliveryPkg(p.code)}
-                          style={{
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                            padding: '10px 12px', borderRadius: 10, fontSize: 13, textAlign: 'left',
-                            border: deliveryPkg === p.code ? '2px solid #24305E' : '1px solid #e0e0e0',
-                            background: deliveryPkg === p.code ? '#eef2ff' : '#fff',
-                          }}
-                        >
-                          <div>
-                            <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
-                            <div style={{ color: '#666', fontSize: 12 }}>{p.eta_text}{p.shop_support > 0 ? ` · Quán hỗ trợ ${fmt(p.shop_support)}đ` : ''}</div>
-                          </div>
-                          <div style={{ fontWeight: 700, color: '#24305E' }}>{fmt(p.customer_pays)}đ</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {!quoteLoading && quoteError && !quote?.packages?.length && km == null && (
-                  <div className="zm-alert" style={{ background: '#fef2f2', borderColor: '#fecaca' }}>
-                    ⚠️ {quoteError}
-                  </div>
-                )}
                 <div className="zm-field">
                   <label>Ghi chú giao hàng</label>
                   <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
@@ -975,7 +902,11 @@ function GroupCheckout({ group, onDone, onBack }) {
       {(payMethods.length ? payMethods : [
         { value: 'transfer', label: 'Chuyển khoản / QR', desc: 'Quán xác nhận đã nhận tiền rồi mới làm món' },
         { value: 'pay_at_store', label: 'Thanh toán tại quán', desc: 'Trả tiền khi nhận món' },
-      ]).map((m) => (
+      ])
+        // Spec phí giao mục 5.2/5.3: đơn giao ở nhánh dự phòng không có trả
+        // tại quán/thu hộ ở cả 2 giai đoạn — ẩn hẳn lựa chọn.
+        .filter((m) => !(m.value === 'pay_at_store' && type === 'delivery'))
+        .map((m) => (
         <div key={m.value} className={`zm-pay-opt ${payment === m.value ? 'on' : ''}`} onClick={() => setPayment(m.value)}>
           <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{m.desc}</div></div>
         </div>
@@ -1028,10 +959,11 @@ function GroupCheckout({ group, onDone, onBack }) {
       <div className="zm-total-row"><span>Tạm tính ({group.total_qty} món)</span><span>{fmt(group.subtotal)}đ</span></div>
       {type === 'delivery' && (
         <div className="zm-total-row">
-          <span>Phí vận chuyển{quotePkg ? ` (${quotePkg.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} · ${quotePkg.provider_label})` : km != null ? ` (~${km}km)` : ''}</span>
-          <span>{quotePkg || km != null ? `${fmt(shipFee)}đ` : 'Quán xác nhận'}</span>
+          <span>Phí vận chuyển{km != null ? ` (~${km}km)` : ''}</span>
+          <span>{km != null ? `${fmt(shipFeeGross)}đ` : 'Quán xác nhận'}</span>
         </div>
       )}
+      {type === 'delivery' && shipShopSupport > 0 && <div className="zm-total-row disc"><span>🏠 Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>}
       {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
       {/* 🟠8: hiển thị theo phía thắng thật giữa KM và voucher */}
       {voucherWins ? (

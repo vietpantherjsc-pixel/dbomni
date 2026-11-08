@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\ProductPrice;
 use App\Models\ProductCategoryPrice;
 use App\Models\Recipe;
+use App\Support\CatalogCache;
 use App\Support\RecipeUnitResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -111,6 +112,7 @@ class ProductController extends Controller
             return $product;
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($this->loadFull($product), 201);
     }
 
@@ -190,12 +192,14 @@ class ProductController extends Controller
             }
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($this->loadFull($product));
     }
 
     public function destroy(Product $product)
     {
         $product->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['message' => 'Đã xóa mặt hàng thành công']);
     }
 
@@ -203,6 +207,7 @@ class ProductController extends Controller
     public function toggleFavorite(Product $product)
     {
         $product->update(['is_favorite' => !$product->is_favorite]);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['is_favorite' => (bool) $product->is_favorite]);
     }
 
@@ -292,6 +297,7 @@ class ProductController extends Controller
             return $done;
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'updated' => $result]);
     }
 
@@ -380,6 +386,7 @@ class ProductController extends Controller
             return $n;
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'updated' => $updated]);
     }
 
@@ -495,10 +502,12 @@ class ProductController extends Controller
             $material = $recipe->material;
             if (!$material) continue;
             $latest = $material->batches()->orderByDesc('id')->first();
+            // Gói dọn 06/11: batch.unit_cost LUÔN là giá theo ĐƠN VỊ CƠ SỞ
+            // (mọi đường ghi lô đã quy đổi từ giá mua ngay lúc ghi — xem họ
+            // Inbound) và recipe.quantity cũng theo cơ sở nên nhân thẳng.
+            // Bản Gói 55 chia thêm conversion_rate ở đây làm giá vốn NL có
+            // đơn vị mua bị thổi lên (VD rate 0,001 → ×1000).
             $unitCost = $latest ? (float) $latest->unit_cost : 0;
-            // unit_cost đang theo đơn vị NHẬP -> quy về đơn vị cơ sở
-            $rate = (float) ($material->conversion_rate ?: 1);
-            if ($rate > 0) $unitCost = $unitCost / $rate;
             $cost += (float) $recipe->quantity * $unitCost;
         }
         return round($cost);

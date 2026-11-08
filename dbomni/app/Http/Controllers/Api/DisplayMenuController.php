@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\BranchMenuHidden;
 use App\Models\BranchProductHidden;
 use App\Models\Menu;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -22,59 +23,75 @@ class DisplayMenuController extends Controller
         // Gói 10c: route online (Mini App) ẩn món "giá nhập khi chọn món";
         // POS (route web) vẫn hiện để thu ngân bấm và nhập giá.
         $isOnline = $request->is('api/online/*');
-
-        // Gói 25: ?branch_id= -> loại thực đơn bị ẩn ở CN đó + loại món bị ẩn ở CN đó.
-        // Ưu tiên: món bị ẩn ở CN -> ẩn (dù thực đơn đang bật).
         $branchId = (int) $request->query('branch_id', 0);
-        $hiddenMenuIds = $branchId > 0
-            ? BranchMenuHidden::where('branch_id', $branchId)->pluck('menu_id')->all()
-            : [];
-        $hiddenProductIds = $branchId > 0
-            ? BranchProductHidden::where('branch_id', $branchId)->pluck('product_id')->all()
-            : [];
+        $unique = $request->boolean('unique');
 
-        $menus = Menu::where('is_active', true)
-            ->when(!empty($hiddenMenuIds), fn($q) => $q->whereNotIn('id', $hiddenMenuIds))
-            ->orderBy('sort_order')
-            ->orderBy('id')
-            ->with(['products' => function ($q) use ($isOnline, $hiddenProductIds) {
-                $q->where('products.is_active', true)
-                    ->where('products.is_service_fee', false)
-                    ->when($isOnline, fn($qq) => $qq->where('products.price_on_demand', false))
-                    ->when(!empty($hiddenProductIds), fn($qq) => $qq->whereNotIn('products.id', $hiddenProductIds))
-                    ->orderBy('menu_product.sort_order')
-                    ->orderBy('products.name')
-                    ->with(['options', 'prices.priceList', 'categoryPrices', 'optionGroups' => function ($qq) {
-                        // Gói 34e: sắp xếp nhóm tùy chọn theo sort_order của admin
-                        $qq->where('is_active', true)->orderBy('sort_order')->orderBy('id')
-                            ->with(['options' => fn($qqq) => $qqq->orderBy('sort_order')->orderBy('id')]);
-                    }]);
-            }])
-            ->get();
+        // Bộ nhớ đệm thực đơn (spec 2026-11-05): chỉ đệm payload HIỂN THỊ
+        // này; đường tạo đơn không đọc đệm. Khóa tách biến thể online/POS
+        // (bản online loại món price_on_demand, bản POS giữ) + unique +
+        // chi nhánh. Trả header X-Catalog-Cache để vòng đo nhìn thấy trạng
+        // thái đệm; body/hợp đồng API không đổi.
+        [$data, $status] = CatalogCache::remember(
+            CatalogCache::displayMenusKey($isOnline, $unique, $branchId),
+            CatalogCache::TTL,
+            function () use ($isOnline, $branchId, $unique) {
+                // Gói 25: ?branch_id= -> loại thực đơn bị ẩn ở CN đó + loại món bị ẩn ở CN đó.
+                // Ưu tiên: món bị ẩn ở CN -> ẩn (dù thực đơn đang bật).
+                $hiddenMenuIds = $branchId > 0
+                    ? BranchMenuHidden::where('branch_id', $branchId)->pluck('menu_id')->all()
+                    : [];
+                $hiddenProductIds = $branchId > 0
+                    ? BranchProductHidden::where('branch_id', $branchId)->pluck('product_id')->all()
+                    : [];
 
-        if ($request->boolean('unique')) {
-            $seen = [];
-            $menus = $menus->map(function ($menu) use (&$seen) {
-                $menu->setRelation('products', $menu->products->reject(
-                    function ($p) use (&$seen) {
-                        if (isset($seen[$p->id])) {
-                            return true;
-                        }
-                        $seen[$p->id] = true;
-                        return false;
-                    }
-                )->values());
-                return $menu;
-            })->filter(fn($m) => $m->products->isNotEmpty())->values();
-        }
+                $menus = Menu::where('is_active', true)
+                    ->when(!empty($hiddenMenuIds), fn($q) => $q->whereNotIn('id', $hiddenMenuIds))
+                    ->orderBy('sort_order')
+                    ->orderBy('id')
+                    ->with(['products' => function ($q) use ($isOnline, $hiddenProductIds) {
+                        $q->where('products.is_active', true)
+                            ->where('products.is_service_fee', false)
+                            ->when($isOnline, fn($qq) => $qq->where('products.price_on_demand', false))
+                            ->when(!empty($hiddenProductIds), fn($qq) => $qq->whereNotIn('products.id', $hiddenProductIds))
+                            ->orderBy('menu_product.sort_order')
+                            ->orderBy('products.name')
+                            ->with(['options', 'prices.priceList', 'categoryPrices', 'optionGroups' => function ($qq) {
+                                // Gói 34e: sắp xếp nhóm tùy chọn theo sort_order của admin
+                                $qq->where('is_active', true)->orderBy('sort_order')->orderBy('id')
+                                    ->with(['options' => fn($qqq) => $qqq->orderBy('sort_order')->orderBy('id')]);
+                            }]);
+                    }])
+                    ->get();
 
-        // Gói 49i: gắn giá kênh online cho Mini App
-        $menus->each(function ($menu) {
-            $menu->products->each(function ($p) {
-                $p->setAppends(array_unique(array_merge($p->getAppends(), ['online_price'])));
-            });
-        });
+                if ($unique) {
+                    $seen = [];
+                    $menus = $menus->map(function ($menu) use (&$seen) {
+                        $menu->setRelation('products', $menu->products->reject(
+                            function ($p) use (&$seen) {
+                                if (isset($seen[$p->id])) {
+                                    return true;
+                                }
+                                $seen[$p->id] = true;
+                                return false;
+                            }
+                        )->values());
+                        return $menu;
+                    })->filter(fn($m) => $m->products->isNotEmpty())->values();
+                }
 
-        return response()->json(['success' => true, 'data' => $menus]);
+                // Gói 49i: gắn giá kênh online cho Mini App
+                $menus->each(function ($menu) {
+                    $menu->products->each(function ($p) {
+                        $p->setAppends(array_unique(array_merge($p->getAppends(), ['online_price'])));
+                    });
+                });
+
+                // Payload đệm là mảng `data` đúng hình dạng response hiện tại.
+                return $menus->toArray();
+            }
+        );
+
+        return response()->json(['success' => true, 'data' => $data])
+            ->header('X-Catalog-Cache', $status);
     }
 }

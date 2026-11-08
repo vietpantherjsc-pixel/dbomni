@@ -320,6 +320,12 @@ class InboundReceiptController extends Controller
         if (!in_array($receipt->status, ['confirmed', 'draft'], true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu không ở trạng thái đã nhập hoặc nháp.'], 422);
         }
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự hủy phiếu
+        // của mình TỪ HÀNG CHỜ — chỉ áp khi phiếu đang nháp (đang chờ). Hủy
+        // phiếu đã confirmed là thao tác hậu-duyệt phía Admin, ngoài luật này.
+        if ($receipt->status === 'draft') {
+            if ($deny = \App\Support\SelfApprovalGuard::check($receipt, $receipt->created_by_user_id, $receipt->created_by_employee_id, $request, 'inbound', 'reject')) return $deny;
+        }
         foreach ($receipt->items as $line) {
             if ($line->batch && (float) $line->batch->current_quantity != (float) $line->batch->initial_quantity) {
                 return response()->json(['success' => false, 'message' => 'Nguyên liệu "' . ($line->material?->name ?? '') . '" đã xuất dùng, không hủy được.'], 422);
@@ -355,6 +361,14 @@ class InboundReceiptController extends Controller
     {
         $apprBranch = InboundReceipt::where('id', $id)->value('branch_id');
         if ($apprBranch !== null && ($deny = $this->denyReceiptBranch($request, $apprBranch))) return $deny;
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự duyệt phiếu
+        // của mình. Kiểm trạng thái chờ nằm trong transaction dưới nên nạp
+        // trước 1 bản nhẹ: chỉ chặn khi phiếu đang nháp (đang chờ); phiếu đã
+        // xử lý để transaction trả lỗi trạng thái như cũ.
+        $preReceipt = InboundReceipt::find($id);
+        if ($preReceipt && $preReceipt->status === 'draft') {
+            if ($deny = \App\Support\SelfApprovalGuard::check($preReceipt, $preReceipt->created_by_user_id, $preReceipt->created_by_employee_id, $request, 'inbound', 'approve')) return $deny;
+        }
         // Sổ #75 (2026-11-04): tính cặp người duyệt TRƯỚC, truyền $request->user()
         // vào ids() — bản cũ gọi ids() không đối số nên chỉ thấy override của
         // đường Hub; duyệt TRỰC TIẾP bằng phiên NV thì rơi xuống fallback

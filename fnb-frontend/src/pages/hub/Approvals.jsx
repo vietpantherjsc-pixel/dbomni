@@ -30,6 +30,7 @@ const CSS = `
 .ap-meta{font-size:12px;color:#1f2937;margin-top:4px;}
 .ap-meta span{color:#8a93a6;}
 .ap-creator{font-size:11.5px;color:#8a93a6;margin-top:2px;}
+.ap-own{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#fdf0dc;color:#9a6a12;font-size:10.5px;font-weight:700;vertical-align:1px;}
 .ap-head{display:flex;align-items:center;gap:10px;padding:12px;}
 .ap-back{border:1px solid #e3e8f2;background:#fff;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;color:#24305E;min-height:44px;}
 .ap-hd-t{font-size:15px;font-weight:800;color:#24305E;flex:1;}
@@ -58,6 +59,8 @@ const CSS = `
 .ap-branchline{background:#fff7e6;border:1.5px solid #F5A623;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:800;color:#7c4a03;margin:0 12px 10px;}
 .ap-pin{width:100%;border:1.5px solid #e3e8f2;border-radius:12px;padding:12px;font-size:22px;font-weight:800;letter-spacing:10px;text-align:center;color:#24305E;margin:6px 0;}
 .ap-note{width:100%;border:1px solid #e3e8f2;border-radius:10px;padding:10px;font-size:13px;margin-top:6px;min-height:64px;}
+.ap-amt{width:100%;border:1.5px solid #e3e8f2;border-radius:12px;padding:12px;font-size:17px;font-weight:800;text-align:right;color:#24305E;margin:6px 0;min-height:48px;}
+.ap-sel{width:100%;border:1.5px solid #e3e8f2;border-radius:12px;padding:12px;font-size:14px;font-weight:700;color:#24305E;margin:6px 0;min-height:48px;background:#fff;}
 .ap-err{background:#fdecec;color:#b91c1c;border-radius:10px;padding:9px 12px;font-size:12.5px;font-weight:700;margin:8px 0;}
 .ap-warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:10px 12px;font-size:12.5px;margin:0 12px 10px;}
 .ap-more{display:block;width:calc(100% - 24px);margin:2px 12px 16px;border:1px solid #e3e8f2;background:#fff;border-radius:12px;padding:12px;font-size:13px;font-weight:700;color:#24305E;}
@@ -227,7 +230,7 @@ export function ApprovalsFlow({ token, emp, branchId, branchName, initialType, o
       {notice && <div className="ap-notice">{notice}</div>}
 
       {route.v === 'list' && (
-        <ListView key={'l' + route.type + branchId} A={A} type={route.type} branchName={branchName}
+        <ListView key={'l' + route.type + branchId} A={A} token={token} emp={emp} type={route.type} branchName={branchName}
           onBack={onBack} onOpen={(id) => setRoute({ v: 'detail', type: route.type, id })} onExpired={onExpired} />
       )}
       {route.v === 'detail' && (
@@ -243,7 +246,7 @@ export function ApprovalsFlow({ token, emp, branchId, branchName, initialType, o
   );
 }
 
-function ListView({ A, type, branchName, onBack, onOpen, onExpired }) {
+function ListView({ A, token, emp, type, branchName, onBack, onOpen, onExpired }) {
   const meta = TYPES_META[type] || {};
   const [items, setItems] = useState([]);
   const [listErr, setListErr] = useState(false); // UX 2026-10-26 (🟠T1)
@@ -286,7 +289,11 @@ function ListView({ A, type, branchName, onBack, onOpen, onExpired }) {
         <button key={it.id} className="ap-card" onClick={() => onOpen(it.id)}>
           <div className="r1"><span className="ap-code">{it.title}</span><span className="ap-wait">{waitLabel(it.created_at)}</span></div>
           <div className="ap-meta">{it.meta}</div>
-          {it.creator && <div className="ap-creator">Người tạo: {it.creator}</div>}
+          {(it.creator_name || it.creator) && (
+            <div className="ap-creator">Người tạo: {it.creator_name || it.creator}
+              {it.is_own && <span className="ap-own">Do bạn tạo</span>}
+            </div>
+          )}
         </button>
       ))}
       {!loading && items.length === 0 && <div className="ap-empty" style={{ margin: '0 12px' }}>Không có phiếu chờ 🎉</div>}
@@ -296,6 +303,193 @@ function ListView({ A, type, branchName, onBack, onOpen, onExpired }) {
           {loading ? 'Đang tải...' : 'Tải thêm'}
         </button>
       )}
+      {/* Remedy NV-G5 (2026-11-06): mục Công nợ chờ thu chỉ nằm trong màn Thu-chi, dưới danh sách chờ duyệt */}
+      {type === 'transaction' && (
+        <DebtsSection A={A} token={token} emp={emp} onExpired={onExpired} />
+      )}
+    </div>
+  );
+}
+
+// ---------------- Công nợ chờ thu (Remedy NV-G5, 2026-11-06) ----------------
+// Mục dưới danh sách chờ duyệt của màn Thu-chi: phiếu ĐÃ duyệt còn nợ (kể cả
+// phiếu không gắn đối tác). Tải độc lập với danh sách chờ duyệt; 403 (không có
+// finance.manage) thì ẩn hẳn. Ghi thanh toán qua POST /employee/debts/{id}/pay
+// — PIN step-up như duyệt phiếu, server ủy quyền nguyên vẹn vào pay().
+function DebtsSection({ A, token, emp, onExpired }) {
+  const [items, setItems] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [page, setPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [hidden, setHidden] = useState(false);
+  const [loadErr, setLoadErr] = useState(false);
+  const [payTarget, setPayTarget] = useState(null);
+  const [notice, setNotice] = useState('');
+
+  const load = async (p) => {
+    setLoading(true);
+    try {
+      const r = await axios.get(API + '/employee/debts', { ...A, params: { ...(A.params || {}), page: p } });
+      const d = (r.data && r.data.data) || [];
+      setItems((prev) => (p === 1 ? d : [...prev, ...d]));
+      if (r.data && r.data.summary) setSummary(r.data.summary);
+      setLastPage((r.data && r.data.pagination && r.data.pagination.last_page) || 1);
+      setPage(p);
+      setLoadErr(false);
+    } catch (e) {
+      if (e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
+      if (e && e.response && e.response.status === 403) { setHidden(true); return; }
+      setLoadErr(true);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(1); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const onPaid = (msg) => {
+    setPayTarget(null);
+    setNotice(msg);
+    setTimeout(() => setNotice(''), 5000);
+    load(1);
+  };
+
+  if (hidden) return null;
+  if (!summary && !loadErr) return null; // đang tải lần đầu — chưa có số thật thì không chiếm chỗ
+  if (summary && summary.count === 0) {
+    // Hết nợ: mục biến mất, chỉ giữ thông báo kết quả vừa ghi (nếu có)
+    return notice ? <div className="ap-notice" style={{ marginTop: 12 }}>{notice}</div> : null;
+  }
+
+  return (
+    <div className="ap-sec">
+      <div className="ap-title">💰 Công nợ chờ thu
+        {summary && <span className="ap-total">{summary.count} phiếu · còn nợ {fmtMoney(summary.total_remaining)}đ</span>}
+      </div>
+      {notice && <div className="ap-notice" style={{ margin: '0 0 10px' }}>{notice}</div>}
+      {loadErr && (
+        <div style={{ padding: '10px 12px', borderRadius: 12, background: '#fef2f2', color: '#b42318', fontSize: 13, marginBottom: 8 }}>
+          ⚠ Không tải được danh sách công nợ.
+          <button onClick={() => load(1)} style={{ marginLeft: 8, minHeight: 44, padding: '0 14px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700 }}>Thử lại</button>
+        </div>
+      )}
+      {items.map((it) => (
+        <div key={it.id} className="ap-card" style={{ margin: '0 0 8px', width: '100%', cursor: 'default' }}>
+          <div className="r1">
+            <span className="ap-code">{it.code}</span>
+            <span className="ap-wait">{it.type === 'income' ? 'Thu' : 'Chi'}{it.category_name ? ' · ' + it.category_name : ''}</span>
+          </div>
+          <div className="ap-meta">Đối tác: <b>{it.partner_name || 'Không đối tác'}</b></div>
+          <div className="ap-meta">Tổng {fmtMoney(it.amount)}đ · Đã trả {fmtMoney(it.paid_amount)}đ</div>
+          <div style={{ fontSize: 14.5, fontWeight: 800, color: '#b91c1c', marginTop: 4 }}>Còn nợ {fmtMoney(it.remaining)}đ</div>
+          <button className="ap-btn go" style={{ width: '100%', marginTop: 9, minHeight: 44, padding: '10px 8px', fontSize: 14 }} onClick={() => setPayTarget(it)}>Ghi thanh toán</button>
+        </div>
+      ))}
+      {loading && items.length === 0 && <div className="ap-empty">Đang tải...</div>}
+      {page < lastPage && (
+        <button className="ap-more" style={{ width: '100%', margin: '2px 0 4px' }} onClick={() => load(page + 1)} disabled={loading}>
+          {loading ? 'Đang tải...' : 'Tải thêm'}
+        </button>
+      )}
+      {payTarget && (
+        <DebtPaySheet A={A} token={token} emp={emp} debt={payTarget}
+          onClose={() => setPayTarget(null)} onPaid={onPaid} onExpired={onExpired} onReload={() => load(1)} />
+      )}
+    </div>
+  );
+}
+
+// Sheet ghi thanh toán 1 phiếu nợ — mẫu sheet của màn Chờ duyệt + PIN step-up.
+// Số tiền điền sẵn = còn nợ (trả đủ là ca thường nhất); ngày ghi nhận = hôm nay
+// (pay() tự mặc định, Hub không cho chọn lùi ngày).
+function DebtPaySheet({ A, token, emp, debt, onClose, onPaid, onExpired, onReload }) {
+  const [amount, setAmount] = useState(String(debt.remaining || ''));
+  const [method, setMethod] = useState('cash');
+  const [note, setNote] = useState('');
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const authCfg = cfg(token);
+
+  const submit = async () => {
+    if (busy) return;
+    const amt = Number(amount);
+    if (!amt || amt < 1) { setErr('Nhập số tiền thanh toán hợp lệ.'); return; }
+    setBusy(true); setErr('');
+    try {
+      let approvalToken;
+      try {
+        approvalToken = await ensureApprovalToken(authCfg, emp && emp.id, pin);
+      } catch (e2) {
+        if (e2 && e2.message === 'NEED_PIN') { setErr('Nhập mã PIN 6 số của bạn để xác nhận.'); setBusy(false); return; }
+        setErr(errMsg(e2, 'Mã PIN không đúng.')); setBusy(false); return;
+      }
+      const body = {
+        branch_id: Number((A.params || {}).branch_id) || undefined,
+        approval_token: approvalToken,
+        amount: amt,
+        payment_method: method,
+      };
+      if (note.trim()) body.note = note.trim();
+      const r = await axios.post(`${API}/employee/debts/${debt.id}/pay`, body, authCfg);
+      if (r.data && r.data.success) {
+        const remaining = (r.data.data && r.data.data.remaining) || 0;
+        onPaid(remaining > 0
+          ? `Đã ghi thanh toán ${fmtMoney(amt)}đ — ${debt.code} còn nợ ${fmtMoney(remaining)}đ`
+          : `Đã trả đủ — ${debt.code} chuyển Đã thanh toán ✅`);
+      } else {
+        setErr(errMsg(r, 'Ghi thanh toán thất bại.'));
+        if (onReload) onReload();
+      }
+    } catch (e) {
+      if (e && e.response && e.response.status === 401) { if (onExpired) onExpired(); return; }
+      if (e && e.response && e.response.data && e.response.data.code === 'PIN_REQUIRED') {
+        approvalTokenCache = { token: '', ts: 0, empId: 0 };
+        setErr('Phiên xác nhận PIN đã hết hạn — nhập lại PIN.');
+      } else {
+        // Mục 1.5 spec: lỗi server (vd số tiền vượt còn nợ vì người khác vừa ghi) → hiện nguyên thông điệp + tải lại mục
+        setErr(errMsg(e, 'Ghi thanh toán thất bại.'));
+        if (onReload) onReload();
+      }
+    } finally { setBusy(false); }
+  };
+
+  const numRow = (k, v, strong) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}>
+      <span style={{ color: '#8a93a6' }}>{k}</span>
+      <b style={strong ? { color: '#b91c1c', fontSize: 15 } : { color: '#24305E' }}>{v}</b>
+    </div>
+  );
+
+  return (
+    <div className="ap-modal" onClick={onClose}>
+      <div className="ap-box" onClick={(e) => e.stopPropagation()}>
+        <h4>Ghi thanh toán — {debt.code}</h4>
+        <p>{debt.type === 'income' ? 'Thu' : 'Chi'}{debt.category_name ? ' · ' + debt.category_name : ''} · Đối tác: {debt.partner_name || 'Không đối tác'}</p>
+        <div style={{ background: '#f7f9fd', borderRadius: 12, padding: '10px 12px', marginBottom: 6 }}>
+          {numRow('Tổng tiền', fmtMoney(debt.amount) + 'đ')}
+          {numRow('Đã trả', fmtMoney(debt.paid_amount) + 'đ')}
+          {numRow('Còn nợ', fmtMoney(debt.remaining) + 'đ', true)}
+        </div>
+        <label className="ap-note-lb">Số tiền thanh toán <span className="ap-req">(bắt buộc)</span></label>
+        <input className="ap-amt" type="number" inputMode="numeric" min="1" value={amount}
+          onChange={(e) => setAmount(e.target.value)} />
+        <label className="ap-note-lb">Hình thức</label>
+        <select className="ap-sel" value={method} onChange={(e) => setMethod(e.target.value)}>
+          <option value="cash">Tiền mặt</option>
+          <option value="transfer">Chuyển khoản</option>
+        </select>
+        <label className="ap-note-lb">Ghi chú (tùy chọn)</label>
+        <textarea className="ap-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Ghi chú lần thanh toán này..." />
+        <label className="ap-note-lb">Mã PIN của bạn <span className="ap-req">(xác nhận lại)</span></label>
+        <input className="ap-pin" type="password" inputMode="numeric" maxLength={6}
+          value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          placeholder="••••••" autoComplete="off" />
+        <div style={{ fontSize: 11.5, color: '#8a93a6', marginBottom: 4 }}>Nhập 1 lần, miễn nhắc lại trong 5 phút. Ngày ghi nhận = hôm nay.</div>
+        {err && <div className="ap-err">{err}</div>}
+        <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
+          <button className="ap-btn rej" style={{ borderColor: '#e3e8f2', color: '#24305E' }} onClick={onClose} disabled={busy}>Hủy bỏ</button>
+          <button className="ap-btn go" onClick={submit} disabled={busy}>{busy ? 'Đang ghi...' : 'Ghi thanh toán'}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -371,6 +565,8 @@ function DetailView({ A, token, emp, type, id, onBack, onActed, onExpired }) {
   const rec = data.record || {};
   const branchNames = data.branch_names || [];
   const canAct = !!data.can_act;
+  // Gói chặn tự duyệt (2026-11-06): phiếu của chính mình → khóa nút + chú thích
+  const isOwn = !!data.is_own;
 
   return (
     <div>
@@ -385,11 +581,14 @@ function DetailView({ A, token, emp, type, id, onBack, onActed, onExpired }) {
           : `📍 Chi nhánh của phiếu: ${branchNames[0] || ''}`}
       </div>
       <DetailBody type={type} rec={rec} />
-      {canAct && (
+      {canAct && !isOwn && (
         <div className="ap-sticky">
           <button className="ap-btn go" onClick={() => setConfirm('approve')}>Duyệt</button>
           <button className="ap-btn rej" onClick={() => setConfirm('reject')}>{data.reject_label || meta.rejectLabel}</button>
         </div>
+      )}
+      {canAct && isOwn && (
+        <div className="ap-warn">Bạn là người tạo — cần người khác duyệt</div>
       )}
       {!canAct && (
         <div className="ap-warn">Phiếu này đã được xử lý — chỉ xem lại, không thể duyệt/từ chối lại.</div>

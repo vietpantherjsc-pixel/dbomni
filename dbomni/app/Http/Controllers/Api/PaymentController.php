@@ -45,13 +45,16 @@ class PaymentController extends Controller
             return response()->json(['success' => false, 'message' => 'Kênh ZaloPay chưa được bật.'], 422);
         }
 
-        // Quy tắc COD: chỉ mang về/hẹn giờ (nếu bật)
-        if ($channel === ZaloPaymentService::CHANNEL_COD && $cfg['cod_takeaway_only']) {
-            $orderType = $request->input('order_type');
-            if ($orderType === 'delivery') {
+        // Quy tắc COD cho đơn GIAO HÀNG — spec phí giao một nguồn mục 5.1:
+        // công tắc riêng delivery_cod_enabled (mặc định TẮT) quyết định, KHÔNG
+        // còn do cờ cod_takeaway_only (cờ đó thu hẹp về chốt chặn ở đường dự
+        // phòng trong OnlineOrderController@store). Đơn giao qua kênh COD chỉ
+        // chạy khi cả kênh COD lẫn công tắc này cùng bật (kênh đã kiểm ở trên).
+        if ($channel === ZaloPaymentService::CHANNEL_COD && $request->input('order_type') === 'delivery') {
+            if (empty($cfg['delivery_cod_enabled'])) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Trả tại quán chỉ áp dụng cho đơn mang về/hẹn giờ.',
+                    'message' => 'Đơn giao hàng hiện chỉ nhận chuyển khoản. Vui lòng chọn Chuyển khoản/VietQR.',
                 ], 422);
             }
         }

@@ -9,6 +9,17 @@ const noteExpired = (e) => {
         alert('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
     }
 };
+
+// Gói chặn tự duyệt (2026-11-06): id tài khoản User đang đăng nhập Admin +
+// kiểm "phiếu này do chính mình tạo" theo phía User của người tạo — chỉ để
+// khóa nút phía client, server 422 SELF_APPROVAL_BLOCKED là cổng cứng.
+function myUserId() {
+    try { return JSON.parse(localStorage.getItem('user') || 'null')?.id ?? null; } catch { return null; }
+}
+function isOwnByUser(creatorUserId) {
+    const me = myUserId();
+    return me != null && creatorUserId != null && Number(creatorUserId) === Number(me);
+}
 import axios from 'axios';
 import SearchInput from '../../components/SearchInput';
 import { useParams } from 'react-router-dom';
@@ -1257,8 +1268,9 @@ function InboundTab({ materials, onDone, branchId, branches }) {
                                         {/* K-R1: duyệt/hủy phiếu nháp */}
                                         {r.status === 'draft' && (
                                             <>
-                                                <button onClick={() => approveReceipt(r.id)} className="text-green-600 text-[12px] font-medium mr-3">Duyệt</button>
-                                                <button onClick={() => cancelReceipt(r.id)} className="text-red-500 text-[12px]">Hủy</button>
+                                                <button onClick={() => approveReceipt(r.id)} disabled={isOwnByUser(r.created_by_user_id)} className="text-green-600 text-[12px] font-medium mr-3 disabled:opacity-40">Duyệt</button>
+                                                <button onClick={() => cancelReceipt(r.id)} disabled={isOwnByUser(r.created_by_user_id)} className="text-red-500 text-[12px] disabled:opacity-40">Hủy</button>
+                                                {isOwnByUser(r.created_by_user_id) && <div className="text-[11px] text-amber-700 font-medium">Bạn là người tạo — cần người khác duyệt</div>}
                                             </>
                                         )}
                                         {r.status === 'confirmed' && (
@@ -1744,8 +1756,9 @@ function TransferTab({ materials, branches, branchId, onDone }) {
                                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                                         {t.status === 'draft' && (
                                             <>
-                                                <button onClick={() => doConfirm(t.id)} className="text-green-600 text-[12px] font-medium mr-3">✓ Chốt</button>
-                                                <button onClick={() => doCancel(t.id)} className="text-red-500 text-[12px]">Hủy</button>
+                                                <button onClick={() => doConfirm(t.id)} disabled={isOwnByUser(t.created_by_user_id ?? t.requested_by)} className="text-green-600 text-[12px] font-medium mr-3 disabled:opacity-40">✓ Chốt</button>
+                                                <button onClick={() => doCancel(t.id)} disabled={isOwnByUser(t.created_by_user_id ?? t.requested_by)} className="text-red-500 text-[12px] disabled:opacity-40">Hủy</button>
+                                                {isOwnByUser(t.created_by_user_id ?? t.requested_by) && <div className="text-[11px] text-amber-700 font-medium">Bạn là người tạo — cần người khác duyệt</div>}
                                             </>
                                         )}
                                     </td>
@@ -3172,11 +3185,14 @@ function OutboundTab({ materials, onDone, branchId, branches }) {
                             <button onClick={() => setDetail(null)} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-[14px]">Đóng</button>
                             {detail.status === 'draft' && (
                                 <>
-                                    <button onClick={() => doCancel(detail.id)} className="flex-1 px-4 py-2.5 border border-red-300 text-red-600 rounded-lg text-[14px]">Hủy phiếu</button>
-                                    <button onClick={() => doConfirm(detail.id)} className="flex-1 px-4 py-2.5 bg-[#24305E] text-white rounded-lg text-[14px] font-semibold">Chốt xuất kho</button>
+                                    <button onClick={() => doCancel(detail.id)} disabled={isOwnByUser(detail.created_by)} className="flex-1 px-4 py-2.5 border border-red-300 text-red-600 rounded-lg text-[14px] disabled:opacity-40">Hủy phiếu</button>
+                                    <button onClick={() => doConfirm(detail.id)} disabled={isOwnByUser(detail.created_by)} className="flex-1 px-4 py-2.5 bg-[#24305E] text-white rounded-lg text-[14px] font-semibold disabled:opacity-40">Chốt xuất kho</button>
                                 </>
                             )}
                         </div>
+                        {detail.status === 'draft' && isOwnByUser(detail.created_by) && (
+                            <div className="text-[12px] text-amber-700 font-medium mt-2">Bạn là người tạo — cần người khác duyệt</div>
+                        )}
                     </div>
                 </div>
             )}

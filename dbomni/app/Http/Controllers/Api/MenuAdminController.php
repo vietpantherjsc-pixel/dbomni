@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Menu;
 use App\Models\Product;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -48,6 +49,7 @@ class MenuAdminController extends Controller
             'description' => 'nullable|string|max:255',
         ]);
         $menu = Menu::create($v + ['sort_order' => Menu::max('sort_order') + 1]);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã tạo thực đơn.', 'data' => $menu], 201);
     }
 
@@ -60,12 +62,14 @@ class MenuAdminController extends Controller
             'is_active' => 'boolean',
         ]);
         $menu->update($v);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã cập nhật.', 'data' => $menu]);
     }
 
     public function destroy(int $id): JsonResponse
     {
         Menu::findOrFail($id)->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã xóa thực đơn.']);
     }
 
@@ -78,6 +82,7 @@ class MenuAdminController extends Controller
                 Menu::where('id', $id)->update(['sort_order' => $i]);
             }
         });
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã lưu thứ tự.']);
     }
 
@@ -88,6 +93,7 @@ class MenuAdminController extends Controller
         $v = $request->validate(['product_id' => 'required|integer|exists:products,id']);
         $max = DB::table('menu_product')->where('menu_id', $id)->max('sort_order') ?? -1;
         $menu->products()->syncWithoutDetaching([$v['product_id'] => ['sort_order' => $max + 1]]);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã thêm món vào thực đơn.']);
     }
 
@@ -95,6 +101,7 @@ class MenuAdminController extends Controller
     public function detachProduct(int $id, int $productId): JsonResponse
     {
         Menu::findOrFail($id)->products()->detach($productId);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã bớt món khỏi thực đơn.']);
     }
 
@@ -111,6 +118,7 @@ class MenuAdminController extends Controller
                     ->update(['sort_order' => $i]);
             }
         });
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã lưu thứ tự món.']);
     }
 

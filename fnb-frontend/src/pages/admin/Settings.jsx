@@ -24,6 +24,7 @@ import PrintTemplateSettings from './PrintTemplateSettings'; // Gói 52
 import StaffHubQr from './StaffHubQr'; // Gói 59: QR trang hub nhân viên
 import DeliverySettings from './DeliverySettings'; // Gói 60: cấu hình giao hàng
 import ZaloPaymentSettings from './ZaloPaymentSettings'; // SPEC-01: thanh toán Zalo Mini App
+import PrivacyPolicySettings from './PrivacyPolicySettings'; // Gói chính sách Mini App vào Cài đặt Admin
 import SharedCategoryManager from './SharedCategoryManager'; // Spec danh mục dùng chung: 13 tab
 import { API } from '../../utils/api';
 
@@ -1005,6 +1006,11 @@ const Settings = () => {
                         Chuyển khoản (BANK) / Trả tại quán (COD) qua Checkout SDK. 0đ phí giao dịch.
                     </p>
                     <ZaloPaymentSettings onDirty={() => markDirty('zalopay')} onSaved={() => clearDirty('zalopay')} />
+                </CollapsibleCard>
+
+                {/* Gói chính sách Mini App vào Cài đặt Admin: thẻ NGAY SAU thẻ thanh toán Zalo (cụm Mini App) */}
+                <CollapsibleCard title="Chính sách — Điều khoản Mini App" dirty={!!dirtyMap.privacy}>
+                    <PrivacyPolicySettings onDirty={() => markDirty('privacy')} onSaved={() => clearDirty('privacy')} />
                 </CollapsibleCard>
 
                 {/* Spec danh mục dùng chung: 13 tab */}

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Support\CatalogCache;
 use Illuminate\Http\Request;
 
 class CategoryController extends Controller
@@ -24,6 +25,7 @@ class CategoryController extends Controller
         ]);
 
         $category = Category::create($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($category, 201);
     }
 
@@ -42,12 +44,14 @@ class CategoryController extends Controller
         ]);
 
         $category->update($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($category);
     }
 
     public function destroy(Category $category)
     {
         $category->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['message' => 'Đã xóa danh mục thành công']);
     }
 }

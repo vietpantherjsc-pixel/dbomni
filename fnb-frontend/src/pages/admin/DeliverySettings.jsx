@@ -121,8 +121,8 @@ const DeliverySettings = ({ onDirty, onSaved } = {}) => {
                     <option value="lalamove">Lalamove</option>
                 </select>
             )}
-            {row('Ngưỡng failover (phút)', 'Quá thời gian chưa có tài xế → tự chuyển hãng dự phòng', num('delivery_failover_timeout_minutes', 'phút'))}
-            {row('Trần chênh failover (đ/đơn)', 'Quán chịu chênh trong trần; vượt trần báo khách xác nhận lại', num('delivery_failover_max_diff', 'đ'))}
+            {row('Cảnh báo tìm tài xế quá lâu (phút)', 'Quá thời gian chưa có tài xế → KDS cảnh báo, NV quyết chuyển Quán Tự Đặt (không còn tự chuyển hãng)', num('delivery_failover_timeout_minutes', 'phút'))}
+            {row('Trần quán chịu phí ship (đ/đơn)', 'Trần phần quán chịu khi đặt ship tại KDS; vượt trần → cảnh báo đỏ trong popup đặt + ghi log đối soát', num('delivery_failover_max_diff', 'đ'))}
             {row('Ngưỡng hỗ trợ phí ship (đ)', 'Đơn từ mức này → quán hỗ trợ phí ship', num('delivery_support_threshold', 'đ'))}
             {row('Mức hỗ trợ phí ship (đ)', 'Số tiền quán hỗ trợ mỗi đơn đạt ngưỡng', num('delivery_support_amount', 'đ'))}
             {loadErr && (<div className="text-[13px] mt-3" style={{ color: 'var(--m-danger)' }}>⚠ Chưa tải được cấu hình hiện tại — nút Lưu đang KHÓA để tránh ghi đè cấu hình thật bằng giá trị mặc định. Tải lại trang để thử lại.</div>)}

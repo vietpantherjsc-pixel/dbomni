@@ -117,6 +117,10 @@ class CustomerController extends Controller
             'phone' => 'required|string|max:20|unique:customers,phone',
             'birthday' => 'nullable|date',
             'note' => 'nullable|string|max:255',
+        ], [
+            // Delta form sửa khách (2026-11-07): câu lỗi trùng SĐT tiếng Việt
+            // thay cho mặc định tiếng Anh của Laravel.
+            'phone.unique' => 'Số điện thoại này đã thuộc về một khách khác.',
         ]);
 
         $customer = DB::transaction(function () use ($validated) {
@@ -153,6 +157,10 @@ class CustomerController extends Controller
             // đa 150 ký tự, KHÔNG unique; để trống = xóa). Sửa ở Admin KHÔNG
             // ghi email_added_at (cột đó chỉ ghi hành vi tự nguyện của khách).
             'email' => 'nullable|email|max:150',
+        ], [
+            // Delta form sửa khách (2026-11-07): câu lỗi trùng SĐT tiếng Việt
+            // thay cho mặc định tiếng Anh của Laravel.
+            'phone.unique' => 'Số điện thoại này đã thuộc về một khách khác.',
         ]);
         if (array_key_exists('email', $validated)) {
             $validated['email'] = ($validated['email'] ?? null) !== null && trim((string) $validated['email']) !== ''

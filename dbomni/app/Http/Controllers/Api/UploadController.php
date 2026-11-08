@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Branch;
 use App\Models\Setting;
+use App\Support\CatalogCache;
 use App\Support\MediaFilename;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -70,6 +71,7 @@ class UploadController extends Controller
             Setting::set('shop_cover_url', $url);
         }
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'data' => ['url' => $url]]);
     }
 

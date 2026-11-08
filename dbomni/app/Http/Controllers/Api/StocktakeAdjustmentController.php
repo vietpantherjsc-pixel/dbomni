@@ -39,6 +39,9 @@ class StocktakeAdjustmentController extends Controller
         if (!$material) {
             return response()->json(['success' => false, 'message' => 'Nguyên liệu không còn tồn tại.'], 422);
         }
+        // Gói chặn tự duyệt (2026-11-06): người chốt kiểm kê sinh đề xuất
+        // (requested_by_employee_id) không được tự duyệt đề xuất của mình.
+        if ($deny = \App\Support\SelfApprovalGuard::check($adj, null, $adj->requested_by_employee_id, $request, 'stocktake_adjustment', 'approve')) return $deny;
 
         try {
             DB::transaction(function () use ($adj, $material, $actor) {
@@ -141,6 +144,8 @@ class StocktakeAdjustmentController extends Controller
         $v = $request->validate(['note' => 'nullable|string|max:500']);
         $adj = StocktakeAdjustment::where('status', 'pending')->findOrFail($id);
         $actor = $request->user();
+        // Gói chặn tự duyệt (2026-11-06): người sinh đề xuất không được tự từ chối.
+        if ($deny = \App\Support\SelfApprovalGuard::check($adj, null, $adj->requested_by_employee_id, $request, 'stocktake_adjustment', 'reject')) return $deny;
         $adj->update([
             'status' => 'rejected',
             'approved_by_user_id' => $actor instanceof \App\Models\User ? $actor->id : null,

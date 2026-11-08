@@ -83,11 +83,13 @@ class OutboundController extends Controller
         $employeeId = $isEmployee ? (int) $actor->id : ($v['employee_id'] ?? null);
         // Sổ #22 (2026-11-04): created_by là khóa ngoại sang users — NV tạo qua Hub
         // mà ghi id NHÂN VIÊN vào đây là vỡ FK 1452 → 500 (log VPS 17:54:31).
-        // Người tạo phía NV đã nằm ở employee_id (mọi nơi hiển thị đều đọc cột đó,
-        // created_by không có nơi đọc) → actor là Employee thì để null, Admin giữ nguyên.
-        $createdBy = $isEmployee ? null : $request->user()?->id;
+        // Gói chặn tự duyệt (2026-11-06): phía NV nay ghi vào cột riêng
+        // created_by_employee_id (migration 000100) qua ApprovalActor — cặp
+        // (created_by, created_by_employee_id) là dữ kiện người tạo tường minh.
+        // employee_id giữ nguyên ngữ nghĩa phụ trách/gán việc ở trên, không đụng.
+        [$createdBy, $createdByEmployeeId] = \App\Support\ApprovalActor::ids($actor);
 
-        $receipt = DB::transaction(function () use ($v, $request, $branchId, $employeeId, $createdBy) {
+        $receipt = DB::transaction(function () use ($v, $request, $branchId, $employeeId, $createdBy, $createdByEmployeeId) {
             $r = OutboundReceipt::create([
                 'code' => OutboundReceipt::nextCode(),
                 'branch_id' => $branchId,
@@ -97,6 +99,7 @@ class OutboundController extends Controller
                 'status' => 'draft',
                 'total_quantity' => 0,
                 'created_by' => $createdBy,
+                'created_by_employee_id' => $createdByEmployeeId,
             ]);
 
             $total = 0;
@@ -155,6 +158,12 @@ class OutboundController extends Controller
                 'message' => 'Chỉ chốt được phiếu đang ở trạng thái nháp.',
             ], 422);
         }
+
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự chốt phiếu
+        // của mình. Phân giải người tạo: phiếu mới dùng cặp tường minh; phiếu
+        // cũ (created_by_employee_id chưa có) — created_by null thì employee_id
+        // chính là người tạo (điểm tạo duy nhất ép = actor ở nhánh NV).
+        if ($deny = \App\Support\SelfApprovalGuard::check($receipt, $receipt->created_by, $receipt->created_by_employee_id ?? ($receipt->created_by === null ? $receipt->employee_id : null), $request, 'outbound', 'approve')) return $deny;
 
         // Sổ #97 (2026-11-05): lấy actor TRƯỚC closure — bản cũ gọi
         // $request->user() trong thân mà use không bắt $request → nổ
@@ -231,6 +240,10 @@ class OutboundController extends Controller
                 'message' => 'Chỉ hủy được phiếu nháp. Phiếu đã chốt không thể hủy để giữ toàn vẹn số liệu kho.',
             ], 422);
         }
+
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự hủy phiếu
+        // của mình từ hàng chờ (phân giải người tạo như ở confirm()).
+        if ($deny = \App\Support\SelfApprovalGuard::check($receipt, $receipt->created_by, $receipt->created_by_employee_id ?? ($receipt->created_by === null ? $receipt->employee_id : null), $request, 'outbound', 'reject')) return $deny;
 
         // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
         // Sổ #77 (2026-11-04): truyền $request->user() — NV hủy TRỰC TIẾP cũng có vết.

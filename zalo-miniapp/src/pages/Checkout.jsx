@@ -8,7 +8,7 @@ import ZmIcon from '../components/ZmIcon';
 import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
 import { findPlaceByName } from '../utils/placeName'; // Sổ #69: khớp tên tỉnh/phường có chuẩn hóa
-import { DateField, TimeField, toApiDate, validTime, formatPhone } from '../utils/checkoutFields.jsx';
+import { DateField, TimeField, toApiDate, validTime, formatPhone, validPhone } from '../utils/checkoutFields.jsx';
 import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4: ô đồng ý dùng chung với mặt tiền đăng ký
 import { useShop } from '../store';
 
@@ -32,11 +32,10 @@ export default function Checkout() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   // Gói Đón Bình Minh (2026-10-28): ô nhập tay mã người giới thiệu — prefilled
-  // từ zm_ref khi đến từ link mời; khách đã có lịch sử đơn thì ẩn (mã mời chỉ
-  // có ý nghĩa ở đơn đầu; backend vốn chỉ kích hoạt CP-02 cho đơn đầu thật).
+  // từ zm_ref khi đến từ link mời. (Sửa 2026-11-07 #11: ô luôn có trong cụm
+  // thu gọn; việc mã có hiệu lực hay không do backend quyết theo hồ sơ khách.)
   const [refCode, setRefCodeState] = useState(() => getRef());
   const [refFromLink] = useState(() => !!getRef());
-  const [hasPriorOrders, setHasPriorOrders] = useState(false);
   const updateRefCode = (v) => { setRefCodeState(v); setRef(v); };
   const [provinces, setProvinces] = useState([]);
   const [province, setProvince] = useState('');
@@ -112,6 +111,9 @@ export default function Checkout() {
   const [customerId, setCustomerId] = useState(null);
   // Spec mật khẩu §5.4/§7.3: email tự nguyện + ô đồng ý NĐ 13 ở đơn đầu.
   const [email, setEmail] = useState('');
+  // Mục thu gọn Email + Mã giới thiệu (phán Đại Vương 2026-11-07): mặc định
+  // đóng cho gọn form; mở sẵn khi có mã mời gắn từ link để khách thấy mã.
+  const [moreInfoOpen, setMoreInfoOpen] = useState(() => !!getRef());
   const [consentChecked, setConsentChecked] = useState(false);
   const [hasConsented, setHasConsented] = useState(null); // null = chưa rõ
   const [consentNeeded, setConsentNeeded] = useState(false);
@@ -153,13 +155,13 @@ export default function Checkout() {
   const [suggests, setSuggests] = useState([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [pickedCoord, setPickedCoord] = useState(null); // {lat, lng} khi user chọn gợi ý
-  // Gói 60: báo giá giao hàng live từ hãng (AhaMove/Lalamove qua backend)
-  const [quote, setQuote] = useState(null); // {packages:[{code,name,fee,customer_pays,shop_support,provider...}], ...}
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
-  const [deliveryPkg, setDeliveryPkg] = useState('nhanh'); // gói khách chọn
-  const [deliveryReady, setDeliveryReady] = useState(false); // backend đã cấu hình hãng giao hàng
-  const quoteTimer = useRef(null);
+  // Spec phí giao một nguồn mục 5.2/5.3 (2026-11-06): đơn GIAO HÀNG ở giai
+  // đoạn đầu chỉ nhận chuyển khoản — lựa chọn thu hộ được ẨN HẲN khỏi
+  // checkout khi công tắc delivery_cod_enabled tắt (không hiện mờ/khóa như
+  // trước). Bật công tắc → hiện "Thanh toán khi nhận hàng" ở nhánh ZaloPay.
+  const codDeliveryOn = !!(zaloCfg && zaloCfg.cod_enabled && zaloCfg.delivery_cod_enabled);
+  const codHiddenForDelivery = type === 'delivery' && !codDeliveryOn;
+
   // Audit UX 2026-10-21 (hạng 3): client_key CỐ ĐỊNH theo phiên giỏ — sinh 1 lần khi
   // giỏ thay đổi, KHÔNG sinh lại mỗi lần bấm Đặt hàng (bấm lại sau timeout mạng phải
   // dùng key cũ để server nhận diện trùng, tránh tạo 2 đơn).
@@ -172,12 +174,6 @@ export default function Checkout() {
     items: cart.map((l) => [l.product.id, l.optionId || 0, (l.optionIds || []).join(','), l.qty, l.unitPrice]),
   });
   useEffect(() => { clientKeyRef.current = newClientKey(); }, [cartSig]);
-  // Audit UX 2026-10-21 (hạng 6): bản gương mới nhất của báo giá — place() đọc qua ref
-  // để tự chờ quote xong rồi đặt tiếp, thay vì chặn bắt khách bấm lại.
-  const quoteLiveRef = useRef({ loading: false, pkg: null, code: 'nhanh' });
-  useEffect(() => {
-    api.deliveryConfig().then((c) => setDeliveryReady(!!c?.ready)).catch(() => {});
-  }, []);
   // Gói 55 p10: kiểm tra trạng thái mở cửa — đóng cửa thì chỉ nhận hẹn giờ
   const st = openStatus(branch);
   const isClosed = st && !st.open;
@@ -228,6 +224,14 @@ export default function Checkout() {
       const g = await geocodeAddress(fullAddress() + ', Việt Nam');
       const d = haversineKm(Number(branch.latitude), Number(branch.longitude), g.lat, g.lng);
       setKm(Math.round(d * 10) / 10);
+      // Delta phí giao (TESTER §AS, 2026-11-06): GHIM luôn tọa độ vừa geocode
+      // được vào pickedCoord — trước đây tọa độ này chỉ dùng để HIỂN THỊ km,
+      // payload không gửi kèm nên server rơi về nấc thiếu-tọa-độ (phí 0 +
+      // ghi chú quán xác nhận) dù khách đã thấy phí. Ghim ở đây thì số hiển
+      // thị ở modal/checkout và số server chốt trên đơn là MỘT (spec 3.1).
+      // Đổi địa chỉ thì các ô nhập đã tự xóa pickedCoord nên tính lại đúng;
+      // geocode thất bại vẫn giữ nấc thiếu-tọa-độ như cũ.
+      setPickedCoord({ lat: g.lat, lng: g.lng });
     } catch (e) { setKm(null); setGeoError(true); }
     finally { setGeoLoading(false); }
   };
@@ -324,45 +328,6 @@ export default function Checkout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [street, ward, province, type]);
 
-  // Gói 60: gọi báo giá live khi có địa chỉ giao đầy đủ (debounce 1s).
-  // Quá 8s chưa có kết quả → dùng phí nội bộ cũ (không chặn đặt đơn quá lâu).
-  useEffect(() => {
-    if (type !== 'delivery') { setQuote(null); setQuoteError(''); return; }
-    if (!branch?.id || !street.trim() || !ward || !province) { setQuote(null); setQuoteError(''); return; }
-    clearTimeout(quoteTimer.current);
-    quoteTimer.current = setTimeout(async () => {
-      setQuoteLoading(true); setQuoteError('');
-      const addr = fullAddress();
-      const timeoutMs = 8000;
-      try {
-        const data = await Promise.race([
-          api.deliveryQuote({
-            branch_id: branch.id,
-            dropoff_address: addr,
-            dropoff_lat: pickedCoord?.lat || null,
-            dropoff_lng: pickedCoord?.lng || null,
-            subtotal,
-            cod_amount: payment === 'pay_at_store' ? subtotal : 0,
-          }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
-        ]);
-        setQuote(data);
-        // Mặc định gói Nhanh (rẻ nhất) theo quyết định đã chốt
-        const hasNhanh = (data.packages || []).some((p) => p.code === 'nhanh');
-        setDeliveryPkg(hasNhanh ? 'nhanh' : (data.packages[0]?.code || 'nhanh'));
-      } catch (e) {
-        // Hãng không báo được giá → fallback phí nội bộ cũ; nếu cũng không có thì báo lỗi
-        setQuote(null);
-        setQuoteError(e.message === 'timeout'
-          ? 'Đang tính phí ship — vui lòng đợi giây lát.'
-          : (e.message || 'Chưa giao được tới địa chỉ này.'));
-      } finally {
-        setQuoteLoading(false);
-      }
-    }, 1000);
-    return () => clearTimeout(quoteTimer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [street, ward, province, type, branch?.id, subtotal, payment]);
 
   useEffect(() => {
     if (!phone || phone.length < 9) return;
@@ -387,9 +352,6 @@ export default function Checkout() {
           setHasConsented(!!c.has_consented);
           if (c.has_consented === false) setConsentNeeded(true);
           if (c.email) setEmail((prev) => prev || c.email);
-          // Gói Đón Bình Minh: khách đã từng có đơn (đã tích lũy chi tiêu hoặc
-          // còn đơn gần đây) → ẩn ô mã người giới thiệu ở form bên dưới.
-          setHasPriorOrders((Number(c.total_spent) || 0) > 0 || (c.orders || []).length > 0);
           api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: r là mảng thuần (req đã bóc phong bì)
           return api.eligiblePromotions({ ...payload, customer_id: c.id, phone: formatPhone(phone), member_code: getProfile()?.member_code || '' });
         }
@@ -434,17 +396,15 @@ export default function Checkout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offers]);
 
-  // Gói 60: phí ship ưu tiên từ báo giá live của hãng (đã trừ phần quán hỗ trợ);
-  // chưa có báo giá thì dùng cách tính nội bộ cũ.
-  const quotePkg = quote?.packages?.find((p) => p.code === deliveryPkg) || quote?.packages?.[0];
-  const shipFee = type === 'delivery'
-    ? (quotePkg ? quotePkg.customer_pays : (km != null && shipCfg ? calcShipFee(km, shipCfg) : 0))
-    : 0;
-  const shipShopSupport = quotePkg ? quotePkg.shop_support : 0;
-  useEffect(() => {
-    quoteLiveRef.current = { loading: quoteLoading, pkg: quotePkg || null, code: deliveryPkg };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quoteLoading, quote, deliveryPkg]);
+  // Spec phí giao MỘT NGUỒN (2026-11-06): phí hiển thị = đúng công thức nội
+  // bộ server sẽ chốt (haversine tọa độ ghim + bảng phí), trừ phần quán hỗ
+  // trợ theo cấu hình — modal địa chỉ, tổng checkout và đơn đã tạo khớp nhau
+  // theo cấu trúc. Không còn số nào từ báo giá hãng ở đường khách.
+  const shipFeeGross = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
+  const shipShopSupport = type === 'delivery' && shipCfg && subtotal >= (Number(shipCfg.support_threshold) || 0)
+    ? Math.min(Number(shipCfg.support_amount) || 0, shipFeeGross) : 0;
+  const shipFee = Math.max(0, shipFeeGross - shipShopSupport);
+
   // ===== Gói Ưu đãi hợp nhất (2026-10-31): PHÂN XỬ HIỂN THỊ §5d =====
   // Bất biến sống còn: TỔNG HIỂN THỊ = SỐ SERVER THU. Mọi số đầu vào do server
   // trả (số giảm từng mã, cờ cộng dồn, trần stack_cap_amount); client chỉ chạy
@@ -579,6 +539,8 @@ export default function Checkout() {
   const goSummary = async () => {
     setFormErr('');
     if (!name.trim() || !phone.trim()) { setFormErr('Nhập tên và số điện thoại ở phần thông tin nhận hàng phía trên.'); return; }
+    // Luật SĐT 2026-11-07: bắt đầu bằng 0 thì phải đủ đúng 10 số.
+    if (!validPhone(phone)) { setFormErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     // 🟠8: có mã voucher chưa validate (hoặc khác mã đã validate) → validate trước khi
     // sang bước 2 để tổng hiển thị ở bước 2 đã gồm số giảm/không gồm mã sai.
     const vcode = voucher.trim().toUpperCase();
@@ -613,21 +575,8 @@ export default function Checkout() {
     if (placing) return;
     setPlacing(true);
     try {
-      // Audit UX 2026-10-21 (hạng 6): đang tính phí ship thì TỰ CHỜ quote xong (tối đa 10s)
-      // rồi đặt tiếp — không chặn bắt khách bấm lại như trước.
-      if (type === 'delivery') {
-        let waited = 0;
-        while (quoteLiveRef.current.loading && waited < 10000) {
-          await new Promise((r) => setTimeout(r, 300));
-          waited += 300;
-        }
-      }
-      const livePkg = type === 'delivery' ? quoteLiveRef.current.pkg : null;
-      // Gói 60: đã cấu hình hãng mà báo giá lỗi và không có phí dự phòng → chặn (checklist #5)
-      if (type === 'delivery' && deliveryReady && !livePkg && km == null) {
-        setFormErr('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
-        return;
-      }
+      // Spec phí giao MỘT NGUỒN: không còn bước chờ/báo giá hãng ở đường
+      // khách — địa chỉ thiếu tọa độ vẫn đặt được (phí để quán xác nhận).
       let scheduledAt = null;
       if (type === 'scheduled') {
         const d = toApiDate(schedDate);
@@ -666,6 +615,8 @@ export default function Checkout() {
       if (useZaloPay) {
         if (effChannel === 'BANK' && !zaloCfg.bank_available && zaloCfg.cod_enabled) effChannel = 'COD';
         if (effChannel === 'COD' && !zaloCfg.cod_enabled && zaloCfg.bank_available) effChannel = 'BANK';
+        // Đơn giao khi thu hộ đang tắt: COD bị ẩn — kênh đang chọn rơi về BANK
+        if (effChannel === 'COD' && type === 'delivery' && !codDeliveryOn) effChannel = 'BANK';
         if (effChannel !== payChannel) setPayChannel(effChannel);
       }
       const orderPayload = {
@@ -685,12 +636,13 @@ export default function Checkout() {
         ward: type === 'delivery' ? wardName() : null,
         distance_km: type === 'delivery' ? km : null,
         delivery_note: type === 'delivery' && deliveryNote.trim() ? deliveryNote.trim() : null,
-        // Gói 60: gói giao hàng khách chọn + phí đã khóa lúc chốt đơn (checklist #6)
-        // (đọc từ quoteLiveRef — bản mới nhất sau khi chờ quote, tránh closure cũ)
-        delivery_package: type === 'delivery' ? (quoteLiveRef.current.code || deliveryPkg) : null,
-        delivery_quoted_fee: type === 'delivery' && livePkg ? livePkg.fee : null,
-        delivery_provider: type === 'delivery' ? livePkg?.provider || null : null,
-        // Gói 61b: tọa độ điểm giao để hãng báo giá/tạo đơn chính xác
+        // Spec phí giao MỘT NGUỒN: khách không chọn hãng/gói nữa — quán điều
+        // phối hãng sau khi có đơn; phí do server chốt theo bảng nội bộ.
+        delivery_package: null,
+        delivery_quoted_fee: null,
+        delivery_provider: null,
+        // Gói 61b + spec phí giao một nguồn: tọa độ điểm giao GHIM tại đây —
+        // server tính phí từ đúng cặp tọa độ này và điều phối hãng cũng dùng nó
         delivery_dropoff_lat: type === 'delivery' ? pickedCoord?.lat || null : null,
         delivery_dropoff_lng: type === 'delivery' ? pickedCoord?.lng || null : null,
         scheduled_at: scheduledAt,
@@ -837,12 +789,50 @@ export default function Checkout() {
             <div className="zm-field">
               <label>Số điện thoại * <span style={{ color: '#888', fontWeight: 400 }}>(để tích điểm thành viên)</span></label>
               <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
+              {phone && !validPhone(phone) && (
+                <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+              )}
             </div>
-            {/* Spec mật khẩu §7.3: email tự nguyện ở checkout — chỉ điền vào
-                hồ sơ khi hồ sơ đang trống (server quyết), không bắt buộc. */}
-            <div className="zm-field">
-              <label>Email <span style={{ color: '#888', fontWeight: 400 }}>(không bắt buộc — chỉ dùng cho thông báo bảo mật)</span></label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email của bạn" type="email" maxLength={150} />
+            {/* Mục thu gọn (phán Đại Vương 2026-11-07): Email + Mã người giới
+                thiệu dồn vào một mục riêng mặc định đóng cho gọn form. Giá trị
+                đã nhập vẫn gửi đi y nguyên kể cả khi mục đang đóng. */}
+            <div style={{ margin: '0 0 6px' }}>
+              <button type="button" onClick={() => setMoreInfoOpen(!moreInfoOpen)} aria-expanded={moreInfoOpen}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', background: 'none', border: 0, padding: '6px 0', cursor: 'pointer', color: '#24305E', fontSize: 13.5, fontWeight: 700, textAlign: 'left', minHeight: 44 }}>
+                <span style={{ flex: 1 }}>Thêm email / mã giới thiệu (không bắt buộc)</span>
+                <span style={{ fontSize: 12, color: '#888' }}>{moreInfoOpen ? '▾' : '▸'}</span>
+              </button>
+              {moreInfoOpen && (
+                <>
+                  {/* Spec mật khẩu §7.3: email tự nguyện ở checkout — chỉ điền
+                      vào hồ sơ khi hồ sơ đang trống (server quyết). */}
+                  <div className="zm-field">
+                    <label>Email <span style={{ color: '#888', fontWeight: 400 }}>(không bắt buộc — chỉ dùng cho thông báo bảo mật)</span></label>
+                    <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email của bạn" type="email" maxLength={150} />
+                  </div>
+                  {/* Gói Đón Bình Minh (2026-10-28): mã người giới thiệu; từ
+                      link thì hiện sẵn mã đã gắn. Sửa 2026-11-07 (#11): bỏ
+                      cổng ẩn !hasPriorOrders trong cụm thu gọn — cổng đó làm
+                      ô biến mất với mọi tài khoản đã có đơn (kể cả đơn vừa
+                      đặt trong cùng phiên thử) trong khi tiêu đề mục hứa có
+                      ô này. Backend vẫn là nơi quyết: referred_by chỉ được
+                      gắn khi TẠO khách mới, khách cũ nhập mã cũng không đổi
+                      hồ sơ (OnlineOrderController) — payload gửi đi không đổi. */}
+                  <div className="zm-field">
+                    <label>Mã người giới thiệu (nếu có)</label>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                      <input value={refCode} onChange={(e) => updateRefCode(e.target.value.toUpperCase())} placeholder="Nhập mã của người giới thiệu" maxLength={20} style={{ flex: 1 }} />
+                      {refCode && (
+                        <button type="button" onClick={() => updateRefCode('')} aria-label="Xóa mã người giới thiệu"
+                          style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}><ZmIcon name="x" size={16} /></button>
+                      )}
+                    </div>
+                    {refFromLink && refCode && (
+                      <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>Đã gắn từ link mời — kiểm tra đúng người mời của bạn chưa nhé.</div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
             {/* Spec mật khẩu §5.4: ô đồng ý NĐ 13 ở đơn đầu — chưa tích thì
                 nút đặt đơn khóa (cổng cứng ở server, xem place()). */}
@@ -851,24 +841,6 @@ export default function Checkout() {
                 <ConsentCheck checked={consentChecked} onChange={setConsentChecked} />
               </div>
             )}
-            {/* Gói Đón Bình Minh (2026-10-28): mã người giới thiệu — chỉ hiện với
-                khách chưa có đơn; đến từ link thì hiện sẵn mã đã gắn, xóa/sửa được */}
-            {!hasPriorOrders && (
-              <div className="zm-field">
-                <label>Mã người giới thiệu (nếu có)</label>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-                  <input value={refCode} onChange={(e) => updateRefCode(e.target.value.toUpperCase())} placeholder="Nhập mã của người giới thiệu" maxLength={20} style={{ flex: 1 }} />
-                  {refCode && (
-                    <button type="button" onClick={() => updateRefCode('')} aria-label="Xóa mã người giới thiệu"
-                      style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}><ZmIcon name="x" size={16} /></button>
-                  )}
-                </div>
-                {refFromLink && refCode && (
-                  <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>Đã gắn từ link mời — kiểm tra đúng người mời của bạn chưa nhé.</div>
-                )}
-              </div>
-            )}
-
             {type === 'delivery' && (
               <>
                 {/* Gói 55 p10: chọn Giao ngay / Hẹn giờ giao */}
@@ -1022,41 +994,6 @@ export default function Checkout() {
       <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
     </div>
   )}
-  {/* Gói 60: chọn gói giao hàng từ báo giá live của hãng */}
-  {type === 'delivery' && quoteLoading && (
-    <div className="zm-note">Đang tính phí ship từ hãng giao hàng...</div>
-  )}
-  {type === 'delivery' && !quoteLoading && quote?.packages?.length > 0 && (
-    <div className="zm-field">
-      <label>Chọn gói giao hàng</label>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {quote.packages.map((p) => (
-          <button
-            key={p.code + p.provider}
-            type="button"
-            onClick={() => setDeliveryPkg(p.code)}
-            style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '10px 12px', borderRadius: 10, fontSize: 13, textAlign: 'left',
-              border: deliveryPkg === p.code ? '2px solid #24305E' : '1px solid #e0e0e0',
-              background: deliveryPkg === p.code ? '#eef2ff' : '#fff',
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 700 }}>{p.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} <span style={{ color: '#888', fontWeight: 400 }}>· {p.provider_label}</span></div>
-              <div style={{ color: '#666', fontSize: 12 }}>{p.eta_text}{p.shop_support > 0 ? ` · Quán hỗ trợ ${fmt(p.shop_support)}đ` : ''}</div>
-            </div>
-            <div style={{ fontWeight: 700, color: '#24305E' }}>{fmt(p.customer_pays)}đ</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )}
-  {type === 'delivery' && !quoteLoading && quoteError && !quote?.packages?.length && km == null && (
-    <div className="zm-alert" style={{ background: '#fef2f2', borderColor: '#fecaca' }}>
-      ⚠️ {quoteError}
-    </div>
-  )}
   <div className="zm-field">
     <label>Ghi chú giao hàng</label>
     <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
@@ -1109,17 +1046,15 @@ export default function Checkout() {
                     <div className="dot" /><div><b>Chuyển khoản</b><div style={{ fontSize: 12, color: '#888' }}>Quét QR / chuyển khoản qua Zalo</div></div>
                   </div>
                 )}
-                {zaloCfg.cod_enabled && (
+                {/* Spec phí giao mục 5.2/5.3: đơn giao + thu hộ TẮT → ẩn hẳn lựa
+                    chọn này; thu hộ BẬT → nhãn "Thanh toán khi nhận hàng" */}
+                {zaloCfg.cod_enabled && !codHiddenForDelivery && (
                   <div
-                    className={`zm-pay-opt ${payChannel === 'COD' ? 'on' : ''} ${zaloCfg.cod_takeaway_only && type === 'delivery' ? 'disabled' : ''}`}
-                    onClick={() => {
-                      if (zaloCfg.cod_takeaway_only && type === 'delivery') return;
-                      setPayChannel('COD');
-                    }}
-                    style={zaloCfg.cod_takeaway_only && type === 'delivery' ? { opacity: 0.5 } : {}}
+                    className={`zm-pay-opt ${payChannel === 'COD' ? 'on' : ''}`}
+                    onClick={() => setPayChannel('COD')}
                   >
-                    <div className="dot" /><div><b>Trả tại quán</b><div style={{ fontSize: 12, color: '#888' }}>
-                      {zaloCfg.cod_takeaway_only && type === 'delivery' ? 'Chỉ áp dụng mang về/hẹn giờ' : 'Trả tiền khi nhận món'}
+                    <div className="dot" /><div><b>{type === 'delivery' ? 'Thanh toán khi nhận hàng' : 'Trả tại quán'}</b><div style={{ fontSize: 12, color: '#888' }}>
+                      {type === 'delivery' ? 'Trả tiền mặt cho shipper khi nhận món' : 'Trả tiền khi nhận món'}
                     </div></div>
                   </div>
                 )}
@@ -1129,18 +1064,17 @@ export default function Checkout() {
               (payMethods.length ? payMethods : [
                 { value: 'transfer', label: 'Chuyển khoản / QR', desc: 'Quán xác nhận đã nhận tiền rồi mới làm món' },
                 { value: 'pay_at_store', label: 'Thanh toán tại quán', desc: 'Trả tiền khi nhận món' },
-              ]).map((m) => {
-                // S8: khóa "Trả tại quán" khi đang Giao hàng (như đường cấu hình Zalo ở trên)
-                const mLocked = m.value === 'pay_at_store' && type === 'delivery';
-                return (
+              ])
+                // Spec phí giao mục 5.2/5.3: nhánh dự phòng KHÔNG có thu hộ cho
+                // đơn giao ở cả 2 giai đoạn — ẩn hẳn "Thanh toán tại quán".
+                .filter((m) => !(m.value === 'pay_at_store' && type === 'delivery'))
+                .map((m) => (
                   <div key={m.value}
-                    className={`zm-pay-opt ${payment === m.value ? 'on' : ''} ${mLocked ? 'disabled' : ''}`}
-                    onClick={() => { if (!mLocked) setPayment(m.value); }}
-                    style={mLocked ? { opacity: 0.5 } : {}}>
-                    <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{mLocked ? 'Chỉ áp dụng khi nhận tại quán' : m.desc}</div></div>
+                    className={`zm-pay-opt ${payment === m.value ? 'on' : ''}`}
+                    onClick={() => setPayment(m.value)}>
+                    <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{m.desc}</div></div>
                   </div>
-                );
-              })
+                ))
             )}
 
             {/* Gói 64: bỏ tick xuất VAT trên Mini App (hóa đơn đã kèm mã QR cho khách quét nhập thông tin) */}
@@ -1429,8 +1363,8 @@ export default function Checkout() {
             <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết thanh toán</div>
             {type === 'delivery' && (
               <div className="zm-total-row">
-                <span>Phí vận chuyển{quotePkg ? ` (${quotePkg.code === 'nhanh' ? 'Nhanh' : 'Siêu Tốc'} · ${quotePkg.provider_label})` : km != null ? ` (~${km}km)` : ''}</span>
-                <span>{quotePkg || km != null ? `${fmt(shipFee)}đ` : 'Quán xác nhận'}</span>
+                <span>Phí vận chuyển{km != null ? ` (~${km}km)` : ''}</span>
+                <span>{km != null ? `${fmt(shipFeeGross)}đ` : 'Quán xác nhận'}</span>
               </div>
             )}
             {type === 'delivery' && shipShopSupport > 0 && (

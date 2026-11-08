@@ -8,6 +8,7 @@ use App\Models\BranchMenuHidden;
 use App\Models\BranchProductHidden;
 use App\Models\Menu;
 use App\Models\Product;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -42,6 +43,7 @@ class BranchVisibilityController extends Controller
             BranchProductHidden::where('branch_id', $v['branch_id'])
                 ->where('product_id', $v['product_id'])->delete();
         }
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 
@@ -59,6 +61,7 @@ class BranchVisibilityController extends Controller
                 BranchProductHidden::create(['branch_id' => $v['branch_id'], 'product_id' => $pid]);
             }
         });
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 
@@ -88,6 +91,7 @@ class BranchVisibilityController extends Controller
             BranchMenuHidden::where('branch_id', $v['branch_id'])
                 ->where('menu_id', $v['menu_id'])->delete();
         }
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 
@@ -105,6 +109,7 @@ class BranchVisibilityController extends Controller
                 BranchMenuHidden::create(['branch_id' => $v['branch_id'], 'menu_id' => $mid]);
             }
         });
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 }

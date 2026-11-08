@@ -1,1 +1,27 @@
-{"app":{"description":"Đặt món, tích điểm và nhận ưu đãi từ Daybreak Tea & Coffee","id":222133330488026054,"logo":"/logo.png","name":"Daybreak Đặt món","package":"zmp-cli"},"template":{"css":false,"type":"react"}}
+{
+  "app": {
+    "title": "Daybreak",
+    "headerTitle": "Daybreak",
+    "headerColor": "#24305E",
+    "textColor": "white",
+    "leftButton": "back",
+    "statusBar": "normal",
+    "actionBarHidden": false,
+    "hideAndroidBottomNavigationBar": false,
+    "hideIOSSafeAreaBottom": false
+  },
+  "listSyncJS": [
+  "assets/index.DQ31cnL9.module.js"
+  ],
+  "listAsyncJS": [
+    "assets/GameRules.BZRvmsu0.module.js",
+    "assets/HungTranChau.EfU0_CW9.module.js",
+    "assets/index.DshJxjbc.module.js",
+    "assets/index.es.BVyZxF6u.module.js"
+  ],
+  "listCSS": [
+    "assets/index-H-8xWDL2.css"
+  ]
+
+
+}

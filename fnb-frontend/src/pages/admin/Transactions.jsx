@@ -62,6 +62,11 @@ const Transactions = () => {
     const [rejectReason, setRejectReason] = useState('');
     const [rejectBusy, setRejectBusy] = useState(false);
     const [actionBusy, setActionBusy] = useState(false);
+    // Gói chặn tự duyệt (2026-11-06): phiếu do chính tài khoản User đang đăng
+    // nhập tạo → khóa nút Duyệt/Từ chối phía client (server 422
+    // SELF_APPROVAL_BLOCKED là cổng cứng). Chỉ khớp phía User của người tạo.
+    const myUserId = (() => { try { return JSON.parse(localStorage.getItem('user') || 'null')?.id ?? null; } catch { return null; } })();
+    const isOwnTx = (row) => myUserId != null && row.created_by != null && Number(row.created_by) === Number(myUserId);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [showForm, setShowForm] = useState(false);
@@ -258,6 +263,10 @@ const Transactions = () => {
     };
 
     const isAuto = editing && editing.related_type;
+    // Remedy NV-G5 (2026-11-06): khóa ô Trạng thái cho MỌI phiếu đang sửa còn nợ
+    // (status = 'pending', có hay không đối tác) — trạng thái chỉ đổi qua Ghi thanh toán.
+    // Cờ is_debt giữ nguyên ngữ nghĩa ở đường tạo mới (checkbox + payload).
+    const isDebtLocked = !!editing && editing.status === 'pending';
     const catsOfTab = categories.filter((c) => c.type === tab);
 
     return (
@@ -422,10 +431,11 @@ const Transactions = () => {
                                                 phiếu đã từ chối = hồ sơ đóng → không Sửa/duyệt lại (giữ Xóa để dọn dữ liệu) */}
                                             {!r.is_rejected && !r.is_approved && (
                                                 <>
-                                                    <button onClick={() => handleApprove(r)} disabled={actionBusy}
+                                                    <button onClick={() => handleApprove(r)} disabled={actionBusy || isOwnTx(r)}
                                                         className="text-green-700 hover:underline mr-3 disabled:opacity-50">Duyệt</button>
-                                                    <button onClick={() => openReject(r)}
-                                                        className="text-red-600 hover:underline mr-3">Từ chối</button>
+                                                    <button onClick={() => openReject(r)} disabled={isOwnTx(r)}
+                                                        className="text-red-600 hover:underline mr-3 disabled:opacity-50">Từ chối</button>
+                                                    {isOwnTx(r) && <div className="text-[11px] text-amber-700 font-medium">Bạn là người tạo — cần người khác duyệt</div>}
                                                 </>
                                             )}
                                             {!r.is_rejected && (
@@ -589,11 +599,14 @@ const Transactions = () => {
                             )}
                             <div>
                                 <label className="text-[12.5px] text-gray-500 block mb-1">Trạng thái</label>
-                                <select value={form.status} disabled={isAuto || form.is_debt}
+                                <select value={form.status} disabled={isAuto || form.is_debt || isDebtLocked}
                                     onChange={(e) => setForm({ ...form, status: e.target.value })}
                                     className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px] disabled:bg-gray-100">
                                     {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                                 </select>
+                                {isDebtLocked && (
+                                    <div className="text-[12px] text-amber-700 mt-1">Phiếu đang còn nợ — trạng thái chỉ đổi qua Ghi thanh toán.</div>
+                                )}
                             </div>
                             {/* Gói 29: đối tác + ghi công nợ */}
                             {!isAuto && (

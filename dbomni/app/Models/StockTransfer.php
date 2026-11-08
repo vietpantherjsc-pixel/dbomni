@@ -17,6 +17,9 @@ class StockTransfer extends Model
         'code', 'from_branch_id', 'to_branch_id', 'status', 'note', 'total_cost',
         'requested_by', 'confirmed_by', 'confirmed_by_employee_id', 'confirmed_at',
         'cancelled_by', 'cancelled_by_employee_id', 'cancelled_at',
+        // Gói chặn tự duyệt (2026-11-06): cặp người tạo có cột từ 000030 nhưng
+        // trước đây không nằm trong fillable nên store() không ghi được.
+        'created_by_user_id', 'created_by_employee_id',
     ];
 
     protected $casts = [

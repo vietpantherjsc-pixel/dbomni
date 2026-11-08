@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\PriceList;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -39,6 +40,7 @@ class PriceListController extends Controller
         $validated['sort_order'] = (PriceList::max('sort_order') ?? -1) + 1;
 
         $pl = PriceList::create($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($pl, 201);
     }
 
@@ -56,6 +58,7 @@ class PriceListController extends Controller
         ]);
 
         $priceList->update($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($priceList);
     }
 
@@ -66,6 +69,7 @@ class PriceListController extends Controller
             return response()->json(['message' => 'Kênh đang có giá món, hãy tắt thay vì xóa.'], 422);
         }
         $priceList->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['message' => 'Đã xóa kênh bán hàng.']);
     }
 
@@ -81,6 +85,7 @@ class PriceListController extends Controller
             PriceList::where('id', $id)->update(['sort_order' => $i]);
         }
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 }

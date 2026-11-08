@@ -1,10 +1,43 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { api } from '../api';
 
 // Spec P4-P5 (khắc phục kiểm duyệt Zalo): popup "Chính sách — Điều khoản Mini App Daybreak Đặt món".
 // KHÔNG link ngoài. Đủ 5 nội dung: đơn vị chủ quản, dữ liệu thu thập, mục đích,
 // thời gian lưu trữ, cách rút lại đồng ý + liên hệ.
+//
+// Gói chính sách vào Cài đặt Admin (2026-11-06): nội dung do Admin tự sửa ở
+// Thiết lập, popup mở là gọi GET /online/privacy-policy lấy bản mới nhất.
+// Trong lúc chờ VÀ khi gọi hỏng/mất mạng, popup hiện ngay BẢN DỰ PHÒNG viết
+// sẵn dưới đây (nguyên văn nội dung gốc) — không spinner chặn đọc, không
+// popup rỗng trong mọi trường hợp. Nội dung nhận về là văn bản thuần, render
+// dạng text giữ xuống dòng (pre-line), KHÔNG render HTML.
+const FALLBACK_SECTIONS = [
+    { title: 'Đơn vị chủ quản', content: 'Daybreak Tea & Coffee — hệ thống cửa hàng trà & cà phê. Mọi thông tin liên hệ hiển thị tại trang chủ ứng dụng theo từng chi nhánh.' },
+    { title: 'Dữ liệu chúng tôi thu thập', content: 'Khi bạn sử dụng ứng dụng, chúng tôi có thể thu thập: số điện thoại, tên, địa chỉ giao hàng, vị trí hiện tại (chỉ khi bạn cho phép, để tính phí giao hàng), lịch sử đơn hàng, điểm tích lũy và thông tin thiết bị cơ bản. Email chỉ được thu thập khi bạn tự nguyện cung cấp — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.' },
+    { title: 'Mục đích sử dụng', content: 'Dữ liệu được dùng để: xử lý đơn đặt món, giao hàng, quản lý tài khoản thành viên, tích điểm & đổi ưu đãi, gửi thông báo về đơn hàng và chương trình khuyến mại (nếu bạn đồng ý).' },
+    { title: 'Thời gian lưu trữ', content: 'Dữ liệu được lưu trữ trong suốt thời gian bạn sử dụng dịch vụ và tối đa 24 tháng sau lần tương tác cuối cùng, trừ khi pháp luật yêu cầu lưu lâu hơn (ví dụ dữ liệu hóa đơn).' },
+    { title: 'Rút lại đồng ý & liên hệ', content: 'Bạn có thể rút lại sự đồng ý xử lý dữ liệu bất cứ lúc nào bằng cách liên hệ trực tiếp cửa hàng qua số điện thoại hiển thị tại trang chủ, hoặc yêu cầu xóa tài khoản thành viên. Việc rút lại đồng ý không ảnh hưởng đến tính hợp pháp của việc xử lý trước đó. Bạn vẫn có thể xem thực đơn và đặt món mà không cần đăng nhập thành viên.' },
+];
+const FALLBACK_UPDATED_TEXT = 'Cập nhật lần cuối: tháng 10/2026. Daybreak có thể cập nhật chính sách này; phiên bản mới nhất luôn hiển thị tại đây.';
+
 export default function PrivacyPolicy({ open, onClose }) {
+    const [sections, setSections] = useState(FALLBACK_SECTIONS);
+    const [updatedText, setUpdatedText] = useState(FALLBACK_UPDATED_TEXT);
+
+    useEffect(() => {
+        if (!open) return;
+        let alive = true;
+        api.privacyPolicy()
+            .then((d) => {
+                if (!alive || !d || !Array.isArray(d.sections) || d.sections.length !== 5) return;
+                setSections(d.sections.map((s) => ({ title: String(s.title ?? ''), content: String(s.content ?? '') })));
+                if (d.updated_text) setUpdatedText(String(d.updated_text));
+            })
+            .catch(() => { /* mất mạng / lỗi: giữ bản dự phòng đang hiện */ });
+        return () => { alive = false; };
+    }, [open ]);
+
     if (!open) return null;
     // Vá 2026-11-05 (lỗi bị thanh menu dưới che): popup PHẢI render qua portal
     // ra document.body. Trước đây nó nằm trong thẻ đăng ký ở Account.jsx —
@@ -25,23 +58,18 @@ export default function PrivacyPolicy({ open, onClose }) {
                     <div style={{ fontWeight: 800, fontSize: 16, color: '#24305E' }}>Chính sách — Điều khoản Mini App Daybreak Đặt món</div>
                     <button onClick={onClose} style={{ border: 'none', background: '#f3f4f6', borderRadius: 20, width: 32, height: 32, fontSize: 16, cursor: 'pointer' }}>✕</button>
                 </div>
-                <div style={{ padding: '16px 20px 28px', overflowY: 'auto', fontSize: 13.5, lineHeight: 1.65, color: '#333' }}>
-                    <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>1. Đơn vị chủ quản</h4>
-                    <p style={{ margin: '0 0 12px' }}>Daybreak Tea &amp; Coffee — hệ thống cửa hàng trà &amp; cà phê. Mọi thông tin liên hệ hiển thị tại trang chủ ứng dụng theo từng chi nhánh.</p>
+                {/* U-02 (gói chính sách 2026-11-06): đệm đáy tính cả chiều cao
+                    thanh menu (56px) + safe-area + 24px khoảng thở — trước đây
+                    cố định 28px làm dòng cuối bị thanh menu che. */}
+                <div style={{ padding: '16px 20px calc(56px + env(safe-area-inset-bottom, 0px) + 24px)', overflowY: 'auto', fontSize: 13.5, lineHeight: 1.65, color: '#333' }}>
+                    {sections.map((s, i) => (
+                        <React.Fragment key={i}>
+                            <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>{i + 1}. {s.title}</h4>
+                            <p style={{ margin: '0 0 12px', whiteSpace: 'pre-line' }}>{s.content}</p>
+                        </React.Fragment>
+                    ))}
 
-                    <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>2. Dữ liệu chúng tôi thu thập</h4>
-                    <p style={{ margin: '0 0 12px' }}>Khi bạn sử dụng ứng dụng, chúng tôi có thể thu thập: số điện thoại, tên, địa chỉ giao hàng, vị trí hiện tại (chỉ khi bạn cho phép, để tính phí giao hàng), lịch sử đơn hàng, điểm tích lũy và thông tin thiết bị cơ bản. Email chỉ được thu thập khi bạn tự nguyện cung cấp — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.</p>
-
-                    <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>3. Mục đích sử dụng</h4>
-                    <p style={{ margin: '0 0 12px' }}>Dữ liệu được dùng để: xử lý đơn đặt món, giao hàng, quản lý tài khoản thành viên, tích điểm &amp; đổi ưu đãi, gửi thông báo về đơn hàng và chương trình khuyến mại (nếu bạn đồng ý).</p>
-
-                    <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>4. Thời gian lưu trữ</h4>
-                    <p style={{ margin: '0 0 12px' }}>Dữ liệu được lưu trữ trong suốt thời gian bạn sử dụng dịch vụ và tối đa 24 tháng sau lần tương tác cuối cùng, trừ khi pháp luật yêu cầu lưu lâu hơn (ví dụ dữ liệu hóa đơn).</p>
-
-                    <h4 style={{ margin: '0 0 6px', color: '#24305E' }}>5. Rút lại đồng ý &amp; liên hệ</h4>
-                    <p style={{ margin: '0 0 12px' }}>Bạn có thể rút lại sự đồng ý xử lý dữ liệu bất cứ lúc nào bằng cách liên hệ trực tiếp cửa hàng qua số điện thoại hiển thị tại trang chủ, hoặc yêu cầu xóa tài khoản thành viên. Việc rút lại đồng ý không ảnh hưởng đến tính hợp pháp của việc xử lý trước đó. Bạn vẫn có thể xem thực đơn và đặt món mà không cần đăng nhập thành viên.</p>
-
-                    <p style={{ margin: '12px 0 0', fontSize: 12, color: '#888' }}>Cập nhật lần cuối: tháng 10/2026. Daybreak có thể cập nhật chính sách này; phiên bản mới nhất luôn hiển thị tại đây.</p>
+                    <p style={{ margin: '12px 0 0', fontSize: 12, color: '#888' }}>{updatedText}</p>
                 </div>
             </div>
         </div>,

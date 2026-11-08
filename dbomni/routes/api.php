@@ -85,8 +85,10 @@ Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10
 // Gói 35: đăng nhập trang nhân viên (public) — QR chấm công / đăng ký ca riêng
 Route::post('/employee/qr-login', [EmployeeAuthController::class, 'qrLogin'])->middleware('throttle:10,1');
 Route::post('/employee/phone-login', [EmployeeAuthController::class, 'phonePinLogin'])->middleware('throttle:10,1');
+Route::post('/employee/password/change-with-ticket', [EmployeeAuthController::class, 'changePasswordWithTicket'])->middleware('throttle:10,1'); // Gói #102: đổi mật khẩu bắt buộc bằng vé
 Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->prefix('employee')->group(function () {
     Route::get('/me', [EmployeeAuthController::class, 'me']);
+    Route::post('/password/setup', [EmployeeAuthController::class, 'setupPassword']); // Gói #102: tự đặt mật khẩu trong phiên (PIN step-up)
     Route::get('/work-shifts', [ShiftRegistrationController::class, 'availableShifts']);
     Route::get('/shift-registrations/week', [ShiftRegistrationController::class, 'myWeek']);
     Route::post('/shift-registrations/week', [ShiftRegistrationController::class, 'submitWeek']);
@@ -159,6 +161,11 @@ Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->pref
         Route::get('/transaction/{id}', [EmployeeApprovalController::class, 'show'])->defaults('type', 'transaction');
         Route::post('/transaction/{id}/approve', [EmployeeApprovalController::class, 'approve'])->defaults('type', 'transaction');
         Route::post('/transaction/{id}/reject', [EmployeeApprovalController::class, 'reject'])->defaults('type', 'transaction');
+    });
+    // Remedy NV-G5 (2026-11-06): công nợ chờ thu trong Hub — phiếu đã duyệt còn nợ + ghi thanh toán (PIN step-up, delegate pay()).
+    Route::middleware(['permission:finance.manage'])->group(function () {
+        Route::get('/debts', [EmployeeApprovalController::class, 'debts']);
+        Route::post('/debts/{id}/pay', [EmployeeApprovalController::class, 'payDebt'])->whereNumber('id');
     });
     Route::middleware(['permission:staff.edit'])->prefix('approvals')->group(function () {
         foreach (['shift_registration', 'leave_request'] as $t) {
@@ -295,6 +302,14 @@ Route::middleware('auth:sanctum')->group(function () {
     });
     // Gói 60: giao hàng — thử tạo lại đơn hãng, xem log, báo cáo failover
     Route::post('/orders/{order}/delivery/retry', [DeliveryController::class, 'retry'])->middleware('permission:orders.edit');
+    // Spec KDS book ship (2026-11-06): thao tác đặt ship tại KDS — báo phí theo
+    // đơn · đặt hãng · hủy tìm/chuyển tay · bắt đầu tay · chuyển bước tay · đính chính ghim
+    Route::post('/orders/{order}/delivery/quote', [DeliveryController::class, 'quoteForOrder']);
+    Route::post('/orders/{order}/delivery/book', [DeliveryController::class, 'book']);
+    Route::post('/orders/{order}/delivery/to-manual', [DeliveryController::class, 'toManual']);
+    Route::post('/orders/{order}/delivery/manual/start', [DeliveryController::class, 'manualStart']);
+    Route::post('/orders/{order}/delivery/manual/advance', [DeliveryController::class, 'manualAdvance']);
+    Route::post('/orders/{order}/delivery/pin', [DeliveryController::class, 'correctPin']);
     Route::get('/orders/{order}/delivery/logs', [DeliveryController::class, 'logs']);
     Route::get('/delivery/failover-report', [DeliveryController::class, 'failoverReport']);
     Route::get('/delivery/config', [DeliveryController::class, 'config'])->middleware('throttle:online-read');
@@ -540,6 +555,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/uploads/product-image', [UploadController::class, 'productImage']); // Gói 55
         Route::post('/uploads/logo', [UploadController::class, 'logo']); // Logo sidebar Admin (2026-10-21)
         Route::post('/settings', [SettingsController::class, 'update']);
+        // Gói chính sách Mini App vào Cài đặt Admin: đường lưu RIÊNG cho nội
+        // dung chính sách (dài hơn rào 255 ký tự của POST /settings).
+        Route::post('/settings/privacy-policy', [SettingsController::class, 'updatePrivacyPolicy']);
+        Route::post('/settings/privacy-policy/reset', [SettingsController::class, 'resetPrivacyPolicy']);
         // Gói 52: phương thức thanh toán + đơn vị tính
         Route::get('/payment-methods', [PaymentMethodController::class, 'index']);
         Route::post('/payment-methods', [PaymentMethodController::class, 'store']);
@@ -772,6 +791,9 @@ Route::prefix('online')->group(function () {
     Route::post('/orders/{code}/claim', [OnlineOrderController::class, 'claim'])->middleware('throttle:60,1');
     // Gói 7p: màu chủ đạo giao diện (public cho Mini App)
     Route::get('/theme', [SettingsController::class, 'publicTheme'])->middleware('throttle:online-read');
+    // Gói chính sách Mini App vào Cài đặt Admin: nội dung chính sách — điều
+    // khoản (public; Mini App gọi khi mở popup, lỗi thì dùng bản dự phòng).
+    Route::get('/privacy-policy', [SettingsController::class, 'publicPrivacyPolicy'])->middleware('throttle:online-read');
     // Gói 48: banner KM cho carousel Mini App (public)
     Route::get('/promo-banners', [PromotionController::class, 'banners'])->middleware('throttle:online-read');
     // Gói 52: PTTT public theo kênh (POS/Mini App)
@@ -806,6 +828,9 @@ Route::prefix('online')->group(function () {
     // Spec đăng nhập SĐT + mật khẩu §4: đường phụ đăng nhập + phiên hợp nhất.
     Route::post('/customer/password/login', [CustomerPasswordController::class, 'login'])->middleware('throttle:10,1');
     Route::post('/customer/password/zalo-set', [CustomerPasswordController::class, 'zaloSet'])->middleware('throttle:10,1');
+    // Spec P4-P5: định danh user Zalo phía server (đổi token qua graph.zalo.me + appsecret_proof)
+    Route::post('/zalo/auth', [ZaloAuthController::class, 'auth'])
+        ->middleware('throttle:60,1');
     Route::post('/customer/password/set', [CustomerPasswordController::class, 'set'])->middleware('throttle:30,1');
     Route::patch('/customer/password/change', [CustomerPasswordController::class, 'change'])->middleware('throttle:30,1');
     Route::post('/customer/password/counter-set', [CustomerPasswordController::class, 'counterSet'])->middleware('throttle:5,1');
@@ -830,6 +855,3 @@ Route::post('/webhooks/delivery/{provider}', [DeliveryWebhookController::class, 
 // Đặt ngoài group 'online' để URL là /api/payment/notify (khớp MANIFEST)
 Route::post('/payment/notify', [PaymentController::class, 'notify'])
     ->middleware('throttle:120,1');
-// Spec P4-P5: định danh user Zalo phía server (đổi token qua graph.zalo.me + appsecret_proof)
-Route::post('/zalo/auth', [ZaloAuthController::class, 'auth'])
-    ->middleware('throttle:60,1');

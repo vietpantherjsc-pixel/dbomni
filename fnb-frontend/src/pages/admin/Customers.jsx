@@ -7,6 +7,7 @@ import { fmtDate, fmtDateTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 import { confirmInApp } from '../../utils/confirmInApp'; // Spec mật khẩu khách §5.3/§7.4
+import { useAuth } from '../../contexts/AuthContext'; // Form sửa thông tin khách (2026-11-07): cổng quyền customers.manage như các trang Admin khác
 
 
 // =====================================================================
@@ -25,6 +26,15 @@ export default function Customers() {
     const [adjust, setAdjust] = useState({ change: '', note: '' });
     // Spec mật khẩu khách §7.3/§5.3: email sửa trong modal + đếm ngược cửa sổ quầy.
     const [emailEdit, setEmailEdit] = useState('');
+    // Form sửa thông tin khách (Đại Vương chốt 2026-11-07): PATCH /customers/{id}
+    // đã có sẵn phía backend — form này chỉ bổ sung phía giao diện trong modal.
+    const { can } = useAuth();
+    const canManage = can('customers.manage');
+    const [tiers, setTiers] = useState([]);
+    const [showEdit, setShowEdit] = useState(false);
+    const [editForm, setEditForm] = useState({ name: '', phone: '', birthday: '', note: '', membership_tier_id: '' });
+    const [editErr, setEditErr] = useState('');
+    const [editSaving, setEditSaving] = useState(false);
     const [nowTick, setNowTick] = useState(Date.now());
     useEffect(() => {
         const t = setInterval(() => setNowTick(Date.now()), 30000);
@@ -41,7 +51,15 @@ export default function Customers() {
             }
         } catch (err) { console.error('Lỗi tải khách hàng:', err); setLoadErr(true); } // UX 2026-10-26 (🟠T1)
     };
-    useEffect(() => { fetchList(1, ''); }, []);
+    // Danh sách hạng cho ô chọn trong form sửa (endpoint dùng chung với
+    // trang Hạng thành viên / Khuyến mại).
+    const fetchTiers = async () => {
+        try {
+            const res = await axios.get(`${API}/membership-tiers`);
+            if (res.data?.success) setTiers(res.data.data || []);
+        } catch (err) { console.error('Lỗi tải hạng thành viên:', err); }
+    };
+    useEffect(() => { fetchList(1, ''); fetchTiers(); }, []);
 
     const handleSearch = (e) => {
         e.preventDefault();
@@ -67,8 +85,54 @@ export default function Customers() {
             if (res.data?.success) {
                 setDetail(res.data.data);
                 setEmailEdit(res.data.data.email || '');
+                setShowEdit(false);
+                setEditErr('');
             }
         } catch (err) { alert('Tải chi tiết thất bại'); }
+    };
+
+    // Mở form sửa: đổ dữ liệu hiện tại của khách vào form.
+    const openEdit = () => {
+        if (!detail) return;
+        setEditForm({
+            name: detail.name || '',
+            phone: detail.phone || '',
+            birthday: detail.birthday ? String(detail.birthday).slice(0, 10) : '',
+            note: detail.note || '',
+            membership_tier_id: detail.membership_tier_id || '',
+        });
+        setEditErr('');
+        setShowEdit(true);
+    };
+
+    // Lưu form sửa qua PATCH sẵn có. Lỗi 422 (SĐT trùng / sai định dạng)
+    // hiện ngay tại form — không nuốt lỗi, không đóng form.
+    const handleSaveEdit = async () => {
+        if (!editForm.name.trim() || !editForm.phone.trim()) { setEditErr('Nhập tên và số điện thoại.'); return; }
+        setEditSaving(true);
+        setEditErr('');
+        try {
+            const res = await axios.patch(`${API}/customers/${detail.id}`, {
+                name: editForm.name.trim(),
+                phone: editForm.phone.trim(),
+                birthday: editForm.birthday || null,
+                note: editForm.note.trim() || null,
+                membership_tier_id: editForm.membership_tier_id ? Number(editForm.membership_tier_id) : null,
+            });
+            if (res.data?.success) {
+                // Delta TESTER §CI (2026-11-07): nạp lại chi tiết + danh sách
+                // XONG mới đóng form và báo thành công — trước đây 2 lượt tải
+                // chạy không chờ, modal/bảng thoáng hiện giá trị cũ rồi mới đúng.
+                await openDetail(detail.id);
+                await fetchList(page, search);
+                setShowEdit(false);
+                alert('Đã cập nhật thông tin khách hàng.');
+            }
+        } catch (err) {
+            const data = err.response?.data;
+            const firstFieldErr = data?.errors ? Object.values(data.errors).flat()[0] : '';
+            setEditErr(firstFieldErr || data?.message || 'Lưu thông tin thất bại.');
+        } finally { setEditSaving(false); }
     };
 
     // Spec mật khẩu §7.3: Admin sửa email (để trống = xóa; sửa ở Admin
@@ -235,7 +299,12 @@ export default function Customers() {
                                     <h3 className="font-semibold text-[16px]">{detail.name}</h3>
                                     <div className="text-[13px] text-gray-500">{detail.phone} · Mã TV: <span className="font-mono">{detail.member_code}</span></div>
                                 </div>
-                                <button onClick={() => setDetail(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+                                <div className="flex items-center gap-2 shrink-0">
+                                    {canManage && !showEdit && (
+                                        <button onClick={openEdit} className="px-3 py-1.5 bg-gray-100 text-[13px] rounded hover:bg-gray-200 whitespace-nowrap">Sửa thông tin</button>
+                                    )}
+                                    <button onClick={() => setDetail(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+                                </div>
                             </div>
 
                             <div className="flex gap-6 mb-5">
@@ -250,6 +319,37 @@ export default function Customers() {
                                     <div className="text-[11px] text-gray-500 mt-1">QR tích điểm</div>
                                 </div>
                             </div>
+
+                            {/* Form sửa thông tin khách (Đại Vương chốt 2026-11-07):
+                                đấu PATCH /customers/{id} sẵn có; email giữ cơ chế riêng ở mục dưới. */}
+                            {showEdit && (
+                                <div className="border-t pt-4 mb-4">
+                                    <h4 className="font-medium text-[14px] mb-2">Sửa thông tin khách hàng</h4>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div><label className="text-xs text-gray-500">Tên *</label>
+                                            <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} maxLength={150} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
+                                        <div><label className="text-xs text-gray-500">SĐT * (định danh)</label>
+                                            <input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} maxLength={20} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
+                                        <div><label className="text-xs text-gray-500">Sinh nhật</label>
+                                            <DateInput value={editForm.birthday} onChange={(v) => setEditForm({ ...editForm, birthday: v })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
+                                        <div><label className="text-xs text-gray-500">Hạng thành viên</label>
+                                            <select value={editForm.membership_tier_id} onChange={(e) => setEditForm({ ...editForm, membership_tier_id: e.target.value })} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E] bg-white">
+                                                <option value="">— Không gán hạng —</option>
+                                                {tiers.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                                            </select></div>
+                                        <div className="col-span-2"><label className="text-xs text-gray-500">Ghi chú</label>
+                                            <input value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} maxLength={255} className="w-full mt-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" /></div>
+                                    </div>
+                                    {editErr && (
+                                        <div className="mt-3 px-3 py-2 text-[13px] text-red-700 bg-red-50 border border-red-200 rounded">{editErr}</div>
+                                    )}
+                                    <div className="flex gap-2 mt-3">
+                                        <button onClick={handleSaveEdit} disabled={editSaving} className="px-4 py-2 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] disabled:opacity-50">{editSaving ? 'Đang lưu...' : 'Lưu thông tin'}</button>
+                                        <button onClick={() => { setShowEdit(false); setEditErr(''); }} className="px-4 py-2 text-[13px] text-gray-500">Hủy</button>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-1">Gán hạng tay được bảo vệ khỏi tụt hạng tự động trong một cửa sổ đầy đủ (hệ thống tự ghi lịch sử hạng).</p>
+                                </div>
+                            )}
 
                             {/* Spec mật khẩu §7.3/§5.3/§7.4: email + cửa sổ quầy + cấp lại mã TV */}
                             <div className="border-t pt-4 mb-4">

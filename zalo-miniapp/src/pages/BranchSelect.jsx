@@ -9,12 +9,28 @@ export default function BranchSelect() {
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState(''); // Lát 3b: lý do khi lần chọn bị chặn
+  const [loadFailed, setLoadFailed] = useState(false);
   const { setBranch } = useShop();
   const nav = useNavigate();
 
-  useEffect(() => {
-    api.branches().then(setBranches).catch(() => alert('Không tải được chi nhánh')).finally(() => setLoading(false));
-  }, []);
+  // Gói xử lý khởi tạo Zalo (2026-11-07): lỗi tải chi nhánh hiện NGAY TRONG
+  // TRANG bằng khung notice sẵn có + nút Thử lại — TUYỆT ĐỐI không dùng
+  // alert(): trong webview Zalo, hộp thoại gốc chặn cứng luồng chạy ở lần
+  // vẽ đầu tiên khiến app không hiện được giao diện (đã chứng minh bằng
+  // mô phỏng: bắt được đúng alert này khoá cứng toàn bộ trang).
+  const loadBranches = () => {
+    setLoading(true);
+    setLoadFailed(false);
+    api.branches()
+      .then((list) => { setBranches(list || []); setNotice(''); })
+      .catch(() => {
+        setLoadFailed(true);
+        setNotice('Không tải được chi nhánh. Bạn kiểm tra kết nối mạng rồi bấm Thử lại nhé.');
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadBranches(); }, []);
 
   // Lát 3b (2026-11-04): setBranch trả false khi giỏ còn món của CN khác —
   // ở lại trang và nói rõ lý do thay vì im lặng như window.confirm trước đây.
@@ -30,7 +46,9 @@ export default function BranchSelect() {
         <div style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 12, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 13, lineHeight: 1.5 }}>
           ⚠ {notice}
           <div style={{ marginTop: 8 }}>
-            <button className="zm-chip" onClick={() => nav('/cart')}>Xem giỏ hàng</button>
+            {loadFailed
+              ? <button className="zm-chip" onClick={loadBranches}>Thử lại</button>
+              : <button className="zm-chip" onClick={() => nav('/cart')}>Xem giỏ hàng</button>}
           </div>
         </div>
       )}
@@ -58,7 +76,7 @@ export default function BranchSelect() {
           </div>
         );
       })}
-      {!loading && branches.length === 0 && <div className="zm-empty">Chưa có chi nhánh nào.</div>}
+      {!loading && !loadFailed && branches.length === 0 && <div className="zm-empty">Chưa có chi nhánh nào.</div>}
     </div>
   );
 }

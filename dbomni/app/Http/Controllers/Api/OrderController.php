@@ -126,8 +126,33 @@ class OrderController extends Controller
             $o->setAttribute('waiting_minutes', $waiting ? (int) $o->created_at->diffInMinutes(now()) : null);
             $o->setAttribute('pay_overdue', $waiting && $o->created_at->diffInMinutes(now()) >= $alertMinutes);
         });
+        // Spec KDS book ship mục 5.5 + 8 C2: lý do giao thất bại + dấu đính chính ghim
+        $this->attachDeliveryMeta($orders->getCollection());
 
         return response()->json(['success' => true, 'data' => $orders]);
+    }
+
+    /**
+     * Spec KDS book ship: gắn 2 thuộc tính hiển thị từ delivery_logs cho 1 tập
+     * đơn (gộp truy vấn, không N+1): delivery_failure_reason = lý do của lần
+     * giao thất bại gần nhất (chế độ tay manual.failed / hãng delivery.failed)
+     * và pin_corrected = đơn từng được đính chính điểm ghim tại quán.
+     */
+    private function attachDeliveryMeta($orders): void
+    {
+        $ids = $orders->pluck('id')->all();
+        if (!$ids) return;
+        $failed = \App\Models\DeliveryLog::whereIn('order_id', $ids)
+            ->whereIn('event', ['manual.failed', 'delivery.failed'])
+            ->orderBy('created_at')->get(['order_id', 'payload'])
+            ->groupBy('order_id');
+        $corrected = \App\Models\DeliveryLog::whereIn('order_id', $ids)
+            ->where('event', 'pin.corrected')->pluck('order_id')->flip();
+        $orders->each(function ($o) use ($failed, $corrected) {
+            $last = ($failed[$o->id] ?? collect())->last();
+            $o->setAttribute('delivery_failure_reason', $last ? ($last->payload['reason'] ?? null) : null);
+            $o->setAttribute('pin_corrected', isset($corrected[$o->id]));
+        });
     }
 
     /**
@@ -657,11 +682,8 @@ class OrderController extends Controller
         }
         $order->save();
 
-        // Gói 60: đơn giao hàng được xác nhận (pending → processing) → tạo đơn hãng.
-        // Tạo thất bại không chặn luồng: đơn nằm chờ, Admin bấm "thử tạo lại" (checklist #11).
-        if ($from === 'pending' && $to === 'processing' && $order->order_type === 'delivery') {
-            $this->createDeliveryOrder($order);
-        }
+        // Spec KDS book ship mục 1 (2026-11-06): KHÔNG còn tự tạo đơn hãng khi
+        // xác nhận đơn — điểm đặt ship đã dời về KDS lúc đơn làm xong (ready).
 
         // Gói 3c: đơn hoàn thành -> giải phóng bàn nếu không còn đơn hoạt động nào khác
         if ($request->status === 'completed') {
@@ -673,31 +695,6 @@ class OrderController extends Controller
             'message' => 'Cập nhật trạng thái thành công',
             'data' => $order
         ]);
-    }
-
-    /**
-     * Gói 60: tạo đơn hãng giao hàng cho đơn đã xác nhận.
-     * Idempotent: đơn đã có delivery_order_id thì bỏ qua (tránh tạo trùng khi bấm 2 lần).
-     */
-    private function createDeliveryOrder(\App\Models\Order $order): void
-    {
-        if ($order->delivery_order_id) return; // đã có đơn hãng
-        try {
-            $service = app(\App\Services\Delivery\DeliveryService::class);
-            if (!$service->isConfigured()) return; // chưa cấu hình hãng: giữ luồng cũ
-            // COD = tổng khách trả khi nhận hàng (0 nếu đã trả trước)
-            $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
-            $order->delivery_cod_amount = $cod;
-            // Phí ship đã khóa lúc chốt đơn: GIỮ phí gốc đã lưu (đối soát hãng) —
-            // audit 2026-10-21 🔴1: chỉ fallback khi chưa có, không ghi đè bằng phí khách chịu.
-            $order->delivery_quoted_fee = $order->delivery_quoted_fee ?? $order->delivery_fee_charged ?? $order->shipping_fee;
-            $order->save();
-            $service->createForOrder($order->fresh(), []);
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning('[Delivery] createDeliveryOrder failed', [
-                'order' => $order->code, 'msg' => $e->getMessage(),
-            ]);
-        }
     }
 
     /**
@@ -1422,6 +1419,8 @@ class OrderController extends Controller
             $o->setAttribute('needs_confirm', $awaiting);
             $o->setAttribute('pay_overdue', $awaiting && $o->created_at->diffInMinutes(now()) >= $alertMinutes);
         });
+        // Spec KDS book ship mục 5.5 + 8 C2: lý do giao thất bại + dấu đính chính ghim cho thẻ KDS
+        $this->attachDeliveryMeta($orders);
 
         return response()->json([
             'success' => true,

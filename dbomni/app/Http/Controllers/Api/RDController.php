@@ -18,6 +18,7 @@ use App\Models\RdProductPrice;
 use App\Models\RdRecipe;
 use App\Models\Recipe;
 use App\Models\Setting;
+use App\Support\CatalogCache;
 use App\Support\RecipeUnitResolver;
 use App\Models\Transaction;
 use App\Models\TransactionCategory;
@@ -62,12 +63,11 @@ class RDController extends Controller
     private function materialUnitCost(Material $m): float
     {
         $latest = $m->batches()->orderByDesc('id')->first();
-        $unitCost = $latest ? (float) $latest->unit_cost : 0.0;
-        $rate = (float) ($m->conversion_rate ?: 1);
-        if ($rate > 0) {
-            $unitCost = $unitCost / $rate;
-        }
-        return $unitCost;
+        // Gói dọn 06/11: batch.unit_cost LUÔN là giá theo ĐƠN VỊ CƠ SỞ (mọi
+        // đường ghi lô đã quy đổi từ giá mua ngay lúc ghi — xem họ Inbound)
+        // nên dùng thẳng. Bản Gói 55 chia thêm conversion_rate ở đây làm giá
+        // vốn NL có đơn vị mua bị thổi lên (VD rate 0,001 → ×1000).
+        return $latest ? (float) $latest->unit_cost : 0.0;
     }
 
     /**
@@ -432,6 +432,11 @@ class RDController extends Controller
         if (trim($p->name) === '' || (float) $p->expected_price <= 0) {
             return response()->json(['success' => false, 'message' => 'Chưa duyệt được: cần tên món và Giá bán dự kiến > 0.'], 422);
         }
+        // Gói dọn 06/11: nháp thiếu đơn vị tính (unit NULL) trước đây lọt vào
+        // Product::create làm SQL lỗi → 500; chặn 422 rõ ràng như các cổng trên.
+        if (trim((string) $p->unit) === '') {
+            return response()->json(['success' => false, 'message' => 'Chưa duyệt được: cần Đơn vị tính cho món (VD: Ly, Phần).'], 422);
+        }
         if ($p->recipes->count() === 0) {
             return response()->json(['success' => false, 'message' => 'Chưa duyệt được: cần ít nhất 1 dòng định mức nguyên liệu.'], 422);
         }
@@ -485,6 +490,7 @@ class RDController extends Controller
             return $product;
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json([
             'success' => true,
             'message' => 'Đã duyệt — món thật đã tạo ở Danh sách mặt hàng. Cần xếp vào Thực đơn mới bán được trên POS/Mini App.',

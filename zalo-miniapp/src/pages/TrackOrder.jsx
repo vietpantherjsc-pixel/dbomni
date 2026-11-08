@@ -4,6 +4,7 @@ import { api, fmt, getProfile } from '../api';
 import TransferGuide from '../components/TransferGuide';
 import ZmIcon from '../components/ZmIcon';
 import { storage } from '../utils/storage';
+import { validPhone } from '../utils/checkoutFields.jsx';
 import { fmtDateTime } from '../utils/format';
 import { TabBar } from './Home';
 
@@ -16,11 +17,14 @@ const STEPS = [
 const ORDER = ['pending', 'processing', 'ready', 'completed'];
 
 // Gói 60: timeline giao hàng (từ webhook hãng, poll 5s)
+// Spec KDS book ship mục 7: thêm nấc "đã đến nơi" (chế độ tay ghi arrived;
+// chế độ hãng suy theo thứ tự bước như các nấc trước)
 const DELIVERY_STEPS = [
   { key: 'searching_driver', label: 'Đang tìm tài xế' },
   { key: 'driver_assigned', label: 'Tài xế đang tới lấy' },
   { key: 'picked_up', label: 'Đã lấy hàng' },
   { key: 'delivering', label: 'Đang giao tới bạn' },
+  { key: 'arrived', label: 'Tài xế đã đến nơi' },
   { key: 'delivered', label: 'Giao thành công' },
 ];
 const DELIVERY_ORDER = DELIVERY_STEPS.map((s) => s.key);
@@ -43,6 +47,9 @@ export default function TrackOrder() {
     // trên trang (bỏ prompt/alert) — lỗi hiện tại chỗ dưới ô tìm
     const phone = getProfile()?.phone || trackPhone || '';
     if (!phone) { setErr('Nhập SĐT đã dùng để đặt đơn ở ô bên dưới để tra cứu.'); return; }
+    // Luật SĐT 2026-11-07 (áp đồng nhất cả ô tra cứu): sai mẫu 0 + 10 số thì
+    // báo ngay tại chỗ thay vì tra trống không rõ vì sao.
+    if (!validPhone(phone)) { setErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     setErr('');
     setTrackPhone(phone);
     setLoading(true);
@@ -107,6 +114,9 @@ export default function TrackOrder() {
           <input type="tel" inputMode="tel" placeholder="SĐT đã dùng để đặt đơn" value={trackPhone} onChange={(e) => setTrackPhone(e.target.value)} style={{ minWidth: 0 }} />
         </div>
       )}
+      {!getProfile()?.phone && trackPhone && !validPhone(trackPhone) && (
+        <div style={{ fontSize: 12, color: '#b91c1c', padding: '0 16px', marginTop: -6, marginBottom: 8 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+      )}
       {err && (
         <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, fontWeight: 600, margin: '0 16px 12px' }}>⚠ {err}</div>
       )}
@@ -152,14 +162,23 @@ export default function TrackOrder() {
 
           {/* S15: địa chỉ giao hàng khách đã nhập — hiện độc lập với trạng thái dispatch
               để khách kiểm lại được ngay từ lúc đặt xong (chỉ đơn giao hàng) */}
+          {/* Sửa 2026-11-07 (#10): trước đây icon + nhãn + địa chỉ là 3 flex
+              item rời trong một hàng → nhãn bị bóp thành cột hẹp gãy từng
+              tiếng, địa chỉ bị ép theo. Nay nhãn nằm trên một dòng riêng,
+              địa chỉ là khối văn bản full bề ngang đọc liền mạch. */}
           {order.order_type === 'delivery' && order.delivery?.address && (
-            <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12, fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <ZmIcon name="mapPin" size={14} /><b style={{ color: '#333' }}>Địa chỉ giao hàng:</b> {order.delivery.address}
+            <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <ZmIcon name="mapPin" size={14} /><b style={{ color: '#333' }}>Địa chỉ giao hàng:</b>
+              </div>
+              <div style={{ fontSize: 13, color: '#555', lineHeight: 1.55, marginTop: 4 }}>{order.delivery.address}</div>
             </div>
           )}
 
-          {/* Gói 60: trạng thái giao hàng live */}
-          {order.delivery?.status && !['failed', 'cancelled'].includes(order.delivery.status) && (
+          {/* Gói 60: trạng thái giao hàng live. Spec KDS book ship mục 7:
+              chế độ tay lúc mới bắt đầu chưa có delivery_status — vẫn hiện
+              khối "Quán tự giao" để khách biết quán đang sắp xếp tài xế */}
+          {(order.delivery?.status || order.delivery?.provider === 'manual') && !['failed', 'cancelled'].includes(order.delivery.status) && (
             <div style={{ margin: '8px 16px', background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: 12 }}>
               <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ZmIcon name="bike" size={14} />Giao hàng · {order.delivery.provider_label || ''}
@@ -169,6 +188,9 @@ export default function TrackOrder() {
                   </span>
                 )}
               </div>
+              {order.delivery.provider === 'manual' && !order.delivery.status && (
+                <div style={{ fontSize: 13, color: '#555', marginBottom: 8 }}>Quán đang sắp xếp tài xế giao cho bạn.</div>
+              )}
               <div className="zm-timeline" style={{ margin: 0 }}>
                 {DELIVERY_STEPS.map((s, i) => {
                   const cur = DELIVERY_ORDER.indexOf(order.delivery.status);
@@ -197,7 +219,9 @@ export default function TrackOrder() {
           )}
           {order.delivery?.status === 'failed' && (
             <div style={{ margin: '8px 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 12, fontSize: 13, color: '#991b1b' }}>
-              ⚠️ Hiện chưa tìm được tài xế. Quán sẽ liên hệ với bạn ngay để chọn: chờ thêm / nhận tại quán / hủy hoàn tiền.
+              ⚠️ Giao hàng chưa thành công. Quán sẽ liên hệ với bạn ngay để chọn: giao lại / nhận tại quán / hủy hoàn tiền.
+              {/* Spec KDS book ship mục 8 C2: lý do thất bại hiện thống nhất cả 2 chế độ */}
+              {order.delivery.failure_reason && <div style={{ marginTop: 4 }}>Lý do: {order.delivery.failure_reason}</div>}
             </div>
           )}
 

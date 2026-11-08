@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Promotion;
 use App\Services\PromotionService;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -104,6 +105,7 @@ class PromotionController extends Controller
         }
 
         $promo = Promotion::create($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'data' => $promo->load('giftProduct')], 201);
     }
 
@@ -132,6 +134,7 @@ class PromotionController extends Controller
             ], 422);
         }
         $promo->update($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         // Gói 50: xóa ảnh banner cũ khi thay bằng ảnh mới (tránh đầy bộ nhớ)
         if (array_key_exists('banner_url', $validated) && $oldBanner && $oldBanner !== $validated['banner_url']) {
             $this->deleteCoverFile($oldBanner);
@@ -147,6 +150,7 @@ class PromotionController extends Controller
             $this->deleteCoverFile($promo->banner_url);
         }
         $promo->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 

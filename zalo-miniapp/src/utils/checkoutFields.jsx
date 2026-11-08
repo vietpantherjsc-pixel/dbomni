@@ -39,3 +39,7 @@ export const formatPhone = (v) => {
   else if (p.startsWith('84') && p.length >= 11) p = '0' + p.slice(2);
   return p;
 };
+// Luật SĐT (Đại Vương chốt 2026-11-07): bắt đầu bằng 0 thì phải đủ đúng
+// 10 chữ số. Kiểm trên số đã chuẩn hóa (+84 → 0) nên gõ dạng quốc tế
+// vẫn qua; thiếu/thừa số đều chặn ngay tại ô nhập.
+export const validPhone = (v) => /^0\d{9}$/.test(formatPhone(v));

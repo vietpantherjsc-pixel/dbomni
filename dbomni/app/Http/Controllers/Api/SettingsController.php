@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -29,6 +30,9 @@ class SettingsController extends Controller
             // trang Tài khoản Mini App — mặc định TẮT (Đại Vương phán tạm ẩn vì
             // luồng bán POS đang hoãn); bật lại ở trang Zalo Mini App (Admin).
             'miniapp_qr_claim_entry' => Setting::get('miniapp_qr_claim_entry', '0'),
+            // Gói chính sách Mini App vào Cài đặt Admin: nội dung chính sách
+            // (đã giải mã; chưa từng sửa → bản mặc định + is_default = true).
+            'miniapp_privacy_policy' => $this->privacyPolicyData(),
             // Gói 26: phụ cấp ăn + tỷ lệ BHXH
             'meal_allowance_min_hours' => Setting::get('meal_allowance_min_hours', '8'),
             'meal_allowance_amount' => Setting::get('meal_allowance_amount', '25000'),
@@ -121,6 +125,139 @@ class SettingsController extends Controller
             Setting::set($key, $value ?? '');
         }
 
+        // Bộ nhớ đệm thực đơn: shop-info đọc 2 key này — đổi thì tăng phiên bản catalog.
+        if (array_intersect_key($validated['settings'], array_flip(['shop_cover_url', 'miniapp_qr_claim_entry']))) {
+            CatalogCache::bump();
+        }
+
         return response()->json(['success' => true, 'message' => 'Đã lưu cấu hình.']);
+    }
+
+    // ===== Gói chính sách Mini App vào Cài đặt Admin (spec đã chốt 2026-11-05) =====
+    // Nội dung "Chính sách — Điều khoản Mini App" lưu ở MỘT khóa settings dạng
+    // JSON {sections: [{title, content} × 5], updated_at} — đúng 5 mục riêng
+    // biệt theo cấu trúc Zalo kiểm duyệt yêu cầu. Đường lưu RIÊNG vì đường lưu
+    // chung ở update() chặn mọi giá trị ở 255 ký tự. Chưa từng sửa (chưa có
+    // khóa) → dùng bản mặc định nguyên văn dưới đây; khôi phục mặc định = xóa
+    // khóa. Không migration, không seed.
+    private const POLICY_KEY = 'miniapp_privacy_policy';
+    private const POLICY_DEFAULT_UPDATED_TEXT = 'Cập nhật lần cuối: tháng 10/2026. Daybreak có thể cập nhật chính sách này; phiên bản mới nhất luôn hiển thị tại đây.';
+
+    /** Bản mặc định NGUYÊN VĂN nội dung popup hiện tại (trước gói này viết cứng ở Mini App). */
+    private function defaultPolicySections(): array
+    {
+        return [
+            ['title' => 'Đơn vị chủ quản', 'content' => 'Daybreak Tea & Coffee — hệ thống cửa hàng trà & cà phê. Mọi thông tin liên hệ hiển thị tại trang chủ ứng dụng theo từng chi nhánh.'],
+            ['title' => 'Dữ liệu chúng tôi thu thập', 'content' => 'Khi bạn sử dụng ứng dụng, chúng tôi có thể thu thập: số điện thoại, tên, địa chỉ giao hàng, vị trí hiện tại (chỉ khi bạn cho phép, để tính phí giao hàng), lịch sử đơn hàng, điểm tích lũy và thông tin thiết bị cơ bản. Email chỉ được thu thập khi bạn tự nguyện cung cấp — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.'],
+            ['title' => 'Mục đích sử dụng', 'content' => 'Dữ liệu được dùng để: xử lý đơn đặt món, giao hàng, quản lý tài khoản thành viên, tích điểm & đổi ưu đãi, gửi thông báo về đơn hàng và chương trình khuyến mại (nếu bạn đồng ý).'],
+            ['title' => 'Thời gian lưu trữ', 'content' => 'Dữ liệu được lưu trữ trong suốt thời gian bạn sử dụng dịch vụ và tối đa 24 tháng sau lần tương tác cuối cùng, trừ khi pháp luật yêu cầu lưu lâu hơn (ví dụ dữ liệu hóa đơn).'],
+            ['title' => 'Rút lại đồng ý & liên hệ', 'content' => 'Bạn có thể rút lại sự đồng ý xử lý dữ liệu bất cứ lúc nào bằng cách liên hệ trực tiếp cửa hàng qua số điện thoại hiển thị tại trang chủ, hoặc yêu cầu xóa tài khoản thành viên. Việc rút lại đồng ý không ảnh hưởng đến tính hợp pháp của việc xử lý trước đó. Bạn vẫn có thể xem thực đơn và đặt món mà không cần đăng nhập thành viên.'],
+        ];
+    }
+
+    /** Hình dạng hợp lệ: đúng 5 mục, tiêu đề + nội dung đều không trống. */
+    private function policySectionsValid($sections): bool
+    {
+        if (!is_array($sections) || count($sections) !== 5) {
+            return false;
+        }
+        foreach ($sections as $s) {
+            if (!is_array($s)
+                || trim((string) ($s['title'] ?? '')) === ''
+                || trim((string) ($s['content'] ?? '')) === '') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Bản chính sách HIỆU LỰC: đã lưu hợp lệ → bản đã lưu; chưa có khóa hoặc
+     * dữ liệu lưu bị hỏng hình dạng → bản mặc định (endpoint không bao giờ
+     * trả popup rỗng / thiếu mục).
+     */
+    private function privacyPolicyData(): array
+    {
+        $raw = Setting::get(self::POLICY_KEY);
+        $decoded = $raw ? json_decode($raw, true) : null;
+        if (is_array($decoded) && $this->policySectionsValid($decoded['sections'] ?? null)) {
+            $updatedAt = isset($decoded['updated_at']) && is_string($decoded['updated_at']) && $decoded['updated_at'] !== ''
+                ? $decoded['updated_at'] : null;
+            return [
+                'sections' => array_values(array_map(
+                    fn($s) => ['title' => (string) $s['title'], 'content' => (string) $s['content']],
+                    $decoded['sections']
+                )),
+                'updated_at' => $updatedAt,
+                'updated_text' => $updatedAt
+                    ? 'Cập nhật lần cuối: ' . \Carbon\Carbon::parse($updatedAt)->format('d/m/Y') . '. Daybreak có thể cập nhật chính sách này; phiên bản mới nhất luôn hiển thị tại đây.'
+                    : self::POLICY_DEFAULT_UPDATED_TEXT,
+                'is_default' => false,
+            ];
+        }
+        return [
+            'sections' => $this->defaultPolicySections(),
+            'updated_at' => null,
+            'updated_text' => self::POLICY_DEFAULT_UPDATED_TEXT,
+            'is_default' => true,
+        ];
+    }
+
+    /** GET /online/privacy-policy — công khai cho Mini App (mở popup mới gọi). */
+    public function publicPrivacyPolicy(): JsonResponse
+    {
+        $d = $this->privacyPolicyData();
+        return response()->json(['success' => true, 'data' => [
+            'sections' => $d['sections'],
+            'updated_text' => $d['updated_text'],
+        ]]);
+    }
+
+    /** POST /settings/privacy-policy — lưu riêng (permission:settings.edit ở route). */
+    public function updatePrivacyPolicy(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'sections' => 'required|array|size:5',
+            'sections.*.title' => 'required|string',
+            'sections.*.content' => 'required|string',
+        ]);
+
+        $sections = [];
+        foreach ($v['sections'] as $s) {
+            // Nội dung là VĂN BẢN THUẦN: bóc mọi thẻ HTML trước khi kiểm
+            // trần ký tự + độ trống (spec mục 2.2).
+            $title = trim(strip_tags((string) $s['title']));
+            $content = trim(strip_tags((string) $s['content']));
+            if ($title === '' || $content === '' || mb_strlen($title) > 120 || mb_strlen($content) > 5000) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Mỗi mục cần tiêu đề (tối đa 120 ký tự) và nội dung (tối đa 5.000 ký tự), không được để trống.',
+                ], 422);
+            }
+            $sections[] = ['title' => $title, 'content' => $content];
+        }
+
+        // updated_at do SERVER ghi (mốc giờ VN) — client gửi kèm cũng bị bỏ qua.
+        Setting::set(self::POLICY_KEY, json_encode([
+            'sections' => $sections,
+            'updated_at' => now('Asia/Ho_Chi_Minh')->toIso8601String(),
+        ], JSON_UNESCAPED_UNICODE));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã lưu chính sách.',
+            'data' => $this->privacyPolicyData(),
+        ]);
+    }
+
+    /** POST /settings/privacy-policy/reset — xóa khóa, quay về bản mặc định. */
+    public function resetPrivacyPolicy(): JsonResponse
+    {
+        Setting::where('key', self::POLICY_KEY)->delete();
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã khôi phục nội dung mặc định.',
+            'data' => $this->privacyPolicyData(),
+        ]);
     }
 }

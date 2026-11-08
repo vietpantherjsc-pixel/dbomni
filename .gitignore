@@ -2,3 +2,6 @@ catalog.sql
 *.zip
 zalo-miniapp/dist/
 /dbomni/public/images/minigame-shares/*
+zalo-miniapp/.env
+zalo-miniapp/www/
+dbomni/promotions-local.sql

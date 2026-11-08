@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { api, fmt, getProfile } from '../api';
+import { validPhone } from '../utils/checkoutFields.jsx';
 
 // Spec Thanh toán QR (2026-10-21) — phương án A (NV xác nhận tay):
 // Khối hướng dẫn chuyển khoản dùng chung cho màn "Chờ thanh toán" (L15) và
@@ -38,7 +39,7 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified, 
       QRCode.toCanvas(canvasRef.current, transfer.vietqr_payload, { width: 224, margin: 1 })
         .catch(() => { /* không sinh được QR thì vẫn còn khối STK sao chép tay */ });
     }
-  }, [transfer?.vietqr_payload, notified, expanded]); // notified/expanded: canvas tháo ra khi thu gọn → mở lại phải vẽ lại QR
+  }, [transfer?.vietqr_payload, notified, expanded, notifiedAt]); // notified/expanded: canvas tháo ra khi thu gọn → mở lại phải vẽ lại QR. notifiedAt (sửa 2026-11-07 #9a): panel chỉ dựng khi notifiedAt hết undefined — thiếu dep này, luồng WaitingPayment (có sẵn transfer từ điều hướng, chờ API chốt cờ) chạy effect lúc canvas CHƯA tồn tại rồi không bao giờ vẽ lại → khung QR trắng trơn trên máy thật.
 
   if (!transfer) return null;
   // Lát 3e (2026-11-04): notifiedAt === undefined nghĩa là trang cha CHƯA biết
@@ -69,6 +70,8 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified, 
   const markNotified = async () => {
     let phone = getProfile()?.phone || phoneInput.trim();
     if (!phone) { setPhoneForm(true); setNotifyErr('Nhập SĐT đã dùng để đặt đơn để quán đối chiếu.'); return; }
+    // Luật SĐT 2026-11-07 (áp đồng nhất): sai mẫu 0 + 10 số thì chặn tại chỗ.
+    if (!validPhone(phone)) { setNotifyErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     setNotifyErr('');
     setSending(true);
     try {
@@ -100,16 +103,18 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified, 
     finally { setSending(false); }
   };
 
+  // Sửa 2026-11-07 (#9b): bố cục 3 cột cố định — nhãn 92px · giá trị co giãn
+  // (mọi giá trị bắt đầu cùng một lề) · nút Sao chép 88px thẳng cột. Trước
+  // đây space-between + nhãn tự do khiến mỗi dòng một kiểu căn, nhãn dài bị
+  // gãy giữa từ, nút chép nhảy vị trí theo độ dài giá trị.
   const row = (label, value, key) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px dashed #eee' }}>
-      <span style={{ fontSize: 13, color: '#888' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <b style={{ fontSize: 14 }}>{value}</b>
-        <button onClick={() => copy(key, value)}
-          style={{ border: '1px solid #ddd', background: '#fff', borderRadius: 8, fontSize: 12, padding: '9px 12px', minHeight: 44, cursor: 'pointer', color: 'var(--zm-primary)', fontWeight: 700 }}>
-          {copied === key ? '✓ Đã chép' : 'Sao chép'}
-        </button>
-      </span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px dashed #eee' }}>
+      <span style={{ width: 92, flexShrink: 0, fontSize: 13, color: '#888' }}>{label}</span>
+      <b style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.45, overflowWrap: 'break-word' }}>{value}</b>
+      <button onClick={() => copy(key, value)}
+        style={{ width: 88, flexShrink: 0, textAlign: 'center', border: '1px solid #ddd', background: '#fff', borderRadius: 8, fontSize: 12, padding: '9px 0', minHeight: 44, cursor: 'pointer', color: 'var(--zm-primary)', fontWeight: 700 }}>
+        {copied === key ? '✓ Đã chép' : 'Sao chép'}
+      </button>
     </div>
   );
 
@@ -159,6 +164,9 @@ export default function TransferGuide({ code, transfer, notifiedAt, onNotified, 
       {phoneForm && !notified && (
         <div className="zm-field" style={{ marginBottom: 10 }}>
           <input type="tel" inputMode="tel" placeholder="SĐT đã dùng để đặt đơn" value={phoneInput} onChange={(e) => setPhoneInput(e.target.value)} />
+          {phoneInput && !validPhone(phoneInput) && (
+            <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+          )}
         </div>
       )}
       {notified ? (

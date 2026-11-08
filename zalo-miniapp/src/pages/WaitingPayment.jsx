@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useLocation, useNavigate, Link } from 'react-router-dom';
 import { api, getProfile } from '../api';
+import { validPhone } from '../utils/checkoutFields.jsx';
 import TransferGuide from '../components/TransferGuide';
 import ZmIcon from '../components/ZmIcon';
 
@@ -39,6 +40,8 @@ export default function WaitingPayment() {
   const cancelOrder = async () => {
     const phone = (getProfile()?.phone || cancelPhone).trim();
     if (!phone) { setCancelErr('Nhập SĐT đã dùng để đặt đơn để xác nhận hủy.'); return; }
+    // Luật SĐT 2026-11-07 (áp đồng nhất): sai mẫu 0 + 10 số thì chặn tại chỗ.
+    if (!validPhone(phone)) { setCancelErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     setCancelErr('');
     setCancelling(true);
     try {
@@ -121,6 +124,9 @@ export default function WaitingPayment() {
             {!getProfile()?.phone && (
               <div className="zm-field" style={{ marginBottom: 10 }}>
                 <input type="tel" inputMode="tel" placeholder="SĐT đã dùng để đặt đơn" value={cancelPhone} onChange={(e) => setCancelPhone(e.target.value)} />
+                {cancelPhone && !validPhone(cancelPhone) && (
+                  <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+                )}
               </div>
             )}
             {cancelErr && <div style={{ fontSize: 12, color: '#b91c1c', fontWeight: 600, marginBottom: 10 }}>⚠ {cancelErr}</div>}

@@ -5,8 +5,12 @@
 import { storage } from './utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk) — TESTER P5: thiếu import gây ReferenceError
 import appConfig from '../app-config.json'; // Gói Đón Bình Minh: app_id lấy từ file cấu hình, không ghi cứng rải rác
 export const API = import.meta.env.VITE_API_BASE || '/api/online';
-// Link mở Mini App chính thức của Zalo (deep-link chia sẻ kèm mã mời)
-export const MINI_APP_ID = appConfig?.app?.id || '';
+// Link mở Mini App chính thức của Zalo (deep-link chia sẻ kèm mã mời).
+// Nguồn ID đúng (2026-11-07): biến môi trường lúc dựng VITE_MINIAPP_ID
+// (Mini App ID lấy tại mini.zalo.me/developers) — app-config do zmp init
+// sinh KHÔNG còn mục app.id, còn file app-config cũ trên cây mang Zalo
+// App ID (không phải Mini App ID) nên chỉ để làm dự phòng cuối.
+export const MINI_APP_ID = import.meta.env.VITE_MINIAPP_ID || appConfig?.app?.id || '';
 export const miniAppLink = (refCode) => `https://zalo.me/s/${MINI_APP_ID}${refCode ? `?ref=${encodeURIComponent(refCode)}` : ''}`;
 export const GREEN = '#24305E'; // fallback; màu thật lấy từ /theme qua loadTheme()
 
@@ -64,12 +68,19 @@ export const api = {
         label: m.name,
         desc: m.type === 'transfer' ? 'Quán xác nhận đã nhận tiền rồi mới làm món' : 'Trả tiền khi nhận món',
       }))
+      // Chốt chặn khử trùng (2026-11-07): bảng cấu hình PTTT có dòng trùng
+      // value (vd 2 dòng chuyển khoản cùng bật cho kênh Zalo) thì checkout
+      // chỉ hiện 1 mục — giữ đúng dòng đầu tiên của mỗi value.
+      .filter((m, i, arr) => arr.findIndex((x) => x.value === m.value) === i)
   ),
   // Gói 50f: gợi ý địa chỉ khi gõ
   geocodeSuggest: (q, lat, lon) => req(`/geocode/suggest?q=${encodeURIComponent(q)}${lat ? `&lat=${lat}&lon=${lon}` : ''}`),
   // Gói 9: trang chủ kiểu GrabFood
   // Gói 10f: shopInfo theo chi nhánh -> cover riêng (chưa có thì cover chung)
   shopInfo: (branchId) => req(`/shop-info${branchId ? `?branch_id=${branchId}` : ''}`),
+  // Gói chính sách Mini App vào Cài đặt Admin: nội dung chính sách mới nhất
+  // (Admin tự sửa ở Thiết lập); popup mở mới gọi, lỗi thì dùng bản dự phòng.
+  privacyPolicy: () => req('/privacy-policy'),
   saleProducts: () => req('/sale-products'),
   topProducts: (branchId) => req(`/top-products${branchId ? `?branch_id=${branchId}` : ''}`), // Gói 34: top 10 bán chạy
   // Gói 9: đặt đơn nhóm
@@ -205,11 +216,16 @@ export const getZaloTokens = async () => {
   const { userInfo } = await getUserInfo({});
   const accessToken = await getAccessToken({});
   let phoneToken = null;
+  // Châm chẩn đoán SĐT (Đại Vương chốt 2026-11-07): GIỮ LẠI lỗi của
+  // getPhoneNumber thay vì nuốt trắng — luồng vẫn đi tiếp như cũ (server
+  // trả B3 nếu cần tạo mới); mã lỗi chỉ phục vụ chẩn đoán ở khung B3.
+  let phoneError = null;
   try {
     const ph = await getPhoneNumber({});
     phoneToken = ph?.token || null;
-  } catch { /* từ chối SĐT → server trả B3 nếu cần tạo mới */ }
-  return { ok: true, accessToken, phoneToken, userInfo };
+    if (!phoneToken) phoneError = { code: 'empty_token', message: 'getPhoneNumber không trả token và không báo lỗi' };
+  } catch (e) { phoneError = { code: String(e?.code ?? e?.error_code ?? e?.error ?? 'unknown'), message: String(e?.message ?? e?.error_message ?? e?.errorMessage ?? '') }; }
+  return { ok: true, accessToken, phoneToken, phoneError, userInfo };
 };
 
 // Spec đăng ký Zalo B §2.1: HÀM XÁC THỰC ZALO DÙNG CHUNG — trang Tài khoản
@@ -245,6 +261,10 @@ export const authWithZalo = async () => {
       setProfile({ ...(getProfile() || {}), phone: json.data.phone, member_code: json.data.member_code, customer_id: json.data.customer_id, zalo_id: json.data.zalo_id });
     }
   }
+  // Châm chẩn đoán SĐT (2026-11-07): gắn kèm trạng thái bước lấy SĐT phía
+  // client để khung B3 phân định nhánh (a) SDK lỗi / (b) server đổi số hỏng.
+  json._phoneSent = !!tk.phoneToken;
+  json._phoneError = tk.phoneError;
   return json;
 };
 

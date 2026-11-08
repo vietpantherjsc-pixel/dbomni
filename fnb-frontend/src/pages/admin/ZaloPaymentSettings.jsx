@@ -15,6 +15,8 @@ const KEYS = [
     'zalo_pay_wait_alert_minutes',
     'zalo_pay_transfer_template',
     'zalo_pay_cod_takeaway_only',
+    // Spec phí giao một nguồn mục 5.1: công tắc thu hộ cho đơn giao hàng
+    'delivery_cod_enabled',
 ];
 
 export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
@@ -37,6 +39,7 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
                     zalo_pay_wait_alert_minutes: d.zalo_pay_wait_alert_minutes ?? '15',
                     zalo_pay_transfer_template: d.zalo_pay_transfer_template ?? 'DAYBREAK {order_code}',
                     zalo_pay_cod_takeaway_only: d.zalo_pay_cod_takeaway_only ?? '1',
+                    delivery_cod_enabled: d.delivery_cod_enabled ?? '0',
                 });
             })
             .catch(() => setLoadErr(true))
@@ -142,6 +145,15 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
                     <div className="font-bold text-[14px]">Trả tại quán (COD)</div>
                     {toggle('zalo_pay_cod_enabled')}
                 </div>
+                {/* Spec phí giao một nguồn mục 5.1: công tắc THU HỘ riêng cho đơn giao hàng */}
+                <div className="flex items-center justify-between mb-1">
+                    <div className="font-bold text-[13px]">Thu hộ (COD) cho đơn giao hàng</div>
+                    {toggle('delivery_cod_enabled')}
+                </div>
+                <div className="text-[12px] mb-3" style={{ color: 'var(--m-ink-soft)' }}>
+                    Tắt: đơn giao hàng chỉ nhận chuyển khoản. Bật: khách trả tiền mặt cho shipper khi nhận món (qua AhaMove, ứng tiền khi lấy hàng).
+                    Đơn giao chỉ dùng được thu hộ khi cả công tắc kênh COD ở trên lẫn công tắc này cùng Bật.
+                </div>
                 <label className="flex items-start gap-2 cursor-pointer">
                     <input
                         type="checkbox"
@@ -151,6 +163,9 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
                     />
                     <span className="text-[13px]">
                         Chỉ cho phép trả tại quán với đơn <b>mang về / hẹn giờ</b> (mặc định BẬT — giảm bùng đơn)
+                        <span className="block text-[12px]" style={{ color: 'var(--m-ink-soft)' }}>
+                            Phạm vi: chỉ là chốt chặn trả-tại-quán-thật ở đường đặt đơn dự phòng — KHÔNG phải công tắc tắt/mở thu hộ cho đơn giao hàng (dùng công tắc ngay phía trên).
+                        </span>
                     </span>
                 </label>
             </div>

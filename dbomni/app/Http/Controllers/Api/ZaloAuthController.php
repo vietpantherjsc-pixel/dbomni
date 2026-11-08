@@ -31,7 +31,7 @@ class ZaloAuthController extends Controller
 
         // Spec đăng nhập SĐT + mật khẩu §4: đổi token + lấy SĐT đã xác thực
         // qua service dùng chung với /customer/password/zalo-set.
-        $verified = ZaloAuthService::verifyTokens($v['access_token'], $v['phone_token'] ?? null);
+        $verified = ZaloAuthService::verifyTokens($v['access_token'], $v['phone_token'] ?? null, 'auth');
         if (!$verified['ok']) {
             return response()->json(['success' => false, 'message' => $verified['message']], $verified['status']);
         }

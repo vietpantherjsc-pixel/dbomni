@@ -24,7 +24,7 @@ export default function Cart() {
     <div className="zm-page">
       <div className="zm-header"><button className="zm-back" onClick={() => nav('/')}>←</button><h1>Giỏ hàng ({count})</h1></div>
       {cart.map((l) => (
-        <div key={l.key} className="zm-row-item" style={{ cursor: 'default' }}>
+        <div key={l.key} className="zm-row-item zm-cart-row" style={{ cursor: 'default' }}>
           <img src={l.product.image_url || '/default-product.svg'} alt="" onError={(e) => { if (!e.target.src.endsWith('/default-product.svg')) e.target.src = '/default-product.svg'; }} />
           <div className="zm-row-info">
             <div className="zm-row-name">{l.product.name}</div>
@@ -34,7 +34,7 @@ export default function Cart() {
             <div className="zm-row-price">{fmt(l.unitPrice * l.qty)}đ</div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-            <div className="zm-qty">
+            <div className="zm-qty-sm">
               <button onClick={() => updateQty(l.key, -1)}>−</button>
               <span>{l.qty}</span>
               <button onClick={() => updateQty(l.key, 1)}>+</button>

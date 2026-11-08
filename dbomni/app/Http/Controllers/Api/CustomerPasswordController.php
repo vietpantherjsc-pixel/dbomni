@@ -137,7 +137,7 @@ class CustomerPasswordController extends Controller
         [$newPassword, $errResp] = $this->newPasswordInput($request);
         if ($errResp) return $errResp;
 
-        $verified = ZaloAuthService::verifyTokens($v['access_token'], $v['phone_token'] ?? null);
+        $verified = ZaloAuthService::verifyTokens($v['access_token'], $v['phone_token'] ?? null, 'zalo-set');
         if (!$verified['ok']) {
             return response()->json(['success' => false, 'message' => $verified['message']], $verified['status']);
         }

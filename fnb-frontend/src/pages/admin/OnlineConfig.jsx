@@ -21,7 +21,7 @@ const imgSrc = (u) => {
 
 export default function OnlineConfig() {
   const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
-    const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '6000' });
+    const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '8000' });
   // Gói 9: cover trang chủ Mini App
   const [cover, setCover] = useState('');
   // Dời từ Thiết lập chung (2026-10-20): banner KM + card Quan tâm OA thuộc cấu hình Mini App

@@ -95,6 +95,7 @@ const Orders = () => {
         driver_assigned: 'Đã có tài xế',
         picked_up: 'Đã lấy hàng',
         delivering: 'Đang giao',
+        arrived: 'Tài xế đã đến nơi',
         delivered: 'Giao thành công',
         failed: 'Giao thất bại',
         cancelled: 'Đã hủy giao',
@@ -502,7 +503,7 @@ const Orders = () => {
                             {selected.delivery_provider && (
                                 <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
                                     <div className="font-bold text-gray-800 mb-1.5">
-                                        {selected.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+                                        {selected.delivery_provider === 'ahamove' ? 'AhaMove' : selected.delivery_provider === 'manual' ? 'Quán tự giao' : 'Lalamove'}
                                         {selected.delivery_failover_from && (
                                             <span className="ml-2 text-[11px] font-medium bg-amber-100 text-amber-700 border border-amber-300 rounded-full px-2 py-0.5">
                                                 Failover từ {selected.delivery_failover_from === 'ahamove' ? 'AhaMove' : 'Lalamove'}
@@ -514,6 +515,10 @@ const Orders = () => {
                                         {selected.delivery_order_id && <div className="flex justify-between"><span>Mã hãng</span><span className="font-mono">{selected.delivery_order_id}</span></div>}
                                         {selected.delivery_driver_name && <div className="flex justify-between"><span>Tài xế</span><span>{selected.delivery_driver_name}{selected.delivery_driver_phone ? ` · ${selected.delivery_driver_phone}` : ''}</span></div>}
                                         {selected.delivery_tracking_url && <div><a href={selected.delivery_tracking_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">📍 Theo dõi tài xế</a></div>}
+                                        {/* Spec KDS book ship mục 5.5: địa chỉ + điểm ghim ĐÃ GỬI HÃNG — căn cứ đối soát khi khiếu nại giao sai điểm */}
+                                        {selected.delivery_address && <div className="flex justify-between gap-3"><span>Địa chỉ đã gửi hãng</span><span className="text-right">{selected.delivery_address}</span></div>}
+                                        {selected.delivery_dropoff_lat && <div className="flex justify-between"><span>Điểm ghim</span><span className="font-mono">{Number(selected.delivery_dropoff_lat).toFixed(5)}, {Number(selected.delivery_dropoff_lng).toFixed(5)}{selected.pin_corrected && <span className="ml-1 text-amber-600 font-bold">· Đã đính chính tại quán</span>}</span></div>}
+                                        {selected.delivery_failure_reason && <div className="flex justify-between"><span>Lý do giao thất bại</span><span className="text-red-600 font-semibold">{selected.delivery_failure_reason}</span></div>}
                                     </div>
                                     {!selected.delivery_order_id && (
                                         <button

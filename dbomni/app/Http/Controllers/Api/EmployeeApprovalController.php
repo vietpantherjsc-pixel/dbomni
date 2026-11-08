@@ -221,6 +221,49 @@ class EmployeeApprovalController extends Controller
         return null;
     }
 
+    /**
+     * Gói chặn tự duyệt (2026-11-06): phân giải người tạo theo bảng mục 4 của
+     * spec → [userId, employeeId] (đúng 1 phía có giá trị, hoặc cả 2 null =
+     * không rõ người tạo). Cùng luật với SelfApprovalGuard ở các method xử lý.
+     */
+    private function creatorIds(string $type, $m): array
+    {
+        return match ($type) {
+            'transaction' => [$m->created_by, $m->created_by_employee_id],
+            'inbound' => [$m->created_by_user_id, $m->created_by_employee_id],
+            // Phiếu xuất cũ: created_by null → employee_id chính là người tạo
+            // (điểm tạo duy nhất ép = actor ở nhánh NV); created_by có giá trị
+            // → employee_id là NV được gán việc, KHÔNG phải người tạo (SA-11b).
+            'outbound' => [$m->created_by, $m->created_by_employee_id ?? ($m->created_by === null ? $m->employee_id : null)],
+            // Phiếu chuyển cũ: phía User của cặp trống → lùi về requested_by.
+            'transfer' => [$m->created_by_user_id ?? $m->requested_by, $m->created_by_employee_id],
+            'stocktake_adjustment' => [null, $m->requested_by_employee_id],
+            default => [null, null],
+        };
+    }
+
+    /** Tên người tạo + cờ "phiếu của chính người xem" cho payload Hub (mục 7.1 của spec). */
+    private function creatorInfo(string $type, $m, Employee $emp): array
+    {
+        [$cu, $ce] = $this->creatorIds($type, $m);
+        $name = null;
+        if ($ce !== null) {
+            $name = $m->createdByEmployee?->full_name
+                ?? $m->requestedBy?->full_name
+                ?? ($type === 'outbound' ? $m->employee?->full_name : null);
+        } elseif ($cu !== null) {
+            $name = $m->createdByUser?->name ?? $m->creator?->name;
+            if ($name === null && $type === 'transfer') {
+                // Phiếu cũ: phía User phân giải từ requested_by (không có quan hệ riêng)
+                $name = \App\Models\User::where('id', $cu)->value('name');
+            }
+        }
+        return [
+            'creator_name' => $name,
+            'is_own' => $ce !== null && (int) $ce === (int) $emp->id,
+        ];
+    }
+
     /** GET /employee/approvals/{type} — danh sách chờ, cũ nhất trước, 20/trang. */
     public function index(Request $request, string $type): JsonResponse
     {
@@ -229,10 +272,10 @@ class EmployeeApprovalController extends Controller
         $bid = $this->branchId($request, $emp);
         $with = match ($type) {
             'inbound' => ['items', 'partner:id,name', 'createdByEmployee:id,full_name', 'createdByUser:id,name'],
-            'outbound' => ['items', 'employee:id,full_name'],
+            'outbound' => ['items', 'employee:id,full_name', 'createdByUser:id,name', 'createdByEmployee:id,full_name'],
             'transfer' => ['items', 'fromBranch:id,name', 'toBranch:id,name', 'createdByEmployee:id,full_name', 'createdByUser:id,name'],
             'stocktake_adjustment' => ['material:id,name,unit', 'requestedBy:id,full_name'],
-            'transaction' => ['category:id,name', 'creator:id,name'],
+            'transaction' => ['category:id,name', 'creator:id,name', 'createdByEmployee:id,full_name'],
             'shift_registration' => ['employee:id,full_name', 'workShift:id,name'],
             'leave_request' => ['employee:id,full_name'],
         };
@@ -242,7 +285,9 @@ class EmployeeApprovalController extends Controller
             ->paginate(20);
         $items = collect($page->items())->map(fn ($m) => array_merge(
             ['id' => $m->id, 'created_at' => $m->created_at],
-            $this->summarize($type, $m)
+            $this->summarize($type, $m),
+            // Gói chặn tự duyệt (2026-11-06): tên người tạo + cờ phiếu của mình
+            $this->creatorInfo($type, $m, $emp)
         ))->values();
         return response()->json(['success' => true, 'data' => $items, 'pagination' => [
             'current_page' => $page->currentPage(), 'last_page' => $page->lastPage(), 'total' => $page->total(),
@@ -291,19 +336,23 @@ class EmployeeApprovalController extends Controller
         abort_unless($m, 404, 'Phiếu không tồn tại hoặc không thuộc chi nhánh này.');
         $with = match ($type) {
             'inbound' => ['items.material:id,name,unit', 'partner:id,name', 'branch:id,name', 'createdByEmployee:id,full_name', 'createdByUser:id,name'],
-            'outbound' => ['items.material:id,name,unit', 'branch:id,name', 'employee:id,full_name'],
+            'outbound' => ['items.material:id,name,unit', 'branch:id,name', 'employee:id,full_name', 'createdByUser:id,name', 'createdByEmployee:id,full_name'],
             'transfer' => ['items.material:id,name,unit', 'fromBranch:id,name', 'toBranch:id,name', 'createdByEmployee:id,full_name', 'createdByUser:id,name'],
             'stocktake_adjustment' => ['material:id,name,unit', 'branch:id,name', 'requestedBy:id,full_name'],
-            'transaction' => ['category:id,name', 'branch:id,name', 'account:id,name', 'partner:id,name', 'creator:id,name'],
+            'transaction' => ['category:id,name', 'branch:id,name', 'account:id,name', 'partner:id,name', 'creator:id,name', 'createdByEmployee:id,full_name'],
             'shift_registration' => ['employee:id,full_name,branch_id', 'employee.branch:id,name', 'workShift'],
             'leave_request' => ['employee:id,full_name,branch_id', 'employee.branch:id,name'],
         };
         $m->load($with);
+        // Gói chặn tự duyệt (2026-11-06): tên người tạo + cờ phiếu của mình
+        $ci = $this->creatorInfo($type, $m, $emp);
         return response()->json(['success' => true, 'data' => [
             'record' => $m,
             'branch_names' => $this->branchNames($type, $m),
             'reject_label' => self::REJECT_LABEL[$type],
             'can_act' => $canAct,
+            'creator_name' => $ci['creator_name'],
+            'is_own' => $ci['is_own'],
         ]]);
     }
 
@@ -383,6 +432,66 @@ class EmployeeApprovalController extends Controller
             $request->merge(['note' => $request->input('reason')]);
         }
         return $this->delegate($type, 'reject', $request, $id);
+    }
+
+    /** Điều kiện "phiếu nợ chờ thu" (Remedy NV-G5, mục 1.2 spec): đã duyệt, đang 'pending', chưa từ chối, còn nợ > 0. */
+    private function debtQuery(int $branchId)
+    {
+        return Transaction::where('branch_id', $branchId)
+            ->where('status', 'pending')
+            ->whereNull('rejected_at')
+            ->where(fn ($w) => $w->whereNotNull('approved_by')->orWhereNotNull('approved_by_employee_id'))
+            ->whereColumn('paid_amount', '<', 'amount');
+    }
+
+    /** GET /employee/debts — phiếu đã duyệt còn nợ tại CN đang chọn, cũ nhất trước, 20/trang (Remedy NV-G5). */
+    public function debts(Request $request): JsonResponse
+    {
+        $emp = $this->employee($request);
+        $bid = $this->branchId($request, $emp);
+        $base = $this->debtQuery($bid);
+        $summary = [
+            'count' => (clone $base)->count(),
+            'total_remaining' => (float) (clone $base)->sum('amount') - (float) (clone $base)->sum('paid_amount'),
+        ];
+        $page = $base->with(['category:id,name', 'partner:id,name'])
+            ->orderBy('created_at')->orderBy('id')
+            ->paginate(20);
+        $items = collect($page->items())->map(fn ($m) => [
+            'id' => $m->id,
+            'code' => $m->code,
+            'type' => $m->type,
+            'category_name' => $m->category?->name,
+            'partner_name' => $m->partner?->name,
+            'amount' => (float) $m->amount,
+            'paid_amount' => (float) $m->paid_amount,
+            'remaining' => $m->remaining(),
+            'created_at' => $m->created_at,
+            'approved_at' => $m->approved_at,
+        ])->values();
+        return response()->json(['success' => true, 'data' => $items, 'summary' => $summary, 'pagination' => [
+            'current_page' => $page->currentPage(), 'last_page' => $page->lastPage(), 'total' => $page->total(),
+        ]]);
+    }
+
+    /** POST /employee/debts/{id}/pay — ghi thanh toán công nợ qua pay() sẵn có, PIN step-up (Remedy NV-G5, mục 1.3). */
+    public function payDebt(Request $request): JsonResponse
+    {
+        // Đọc tham số theo tên từ route như show()/approve() (miễn nhiễm thứ tự tham số).
+        $id = (int) $request->route('id');
+        $emp = $this->employee($request);
+        $bid = $this->branchId($request, $emp);
+        if ($err = $this->checkApprovalToken($request, $emp)) return $err;
+        // Phiếu phải còn đúng điều kiện công nợ chờ thu tại CN đang chọn (chống ghi chồng khi trạng thái vừa đổi).
+        if (!$this->debtQuery($bid)->where('id', $id)->exists()) {
+            return response()->json(['success' => false, 'message' => 'Phiếu đã thay đổi trạng thái — hãy tải lại danh sách.'], 422);
+        }
+        ApprovalActor::set($emp);
+        try {
+            return app(TransactionController::class)->pay($request, $id);
+        } finally {
+            ApprovalActor::clear();
+        }
     }
 
     /** GET /employee/approvals/processed-today — phiếu chính NV này đã xử lý hôm nay (mục 5c, chỉ xem). */

@@ -33,6 +33,22 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+// Đường bo góc an toàn mọi webview: ctx.roundRect là API mới (Chrome 99+/
+// Safari 16+) — webview Zalo trên máy đời cũ chưa có, gọi thẳng sẽ văng và
+// làm gãy bước dựng thẻ chia sẻ (lỗi máy thật 2026-11-07: app rơi vào dòng
+// "Không dựng được thẻ"). Có sẵn thì dùng, không thì tự đi đường bo bằng
+// arcTo — hình ra giống hệt.
+function roundedRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') { ctx.roundRect(x, y, w, h, r); return; }
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
 // Vẽ 1 sprite canh giữa tại (0,0) theo chiều cao h, giữ đúng tỉ lệ thật
 function drawSprite(ctx, img, h) {
   if (!img.complete || img.naturalWidth === 0) return;
@@ -398,8 +414,7 @@ export default function HungTranChau() {
     ctx.fillStyle = NAVY; ctx.fillRect(0, 0, 600, 120);
     // Chi tiết K + mặt trời NGUYÊN BẢN ở header — đặt trong huy hiệu trắng
     // bo góc để thân k navy nổi trên nền header navy
-    ctx.beginPath();
-    ctx.roundRect(22, 14, 92, 92, 18);
+    roundedRectPath(ctx, 22, 14, 92, 92, 18);
     ctx.fillStyle = '#FFFFFF';
     ctx.fill();
     if (kSunImg.complete && kSunImg.naturalWidth > 0) {

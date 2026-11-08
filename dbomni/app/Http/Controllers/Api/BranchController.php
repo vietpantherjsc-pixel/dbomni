@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Branch;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -33,6 +34,7 @@ class BranchController extends Controller
         ]);
         $branch = Branch::findOrFail($id);
         $branch->update($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã cập nhật chi nhánh.', 'data' => $branch]);
     }
 
@@ -49,6 +51,7 @@ class BranchController extends Controller
             'opening_hours' => 'nullable|array', // Gói 55 p2: giờ mở cửa JSON
         ]);
         $branch = Branch::create($validated);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã tạo chi nhánh.', 'data' => $branch], 201);
     }
 }

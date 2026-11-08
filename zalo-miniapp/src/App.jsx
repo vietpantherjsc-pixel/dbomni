@@ -21,13 +21,29 @@ import { loadTheme, captureRef } from './api';
 const GamePage = lazy(() => import('./pages/games/HungTranChau'));
 const GameRules = lazy(() => import('./pages/GameRules'));
 
+// Gói xử lý khởi tạo Zalo (2026-11-07): bên trong Zalo, app được phục vụ
+// dưới thư mục /zapps/<Mini App ID>/ và tài liệu chuyển đổi chính thức yêu
+// cầu router lấy đúng tiền tố đó làm base — thiếu nó, thao tác chuyển
+// trang (kể cả route '*' về '/') đẩy URL ra NGOÀI thư mục app, webview
+// nạp lại ở URL đó là app chết (đã có bằng chứng mô phỏng). Basename được
+// SUY RA TỪ CHÍNH URL hiện tại: khớp mẫu /zapps/<số> ở đầu pathname thì
+// dùng làm basename; bản web chạy trên trình duyệt ở gốc '/' không khớp
+// → không basename, hành vi giữ nguyên. Cách này không phụ thuộc hằng ID
+// (app-config sau zmp init không còn trường id).
+const ZALO_BASENAME = (() => {
+  try {
+    const m = window.location.pathname.match(/^\/zapps\/\d+/);
+    return m ? m[0] : undefined;
+  } catch { return undefined; }
+})();
+
 export default function App() {
   // Gói Đón Bình Minh (2026-10-28): bắt mã mời ngay khi app khởi động (cả 2
   // nguồn: URL + tham số khởi động zmp-sdk) — không phụ thuộc trang đích.
   useEffect(() => { loadTheme(); captureRef(); }, []);
   return (
     <ShopProvider>
-      <BrowserRouter>
+      <BrowserRouter basename={ZALO_BASENAME}>
         <Routes>
           <Route path="/branches" element={<BranchSelect />} />
           <Route path="/" element={<Home />} />

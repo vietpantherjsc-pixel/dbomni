@@ -17,6 +17,8 @@ class Transaction extends Model
         // Gói "Chờ duyệt trên Hub" (2026-10-21): người duyệt/từ chối là Employee + trạng thái từ chối
         'approved_by_employee_id', 'rejected_at', 'reject_reason', 'rejected_by', 'rejected_by_employee_id',
         'status', 'payment_method', 'related_type', 'related_id', 'note', 'created_by',
+        // Gói chặn tự duyệt (2026-11-06): người tạo phía NV (migration 000100)
+        'created_by_employee_id',
     ];
 
     protected $casts = [
@@ -41,6 +43,12 @@ class Transaction extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    // Gói chặn tự duyệt (2026-11-06): người tạo là NV (phiếu tạo qua Hub)
+    public function createdByEmployee(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Employee::class, 'created_by_employee_id');
     }
 
     // Gói 59: người duyệt phiếu (null = chờ duyệt)

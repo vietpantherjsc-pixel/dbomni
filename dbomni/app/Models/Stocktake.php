@@ -15,8 +15,11 @@ class Stocktake extends Model
     // Gọi trong DB::transaction khi tạo phiếu (giống InboundReceipt::nextCode).
     public static function nextCode(): string
     {
-        $count = static::query()->lockForUpdate()->count();
-        return \App\Helpers\CodeGenerator::generate('stocktake', $count + 1, false);
+        // Đồng bộ mã có ngày (Đại Vương lệnh 2026-11-06): đếm THEO NGÀY + cờ
+        // withDate như PN/CK/PT/PC — trước đây đếm toàn cục, mã KK thiếu đoạn
+        // YYYYMMDD. Đường Hub dùng chung method này nên tự đồng bộ theo.
+        $count = static::query()->whereDate('created_at', now()->toDateString())->lockForUpdate()->count();
+        return \App\Helpers\CodeGenerator::generate('stocktake', $count + 1, true);
     }
 
     protected $casts = [

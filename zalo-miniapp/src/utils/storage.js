@@ -3,12 +3,29 @@
 // - Khi dev web: dùng localStorage.
 // - Cache trong bộ nhớ cho các chỗ đọc đồng bộ; hydrate() nạp 1 lần khi app khởi động.
 // CẤM dùng localStorage/document.cookie trực tiếp ở file khác — qua module này.
-import { getStorage, setStorage, removeStorage } from 'zmp-sdk/apis';
+// Gói vá khởi tạo Mini App (2026-11-07, V3): nạp zmp-sdk/apis bằng import
+// ĐỘNG có .catch như mọi chỗ khác trong app (api.js) — trước đây đây là
+// import TĨNH duy nhất của SDK; SDK lỗi/không sẵn sàng thì storage rơi về
+// cache bộ nhớ, tuyệt đối không giết đồ thị module của entry.
+let sdkApisPromise = null;
+const loadApis = () => {
+    if (!sdkApisPromise) {
+        sdkApisPromise = import('zmp-sdk/apis').catch(() => null);
+    }
+    return sdkApisPromise;
+};
 
-export const KEYS = ['zm_branch', 'zm_profile', 'zm_zalo_profile', 'zm_account_cover', 'zm_cart', 'zm_ref', 'zm_groups', 'zm_last_order', 'zm_oa_followed'];
+// V2: 'zm_session' (token phiên khách) phải có trong danh sách hydrate —
+// thiếu nó thì phiên không bao giờ được nạp lại sau reload.
+export const KEYS = ['zm_branch', 'zm_profile', 'zm_zalo_profile', 'zm_account_cover', 'zm_cart', 'zm_ref', 'zm_groups', 'zm_last_order', 'zm_oa_followed', 'zm_session'];
 
+// Nhận diện môi trường Zalo (2026-11-07): ngoài dấu hiệu cũ ZaloJSBridge
+// phải nhận thêm ZaloJavaScriptInterface — cầu nối hiện hành mà chính
+// zmp-sdk v2 dùng để gọi native (bản cũ chỉ chờ ZaloJSBridge nên trong
+// Zalo thật hàm này trả false vĩnh viễn: đăng nhập Zalo bị chặn ở cổng
+// not_zalo và storage lặng lẽ rơi về nhánh localStorage dự phòng).
 const isZalo = () => {
-    try { return typeof window !== 'undefined' && !!window.ZaloJSBridge; } catch { return false; }
+    try { return typeof window !== 'undefined' && (!!window.ZaloJSBridge || !!window.ZaloJavaScriptInterface); } catch { return false; }
 };
 
 const cache = {};
@@ -19,8 +36,11 @@ export async function hydrateStorage() {
     hydrated = true;
     if (isZalo()) {
         try {
-            const { data } = await getStorage({ keys: KEYS });
-            for (const k of KEYS) cache[k] = data?.[k] ?? null;
+            const apis = await loadApis();
+            if (apis?.getStorage) {
+                const { data } = await apis.getStorage({ keys: KEYS });
+                for (const k of KEYS) cache[k] = data?.[k] ?? null;
+            }
         } catch { /* giữ null */ }
     } else {
         for (const k of KEYS) {
@@ -31,7 +51,10 @@ export async function hydrateStorage() {
 
 const persist = async (key, value) => {
     if (isZalo()) {
-        try { await setStorage({ data: { [key]: value } }); } catch {}
+        const apis = await loadApis();
+        if (apis?.setStorage) {
+            try { await apis.setStorage({ data: { [key]: value } }); } catch {}
+        }
     } else {
         try {
             if (value === null || value === undefined) localStorage.removeItem(key);

@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\OptionGroup;
 use App\Models\Product;
 use App\Models\ProductOption;
+use App\Support\CatalogCache;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -71,6 +72,8 @@ class ImportOptionGroups extends Command
             $this->info("Gán nhóm: {$linked} món | Không tìm thấy món: {$missing}");
         });
 
+        // Bộ nhớ đệm thực đơn: lệnh này tạo nhóm/tùy chọn + gán nhóm vào món.
+        CatalogCache::bump();
         $this->info('Import nhóm tùy chọn hoàn tất.');
         return 0;
     }

@@ -17,6 +17,7 @@ use App\Models\VoucherUsage;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
 use App\Services\PromotionService;
+use App\Support\CatalogCache;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -32,9 +33,19 @@ class OnlineOrderController extends Controller
     // Danh sách chi nhánh (kèm địa chỉ + tọa độ để tính ship)
     public function branches(): JsonResponse
     {
-        // Gói 55 p1: thêm phone; p2: thêm opening_hours để Mini App hiện trạng thái mở cửa
-        $branches = Branch::select('id', 'name', 'address', 'phone', 'opening_hours', 'latitude', 'longitude')->get();
-        return response()->json(['success' => true, 'data' => $branches]);
+        // Bộ nhớ đệm thực đơn (spec 2026-11-05): chỉ đệm payload hiển thị
+        // này; header X-Catalog-Cache để vòng đo nhìn thấy trạng thái đệm.
+        [$data, $status] = CatalogCache::remember(
+            CatalogCache::branchesKey(),
+            CatalogCache::TTL,
+            function () {
+                // Gói 55 p1: thêm phone; p2: thêm opening_hours để Mini App hiện trạng thái mở cửa
+                return Branch::select('id', 'name', 'address', 'phone', 'opening_hours', 'latitude', 'longitude')
+                    ->get()->toArray();
+            }
+        );
+        return response()->json(['success' => true, 'data' => $data])
+            ->header('X-Catalog-Cache', $status);
     }
 
     // Thực đơn cho Mini App (ẩn món "Phí dịch vụ")
@@ -60,86 +71,109 @@ class OnlineOrderController extends Controller
     // Gói 9: thông tin hiển thị trang chủ Mini App (cover + điểm thưởng giới thiệu)
     public function shopInfo(Request $request): JsonResponse
     {
-        // Gói 10f: ưu tiên cover riêng của chi nhánh, chưa có thì dùng cover chung
-        $cover = Setting::get('shop_cover_url', '');
-        if ($request->branch_id) {
-            $branchCover = Branch::where('id', $request->branch_id)->value('cover_url');
-            if ($branchCover) $cover = $branchCover;
-        }
+        $branchId = (int) $request->query('branch_id', 0);
+        // Bộ nhớ đệm thực đơn (spec 2026-11-05): cover lưu trong đệm ở
+        // dạng GỐC như trong DB (có thể là đường dẫn tương đối) — bước
+        // ghép host tuyệt đối (Gói 50b) tách ra ngoài phần được đệm và
+        // chạy lại theo request sau khi lấy dữ liệu, kẻo đệm ghim host
+        // của request đầu tiên (Admin/zma dùng chung API) vào mọi khách.
+        [$data, $status] = CatalogCache::remember(
+            CatalogCache::shopInfoKey($branchId),
+            CatalogCache::TTL,
+            function () use ($branchId) {
+                // Gói 10f: ưu tiên cover riêng của chi nhánh, chưa có thì dùng cover chung
+                $cover = Setting::get('shop_cover_url', '');
+                if ($branchId > 0) {
+                    $branchCover = Branch::where('id', $branchId)->value('cover_url');
+                    if ($branchCover) $cover = $branchCover;
+                }
+                return [
+                    'cover_url' => $cover,
+                    // Gói Mini App 2026-10-30: cờ hiện mục Quét QR tích điểm ở trang Tài
+                    // khoản — mặc định ẩn, Admin bật ở trang Zalo Mini App khi cần dùng.
+                    'qr_claim_entry' => filter_var(Setting::get('miniapp_qr_claim_entry', '0'), FILTER_VALIDATE_BOOLEAN),
+                ];
+            }
+        );
         // Gói 50b: chuẩn hóa thành URL tuyệt đối theo host thật (sửa dữ liệu cũ relative/localhost)
-        if ($cover && !preg_match('#^https?://#i', $cover)) {
-            $cover = $request->getSchemeAndHttpHost() . '/' . ltrim($cover, '/');
+        if (!empty($data['cover_url']) && !preg_match('#^https?://#i', $data['cover_url'])) {
+            $data['cover_url'] = $request->getSchemeAndHttpHost() . '/' . ltrim($data['cover_url'], '/');
         }
-        return response()->json(['success' => true, 'data' => [
-            'cover_url' => $cover,
-            // Gói Mini App 2026-10-30: cờ hiện mục Quét QR tích điểm ở trang Tài
-            // khoản — mặc định ẩn, Admin bật ở trang Zalo Mini App khi cần dùng.
-            'qr_claim_entry' => filter_var(Setting::get('miniapp_qr_claim_entry', '0'), FILTER_VALIDATE_BOOLEAN),
-        ]]);
+        return response()->json(['success' => true, 'data' => $data])
+            ->header('X-Catalog-Cache', $status);
     }
 
     // Gói 9: món đang giảm giá (KM scope theo món/danh mục, áp dụng kênh online)
     public function saleProducts(): JsonResponse
     {
-        $now = now();
-        $promos = Promotion::where('is_active', true)
-            ->whereIn('scope', ['product', 'category', 'menu']) // Gói 10: thêm phạm vi Thực đơn
-            ->whereIn('type', ['percent', 'fixed_price'])
-            ->where(function ($q) use ($now) {
-                $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now);
-            })
-            ->where(function ($q) use ($now) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '>=', $now);
-            })
-            ->get()
-            ->filter(function ($p) {
-                $channels = $p->channels ?? [];
-                return empty($channels) || in_array('online', $channels);
-            });
+        // Bộ nhớ đệm thực đơn (spec 2026-11-05): chỉ đệm payload hiển thị
+        // này; header X-Catalog-Cache để vòng đo nhìn thấy trạng thái đệm.
+        [$data, $status] = CatalogCache::remember(
+            CatalogCache::saleProductsKey(),
+            CatalogCache::TTL,
+            function () {
+                $now = now();
+                $promos = Promotion::where('is_active', true)
+                    ->whereIn('scope', ['product', 'category', 'menu']) // Gói 10: thêm phạm vi Thực đơn
+                    ->whereIn('type', ['percent', 'fixed_price'])
+                    ->where(function ($q) use ($now) {
+                        $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now);
+                    })
+                    ->where(function ($q) use ($now) {
+                        $q->whereNull('expires_at')->orWhere('expires_at', '>=', $now);
+                    })
+                    ->get()
+                    ->filter(function ($p) {
+                        $channels = $p->channels ?? [];
+                        return empty($channels) || in_array('online', $channels);
+                    });
 
-        $best = []; // product_id => ['sale_price'=>x, 'promo_name'=>y]
-        foreach ($promos as $promo) {
-            // Gói 10: resolve món theo phạm vi product/category/menu
-            $ids = match ($promo->scope) {
-                'product' => ($promo->scope_ids ?? []),
-                'category' => Product::whereIn('category_id', $promo->scope_ids ?? [])->pluck('id')->all(),
-                'menu' => \Illuminate\Support\Facades\DB::table('menu_product')
-                    ->whereIn('menu_id', $promo->scope_ids ?? [])
-                    ->distinct()->pluck('product_id')->all(),
-                default => [],
-            };
-            foreach ($ids as $pid) {
-                $product = Product::where('id', $pid)->where('is_active', true)
-                    ->where('is_service_fee', false)->with(['prices.priceList', 'categoryPrices'])->first();
-                if (!$product) continue;
-                $base = $product->online_price;
-                $sale = $promo->type === 'percent'
-                    ? $base * (1 - (float) $promo->value / 100)
-                    : min($base, (float) $promo->value);
-                if ($sale < $base && (!isset($best[$pid]) || $sale < $best[$pid]['sale_price'])) {
-                    $best[$pid] = [
-                        'product' => $product,
-                        'sale_price' => round($sale),
-                        'promo_name' => $promo->name,
-                    ];
+                $best = []; // product_id => ['sale_price'=>x, 'promo_name'=>y]
+                foreach ($promos as $promo) {
+                    // Gói 10: resolve món theo phạm vi product/category/menu
+                    $ids = match ($promo->scope) {
+                        'product' => ($promo->scope_ids ?? []),
+                        'category' => Product::whereIn('category_id', $promo->scope_ids ?? [])->pluck('id')->all(),
+                        'menu' => \Illuminate\Support\Facades\DB::table('menu_product')
+                            ->whereIn('menu_id', $promo->scope_ids ?? [])
+                            ->distinct()->pluck('product_id')->all(),
+                        default => [],
+                    };
+                    foreach ($ids as $pid) {
+                        $product = Product::where('id', $pid)->where('is_active', true)
+                            ->where('is_service_fee', false)->with(['prices.priceList', 'categoryPrices'])->first();
+                        if (!$product) continue;
+                        $base = $product->online_price;
+                        $sale = $promo->type === 'percent'
+                            ? $base * (1 - (float) $promo->value / 100)
+                            : min($base, (float) $promo->value);
+                        if ($sale < $base && (!isset($best[$pid]) || $sale < $best[$pid]['sale_price'])) {
+                            $best[$pid] = [
+                                'product' => $product,
+                                'sale_price' => round($sale),
+                                'promo_name' => $promo->name,
+                            ];
+                        }
+                    }
                 }
+
+                return collect($best)->map(function ($b) {
+                    $p = $b['product'];
+                    return [
+                        'id' => $p->id,
+                        'name' => $p->name,
+                        'image_url' => $p->image_url,
+                        'base_price' => (float) $p->base_price,
+                        'online_price' => $p->online_price,
+                        'sale_price' => $b['sale_price'],
+                        'promo_name' => $b['promo_name'],
+                    ];
+                })->values()->all();
             }
-        }
+        );
 
-        $data = collect($best)->map(function ($b) {
-            $p = $b['product'];
-            return [
-                'id' => $p->id,
-                'name' => $p->name,
-                'image_url' => $p->image_url,
-                'base_price' => (float) $p->base_price,
-                'online_price' => $p->online_price,
-                'sale_price' => $b['sale_price'],
-                'promo_name' => $b['promo_name'],
-            ];
-        })->values();
-
-        return response()->json(['success' => true, 'data' => $data]);
+        return response()->json(['success' => true, 'data' => $data])
+            ->header('X-Catalog-Cache', $status);
     }
 
     // Gói 34: top 10 món bán chạy trong 30 ngày qua (theo tổng số lượng, chỉ đơn completed)
@@ -147,32 +181,51 @@ class OnlineOrderController extends Controller
     public function topProducts(Request $request): JsonResponse
     {
         $branchId = (int) $request->query('branch_id', 0);
-        $since = now()->subDays(30);
-        $rows = DB::table('order_items')
-            ->join('orders', 'orders.id', '=', 'order_items.order_id')
-            ->where('orders.status', 'completed')
-            ->whereNotNull('order_items.product_id')
-            ->where('orders.created_at', '>=', $since)
-            ->when($branchId > 0, fn ($q) => $q->where('orders.branch_id', $branchId))
-            ->groupBy('order_items.product_id')
-            ->selectRaw('order_items.product_id, SUM(order_items.quantity) AS total_sold')
-            ->orderByDesc('total_sold')
-            ->limit(10)
-            ->get();
+        // Bộ nhớ đệm thực đơn (spec 2026-11-05): top-products KHÔNG theo
+        // phiên bản catalog (nguồn là đơn hàng đổi liên tục) — chỉ sống
+        // bằng TTL 120s. Header X-Catalog-Cache để vòng đo nhìn thấy trạng
+        // thái đệm.
+        [$data, $status] = CatalogCache::remember(
+            CatalogCache::topProductsKey($branchId),
+            CatalogCache::TOP_TTL,
+            function () use ($branchId) {
+                $since = now()->subDays(30);
+                $rows = DB::table('order_items')
+                    ->join('orders', 'orders.id', '=', 'order_items.order_id')
+                    ->where('orders.status', 'completed')
+                    ->whereNotNull('order_items.product_id')
+                    ->where('orders.created_at', '>=', $since)
+                    ->when($branchId > 0, fn ($q) => $q->where('orders.branch_id', $branchId))
+                    ->groupBy('order_items.product_id')
+                    ->selectRaw('order_items.product_id, SUM(order_items.quantity) AS total_sold')
+                    ->orderByDesc('total_sold')
+                    ->limit(10)
+                    ->get();
 
-        return response()->json(['success' => true, 'data' => $rows->map(fn ($r) => [
-            'product_id' => (int) $r->product_id,
-            'total_sold' => (int) $r->total_sold,
-        ])->values()]);
+                return $rows->map(fn ($r) => [
+                    'product_id' => (int) $r->product_id,
+                    'total_sold' => (int) $r->total_sold,
+                ])->values()->all();
+            }
+        );
+
+        return response()->json(['success' => true, 'data' => $data])
+            ->header('X-Catalog-Cache', $status);
     }
 
     // Cấu hình phí ship
     public function shipConfig(): JsonResponse
     {
+        $deliveryService = app(\App\Services\Delivery\DeliveryService::class);
         return response()->json(['success' => true, 'data' => [
             'base_fee' => (float) Setting::get('ship_base_fee', 20000),
             'base_km' => (float) Setting::get('ship_base_km', 2),
-            'per_km' => (float) Setting::get('ship_per_km', 6000),
+            'per_km' => (float) Setting::get('ship_per_km', 8000),
+            // Spec phí giao một nguồn mục 4.3: quán hỗ trợ phí ship áp thống
+            // nhất — client hiển thị đúng số server sẽ chốt (hỗ trợ là lớp
+            // giảm trên phí bảng, cùng nguồn cấu hình với applySupport).
+            'support_threshold' => $deliveryService->supportThreshold(),
+            'support_amount' => $deliveryService->supportAmount(),
         ]]);
     }
 
@@ -342,7 +395,7 @@ class OnlineOrderController extends Controller
     {
         $baseFee = (float) Setting::get('ship_base_fee', 20000);
         $baseKm = (float) Setting::get('ship_base_km', 2);
-        $perKm = (float) Setting::get('ship_per_km', 6000);
+        $perKm = (float) Setting::get('ship_per_km', 8000);
         if ($km <= $baseKm) {
             return $baseFee;
         }
@@ -384,33 +437,22 @@ class OnlineOrderController extends Controller
         return 'Quán đã đóng cửa (mở lại ' . $open . ')';
     }
 
-    // Gói 55 p11ac: server tự tính khoảng cách (không tin distance_km client gửi)
-    // Trả về null nếu không geocode được -> phí ship để quán xác nhận
-    private function serverDistanceKm(string $address, $branch): ?float
+    // Spec phí giao MỘT NGUỒN (2026-11-06): khoảng cách = haversine giữa tọa
+    // độ chi nhánh và tọa độ điểm giao ĐÃ GHIM tại checkout (client gửi kèm
+    // đơn) — làm tròn 0,1 km như công thức ở mọi tầng. Server KHÔNG geocode
+    // lại chuỗi địa chỉ (hàm serverDistanceKm cũ đã xóa hẳn theo spec mục 3).
+    // Trả về null khi thiếu tọa độ ở một trong hai đầu -> phí để quán xác nhận.
+    private function pinnedDistanceKm($branch, array $validated): ?float
     {
-        if (empty($branch->latitude) || empty($branch->longitude)) return null;
-        try {
-            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query([
-                'format' => 'json', 'limit' => 1, 'countrycodes' => 'vn', 'q' => $address,
-            ]);
-            $ctx = stream_context_create(['http' => [
-                'timeout' => 8,
-                'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
-            ]]);
-            $raw = @file_get_contents($url, false, $ctx);
-            if ($raw === false) return null;
-            $data = json_decode($raw, true);
-            if (empty($data[0]['lat']) || empty($data[0]['lon'])) return null;
-            $lat1 = deg2rad((float) $branch->latitude);
-            $lon1 = deg2rad((float) $branch->longitude);
-            $lat2 = deg2rad((float) $data[0]['lat']);
-            $lon2 = deg2rad((float) $data[0]['lon']);
-            $dLat = $lat2 - $lat1; $dLon = $lon2 - $lon1;
-            $a = sin($dLat / 2) ** 2 + cos($lat1) * cos($lat2) * sin($dLon / 2) ** 2;
-            return round(2 * 6371 * asin(sqrt($a)), 1);
-        } catch (\Throwable $e) {
-            return null;
-        }
+        if (!$branch || empty($branch->latitude) || empty($branch->longitude)) return null;
+        if (!isset($validated['delivery_dropoff_lat']) || !isset($validated['delivery_dropoff_lng'])) return null;
+        $lat1 = deg2rad((float) $branch->latitude);
+        $lon1 = deg2rad((float) $branch->longitude);
+        $lat2 = deg2rad((float) $validated['delivery_dropoff_lat']);
+        $lon2 = deg2rad((float) $validated['delivery_dropoff_lng']);
+        $dLat = $lat2 - $lat1; $dLon = $lon2 - $lon1;
+        $a = sin($dLat / 2) ** 2 + cos($lat1) * cos($lat2) * sin($dLon / 2) ** 2;
+        return round(2 * 6371 * asin(sqrt($a)), 1);
     }
 
     // KM đủ điều kiện cho kênh online
@@ -846,17 +888,30 @@ class OnlineOrderController extends Controller
             'items.*.note' => 'nullable|string|max:255',
         ]);
 
-        // Đợt fix rà soát VPS (S8): khớp quy tắc COD của đường /checkout-orders
-        // (PaymentController) — "Trả tại quán" không đi với đơn giao hàng khi quán
-        // bật chỉ-mang-về (zalo_pay_cod_takeaway_only, mặc định bật). Đường tạo đơn
-        // thường trước đây thiếu chốt này nên đơn giao hàng vẫn trả tại quán được.
+        // Spec phí giao một nguồn mục 5 (2026-11-06; thay chốt S8 cũ): đơn
+        // GIAO HÀNG không bao giờ trả-tại-quán-thật. Đơn giao chỉ thu tiền mặt
+        // qua kênh COD của cổng Zalo — và chỉ khi CẢ 2 công tắc cùng bật:
+        // kênh COD (zalo_pay_cod_enabled) + thu hộ cho đơn giao
+        // (delivery_cod_enabled, mặc định TẮT = giai đoạn đầu chỉ chuyển khoản).
+        // pay_channel chỉ có ở đường /checkout-orders (PaymentController kiểm
+        // kênh trước khi gọi tới đây); đường thường không gửi → coi là
+        // trả-tại-quán-thật → chặn như chốt S8 trước đây. Cờ
+        // zalo_pay_cod_takeaway_only thu hẹp về đúng vai trò này (mục 5.1).
         if (($validated['payment_method'] ?? null) === 'pay_at_store'
-            && ($validated['order_type'] ?? null) === 'delivery'
-            && (bool) Setting::get('zalo_pay_cod_takeaway_only', '1')) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Trả tại quán chỉ áp dụng cho đơn mang về/hẹn giờ.',
-            ], 422);
+            && ($validated['order_type'] ?? null) === 'delivery') {
+            $isCodChannel = ($request->input('pay_channel') === 'COD');
+            $codAllowed = $isCodChannel
+                && (bool) Setting::get('zalo_pay_cod_enabled', '1')
+                && (bool) Setting::get('delivery_cod_enabled', '0');
+            $blocked = $isCodChannel
+                ? !$codAllowed
+                : (bool) Setting::get('zalo_pay_cod_takeaway_only', '1');
+            if ($blocked) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Trả tại quán chỉ áp dụng cho đơn mang về/hẹn giờ.',
+                ], 422);
+            }
         }
 
         // Sổ #95 (2026-11-05): chốt giờ đóng cửa ở SERVER — trước đây chỉ UI
@@ -978,71 +1033,31 @@ class OnlineOrderController extends Controller
                     $customer->save();
                 }
 
-                // 3. Phí ship (đơn giao hàng) — server tự tính, KHÔNG tin client.
-                // Gói 10c: chưa cộng dòng "Phí dịch vụ" vội — đợi trừ KM phí ship (bước 5b).
-                // Gói 61b: khi đã cấu hình hãng giao hàng, BẮT BUỘC phải có báo giá hãng:
-                // - client phải gửi delivery_quoted_fee (từ API quote lúc checkout);
-                // - server gọi lại quote để đối chiếu, lệch quá 5.000đ → báo lỗi bắt báo giá lại,
-                //   KHÔNG tự ý thay bằng phí khác (checklist #6).
-                // - quote thất bại → chặn đơn, không rơi về phí 0đ (checklist #5).
+                // 3. Phí ship (đơn giao hàng) — Spec phí giao MỘT NGUỒN
+                // (2026-11-06): bảng phí nội bộ là nguồn DUY NHẤT ở mọi bề mặt.
+                // Khoảng cách = haversine giữa tọa độ chi nhánh và tọa độ điểm
+                // giao ĐÃ GHIM tại checkout (delivery_dropoff_lat/lng do client
+                // gửi) — server KHÔNG geocode lại chuỗi địa chỉ, KHÔNG gọi báo
+                // giá hãng để chốt phí (báo giá hãng chỉ còn cho Admin/điều
+                // phối). Thiếu tọa độ (hoặc chi nhánh chưa có tọa độ) → phí 0đ
+                // + ghi chú "Quán xác nhận phí ship", đơn vẫn đặt được.
+                // Hỗ trợ phí ship của quán áp THỐNG NHẤT trên phí bảng (mục
+                // 4.3); KM phí ship/freeship trừ tiếp ở bước 5/5b như cũ.
                 $shippingFee = 0;
                 $distanceKm = null;
                 $shipNote = null;
-                $deliveryQuote = null;
                 if ($validated['order_type'] === 'delivery') {
                     $branch = Branch::find($validated['branch_id']);
-                    $deliveryService = app(\App\Services\Delivery\DeliveryService::class);
-                    if ($deliveryService->isConfigured()) {
-                        if (empty($validated['delivery_quoted_fee'])) {
-                            throw new Exception('Chưa có báo giá phí ship. Vui lòng quay lại kiểm tra phí ship trước khi đặt đơn.');
-                        }
-                        $fresh = $deliveryService->quote([
-                            'pickup_lat' => (float) $branch->latitude,
-                            'pickup_lng' => (float) $branch->longitude,
-                            'pickup_address' => $branch->address ?? $branch->name,
-                            'dropoff_address' => $validated['delivery_address'] ?? '',
-                            'dropoff_lat' => isset($validated['delivery_dropoff_lat']) ? (float) $validated['delivery_dropoff_lat'] : null,
-                            'dropoff_lng' => isset($validated['delivery_dropoff_lng']) ? (float) $validated['delivery_dropoff_lng'] : null,
-                            'cod_amount' => 0,
-                        ]);
-                        if (!$fresh['success']) {
-                            throw new Exception('Chưa giao được tới địa chỉ này. Vui lòng thử địa chỉ khác hoặc chọn nhận tại quán.');
-                        }
-                        $quotedFee = (int) $validated['delivery_quoted_fee'];
-                        $matched = false;
-                        $quotedDistance = null;
-                        $matchedPkgFee = null;
-                        foreach ($fresh['providers'] as $p) {
-                            foreach ($p['packages'] as $pkg) {
-                                if (abs($pkg['fee'] - $quotedFee) <= 5000) {
-                                    $matched = true;
-                                    $quotedDistance = $p['distance_km'];
-                                    $matchedPkgFee = (int) $pkg['fee'];
-                                    break 2;
-                                }
-                            }
-                        }
-                        if (!$matched) {
-                            throw new Exception('Phí ship đã thay đổi so với lúc báo giá. Vui lòng kiểm tra lại phí ship trước khi đặt đơn.');
-                        }
-                        // Audit toàn diện 2026-10-21 🔴1: KHÔNG thu full phí hãng khi quán có hỗ trợ.
-                        // Server tự tính lại customer_pays bằng đúng applySupport của báo giá
-                        // (dựa trên subtotal server tự tính) — tổng chốt đơn + VietQR khớp số
-                        // khách đã thấy ở checkout. Áp cho cả đơn thường lẫn đơn nhóm (dùng chung store()).
-                        $supportCalc = $deliveryService->applySupport((int) $subtotal, $matchedPkgFee);
-                        $shippingFee = (int) $supportCalc['charged'];
-                        $distanceKm = $quotedDistance;
-                        $deliveryQuote = $fresh;
+                    $distanceKm = $this->pinnedDistanceKm($branch, $validated);
+                    if ($distanceKm !== null) {
+                        $shippingFee = (int) $this->calcShipFee($distanceKm);
+                        $deliveryService = app(\App\Services\Delivery\DeliveryService::class);
+                        $shippingFee = (int) $deliveryService->applySupport((int) $subtotal, $shippingFee)['charged'];
                     } else {
-                        // Fallback luồng cũ: geocode + bảng phí nội bộ
-                        $distanceKm = $this->serverDistanceKm($validated['delivery_address'] ?? '', $branch);
-                        if ($distanceKm !== null) {
-                            $shippingFee = $this->calcShipFee($distanceKm);
-                        } else {
-                            $shipNote = 'Quán xác nhận phí ship';
-                        }
+                        $shipNote = 'Quán xác nhận phí ship';
                     }
                 }
+
 
                 $discountAmount = 0;
 
@@ -1344,7 +1359,10 @@ class OnlineOrderController extends Controller
                     // Gói 61b: lưu hãng của gói khách chọn (không để createForOrder tự đoán)
                     'delivery_package' => $validated['delivery_package'] ?? 'nhanh',
                     'delivery_provider' => $validated['delivery_provider'] ?? null,
-                    'delivery_quoted_fee' => $validated['delivery_quoted_fee'] ?? $shippingFee,
+                    // Spec phí giao MỘT NGUỒN: cột này là TRUY VẾT phí hãng —
+                    // chỉ ghi khi tạo đơn hãng ở khâu điều phối (khởi tạo null);
+                    // client cũ còn gửi delivery_quoted_fee thì server bỏ qua.
+                    'delivery_quoted_fee' => null,
                     'delivery_fee_charged' => $shippingFee,
                     // Gói 61b: tọa độ điểm giao để hãng báo giá/tạo đơn chính xác
                     'delivery_dropoff_lat' => $validated['delivery_dropoff_lat'] ?? null,
@@ -1514,9 +1532,18 @@ class OnlineOrderController extends Controller
                 'address' => $order->delivery_address,
                 'provider' => $order->delivery_provider,
                 'provider_label' => $order->delivery_provider === 'ahamove' ? 'AhaMove'
-                    : ($order->delivery_provider === 'lalamove' ? 'Lalamove' : null),
+                    : ($order->delivery_provider === 'lalamove' ? 'Lalamove'
+                    // Spec KDS book ship mục 7: chế độ tay hiển thị "Quán tự giao"
+                    : ($order->delivery_provider === 'manual' ? 'Quán tự giao' : null)),
                 'status' => $order->delivery_status,
                 'status_label' => \App\Services\Delivery\DeliveryService::labels()[$order->delivery_status] ?? null,
+                // Spec KDS book ship mục 8 C2: lý do giao thất bại (nếu có) để
+                // app khách hiện thống nhất cả 2 chế độ
+                'failure_reason' => $order->delivery_status === \App\Services\Delivery\DeliveryService::ST_FAILED
+                    ? (\App\Models\DeliveryLog::where('order_id', $order->id)
+                        ->whereIn('event', ['manual.failed', 'delivery.failed'])
+                        ->orderByDesc('created_at')->first()?->payload['reason'] ?? null)
+                    : null,
                 'package' => $order->delivery_package,
                 'tracking_url' => $order->delivery_tracking_url,
                 'driver_name' => $order->delivery_driver_name,
@@ -1749,97 +1776,12 @@ class OnlineOrderController extends Controller
             }
         }
         try {
-            $order = DB::transaction(function () use ($id, $inventoryService, $loyaltyService) {
-                $order = Order::with('items')->lockForUpdate()->findOrFail($id);
-
-                if ($order->online_channel !== 'zalo') {
-                    throw new Exception('Chỉ xác nhận được đơn online.');
-                }
-                if ($order->status === 'cancelled') {
-                    throw new Exception('Đơn đã bị hủy.');
-                }
-                if ($order->stock_deducted) {
-                    throw new Exception('Đơn đã được xác nhận trước đó.');
-                }
-
-                // Trừ kho (món "Phí dịch vụ" không có BOM nên tự bỏ qua)
-                // Gói 8a: trừ định mức cơ bản + định mức từng tùy chọn đã chọn
-                // Gói 55 p11ac: lưu giá vốn vào order_items
-                // Gói 55 p11ad: log xuất kho kèm order_id
-                $matCosts = $inventoryService->deductStock(
-                    $order->branch_id,
-                    $order->items->map(fn($item) => [
-                        'product_id' => $item->product_id,
-                        'product_option_id' => $item->product_option_id,
-                        'option_ids' => $item->options ? array_keys((array) $item->options) : [],
-                        'quantity' => $item->quantity,
-                    ])->toArray(),
-                    ['type' => 'order', 'id' => $order->id, 'note' => 'Xác nhận thanh toán online']
-                );
-                foreach ($order->items as $item) {
-                    $item->update(['unit_cost' => $this->calcItemUnitCost($item, $matCosts)]);
-                }
-
-                $order->payment_status = 'paid';
-                $order->status = 'processing'; // Gói 11: xác nhận xong vào thẳng "Đang Pha Chế" (KDS đã thu tiền)
-                $order->stock_deducted = true;
-                $order->save();
-
-                // Tích điểm
-                if ($order->customer_id) {
-                    $customer = Customer::find($order->customer_id);
-                    if ($customer) {
-                        $order->points_earned = $loyaltyService->earnForOrder($customer, $order, (float) $order->total_amount);
-                        $order->save();
-                    }
-                }
-
-                // SPEC-02: trigger coupon tự động sau khi xác nhận thanh toán
-                if ($order->customer_id) {
-                    try {
-                        $couponService = app(\App\Services\AutoIssueCouponService::class);
-                        $customer = $order->customer;
-                        if ($customer) {
-                            // CP-01: đơn đầu tiên (truyền đơn nguồn để ghi source_order_id)
-                            $couponService->onFirstOrder($customer, $order);
-                            // CP-02: referral (cả 2 bên)
-                            $couponService->onReferralFirstOrder($order);
-                            // CP-03: tích tem
-                            $couponService->onOrderStamp($customer, $order);
-                            // CP-10: coupon đơn tiếp theo (chỉ Mini App)
-                            $couponService->onNextOrderCoupon($customer, $order);
-                        }
-                    } catch (\Throwable $e) {
-                        \Illuminate\Support\Facades\Log::warning('[Coupon] Auto-issue failed', [
-                            'order' => $order->code, 'msg' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
-                return $order->load(['items.product', 'customer']);
-            });
-
-            // HD-R2: đơn online delivery xác nhận qua confirmPayment (bypass updateStatus)
-            // → tạo đơn hãng ngay tại đây (luồng chính Mini App, Gói 61 phụ thuộc).
-            // Tạo thất bại không chặn luồng: đơn nằm chờ, Admin bấm "thử tạo lại".
-            if ($order->order_type === 'delivery' && !$order->delivery_order_id) {
-                try {
-                    $service = app(\App\Services\Delivery\DeliveryService::class);
-                    if ($service->isConfigured()) {
-                        $cod = $order->payment_status === 'paid' ? 0 : (int) round((float) $order->total_amount);
-                        $order->delivery_cod_amount = $cod;
-                        // Audit 2026-10-21 🔴1: GIỮ phí gốc đã lưu lúc tạo đơn (đối soát hãng);
-                        // chỉ fallback khi chưa có (đơn cũ) — không ghi đè bằng phí khách chịu nữa.
-                        $order->delivery_quoted_fee = $order->delivery_quoted_fee ?? $order->delivery_fee_charged ?? $order->shipping_fee;
-                        $order->save();
-                        $service->createForOrder($order->fresh(), []);
-                    }
-                } catch (\Throwable $e) {
-                    \Illuminate\Support\Facades\Log::warning('[Delivery] confirmPayment createForOrder failed', [
-                        'order' => $order->code, 'msg' => $e->getMessage(),
-                    ]);
-                }
-            }
+            // Thân nghiệp vụ (trừ kho + paid + tích điểm + coupon + tạo đơn
+            // hãng) đã tách sang điểm xác nhận CHUNG OnlinePaymentConfirmer
+            // (2026-11-06) để webhook CIA của hãng dùng lại đúng một điểm —
+            // controller chỉ giữ kiểm quyền CN + bọc response như cũ.
+            $order = Order::findOrFail($id);
+            $order = app(\App\Services\OnlinePaymentConfirmer::class)->confirm($order);
 
             return response()->json([
                 'success' => true,
@@ -1870,7 +1812,10 @@ class OnlineOrderController extends Controller
      * - Tùy chọn: phân biệt fixed (product_id NULL) / per_product (đúng món) theo quantity_mode
      * - Gộp product_option_id (size) của dòng đơn vào danh sách option (trước đây bỏ sót)
      */
-    private function calcItemUnitCost($item, array $materialCosts): float
+    // Mở public (2026-11-06): điểm xác nhận thanh toán chung
+    // App\Services\OnlinePaymentConfirmer dùng lại ĐÚNG công thức giá vốn
+    // này cho cả cửa NV bấm lẫn cửa webhook CIA của hãng — không chép lại.
+    public function calcItemUnitCost($item, array $materialCosts): float
     {
         if (empty($materialCosts) || empty($item->product_id)) {
             return 0;

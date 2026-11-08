@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, API, fmt, imgUrl, getProfile, setProfile, profileIdentity, authWithZalo, getSession, setSession, clearSession, getZaloTokens } from '../api';
+import { validPhone } from '../utils/checkoutFields.jsx';
 import { fmtDate } from '../utils/format';
 import { TabBar } from './Home';
 import { storage } from '../utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk)
 import ConsentCheck from '../components/ConsentCheck'; // Spec đăng ký Zalo B: ô đồng ý dùng chung
 import ZmIcon from '../components/ZmIcon';
+import pearlCluster from '../assets/game-pearl-cluster.png'; // Decor thẻ Minigame phương án C: cụm trân châu GỐC của game (không vẽ lại)
 
 // Gói 55 p5: Mục thu gọn — mặc định đóng, bấm mới xổ xuống (tránh trang dài)
 function Collapsible({ icon, title, badge, children, defaultOpen = false }) {
@@ -413,17 +415,22 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
       {/* Minigame (2026-11-01): thẻ lối vào game NGAY DƯỚI Cửa hàng điểm, trước
           PromoCarousel — chèn thêm, không đổi mọi khối Phương án A khác */}
       {mgState?.enabled && (
-        <button onClick={() => nav('/game')} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: '#fff', border: '1px solid #e3e8f2', borderRadius: 14, padding: '13px 16px', marginTop: 12, minHeight: 56, cursor: 'pointer' }}>
-          <span style={{ fontSize: 26, flexShrink: 0 }}>🧋</span>
-          <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ display: 'block', fontWeight: 800, fontSize: 14.5, color: '#24305E' }}>Chơi Hứng Trân Châu</span>
-            <span style={{ display: 'block', fontSize: 12, color: '#8a93a6', marginTop: 2 }}>
+        /* Decor phương án C "Navy sang trọng" (Đại Vương chốt 2026-11-07, theo
+           demo-decor-the-minigame-20261107 cardC): nền gradient navy + viền
+           vàng + cụm trân châu GỐC của game in chìm. Chỉ thay lớp trình bày —
+           điều kiện hiện, vị trí, điều hướng /game và dữ liệu sống giữ nguyên. */
+        <button onClick={() => nav('/game')} style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'linear-gradient(120deg, #171f3d, #24305E 70%)', border: '1px solid #c9973f', borderRadius: 16, padding: 16, marginTop: 12, minHeight: 56, cursor: 'pointer', color: '#fff' }}>
+          <img src={pearlCluster} alt="" style={{ position: 'absolute', right: -16, top: -20, height: 120, opacity: 0.35, pointerEvents: 'none' }} />
+          <span style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 2 }}>
+            <span style={{ display: 'block', fontSize: 10.5, fontWeight: 800, letterSpacing: 1.6, color: '#F5A623' }}>MINIGAME DAYBREAK</span>
+            <span style={{ display: 'block', fontSize: 16.5, fontWeight: 900, marginTop: 3 }}>Hứng Trân Châu</span>
+            <span style={{ display: 'block', fontSize: 12.5, color: '#aebadd', marginTop: 3 }}>
               {mgState.plays_left_today > 0
                 ? `Còn ${mgState.plays_left_today} lượt hôm nay · đã nhận ${fmt(mgState.earned_today)}/${fmt(mgState.daily_cap_points)} điểm`
                 : 'Chơi giải trí không giới hạn ›'}
             </span>
           </span>
-          <span style={{ color: '#c3cadb', fontSize: 18, flexShrink: 0 }}>›</span>
+          <span style={{ position: 'relative', zIndex: 2, color: '#F5A623', fontWeight: 800, fontSize: 13.5, whiteSpace: 'nowrap', flexShrink: 0 }}>Chơi ngay ›</span>
         </button>
       )}
 
@@ -651,6 +658,8 @@ export default function Account() {
   // mật khẩu, không lộ tài khoản có/không có mật khẩu).
   const lookup = async () => {
     if (!phone.trim()) { alert('Vui lòng nhập số điện thoại.'); return; }
+    // Luật SĐT 2026-11-07: sai mẫu 0 + 10 số → chặn ngay, lỗi đỏ hiện tại ô.
+    if (!validPhone(phone)) return;
     if (!password) { alert('Vui lòng nhập mật khẩu.'); return; }
     // Spec P4-P5 (NĐ 13/2023): đăng nhập thành viên cần đồng ý xử lý dữ liệu.
     // Không đồng ý → vẫn xem menu/đặt món, chỉ không đăng nhập/tích điểm.
@@ -698,6 +707,7 @@ export default function Account() {
         r = await api.passwordZaloSet({ access_token: tk.accessToken, phone_token: tk.phoneToken, new_password: pwNew, new_password_confirmation: pwConfirm });
       } else if (pwSheet === 'counter-set') {
         if (!pwPhone.trim()) { setPwErrs(['Nhập số điện thoại của tài khoản.']); return; }
+        if (!validPhone(pwPhone)) { setPwErrs(['Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.']); return; }
         r = await api.passwordCounterSet({ phone: pwPhone.trim(), new_password: pwNew, new_password_confirmation: pwConfirm });
       }
       if (!r.success) {
@@ -740,7 +750,9 @@ export default function Account() {
         return;
       }
       if (!json.success) {
-        if (json.code === 'phone_permission_required') { setZaloB3(true); return; }
+        if (json.code === 'phone_permission_required') {
+          setZaloB3(true); return;
+        }
         alert(json.message || 'Không đăng ký được bằng Zalo.');
         return;
       }
@@ -800,6 +812,7 @@ export default function Account() {
     setWelcome(null);
     setRotatedNotice('');
     setZaloB3(false);
+    setZaloDiag('');
   };
 
   return (
@@ -850,6 +863,9 @@ export default function Account() {
           {/* Spec đăng nhập SĐT + mật khẩu §5.4: form phụ SĐT + mật khẩu. */}
           <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
             <input placeholder="Số điện thoại" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
+            {phone && !validPhone(phone) && (
+              <div style={{ fontSize: 12, color: '#b91c1c' }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+            )}
             <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
               <input placeholder="Mật khẩu" type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
               <button type="button" onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
@@ -1012,9 +1028,19 @@ export default function Account() {
             <div style={{ borderTop: '1px solid #f5f5f5', marginTop: 14, paddingTop: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#24305E' }}>Email (không bắt buộc)</div>
               <div style={{ fontSize: 12.5, color: '#888', marginTop: 2, lineHeight: 1.5 }}>Không bắt buộc — chỉ dùng cho thông báo bảo mật và hỗ trợ khôi phục tài khoản, không dùng cho quảng cáo.</div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'stretch' }}>
+              {/* Vá UX 2026-11-07: hàng nhập email mang class zm-search như hàng
+                  mật khẩu ở form đăng nhập phụ — input mới nhận được kiểu dáng
+                  chuẩn (.zm-search input: viền · radius 12 · padding · cỡ chữ).
+                  Trước đây div thường không có class tổ tiên → input trần sụp
+                  thành 1 vạch. margin của .zm-search (gutter trang 12/16) được
+                  trung hòa bằng longhand inline để hàng giữ đúng vị trí trong thẻ. */}
+              <div className="zm-search" style={{ display: 'flex', gap: 8, marginTop: 8, marginLeft: 0, marginRight: 0, marginBottom: 0, alignItems: 'stretch' }}>
                 <input placeholder="Email của bạn" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setEmailMsg(''); }} style={{ flex: 1, minWidth: 0 }} />
-                <button className="zm-btn-outline" onClick={saveEmail} style={{ minHeight: 44, padding: '0 14px' }}>Lưu</button>
+                {/* Vá delta §BK 2026-11-07: .zm-btn-outline mang width: 100% (index.css)
+                    → trong hàng flex, width 100% thành flex-basis của nút, bóp
+                    input còn ~30px. Ghi đè đúng mẫu nhà (lỗi ô coupon Checkout):
+                    width auto + không co (flexShrink 0). */}
+                <button className="zm-btn-outline" onClick={saveEmail} style={{ width: 'auto', flexShrink: 0, minHeight: 44, padding: '0 14px' }}>Lưu</button>
               </div>
               {emailMsg && <div style={{ fontSize: 12.5, color: '#16a34a', marginTop: 6 }}>{emailMsg}</div>}
             </div>
@@ -1061,18 +1087,21 @@ export default function Account() {
             {pwSheet === 'counter-set' && (
               <div style={{ fontSize: 13, color: '#555', marginTop: 6, lineHeight: 1.5 }}>Nhân viên đã mở cửa sổ hỗ trợ tại quầy (15 phút). Nhập SĐT của tài khoản và mật khẩu mới trên máy của bạn.</div>
             )}
+            {/* Vá gốc họ lỗi ô email (2026-11-07): trước đây các ô trong sheet
+                nằm TRẦN ngoài khung field chuẩn → webview render bóp dẹt mất
+                chiều cao. Nay mọi ô đều bọc .zm-field như form chuẩn của app. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
               {pwSheet === 'change' && (
-                <input placeholder="Mật khẩu hiện tại" type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} />
+                <div className="zm-field" style={{ marginBottom: 0 }}><input placeholder="Mật khẩu hiện tại" type="password" value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} /></div>
               )}
               {pwSheet === 'counter-set' && (
-                <input placeholder="Số điện thoại của tài khoản" value={pwPhone} onChange={(e) => setPwPhone(e.target.value)} inputMode="tel" />
+                <div className="zm-field" style={{ marginBottom: 0 }}><input placeholder="Số điện thoại của tài khoản" value={pwPhone} onChange={(e) => setPwPhone(e.target.value)} inputMode="tel" /></div>
               )}
               <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-                <input placeholder="Mật khẩu mới" type={showPwNew ? 'text' : 'password'} value={pwNew} onChange={(e) => setPwNew(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+                <div className="zm-field" style={{ flex: 1, minWidth: 0, marginBottom: 0 }}><input placeholder="Mật khẩu mới" type={showPwNew ? 'text' : 'password'} value={pwNew} onChange={(e) => setPwNew(e.target.value)} /></div>
                 <button type="button" onClick={() => setShowPwNew(!showPwNew)} style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 13, color: '#24305E' }}>{showPwNew ? 'Ẩn' : 'Hiện'}</button>
               </div>
-              <input placeholder="Nhập lại mật khẩu mới" type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} />
+              <div className="zm-field" style={{ marginBottom: 0 }}><input placeholder="Nhập lại mật khẩu mới" type="password" value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} /></div>
             </div>
             <div style={{ fontSize: 12.5, color: '#888', marginTop: 10, lineHeight: 1.5 }}>Mật khẩu tối thiểu 8 ký tự, có chữ in hoa và ký tự đặc biệt, không trùng SĐT, không chứa chuỗi liên tiếp (1234, abcd, qwer).</div>
             {pwErrs.length > 0 && (

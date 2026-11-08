@@ -86,7 +86,7 @@ td{padding:1mm 0;border-bottom:1px dashed #999}.t{font-weight:bold;font-size:12p
 }
 
 // Dòng đơn hàng dạng danh sách
-function KdsOrderRow({ ord, elapsed, typeLabel, children }) {
+function KdsOrderRow({ ord, elapsed, typeLabel, warnLine, children }) {
   // P0-2: badge cảnh báo khi có món ghi chú (ít đá/ít đường...) để barista mở chi tiết
   const hasItemNote = (ord.items || []).some((it) => it.note && String(it.note).trim());
   return (
@@ -100,6 +100,11 @@ function KdsOrderRow({ ord, elapsed, typeLabel, children }) {
       {hasItemNote && (
         <div className="px-2.5 py-1.5 rounded-xl bg-amber-400 text-slate-900 text-xs font-extrabold animate-pulse">
           📝 Đơn có ghi chú món — bấm "Xem" để đọc kỹ
+        </div>
+      )}
+      {warnLine && (
+        <div className="px-2.5 py-1.5 rounded-xl bg-red-500/20 border border-red-500/60 text-red-300 text-xs font-extrabold animate-pulse">
+          {warnLine}
         </div>
       )}
       <div className="flex items-center justify-between">
@@ -160,10 +165,17 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
         </div>
         <div className="text-xs text-slate-400 mt-3 space-y-1">
           {ord.customer_name && <p>👤 {ord.customer_name} ({ord.customer_phone})</p>}
-          {ord.delivery_address && <p>📍 {ord.delivery_address}</p>}
+          {/* Spec KDS book ship mục 5.5: địa chỉ + điểm ghim ĐÃ GỬI HÃNG kèm dấu đính chính — căn cứ đối soát khi khiếu nại giao sai điểm */}
+          {ord.delivery_address && (
+            <p>📍 {ord.delivery_address}
+              {ord.delivery_dropoff_lat && <> · Ghim: {Number(ord.delivery_dropoff_lat).toFixed(5)}, {Number(ord.delivery_dropoff_lng).toFixed(5)}</>}
+              {ord.pin_corrected && <span className="text-amber-400 font-bold"> · Đã đính chính tại quán</span>}
+            </p>
+          )}
+          {ord.delivery_failure_reason && <p className="text-red-400 font-bold">✖ Lý do giao thất bại: {ord.delivery_failure_reason}</p>}
           {/* Gói 60: thông tin tài xế giao hàng */}
           {ord.delivery_provider && (
-            <p>🛵 {ord.delivery_provider === 'ahamove' ? 'AhaMove' : 'Lalamove'}
+            <p>🛵 {ord.delivery_provider === 'ahamove' ? 'AhaMove' : ord.delivery_provider === 'manual' ? 'Quán tự giao' : 'Lalamove'}
               {ord.delivery_failover_from && <span className="text-amber-400"> (failover)</span>}
               {ord.delivery_driver_name && <> · 👤 {ord.delivery_driver_name} ({ord.delivery_driver_phone})</>}
             </p>
@@ -229,6 +241,374 @@ function ReprintPop({ ord, onClose }) {
   );
 }
 
+// ============================================================
+// Spec KDS book ship (2026-11-06): khối giao hàng trên thẻ đơn cột Chờ Giao
+// + popup Đặt Giao Hàng (báo phí · đối chiếu địa chỉ · đính chính ghim).
+// ============================================================
+
+const fmtMoney = (n) => `${Number(n || 0).toLocaleString('vi-VN')}đ`;
+const PROV_LABEL = { ahamove: 'AhaMove', lalamove: 'Lalamove', manual: 'Quán tự giao' };
+
+// Bản đồ nhỏ OSM (ô gạch zoom 17, không cần thư viện): hiện điểm ghim,
+// bấm vào bản đồ để đặt lại ghim (đính chính mục 5.4)
+function PinMap({ center, pin, onPick }) {
+  const Z = 17, TS = 256, W = 3 * TS, H = 2 * TS;
+  const merc = (lat, lng) => {
+    const s = TS * Math.pow(2, Z);
+    const rad = (lat * Math.PI) / 180;
+    return {
+      x: ((lng + 180) / 360) * s,
+      y: ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * s,
+    };
+  };
+  const inv = (x, y) => {
+    const s = TS * Math.pow(2, Z);
+    const lng = (x / s) * 360 - 180;
+    const n = Math.PI - (2 * Math.PI * y) / s;
+    const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    return { lat: Math.round(lat * 1e7) / 1e7, lng: Math.round(lng * 1e7) / 1e7 };
+  };
+  const c = merc(center.lat, center.lng);
+  const x0 = Math.floor((c.x - W / 2) / TS), y0 = Math.floor((c.y - H / 2) / TS);
+  const tiles = [];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) {
+    const tx = x0 + i, ty = y0 + j;
+    tiles.push(
+      <img key={`${tx}-${ty}`} src={`https://tile.openstreetmap.org/${Z}/${tx}/${ty}.png`} alt="" draggable={false}
+        style={{ position: 'absolute', left: tx * TS - (c.x - W / 2), top: ty * TS - (c.y - H / 2), width: TS, height: TS }} />
+    );
+  }
+  const pinPos = pin ? (() => { const p = merc(pin.lat, pin.lng); return { left: p.x - (c.x - W / 2), top: p.y - (c.y - H / 2) }; })() : null;
+  const pick = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const bx = (e.clientX - r.left) - (r.width - W) / 2 + (c.x - W / 2);
+    const by = (e.clientY - r.top) - (r.height - H) / 2 + (c.y - H / 2);
+    onPick(inv(bx, by));
+  };
+  return (
+    <div onClick={pick} title="Bấm vào bản đồ để đặt lại điểm ghim"
+      style={{ position: 'relative', width: '100%', height: 220, overflow: 'hidden', borderRadius: 12, cursor: 'crosshair', background: '#0f172a' }}>
+      <div style={{ position: 'absolute', left: '50%', top: '50%', width: W, height: H, transform: 'translate(-50%,-50%)' }}>
+        {tiles}
+        {pinPos && (
+          <div style={{ position: 'absolute', left: pinPos.left, top: pinPos.top, transform: 'translate(-50%,-100%)', fontSize: 28, pointerEvents: 'none', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,.6))' }}>📍</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Popup Đặt Giao Hàng: báo phí 2 hãng + quán chịu (mục 6b) + khối đối chiếu
+// địa chỉ (mục 5.2) + cảnh báo lệch phía client (5.3b) + đính chính ghim (5.4)
+function BookShipPop({ ord, onClose, onRefresh }) {
+  const [quote, setQuote] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [showMap, setShowMap] = useState(false);
+  const [draftPin, setDraftPin] = useState(null);
+  const [mismatch, setMismatch] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sugQ, setSugQ] = useState('');
+  const [sugs, setSugs] = useState([]);
+
+  const loadQuote = async () => {
+    setLoading(true); setErr('');
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/delivery/quote`);
+      if (res.data?.success) { setQuote(res.data.data); setDraftPin(null); setArmed(false); }
+      else setErr(res.data?.message || 'Không báo được phí');
+    } catch (e) { setErr(e.response?.data?.message || 'Không báo được phí'); }
+    setLoading(false);
+  };
+  useEffect(() => { loadQuote(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ord.id]);
+
+  const pin = draftPin || (quote?.has_pin ? { lat: quote.pin_lat, lng: quote.pin_lng } : null);
+  const center = pin || (quote?.pickup_lat ? { lat: quote.pickup_lat, lng: quote.pickup_lng } : { lat: 10.7769, lng: 106.7009 });
+
+  // Mục 5.3b: so lệch ghim ↔ địa chỉ chữ NGAY PHÍA CLIENT (reverse-geocode
+  // điểm ghim lấy quận/phường rồi đối chiếu với địa chỉ chữ). Chỉ cảnh báo —
+  // không gửi server, không vào payload đặt. Geocoder lỗi/không rõ → im lặng.
+  useEffect(() => {
+    if (!quote?.has_pin) { setMismatch(false); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&lat=${quote.pin_lat}&lon=${quote.pin_lng}`);
+        const j = await r.json();
+        const a = j.address || {};
+        const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd')
+          .replace(/\b(quan|huyen|thi xa|thanh pho|phuong|xa)\b/g, ' ').replace(/\s+/g, ' ').trim();
+        const addrN = norm(quote.address);
+        const cands = [a.city_district, a.district, a.county, a.town].map(norm).filter((x) => x.length >= 3);
+        if (!alive || !cands.length) return;
+        setMismatch(!cands.some((cd) => addrN.includes(cd)));
+      } catch { /* im lặng bỏ qua */ }
+    })();
+    return () => { alive = false; };
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [quote?.pin_lat, quote?.pin_lng]);
+
+  const searchAddr = async () => {
+    if (!sugQ.trim()) return;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=vn&q=${encodeURIComponent(sugQ)}`);
+      const j = await r.json();
+      setSugs(Array.isArray(j) ? j : []);
+    } catch { setSugs([]); }
+  };
+
+  const savePin = async () => {
+    if (!draftPin) return;
+    setBusy(true);
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/delivery/pin`, { lat: draftPin.lat, lng: draftPin.lng });
+      if (res.data?.success) { setSugs([]); await loadQuote(); }
+      else alert(res.data?.message || 'Không lưu được điểm ghim');
+    } catch (e) { alert(e.response?.data?.message || 'Không lưu được điểm ghim'); }
+    setBusy(false);
+  };
+
+  const doBook = async () => {
+    if (mismatch && !armed) { setArmed(true); return; } // cảnh báo lệch: xác nhận thêm 1 lần
+    setBusy(true);
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/delivery/book`);
+      if (res.data?.success) { onRefresh(); onClose(); }
+      else alert(res.data?.message || 'Đặt hãng thất bại');
+    } catch (e) { alert(e.response?.data?.message || 'Đặt hãng thất bại'); }
+    setBusy(false);
+  };
+
+  const doManual = async () => {
+    setBusy(true);
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/delivery/manual/start`);
+      if (res.data?.success) { onRefresh(); onClose(); }
+      else alert(res.data?.message || 'Không bắt đầu được chế độ Quán Tự Đặt');
+    } catch (e) { alert(e.response?.data?.message || 'Không bắt đầu được chế độ Quán Tự Đặt'); }
+    setBusy(false);
+  };
+
+  const willLabel = quote?.will_use ? (quote.providers[quote.will_use]?.label || PROV_LABEL[quote.will_use]) : null;
+  const bookDisabled = loading || !quote || !quote.has_pin || !quote.will_use || busy || !!draftPin;
+  const bookLabel = !quote ? 'Đang báo phí…'
+    : !quote.has_pin ? 'Chưa có điểm ghim — không đặt tự động được'
+    : !quote.will_use ? 'Không có hãng khả dụng'
+    : armed ? 'Đã kiểm tra địa chỉ — vẫn đặt'
+    : quote.over_cap ? `Vẫn đặt — quán chịu ${fmtMoney(quote.shop_share)}`
+    : `Xác nhận đặt — phí hãng ${fmtMoney(quote.chosen_fee)}`;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="relative bg-slate-800 rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col border border-slate-600" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-3 right-3 z-10 w-11 h-11 flex items-center justify-center rounded-lg bg-slate-700 hover:bg-slate-600 text-lg" title="Đóng">×</button>
+        <div className="overflow-y-auto p-5 space-y-4">
+          <h3 className="font-extrabold">🚚 Đặt Giao Hàng — đơn #{ord.code}</h3>
+
+          {/* Mục 5.2: khối đối chiếu địa chỉ sẽ gửi hãng */}
+          <div className="rounded-xl border border-slate-600 bg-slate-900/60 p-3 space-y-2">
+            <div className="text-xs font-extrabold tracking-wide text-slate-300">📍 ĐỊA CHỈ GIAO SẼ GỬI HÃNG</div>
+            <p className="text-sm font-semibold">{quote?.address || ord.delivery_address || '—'}</p>
+            <p className="text-xs text-slate-400">
+              {quote?.has_pin
+                ? <>Khoảng cách theo điểm ghim: {quote.distance_km != null ? `${Number(quote.distance_km).toFixed(1)} km` : '—'} · Ghim: {Number(quote.pin_lat).toFixed(5)}, {Number(quote.pin_lng).toFixed(5)}{ord.pin_corrected && <span className="text-amber-400 font-bold"> · Đã đính chính tại quán</span>}</>
+                : <span className="text-red-300 font-bold">Đơn chưa có tọa độ ghim — không đặt tự động được cho tới khi đính chính ghim bên dưới, hoặc chuyển Quán Tự Đặt.</span>}
+            </p>
+            {mismatch && quote?.has_pin && (
+              <p className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-amber-400/15 border border-amber-400/50 text-amber-300">
+                ⚠ Điểm ghim có thể lệch khu vực so với địa chỉ chữ — kiểm lại trên bản đồ trước khi đặt. Vẫn đặt được sau khi xác nhận thêm 1 lần.
+              </p>
+            )}
+            <button onClick={() => setShowMap(!showMap)} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs font-bold">
+              {showMap ? 'Ẩn bản đồ' : '🗺 Xem vị trí ghim'}
+            </button>
+            {showMap && (
+              <div className="space-y-2">
+                <PinMap center={center} pin={pin} onPick={(p) => { setDraftPin(p); setArmed(false); }} />
+                <p className="text-[11px] text-slate-400">Bấm vào bản đồ để đặt lại điểm ghim (đính chính). Phí khách đã trả <b>không tính lại</b>; phí hãng sẽ báo lại theo ghim mới.</p>
+                <div className="flex gap-2">
+                  <input value={sugQ} onChange={(e) => setSugQ(e.target.value)} placeholder="Hoặc gõ địa chỉ để chọn lại…"
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm outline-none" />
+                  <button onClick={searchAddr} className="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs font-bold">Tìm</button>
+                </div>
+                {sugs.map((s, i) => (
+                  <button key={i} onClick={() => { setDraftPin({ lat: Number(s.lat), lng: Number(s.lon) }); setSugs([]); }}
+                    className="block w-full text-left text-xs px-2.5 py-1.5 rounded-lg bg-slate-700/60 hover:bg-slate-700">
+                    📍 {s.display_name}
+                  </button>
+                ))}
+                {draftPin && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-amber-300 font-bold">Ghim mới: {draftPin.lat.toFixed(5)}, {draftPin.lng.toFixed(5)}</span>
+                    <button onClick={savePin} disabled={busy} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-xs font-bold disabled:opacity-50">Lưu điểm ghim</button>
+                    <button onClick={() => setDraftPin(null)} className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs font-bold">Hủy</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Mục 6b: báo phí thật tại thời điểm đặt */}
+          <div className="rounded-xl border border-slate-600 bg-slate-900/60 p-3 space-y-2">
+            <div className="text-xs font-extrabold tracking-wide text-slate-300">💰 PHÍ GIAO HÀNG</div>
+            {loading && <p className="text-sm text-slate-400">Đang lấy phí thật từ các hãng…</p>}
+            {err && <p className="text-sm text-red-300 font-bold">{err}</p>}
+            {quote && (
+              <>
+                {Object.entries(quote.providers).map(([code, p]) => (
+                  <div key={code} className="flex justify-between text-sm">
+                    <span>{p.label} {quote.will_use === code && <span className="ml-1 text-[11px] font-bold bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full">Sẽ dùng</span>}</span>
+                    {p.available
+                      ? <b className="font-mono">{fmtMoney(p.fee)}</b>
+                      : <span className="text-slate-400 text-xs">Không khả dụng{p.error ? ` — ${p.error}` : ''}</span>}
+                  </div>
+                ))}
+                {quote.is_cod && <p className="text-[11px] text-slate-400">Đơn thu hộ (COD) — chỉ giao qua AhaMove theo quy định.</p>}
+                <div className="border-t border-slate-700 pt-2 space-y-1 text-sm">
+                  <div className="flex justify-between"><span>Phí ship khách đã trả</span><span className="font-mono">{fmtMoney(quote.customer_fee)}</span></div>
+                  <div className="flex justify-between"><span>Phí hãng {willLabel ? `(${willLabel})` : ''}</span><span className="font-mono">{quote.chosen_fee != null ? fmtMoney(quote.chosen_fee) : '—'}</span></div>
+                  <div className="flex justify-between font-extrabold"><span>Phần quán chịu</span><span className="font-mono">{quote.shop_share != null ? fmtMoney(quote.shop_share) : '—'}</span></div>
+                  <p className="text-[11px] text-slate-400">Trần quán chịu: {fmtMoney(quote.cap)}/đơn.</p>
+                </div>
+                {quote.over_cap && (
+                  <p className="text-xs font-bold px-2.5 py-1.5 rounded-lg bg-red-500/15 border border-red-500/60 text-red-300">
+                    🔴 Quán chịu vượt trần: {fmtMoney(quote.shop_share)} (trần {fmtMoney(quote.cap)}) — đặt thành công sẽ ghi log đối soát cuối ngày.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={doManual} disabled={busy}
+              className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm font-bold disabled:opacity-50">
+              Chuyển Quán Tự Đặt
+            </button>
+            <button onClick={doBook} disabled={bookDisabled}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-extrabold disabled:opacity-50 ${quote?.over_cap ? 'bg-red-600 hover:bg-red-500' : 'bg-emerald-600 hover:bg-emerald-500'} text-white`}>
+              {bookLabel}
+            </button>
+          </div>
+          {draftPin && <p className="text-[11px] text-amber-300">Đang có ghim mới chưa lưu — lưu điểm ghim (hoặc Hủy) rồi mới đặt được, để hãng nhận đúng điểm đã kiểm.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Khối giao hàng trên thẻ đơn ở cột Chờ Giao: khung phí + nút trạng thái chạy
+// theo delivery_status (mục 3 + 6). Đơn giao nằm yên ở cột này suốt quá trình.
+function DeliveryPanel({ ord, btnBase, timeoutMin, onBook, onStartManual, onToManual, onAdvance, onFail, onComplete }) {
+  const ds = ord.delivery_status || '';
+  const isManual = ord.delivery_provider === 'manual';
+  const customerFee = Number(ord.shipping_fee || 0);
+  const carrierFee = ord.delivery_fee != null ? Number(ord.delivery_fee) : null;
+  const share = carrierFee != null ? Math.max(0, carrierFee - customerFee) : null;
+  const chip = "w-full px-3 py-2 rounded-xl text-xs font-extrabold text-center border";
+
+  // Vị trí (c): phí hãng thật sau khi đặt
+  const feeAfter = !isManual && carrierFee != null && (
+    <div className="w-full px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700 text-xs font-semibold">
+      Phí hãng ({PROV_LABEL[ord.delivery_provider] || ''}): <b className="font-mono">{fmtMoney(carrierFee)}</b> · Quán chịu: <b className="font-mono">{fmtMoney(share)}</b>
+    </div>
+  );
+
+  if (ds === 'failed') {
+    return (
+      <>
+        <div className="w-full px-3 py-2 rounded-xl bg-red-500/15 border border-red-500/60 text-red-300 text-xs font-bold">
+          ✖ Giao thất bại{ord.delivery_failure_reason ? <> — {ord.delivery_failure_reason}</> : ''}. Đơn ở lại Chờ Giao chờ quán xử lý.
+        </div>
+        {isManual && (
+          <>
+            <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+            <button onClick={() => onStartManual(ord)} className={`${btnBase} bg-sky-600 hover:bg-sky-500 text-white`}>🛵 Chạy lại Quán Tự Đặt</button>
+          </>
+        )}
+        <button onClick={() => onComplete(ord)} className={`${btnBase} bg-slate-600 hover:bg-slate-500 text-white`}>Khách nhận tại quán — hoàn tất</button>
+      </>
+    );
+  }
+  if (ds === 'cancelled') {
+    return (
+      <>
+        <div className={`${chip} bg-slate-700/40 border-slate-600 text-slate-300`}>Đã hủy giao</div>
+        <button onClick={() => onComplete(ord)} className={`${btnBase} bg-slate-600 hover:bg-slate-500 text-white`}>Khách nhận tại quán — hoàn tất</button>
+      </>
+    );
+  }
+
+  if (isManual) {
+    const steps = {
+      '': { chipText: '🛵 Quán tự giao · Chờ tài xế nhận đơn', next: ['driver_assigned', '✅ Đã Có Tài Xế'] },
+      driver_assigned: { chipText: '🛵 Quán tự giao · Đã có tài xế', next: ['delivering', '🏃 Tài Xế Đang Giao Hàng'] },
+      delivering: { chipText: '🛵 Quán tự giao · Tài xế đang giao', next: ['arrived', '📍 Tài Xế Đã Đến Nơi'] },
+      arrived: { chipText: '🛵 Quán tự giao · Tài xế đã đến nơi', next: ['delivered', '🎉 Giao Hàng Thành Công'] },
+    };
+    const st = steps[ds];
+    if (st) {
+      return (
+        <>
+          <div className="w-full px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700 text-xs font-semibold">
+            Phí ship khách đã trả: <b className="font-mono">{fmtMoney(customerFee)}</b> · Quán tự giao — không qua hãng
+          </div>
+          <div className={`${chip} bg-sky-500/10 border-sky-500/40 text-sky-300`}>{st.chipText}</div>
+          <button onClick={() => onAdvance(ord, st.next[0])} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>{st.next[1]}</button>
+          <button onClick={() => onFail(ord)} className={`${btnBase} bg-red-900/60 hover:bg-red-800 text-red-300`}>✖ Giao thất bại</button>
+        </>
+      );
+    }
+  }
+
+  if (!ds && !ord.delivery_order_id) {
+    // Chưa bắt đầu giao — khung phí (a) + 2 nút chọn chế độ
+    return (
+      <>
+        <div className="w-full px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700 text-xs font-semibold space-y-0.5">
+          <div>Phí ship khách đã trả: <b className="font-mono">{fmtMoney(customerFee)}</b></div>
+          <div className="text-slate-400">Phí hãng dự kiến: — bấm Đặt Giao Hàng để xem</div>
+        </div>
+        <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+        <button onClick={() => onStartManual(ord)} className={`${btnBase} bg-sky-600 hover:bg-sky-500 text-white`}>🛵 Quán Tự Đặt Giao Hàng</button>
+      </>
+    );
+  }
+
+  if (ds === 'searching_driver') {
+    const elapsed = ord.delivery_searching_since ? Math.max(0, Math.floor((Date.now() - new Date(ord.delivery_searching_since).getTime()) / 1000)) : 0;
+    const mmss = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+    const over = elapsed > timeoutMin * 60;
+    return (
+      <>
+        <div className={`${chip} ${over ? 'bg-red-500/15 border-red-500/60 text-red-300 animate-pulse' : 'bg-amber-500/10 border-amber-500/40 text-amber-300'}`}>
+          🔎 Đang tìm tài xế · {mmss}{over ? ` — quá ${timeoutMin} phút chưa có tài xế!` : ''}
+        </div>
+        {feeAfter}
+        <button onClick={() => onToManual(ord)} className={`${btnBase} ${over ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
+          {over ? '🛵 Chuyển Quán Tự Đặt Giao Hàng' : 'Hủy tìm — chuyển Quán Tự Đặt'}
+        </button>
+      </>
+    );
+  }
+
+  const carrierChips = {
+    driver_assigned: `✅ Đã có tài xế${ord.delivery_driver_name ? ` · ${ord.delivery_driver_name}` : ''}${ord.delivery_driver_plate ? ` · ${ord.delivery_driver_plate}` : ''}`,
+    picked_up: '📦 Tài xế đã lấy hàng',
+    delivering: '🏃 Đang giao hàng',
+    delivered: '🎉 Giao thành công',
+  };
+  if (carrierChips[ds]) {
+    return (
+      <>
+        <div className={`${chip} bg-emerald-500/10 border-emerald-500/40 text-emerald-300`}>{carrierChips[ds]}</div>
+        {feeAfter}
+      </>
+    );
+  }
+  return null;
+}
+
 export default function KdsScreen({ onBackToClient }) {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
@@ -254,6 +634,14 @@ export default function KdsScreen({ onBackToClient }) {
   const [printedTem, setPrintedTem] = useState({}); // orderId -> true
   const [printedBill, setPrintedBill] = useState({});
   const previousOrderCount = useRef(0);
+  // Spec KDS book ship: popup đặt ship + popup lý do giao thất bại + ngưỡng
+  // cảnh báo tìm tài xế (đọc từ /delivery/config, mặc định 5 phút)
+  const [bookOrdId, setBookOrdId] = useState(null);
+  const [failOrd, setFailOrd] = useState(null);
+  const [failReason, setFailReason] = useState('');
+  const [deliveryTimeout, setDeliveryTimeout] = useState(5);
+  const [, setTick] = useState(0); // nhịp 1s cho đồng hồ đang tìm tài xế
+  const alertedSearchRef = useRef(new Set()); // đơn đã kêu chuông quá ngưỡng (tránh kêu lặp mỗi nhịp poll)
 
   const playNotificationSound = () => {
     if (!soundEnabled) return;
@@ -284,6 +672,15 @@ export default function KdsScreen({ onBackToClient }) {
           playNotificationSound();
         }
         previousOrderCount.current = newOrders.length;
+        // Spec KDS book ship mục 4: chuông 1 lần cho mỗi đơn tìm tài xế quá ngưỡng
+        newOrders.forEach((o) => {
+          if (o.status === 'ready' && o.delivery_status === 'searching_driver' && o.delivery_searching_since
+            && (Date.now() - new Date(o.delivery_searching_since).getTime()) > deliveryTimeout * 60000
+            && !alertedSearchRef.current.has(o.id)) {
+            alertedSearchRef.current.add(o.id);
+            playNotificationSound();
+          }
+        });
         setOrders(newOrders);
       }
     } catch (error) { setPollFails((n) => n + 1); }
@@ -304,7 +701,26 @@ export default function KdsScreen({ onBackToClient }) {
   useEffect(() => {
     setDetailOrd(null);
     setReprintOrd(null);
+    setBookOrdId(null);
+    setFailOrd(null);
   }, [selectedBranch]);
+
+  // Spec KDS book ship: ngưỡng cảnh báo tìm tài xế từ cấu hình giao hàng
+  // (dùng lại khóa delivery_failover_timeout_minutes — mục 4)
+  useEffect(() => {
+    axios.get(`${API_BASE}/delivery/config`)
+      .then((res) => {
+        const m = Number(res.data?.data?.failover_timeout_minutes);
+        if (m > 0) setDeliveryTimeout(m);
+      })
+      .catch(() => { /* giữ mặc định 5 phút */ });
+  }, []);
+
+  // Nhịp 1 giây cho đồng hồ đếm trên thẻ đang tìm tài xế
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     axios.get(`${API_BASE}/branches`)
@@ -344,6 +760,42 @@ export default function KdsScreen({ onBackToClient }) {
     } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
   };
 
+  // ---- Spec KDS book ship: thao tác giao hàng tại KDS ----
+  const deliveryAction = async (ord, path, body) => {
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/delivery/${path}`, body || {});
+      if (res.data?.success) { fetchKdsOrders(); return true; }
+      alert(res.data?.message || 'Thao tác thất bại');
+      return false;
+    } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại'); return false; }
+  };
+  const startManual = (ord) => deliveryAction(ord, 'manual/start');
+  const toManual = (ord) => {
+    if (!confirm(`Chuyển đơn #${ord.code} sang Quán Tự Đặt? Phiên đặt hãng đang tìm tài xế sẽ bị hủy.`)) return;
+    deliveryAction(ord, 'to-manual');
+  };
+  const advanceManual = (ord, to) => deliveryAction(ord, 'manual/advance', { to });
+  const openBook = (ord) => {
+    // C3: đặt lại hãng sau khi đã chuyển tay phải qua hộp hỏi xác nhận riêng
+    if (ord.delivery_provider === 'manual'
+      && !confirm(`Đơn #${ord.code} đang ở chế độ Quán Tự Đặt — quán có thể đã gọi ship ngoài. Vẫn mở đặt qua hãng?`)) return;
+    setBookOrdId(ord.id);
+  };
+  const submitFail = async () => {
+    if (!failOrd) return;
+    if (!failReason.trim()) { alert('Nhập lý do giao thất bại.'); return; }
+    const ok = await deliveryAction(failOrd, 'manual/advance', { to: 'failed', reason: failReason.trim() });
+    if (ok) { setFailOrd(null); setFailReason(''); }
+  };
+
+  // C4: đơn giao nằm ở Chờ Giao quá 10 phút (từ ready_at) mà chưa bắt đầu giao
+  const isStaleUnbooked = (ord) => ord.order_type === 'delivery' && ord.status === 'ready'
+    && !ord.delivery_status && !ord.delivery_order_id && ord.delivery_provider !== 'manual'
+    && ord.ready_at && (Date.now() - new Date(ord.ready_at).getTime()) > 10 * 60000;
+  const isOverSearch = (ord) => ord.order_type === 'delivery' && ord.delivery_status === 'searching_driver'
+    && ord.delivery_searching_since
+    && (Date.now() - new Date(ord.delivery_searching_since).getTime()) > deliveryTimeout * 60000;
+
   const doPrintTem = (ord) => {
     if (printedTem[ord.id]) { setReprintOrd(ord); return; }
     printLabels(ord, null);
@@ -357,6 +809,7 @@ export default function KdsScreen({ onBackToClient }) {
   const pendingOrders = orders.filter((o) => o.status === 'pending' || o.status === 'confirmed'); // SPEC-01: đơn COD (confirmed) hiện ở cột chờ
   const processingOrders = orders.filter((o) => o.status === 'processing');
   const readyOrders = orders.filter((o) => o.status === 'ready');
+  const overSearchOrders = readyOrders.filter(isOverSearch); // banner cảnh báo mục 4
 
   const orderTypeLabel = (o) => {
     if (o.scheduled_at) return 'Hẹn lấy';
@@ -424,13 +877,21 @@ export default function KdsScreen({ onBackToClient }) {
         </div>
       </header>
 
+      {/* Spec KDS book ship mục 4: banner đơn tìm tài xế quá ngưỡng — đơn KHÔNG
+          bị hủy/tự chuyển hãng; NV bấm chuyển tay ngay trên thẻ đơn */}
+      {overSearchOrders.length > 0 && (
+        <div className="mx-6 mt-4 px-4 py-3 rounded-2xl bg-red-500/15 border border-red-500/50 text-red-200 text-sm font-bold animate-pulse">
+          ⏰ {overSearchOrders.length} đơn đã quá {deliveryTimeout} phút chưa có tài xế: {overSearchOrders.map((o) => `#${o.code}`).join(', ')} — bấm "Chuyển Quán Tự Đặt Giao Hàng" trên thẻ đơn để quán tự giao. Đơn không bị hủy.
+        </div>
+      )}
+
       <main className={`flex-1 p-6 grid grid-cols-1 md:grid-cols-3 gap-6 overflow-hidden ${pollFails >= 2 ? 'outline outline-2 outline-red-500/60 -outline-offset-2' : ''}`}>
-        {/* CỘT 1: NHẬN ĐƠN */}
+        {/* CỘT 1: ĐƠN MỚI (spec KDS book ship mục 2: đổi tên, ánh xạ giữ nguyên) */}
         <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-amber-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-              <h2 className="font-extrabold text-sm text-amber-400 tracking-wider uppercase">Nhận Đơn</h2>
+              <h2 className="font-extrabold text-sm text-amber-400 tracking-wider uppercase">Đơn Mới</h2>
               {/* Spec QR 2026-10-21: badge hàng đợi chờ thanh toán */}
               {pendingOrders.filter((o) => o.needs_confirm).length > 0 && (
                 <span className="text-xs font-mono font-bold bg-sky-500/20 text-sky-300 px-2.5 py-0.5 rounded-full">Chờ thanh toán ({pendingOrders.filter((o) => o.needs_confirm).length})</span>
@@ -473,12 +934,12 @@ export default function KdsScreen({ onBackToClient }) {
           </div>
         </section>
 
-        {/* CỘT 2: ĐANG PHA CHẾ */}
+        {/* CỘT 2: ĐANG LÀM */}
         <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-blue-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
-              <h2 className="font-extrabold text-sm text-blue-400 tracking-wider uppercase">Đang Pha Chế</h2>
+              <h2 className="font-extrabold text-sm text-blue-400 tracking-wider uppercase">Đang Làm</h2>
             </div>
             <span className="text-xs font-mono font-bold bg-blue-500/20 text-blue-300 px-2.5 py-0.5 rounded-full">{processingOrders.length}</span>
           </div>
@@ -503,25 +964,34 @@ export default function KdsScreen({ onBackToClient }) {
           </div>
         </section>
 
-        {/* CỘT 3: CHỜ KHÁCH NHẬN */}
+        {/* CỘT 3: CHỜ GIAO — đơn lấy tại quầy giữ nút Khách đã nhận; đơn giao
+            hàng nằm yên ở cột này, trạng thái chạy trên thẻ (spec mục 2+3) */}
         <section className="bg-slate-900/90 rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-emerald-500/5">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-              <h2 className="font-extrabold text-sm text-emerald-400 tracking-wider uppercase">Chờ Khách Nhận</h2>
+              <h2 className="font-extrabold text-sm text-emerald-400 tracking-wider uppercase">Chờ Giao</h2>
             </div>
             <span className="text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full">{readyOrders.length}</span>
           </div>
           <div className="flex-1 p-4 overflow-y-auto space-y-3 no-scrollbar">
             {readyOrders.length === 0 && <p className="text-xs text-slate-500 text-center py-10">Không có đơn chờ lấy</p>}
             {readyOrders.map((ord) => (
-              <KdsOrderRow key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)} typeLabel={orderTypeLabel(ord)}>
+              <KdsOrderRow key={ord.id} ord={ord} elapsed={getElapsedMinutes(ord.created_at)} typeLabel={orderTypeLabel(ord)}
+                warnLine={isStaleUnbooked(ord) ? `⏰ Chưa đặt ship — đơn đã chờ giao ${Math.floor((Date.now() - new Date(ord.ready_at).getTime()) / 60000)} phút` : null}>
                 <button onClick={() => setDetailOrd(ord)} className={`${btnBase} bg-slate-700 hover:bg-slate-600 text-white`}>
                   <Eye className="w-3.5 h-3.5" /> Xem
                 </button>
-                <button onClick={() => handleUpdateStatus(ord.code, 'completed')} className={`${btnBase} bg-slate-600 hover:bg-slate-500 text-white`}>
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Khách đã nhận
-                </button>
+                {ord.order_type === 'delivery' ? (
+                  <DeliveryPanel ord={ord} btnBase={btnBase} timeoutMin={deliveryTimeout}
+                    onBook={openBook} onStartManual={startManual} onToManual={toManual}
+                    onAdvance={advanceManual} onFail={(o) => { setFailOrd(o); setFailReason(''); }}
+                    onComplete={(o) => handleUpdateStatus(o.code, 'completed')} />
+                ) : (
+                  <button onClick={() => handleUpdateStatus(ord.code, 'completed')} className={`${btnBase} bg-slate-600 hover:bg-slate-500 text-white`}>
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Khách đã nhận
+                  </button>
+                )}
               </KdsOrderRow>
             ))}
           </div>
@@ -531,6 +1001,29 @@ export default function KdsScreen({ onBackToClient }) {
       {/* Lát 2g: popup đọc bản đơn MỚI NHẤT theo id từ danh sách đang poll (trước đây là bản chụp lúc bấm mở — đứng yên trong khi bảng ngoài cập nhật 3s/lần) */}
       <OrderDetailPop ord={detailOrd ? (orders.find((o) => o.id === detailOrd.id) || detailOrd) : null} onClose={() => setDetailOrd(null)} typeLabel={detailOrd ? orderTypeLabel(orders.find((o) => o.id === detailOrd.id) || detailOrd) : ''} />
       <ReprintPop ord={reprintOrd} onClose={() => setReprintOrd(null)} />
+
+      {/* Spec KDS book ship: popup Đặt Giao Hàng (đọc bản đơn mới nhất theo id như popup chi tiết) */}
+      {bookOrdId && (() => {
+        const o = orders.find((x) => x.id === bookOrdId);
+        return o ? <BookShipPop ord={o} onClose={() => setBookOrdId(null)} onRefresh={fetchKdsOrders} /> : null;
+      })()}
+
+      {/* Spec KDS book ship mục 8 C2: popup ghi lý do Giao thất bại (chế độ tay) */}
+      {failOrd && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setFailOrd(null)}>
+          <div className="relative bg-slate-800 rounded-2xl w-full max-w-md border border-slate-600 p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-extrabold">✖ Giao thất bại — đơn #{failOrd.code}</h3>
+            <p className="text-xs text-slate-400">Đơn <b>không</b> hoàn tất — ở lại cột Chờ Giao chờ quán xử lý. Lý do hiện trên thẻ + app khách.</p>
+            <textarea value={failReason} onChange={(e) => setFailReason(e.target.value)} rows={3} maxLength={255}
+              placeholder="Lý do giao thất bại (bắt buộc) — VD: khách không nghe máy, địa chỉ sai…"
+              className="w-full bg-slate-900 border border-slate-600 rounded-xl px-3 py-2 text-sm outline-none" />
+            <div className="flex gap-2">
+              <button onClick={() => setFailOrd(null)} className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm font-bold">Hủy</button>
+              <button onClick={submitFail} className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 rounded-xl text-sm font-extrabold text-white">Ghi nhận giao thất bại</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

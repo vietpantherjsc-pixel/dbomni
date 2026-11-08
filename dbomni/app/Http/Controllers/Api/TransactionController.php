@@ -162,8 +162,12 @@ class TransactionController extends Controller
         $branchId = $isEmployee
             ? $this->resolveEmployeeBranch($actor, $v['branch_id'] ?? null)
             : ($v['branch_id'] ?? null);
+        // Gói chặn tự duyệt (2026-11-06): ghi vết người tạo CẢ 2 phía qua
+        // ApprovalActor — phía NV nay có cột riêng created_by_employee_id
+        // (migration 000100); trước đây NV tạo ghi null nên không có dữ kiện.
+        [$creatorUserId, $creatorEmployeeId] = \App\Support\ApprovalActor::ids($actor);
 
-        $tx = DB::transaction(function () use ($v, $status, $branchId, $isEmployee) {
+        $tx = DB::transaction(function () use ($v, $status, $branchId, $isEmployee, $creatorUserId, $creatorEmployeeId) {
             return Transaction::create([
                 'code' => Transaction::nextCode($v['type']),
                 'type' => $v['type'],
@@ -181,7 +185,8 @@ class TransactionController extends Controller
                 'status' => $status,
                 'payment_method' => $v['payment_method'] ?? null,
                 'note' => $v['note'] ?? null,
-                'created_by' => $isEmployee ? null : auth()->id(), // Gói 59: NV không có users.id
+                'created_by' => $creatorUserId, // Gói 59 + chặn tự duyệt: phía User (NV tạo = null)
+                'created_by_employee_id' => $creatorEmployeeId, // Gói chặn tự duyệt (2026-11-06)
             ]);
         });
 
@@ -214,6 +219,14 @@ class TransactionController extends Controller
         // Gói "Chờ duyệt trên Hub" (2026-10-21): phiếu đã từ chối là hồ sơ đóng — không sửa.
         if ($tx->rejected_at !== null) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã bị từ chối, không thể sửa. Hãy tạo phiếu mới.'], 422);
+        }
+
+        // Remedy NV-G5 (2026-11-06): phiếu đang còn nợ (status = 'pending', mọi
+        // phiếu nợ — có hay không đối tác) chỉ đổi trạng thái qua Ghi thanh toán
+        // (pay()); form Sửa không được lật 'paid'/'cancelled', bịt đường vòng
+        // nhánh đồng bộ bên dưới gán paid_amount = amount ghi khống, 0 payment.
+        if ($tx->status === 'pending' && $request->filled('status') && $request->input('status') !== 'pending') {
+            return response()->json(['success' => false, 'message' => 'Phiếu đang còn nợ — trạng thái chỉ thay đổi khi ghi thanh toán qua chức năng Ghi thanh toán. Form Sửa không được chuyển trạng thái phiếu nợ.'], 422);
         }
 
         // Gói 27: phiếu tự sinh chỉ cho sửa ghi chú.
@@ -346,6 +359,8 @@ class TransactionController extends Controller
         if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
         }
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự duyệt phiếu của mình.
+        if ($deny = \App\Support\SelfApprovalGuard::check($tx, $tx->created_by, $tx->created_by_employee_id, $request, 'transaction', 'approve')) return $deny;
         // Sổ #75 (2026-11-04): truyền $request->user() — ids() không đối số mù
         // với phiên NV duyệt trực tiếp, fallback sẽ ghi mã NV vào FK users.
         [$uid, $eid] = \App\Support\ApprovalActor::ids($request->user());
@@ -379,6 +394,8 @@ class TransactionController extends Controller
         if ($tx->approved_by !== null || $tx->approved_by_employee_id !== null || $tx->rejected_at !== null) {
             return response()->json(['success' => false, 'message' => 'Phiếu đã được xử lý (duyệt/từ chối) trước đó.'], 422);
         }
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự từ chối phiếu của mình.
+        if ($deny = \App\Support\SelfApprovalGuard::check($tx, $tx->created_by, $tx->created_by_employee_id, $request, 'transaction', 'reject')) return $deny;
         // Sổ #75 (2026-11-04): truyền $request->user() như ở approve().
         [$uid, $eid] = \App\Support\ApprovalActor::ids($request->user());
         if ($uid === null && $eid === null) {

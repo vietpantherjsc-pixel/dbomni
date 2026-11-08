@@ -7,6 +7,7 @@ use App\Models\Menu;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPrice;
+use App\Support\CatalogCache;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -119,6 +120,8 @@ class ImportProducts extends Command
             $this->info("Tạo mới: {$created} món | Bỏ qua (đã có): {$skipped} món");
         });
 
+        // Bộ nhớ đệm thực đơn: lệnh này (tái) xây toàn bộ catalog (món/danh mục/thực đơn/giá).
+        CatalogCache::bump();
         $this->info('Import hoàn tất.');
         return 0;
     }

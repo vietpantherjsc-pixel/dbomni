@@ -72,13 +72,19 @@ class StockTransferController extends Controller
         if ($fromBranchId === (int) $v['to_branch_id']) {
             return response()->json(['success' => false, 'message' => 'Kho nguồn và kho đích phải khác nhau.'], 422);
         }
-        $transfer = DB::transaction(function () use ($v, $actor, $fromBranchId) {
+        // Gói chặn tự duyệt (2026-11-06): ghi thêm cặp người tạo tường minh
+        // (cột có từ 000030, nay mới vào fillable + ghi vết); requested_by giữ
+        // nguyên cách ghi hiện tại (phía User) cho các nơi đang đọc nó.
+        [$creatorUserId, $creatorEmployeeId] = \App\Support\ApprovalActor::ids($actor);
+        $transfer = DB::transaction(function () use ($v, $actor, $fromBranchId, $creatorUserId, $creatorEmployeeId) {
             $t = StockTransfer::create([
                 'code' => StockTransfer::nextCode(),
                 'from_branch_id' => $fromBranchId,
                 'to_branch_id' => $v['to_branch_id'],
                 'status' => 'draft',
                 'requested_by' => $actor && $actor instanceof \App\Models\User ? $actor->id : null,
+                'created_by_user_id' => $creatorUserId,
+                'created_by_employee_id' => $creatorEmployeeId,
                 'note' => $v['note'] ?? null,
             ]);
             foreach ($v['items'] as $it) {
@@ -96,8 +102,15 @@ class StockTransferController extends Controller
     public function confirm(int $id, Request $request, InventoryService $inv): JsonResponse
     {
         $actor = $request->user();
-        $tRow = StockTransfer::where('id', $id)->first(['from_branch_id', 'to_branch_id']);
+        $tRow = StockTransfer::where('id', $id)->first(['id', 'code', 'status', 'from_branch_id', 'to_branch_id', 'created_by_user_id', 'created_by_employee_id', 'requested_by']);
         if ($tRow && ($deny = $this->denyTransferBranch($request, $tRow->from_branch_id, $tRow->to_branch_id))) return $deny;
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự chốt phiếu
+        // của mình. Người tạo: cặp created_by_* trước; phía User của cặp trống
+        // thì lùi về requested_by (phiếu cũ do User tạo). Chỉ xét khi nháp —
+        // phiếu đã xử lý để transaction trong trả lỗi trạng thái như cũ.
+        if ($tRow && $tRow->status === 'draft') {
+            if ($deny = \App\Support\SelfApprovalGuard::check($tRow, $tRow->created_by_user_id ?? $tRow->requested_by, $tRow->created_by_employee_id, $request, 'transfer', 'approve')) return $deny;
+        }
         try {
             $totalCost = DB::transaction(function () use ($id, $actor, $inv) {
                 // Gói 55: lock row trong transaction trước khi check status (chống race condition)
@@ -191,6 +204,9 @@ class StockTransferController extends Controller
         if ($t->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Chỉ hủy được phiếu nháp.'], 422);
         }
+        // Gói chặn tự duyệt (2026-11-06): người tạo không được tự hủy phiếu
+        // của mình từ hàng chờ (phân giải người tạo như ở confirm()).
+        if ($deny = \App\Support\SelfApprovalGuard::check($t, $t->created_by_user_id ?? $t->requested_by, $t->created_by_employee_id, $request, 'transfer', 'reject')) return $deny;
         // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
         // Sổ #77 (2026-11-04): truyền $request->user() — NV hủy TRỰC TIẾP cũng có vết.
         [, $cancelEmployeeId] = \App\Support\ApprovalActor::ids($request->user());

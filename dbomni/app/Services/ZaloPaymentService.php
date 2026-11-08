@@ -42,6 +42,11 @@ class ZaloPaymentService
             'bank_info' => $bankInfo,
             // Quy tắc COD: chỉ mang về/hẹn giờ (mặc định BẬT)
             'cod_takeaway_only' => (bool) Setting::get('zalo_pay_cod_takeaway_only', '1'),
+            // Spec phí giao một nguồn mục 5.1: công tắc THU HỘ cho đơn GIAO
+            // HÀNG (mặc định TẮT — khóa chưa tồn tại = Tắt, không cần dữ liệu
+            // khởi tạo). Đơn giao dùng được COD khi cả cod_enabled (kênh) lẫn
+            // khóa này cùng bật.
+            'delivery_cod_enabled' => (bool) Setting::get('delivery_cod_enabled', '0'),
             // Spec QR 2026-10-21: kênh BANK chỉ "sẵn sàng" khi đủ thông tin NH + private key.
             // Mini App dùng cờ này để ẨN kênh BANK khi thiếu cấu hình (tránh kênh chết/đơn mồ côi).
             'bank_available' => (bool) Setting::get('zalo_pay_bank_enabled', '1')

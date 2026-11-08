@@ -11,8 +11,10 @@ class Batch extends Model
 
     // Gói 55: casts để tính toán PHP chính xác, JSON trả số
     protected $casts = [
-        'initial_quantity' => 'decimal:2',
-        'current_quantity' => 'decimal:2',
+        // Gói dọn 06/11: cột đã nới decimal(14,4) ở migration 000082 — cast
+        // phải khớp cột, giữ decimal:2 làm tồn lẻ < 0,01 bị đọc làm tròn.
+        'initial_quantity' => 'decimal:4',
+        'current_quantity' => 'decimal:4',
         'unit_cost' => 'decimal:2',
         'expired_at' => 'datetime',
     ];

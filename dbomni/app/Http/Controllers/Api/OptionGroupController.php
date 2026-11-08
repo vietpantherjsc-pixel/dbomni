@@ -8,6 +8,7 @@ use App\Models\OptionGroup;
 use App\Models\Product;
 use App\Models\ProductOption;
 use App\Models\Recipe;
+use App\Support\CatalogCache;
 use App\Support\RecipeUnitResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -36,6 +37,7 @@ class OptionGroupController extends Controller
             'quantity_mode' => 'nullable|in:fixed,per_product', // Gói 8c
         ]);
         $group = OptionGroup::create($v);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã tạo nhóm.', 'data' => $group], 201);
     }
 
@@ -52,6 +54,7 @@ class OptionGroupController extends Controller
             'quantity_mode' => 'sometimes|in:fixed,per_product', // Gói 8c
         ]);
         $group->update($v);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã cập nhật.', 'data' => $group]);
     }
 
@@ -62,6 +65,7 @@ class OptionGroupController extends Controller
         ProductOption::where('option_group_id', $id)->update(['option_group_id' => null]);
         $group->products()->detach();
         $group->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã xóa nhóm.']);
     }
 
@@ -77,6 +81,7 @@ class OptionGroupController extends Controller
             'additional_price' => $v['additional_price'] ?? 0,
             'product_id' => null,
         ]);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã thêm tùy chọn.', 'data' => $opt], 201);
     }
 
@@ -89,12 +94,14 @@ class OptionGroupController extends Controller
             'is_required' => 'boolean',
         ]);
         $opt->update($v);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã cập nhật giá.', 'data' => $opt]);
     }
 
     public function destroyOption(int $id): JsonResponse
     {
         ProductOption::findOrFail($id)->delete();
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã xóa tùy chọn.']);
     }
 
@@ -107,6 +114,7 @@ class OptionGroupController extends Controller
         foreach ($v['ids'] as $i => $id) {
             OptionGroup::where('id', $id)->update(['sort_order' => $i]);
         }
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 
@@ -117,6 +125,7 @@ class OptionGroupController extends Controller
         foreach ($v['ids'] as $i => $id) {
             ProductOption::where('id', $id)->where('option_group_id', $groupId)->update(['sort_order' => $i]);
         }
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true]);
     }
 
@@ -136,6 +145,7 @@ class OptionGroupController extends Controller
             'product_ids.*' => 'exists:products,id',
         ]);
         $group->products()->sync($v['product_ids']);
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã gán nhóm cho ' . count($v['product_ids']) . ' mặt hàng.']);
     }
 
@@ -206,6 +216,7 @@ class OptionGroupController extends Controller
             }
         });
 
+        CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json(['success' => true, 'message' => 'Đã lưu định mức.']);
     }
 }

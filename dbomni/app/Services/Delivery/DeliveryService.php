@@ -16,6 +16,8 @@ class DeliveryService
     public const ST_ASSIGNED = 'driver_assigned';
     public const ST_PICKED_UP = 'picked_up';
     public const ST_DELIVERING = 'delivering';
+    // Spec KDS book ship mục 3.2: nấc mới của chế độ tay (cột string(30) chứa vừa)
+    public const ST_ARRIVED = 'arrived';
     public const ST_DELIVERED = 'delivered';
     public const ST_FAILED = 'failed';
     public const ST_CANCELLED = 'cancelled';
@@ -27,6 +29,7 @@ class DeliveryService
             self::ST_ASSIGNED => 'Đã có tài xế',
             self::ST_PICKED_UP => 'Đã lấy hàng',
             self::ST_DELIVERING => 'Đang giao',
+            self::ST_ARRIVED => 'Tài xế đã đến nơi',
             self::ST_DELIVERED => 'Giao thành công',
             self::ST_FAILED => 'Giao thất bại',
             self::ST_CANCELLED => 'Đã hủy giao',
@@ -131,12 +134,203 @@ class DeliveryService
         return ['support' => $support, 'charged' => max(0, $fee - $support)];
     }
 
+    // ---- Spec KDS book ship: chuẩn bị dữ kiện đặt ship ----
+    /**
+     * Gán delivery_cod_amount + delivery_quoted_fee — phần chuẩn bị vốn nằm ở
+     * 2 điểm tự tạo đơn hãng (OnlinePaymentConfirmer + OrderController::
+     * updateStatus), ĐÃ GỠ theo spec mục 1. Nay chạy ngay trước thao tác đặt
+     * tại KDS (đặt hãng / bắt đầu chế độ tay / retry Admin) — công thức giữ
+     * nguyên vẹn: COD = 0 nếu đơn đã trả trước, ngược lại = tổng đơn;
+     * quoted_fee giữ phí gốc đã lưu, chỉ fallback khi trống.
+     */
+    public function prepareBookingData(Order $order): void
+    {
+        $order->delivery_cod_amount = $order->payment_status === 'paid'
+            ? 0
+            : (int) round((float) $order->total_amount);
+        $order->delivery_quoted_fee = $order->delivery_quoted_fee
+            ?? $order->delivery_fee_charged
+            ?? $order->shipping_fee;
+        $order->save();
+    }
+
+    /**
+     * Hãng hệ thống SẼ dùng nếu đặt ngay lúc này — gương đúng luật trong
+     * createForOrder()/createWithProvider() (chỉ ĐỌC để popup KDS đánh dấu
+     * trước; đường tạo thật vẫn chạy nguyên 2 hàm đó, không đổi hành vi).
+     * Trả null khi không hãng nào khả dụng.
+     */
+    public function resolveProviderCode(Order $order): ?string
+    {
+        // Thu hộ hiệu dụng: sau prepareBookingData, đơn chưa trả luôn có
+        // delivery_cod_amount = tổng đơn — hai dạng dưới tương đương sau bước
+        // chuẩn bị, và dạng gộp này cũng đúng khi báo phí TRƯỚC lúc chuẩn bị.
+        if ((float) ($order->delivery_cod_amount ?? 0) > 0 || $order->payment_status !== 'paid') {
+            $aha = $this->provider('ahamove');
+            return ($this->isProviderEnabled('ahamove') && $aha && $aha->isConfigured())
+                ? 'ahamove' : null;
+        }
+        $code = $order->delivery_provider ?: $this->primaryProvider();
+        if (!$this->isProviderEnabled($code) || !$this->provider($code)?->isConfigured()) {
+            $code = $this->primaryProvider();
+        }
+        if (!$this->isProviderEnabled($code)) {
+            $code = $code === 'ahamove' ? 'lalamove' : 'ahamove';
+        }
+        $provider = $this->provider($code);
+        if (!$provider || !$this->isProviderEnabled($code) || !$provider->isConfigured()) {
+            return null;
+        }
+        return $code;
+    }
+
+    /**
+     * Báo phí THEO ĐƠN cho popup Đặt Giao Hàng ở KDS (spec mục 6b): server tự
+     * dựng tham số từ đơn (điểm giao = tọa độ ghim trên đơn, không geocode
+     * lại) → phí thật tại thời điểm gọi của từng hãng khả dụng. Đơn thu hộ
+     * chỉ chào AhaMove (luật createForOrder). Phần quán chịu =
+     * max(0, phí hãng sẽ dùng − phí khách đã trả); trần đọc từ setting
+     * delivery_failover_max_diff.
+     */
+    public function quoteForOrder(Order $order): array
+    {
+        $quote = $this->quote($this->quoteParams($order));
+        $isCod = (float) ($order->delivery_cod_amount ?? 0) > 0
+            || ($order->payment_status !== 'paid' && (float) $order->total_amount > 0);
+        $providers = [];
+        foreach ($quote['providers'] as $code => $p) {
+            if ($isCod && $code !== 'ahamove') continue; // thu hộ: không chào Lalamove
+            // Chọn phí gói: khớp mã gói trên đơn (mặc định 'nhanh') như failover,
+            // không có gói khớp thì lấy gói đầu tiên hãng trả về
+            $fee = null;
+            if (!empty($p['packages'])) {
+                foreach ($p['packages'] as $pkg) {
+                    if (($pkg['code'] ?? null) === ($order->delivery_package ?? 'nhanh')) { $fee = (int) $pkg['fee']; break; }
+                }
+                $fee = $fee ?? (int) ($p['packages'][0]['fee'] ?? 0);
+            }
+            $providers[$code] = [
+                'label' => $p['label'],
+                'available' => (bool) ($p['success'] && $fee !== null),
+                'fee' => $fee,
+                'distance_km' => $p['distance_km'] ?? null,
+                'error' => $p['success'] ? null : ($p['error'] ?? 'Không lấy được phí'),
+            ];
+        }
+        // Hãng tắt/chưa cấu hình không xuất hiện trong quote() — bổ sung trạng
+        // thái "không khả dụng" tường minh để popup không bịa số
+        foreach ($this->providers() as $code => $provider) {
+            if ($isCod && $code !== 'ahamove') continue;
+            if (!isset($providers[$code])) {
+                $providers[$code] = [
+                    'label' => $provider->label(),
+                    'available' => false,
+                    'fee' => null,
+                    'distance_km' => null,
+                    'error' => !$this->isProviderEnabled($code) ? 'Hãng đang tắt trong cài đặt'
+                        : (!$provider->isConfigured() ? 'Hãng chưa cấu hình' : 'Không lấy được phí'),
+                ];
+            }
+        }
+
+        $willUse = $this->resolveProviderCode($order);
+        $chosenFee = ($willUse && ($providers[$willUse]['available'] ?? false))
+            ? $providers[$willUse]['fee'] : null;
+        $customerFee = (int) round((float) ($order->shipping_fee ?? 0));
+        $shopShare = $chosenFee !== null ? max(0, $chosenFee - $customerFee) : null;
+        $cap = $this->failoverMaxDiff();
+        $branch = $order->branch;
+
+        return [
+            'providers' => $providers,
+            'will_use' => $willUse,
+            'chosen_fee' => $chosenFee,
+            'customer_fee' => $customerFee,
+            'shop_share' => $shopShare,
+            'cap' => $cap,
+            'over_cap' => $shopShare !== null && $shopShare > $cap,
+            'is_cod' => $isCod,
+            'has_pin' => $order->delivery_dropoff_lat !== null && $order->delivery_dropoff_lng !== null,
+            'address' => $order->delivery_address,
+            'pin_lat' => $order->delivery_dropoff_lat !== null ? (float) $order->delivery_dropoff_lat : null,
+            'pin_lng' => $order->delivery_dropoff_lng !== null ? (float) $order->delivery_dropoff_lng : null,
+            'distance_km' => $order->distance_km !== null ? (float) $order->distance_km : null,
+            'pickup_lat' => $branch?->latitude !== null ? (float) $branch->latitude : null,
+            'pickup_lng' => $branch?->longitude !== null ? (float) $branch->longitude : null,
+            'failover_timeout_minutes' => $this->failoverTimeoutMinutes(),
+        ];
+    }
+
+    /**
+     * Mốc ĐÃ THU cho đơn thu hộ chưa trả — dùng chung cho webhook CIA của
+     * AhaMove (tài xế lấy hàng + ứng tiền) và bước tay "Tài Xế Đang Giao
+     * Hàng" (spec mục 8 C1). Cả hai đều qua ĐIỂM XÁC NHẬN CHUNG
+     * OnlinePaymentConfirmer — đúng 1 lần: điều kiện ở đây + chốt chặn
+     * stock_deducted bên trong điểm xác nhận. Lỗi chỉ ghi log, không ném ra
+     * (trạng thái giao hàng vẫn phải tiến lên).
+     */
+    public function confirmCollectionOnPickup(Order $order): void
+    {
+        if ((float) ($order->delivery_cod_amount ?? 0) <= 0
+            || $order->payment_status === 'paid'
+            || $order->stock_deducted) {
+            return;
+        }
+        try {
+            app(\App\Services\OnlinePaymentConfirmer::class)->confirm($order->fresh());
+            Log::info('[Delivery] Đã xác nhận thu hộ tại mốc lấy hàng', ['order' => $order->code]);
+        } catch (\Throwable $e) {
+            Log::warning('[Delivery] Xác nhận thu hộ tại mốc lấy hàng thất bại', [
+                'order' => $order->code, 'msg' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Spec mục 2: giao thành công (webhook hãng hay nút tay) → đơn lật
+     * ready → completed + completed_at (đúng ngữ nghĩa hoàn tất của
+     * updateStatus). ĐÚNG 1 chỗ dùng chung cho cả 2 chế độ.
+     */
+    public function completeIfDelivered(Order $order): void
+    {
+        if ($order->delivery_status === self::ST_DELIVERED && $order->status === 'ready') {
+            $order->update([
+                'status' => 'completed',
+                'completed_at' => $order->completed_at ?: now(),
+            ]);
+        }
+    }
+
     // ---- Tạo đơn hãng cho đơn nội bộ ----
     // Gói 61b: ưu tiên hãng khách đã chọn ở checkout ($order->delivery_provider),
     // fallback về hãng chính nếu hãng đó bị tắt/chưa cấu hình.
     public function createForOrder(Order $order, array $params = []): array
     {
+        // Spec phí giao một nguồn mục 5.3 + 5.5: đơn THU HỘ chưa thu
+        // (delivery_cod_amount > 0) CHỈ tạo đơn qua AhaMove — Lalamove chưa
+        // có kiểm chứng COD cho VN nên không được chào cho các đơn này, và
+        // cấm trượt hãng dự phòng khi AhaMove chưa sẵn sàng (lỗi hiện ở
+        // log/retry Admin, đơn giữ chờ thu).
+        if ((float) ($order->delivery_cod_amount ?? 0) > 0) {
+            $aha = $this->provider('ahamove');
+            if (!$this->isProviderEnabled('ahamove') || !$aha || !$aha->isConfigured()) {
+                DeliveryLog::create([
+                    'order_id' => $order->id, 'provider' => 'system',
+                    'event' => 'create.skipped',
+                    'payload' => ['reason' => 'cod_requires_ahamove'],
+                ]);
+                return ['success' => false, 'error' => 'Đơn thu hộ (COD) chỉ giao qua AhaMove — hãng chưa sẵn sàng.'];
+            }
+            $code = 'ahamove';
+            return $this->createWithProvider($order, $params, $code);
+        }
         $code = $order->delivery_provider ?: $this->primaryProvider();
+        return $this->createWithProvider($order, $params, $code);
+    }
+
+    /** Tạo đơn với 1 hãng đã chốt (thân cũ của createForOrder). */
+    private function createWithProvider(Order $order, array $params, string $code): array
+    {
         if (!$this->isProviderEnabled($code) || !$this->provider($code)?->isConfigured()) {
             $code = $this->primaryProvider();
         }
@@ -172,6 +366,7 @@ class DeliveryService
                 'delivery_fee' => $result['fee'] ?? $order->delivery_quoted_fee,
             ]);
         }
+        return $result;
         return $result;
     }
 
@@ -229,6 +424,9 @@ class DeliveryService
 
         $terminal = [self::ST_DELIVERED, self::ST_CANCELLED, self::ST_FAILED];
         if (in_array($order->delivery_status, $terminal, true)) {
+            // Spec KDS book ship mục 2: đơn đã delivered mà chưa lật completed
+            // (đơn cũ trước gói này) thì nối mốc hoàn tất ngay tại đây
+            $this->completeIfDelivered($order);
             DeliveryLog::create([
                 'order_id' => $order->id, 'provider' => $provider,
                 'provider_order_id' => $order->delivery_order_id,
@@ -254,15 +452,41 @@ class DeliveryService
         if ($mapped === self::ST_DELIVERED) {
             $update['delivery_fee'] = $order->delivery_fee ?? $order->delivery_quoted_fee;
         }
+        // Phí thu hộ hãng trả về (webhook AhaMove) → cột truy vết đối soát
+        if (isset($extra['cod_commission_fee'])) {
+            $update['delivery_cod_fee'] = (float) $extra['cod_commission_fee'];
+        }
         $order->update($update);
 
+        // Spec phí giao một nguồn mục 5.4 — chế độ CIA (ứng tiền khi lấy
+        // hàng): tài xế AhaMove lấy hàng thành công + đã ứng đúng số COD
+        // cho quán = mốc "ĐÃ THU" của đơn thu hộ chưa trả. Xác nhận qua
+        // ĐIỂM XÁC NHẬN CHUNG (confirmCollectionOnPickup — dùng chung với
+        // bước tay ở spec KDS book ship mục 8 C1, đúng 1 lần).
+        if ($mapped === self::ST_PICKED_UP && $provider === 'ahamove') {
+            $this->confirmCollectionOnPickup($order);
+        }
+
         // Đơn giao thất bại có hàng trả về: đánh dấu cờ để lọc báo cáo,
-        // không tính doanh thu (checklist #26)
+        // không tính doanh thu (checklist #26). Spec KDS book ship mục 8 C2:
+        // ghi thêm dòng log mang lý do (nếu hãng gửi kèm) để thẻ KDS + app
+        // khách hiện thống nhất với chế độ tay (event manual.failed).
         if ($mapped === self::ST_FAILED) {
             $order->update([
                 'delivery_returned' => true,
                 'note' => trim(($order->note ? $order->note . ' | ' : '') . 'Giao thất bại — hàng trả về'),
             ]);
+            DeliveryLog::create([
+                'order_id' => $order->id, 'provider' => $provider,
+                'provider_order_id' => $order->delivery_order_id,
+                'event' => 'delivery.failed',
+                'payload' => ['reason' => $extra['reason'] ?? $extra['failure_reason'] ?? null],
+            ]);
+        }
+
+        // Spec KDS book ship mục 2: delivered → lật đơn completed (1 chỗ chung)
+        if ($mapped === self::ST_DELIVERED) {
+            $this->completeIfDelivered($order->fresh());
         }
     }
 
@@ -298,6 +522,12 @@ class DeliveryService
      */
     public function failover(Order $order): bool
     {
+        // Spec phí giao một nguồn mục 5.5: đơn THU HỘ chưa thu không được
+        // trượt sang Lalamove (chưa có kiểm chứng COD cho VN) — giữ nguyên
+        // hãng AhaMove chờ xử lý tay, không hủy đơn hãng hiện tại.
+        if ((float) ($order->delivery_cod_amount ?? 0) > 0) {
+            return false;
+        }
         $from = $order->delivery_provider;
         $to = $from === 'ahamove' ? 'lalamove' : 'ahamove';
         $fromProvider = $this->provider($from);

@@ -14,6 +14,7 @@ use App\Models\ProductAlias;
 use App\Models\User;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
+use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -691,6 +692,7 @@ class OrderImportController extends Controller
                 'sell_on_pos' => false,
                 'sell_on_zalo' => false,
             ]);
+            CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         }
         $this->productCache[$key] = $p;
         return $p;

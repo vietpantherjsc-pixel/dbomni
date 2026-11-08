@@ -130,6 +130,11 @@ class AhaMoveProvider implements DeliveryProvider
                 'receiver_name' => $order->customer_name ?? '',
                 'receiver_phone' => $order->customer_phone ?? '',
                 'cod_amount' => (int) ($order->delivery_cod_amount ?? 0),
+                // Spec phí giao một nguồn mục 5.3: đơn thu hộ thanh toán phí
+                // hãng bằng ví quán (BALANCE); CASH_BY_RECIPIENT bị cấm vì
+                // COD chỉ gồm tiền hàng (trả-gộp-1-lần). Đơn thường giữ mặc
+                // định của hãng như trước.
+                ...((float) ($order->delivery_cod_amount ?? 0) > 0 ? ['payment_method' => 'BALANCE'] : []),
                 'notes' => $order->delivery_note ?? '',
                 'service_id' => ($order->delivery_package === 'sieu_toc') ? 'SUPER' : 'STANDARD',
                 'order_id' => $order->code, // mã tham chiếu nội bộ
@@ -244,6 +249,8 @@ class AhaMoveProvider implements DeliveryProvider
             'driver_phone' => $payload['driver_phone'] ?? $payload['driver']['phone'] ?? null,
             'driver_plate' => $payload['driver_plate'] ?? $payload['driver']['plate'] ?? null,
             'tracking_url' => $payload['tracking_url'] ?? $payload['share_url'] ?? null,
+            // Phí thu hộ hãng báo về (nếu có trong payload) → delivery_cod_fee
+            'cod_commission_fee' => $payload['cod_commission_fee'] ?? $payload['cod_fee'] ?? null,
         ]);
     }
 }
