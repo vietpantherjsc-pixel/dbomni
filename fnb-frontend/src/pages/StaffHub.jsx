@@ -212,6 +212,19 @@ export default function StaffHub() {
   });
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
+  // Gói #102: yếu tố mật khẩu ở cổng đăng nhập Hub + luồng ép đổi bằng vé
+  const [password, setPassword] = useState('');
+  const [changeFlow, setChangeFlow] = useState(null); // { ticket, info } khi server trả must_change_password
+  const [changePw, setChangePw] = useState('');
+  const [changePw2, setChangePw2] = useState('');
+  const [changeBranch, setChangeBranch] = useState(0);
+  // Gói #102 mục 5.2: thẻ tự đặt mật khẩu trong phiên (NV chưa có mật khẩu)
+  const [setupPin, setSetupPin] = useState('');
+  const [setupPw, setSetupPw] = useState('');
+  const [setupPw2, setSetupPw2] = useState('');
+  const [setupErr, setSetupErr] = useState('');
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupDone, setSetupDone] = useState(false);
   const [err, setErr] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
   const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi | choduyet
@@ -225,7 +238,8 @@ export default function StaffHub() {
   const finishLogin = (tk, info, bid) => {
     saveStaffSession(tk, info, bid);
     setToken(tk); setEmp(info); setBranchId(bid || 0);
-    setPendingLogin(null); setPhone(''); setPin('');
+    setPendingLogin(null); setPhone(''); setPin(''); setPassword('');
+    setChangeFlow(null); setChangePw(''); setChangePw2(''); setChangeBranch(0);
   };
   const doLogin = async (e) => {
     e.preventDefault();
@@ -234,16 +248,25 @@ export default function StaffHub() {
     if (p.startsWith('+84')) p = '0' + p.slice(3);
     if (!p) { setErr('Vui lòng nhập số điện thoại.'); return; }
     if (!/^\d{6}$/.test(pin)) { setErr('Vui lòng nhập đủ 6 số PIN.'); return; }
+    if (!password) { setErr('Vui lòng nhập mật khẩu.'); return; } // Gói #102
     setLoginBusy(true);
     try {
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, surface: 'hub' }); // S5: phiên riêng của Hub
+      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, password, surface: 'hub' }); // S5: phiên riêng của Hub · #102: thêm mật khẩu
+      // Gói #102 mục 2.3: đang giữ mật khẩu tạm → server không cấp phiên mà
+      // trả vé đổi mật khẩu; sang màn ép đổi (chọn CN tại đó — Q4).
+      if (r.data && r.data.must_change_password && r.data.change_ticket) {
+        setChangeFlow({ ticket: r.data.change_ticket, info: r.data.employee || {} });
+        return;
+      }
       const tk = r.data.access_token;
       const info = r.data.employee || {};
       const list = info.branches || [];
       if (list.length > 1) { setPendingLogin({ tk, info }); return; }
       finishLogin(tk, info, (list[0] && (list[0].id || list[0])) || info.branch_id || 0);
     } catch (e2) {
-      setErr(errMsg(e2, 'Đăng nhập thất bại. Kiểm tra lại SĐT và mã PIN.'));
+      // Gói #102 (Q6): 403 code password_setup_required → message của server
+      // đã là câu hướng dẫn đầy đủ, errMsg lấy nguyên message đó.
+      setErr(errMsg(e2, 'Đăng nhập thất bại. Kiểm tra lại SĐT, mã PIN và mật khẩu.'));
     } finally { setLoginBusy(false); }
   };
   const pickBranch = async (bid) => {
@@ -255,16 +278,53 @@ export default function StaffHub() {
     try {
       // Gọi lại phone-login kèm branch_id: server kiểm CN thuộc phân công
       // (422 nếu không) và cấp token mới của chính phiên này.
-      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, surface: 'hub', branch_id: bid });
+      const r = await axios.post(API + '/employee/phone-login', { phone: p, pin_code: pin, password, surface: 'hub', branch_id: bid });
       finishLogin(r.data.access_token, r.data.employee || pendingLogin.info, r.data.session_branch_id || bid);
     } catch (e2) {
       setErr(errMsg(e2, 'Không chọn được chi nhánh.'));
     } finally { setLoginBusy(false); }
   };
+  // Gói #102 mục 2.3: nộp màn ép đổi — đặt mật khẩu mới bằng vé, nhận phiên.
+  const submitChange = async (e) => {
+    e.preventDefault();
+    if (!changeFlow) return;
+    setErr('');
+    if (changePw.length < 8 || changePw.length > 72) { setErr('Mật khẩu mới phải từ 8 đến 72 ký tự.'); return; }
+    if (changePw !== changePw2) { setErr('Mật khẩu nhập lại không khớp.'); return; }
+    const list = (changeFlow.info && changeFlow.info.branches) || [];
+    const bid = changeBranch || (list.length === 1 ? (list[0].id || list[0]) : 0) || changeFlow.info.branch_id || 0;
+    if (list.length > 1 && !bid) { setErr('Vui lòng chọn chi nhánh làm việc.'); return; }
+    setLoginBusy(true);
+    try {
+      const r = await axios.post(API + '/employee/password/change-with-ticket', { ticket: changeFlow.ticket, new_password: changePw, branch_id: bid || undefined });
+      finishLogin(r.data.access_token, r.data.employee || changeFlow.info, r.data.session_branch_id || bid || 0);
+    } catch (e2) {
+      setErr(errMsg(e2, 'Đổi mật khẩu thất bại. Vui lòng đăng nhập lại.'));
+    } finally { setLoginBusy(false); }
+  };
+  // Gói #102 mục 5.2: tự đặt mật khẩu trong phiên đang sống (PIN step-up).
+  const submitSetup = async () => {
+    setSetupErr('');
+    if (!/^\d{6}$/.test(setupPin)) { setSetupErr('Vui lòng nhập đủ 6 số PIN.'); return; }
+    if (setupPw.length < 8 || setupPw.length > 72) { setSetupErr('Mật khẩu phải từ 8 đến 72 ký tự.'); return; }
+    if (setupPw !== setupPw2) { setSetupErr('Mật khẩu nhập lại không khớp.'); return; }
+    setSetupBusy(true);
+    try {
+      await axios.post(API + '/employee/password/setup', { pin_code: setupPin, new_password: setupPw, new_password_confirmation: setupPw2 }, auth(token));
+      const merged = { ...(emp || {}), has_password: true };
+      setEmp(merged);
+      try { localStorage.setItem('staff_emp', JSON.stringify(merged)); } catch (e) { /* ignore */ }
+      setSetupDone(true); setSetupPin(''); setSetupPw(''); setSetupPw2('');
+    } catch (e2) {
+      if (e2 && e2.response && e2.response.status === 401 && !e2.response.data?.message?.includes('PIN')) { onExpired(); return; }
+      setSetupErr(errMsg(e2, 'Thiết lập mật khẩu thất bại.'));
+    } finally { setSetupBusy(false); }
+  };
 
   const logout = () => { // Gói phiên Hub 2026-11-05: đăng xuất là lối duy nhất đổi CN
     clearStaffSession();
     setToken(''); setEmp(null); setScreen('hub'); setBranchId(0); setPendingLogin(null);
+    setPassword(''); setChangeFlow(null); // Gói #102
   };
   // S5: hết phiên → về màn hình đăng nhập KÈM câu chuẩn (mẫu trang chấm công chi nhánh),
   // thay vì đăng xuất câm khiến NV tưởng lỗi tải. doLogin xóa err khi đăng nhập lại.
@@ -292,6 +352,23 @@ export default function StaffHub() {
     const b = empBranches.find((x) => (x.id || x) === branchId);
     return (b && b.name) || (emp && emp.branch_name) || '';
   })();
+  // Gói #102 (Q7): phiên tạo TRƯỚC gói này chưa có has_password trong
+  // staff_emp — tải lại /employee/me một lần khi mở Hub để biết có phải
+  // hiện thẻ "Thiết lập mật khẩu" cho NV chưa có mật khẩu hay không.
+  useEffect(() => {
+    if (!token || !emp) return;
+    let cancelled = false;
+    axios.get(API + '/employee/me', auth(token)).then((r) => {
+      const d = r.data && r.data.data;
+      if (cancelled || !d || typeof d.has_password !== 'boolean') return;
+      if (emp.has_password === d.has_password) return;
+      const merged = { ...emp, has_password: d.has_password, must_change_password: !!d.must_change_password };
+      setEmp(merged);
+      try { localStorage.setItem('staff_emp', JSON.stringify(merged)); } catch (e) { /* ignore */ }
+    }).catch(() => { /* im lặng — không phá phiên đang sống */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const embed = { token, emp, onBack: back, onExpired, branchId };
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
@@ -351,6 +428,52 @@ export default function StaffHub() {
     );
   }
 
+  // ---- Màn hình ép đổi mật khẩu (gói #102 mục 2.3: đang giữ mật khẩu tạm) ----
+  if (!token && changeFlow) {
+    const list = (changeFlow.info && changeFlow.info.branches) || [];
+    return (
+      <div className="sh-wrap">
+        <style>{CSS}</style>
+        <div className="sh-login">
+          <div className="sh-hd" style={{ borderRadius: 12 }}>
+            <div className="sh-title">🔐 Đặt mật khẩu của riêng bạn</div>
+            <div className="sh-sub">{changeFlow.info.full_name || ''} — bạn đang dùng mật khẩu tạm do quản lý cấp, hãy đặt mật khẩu mới để tiếp tục (vé đổi chỉ sống 10 phút)</div>
+          </div>
+          <form className="sh-card" onSubmit={submitChange}>
+            <label className="sh-label" style={{ marginTop: 4 }}>Mật khẩu mới (8–72 ký tự)</label>
+            <input className="sh-field" type="password" placeholder="Mật khẩu mới"
+              value={changePw} onChange={(e) => setChangePw(e.target.value)} />
+            <label className="sh-label">Nhập lại mật khẩu mới</label>
+            <input className="sh-field" type="password" placeholder="Nhập lại mật khẩu mới"
+              value={changePw2} onChange={(e) => setChangePw2(e.target.value)} />
+            {list.length > 1 && (
+              <>
+                <label className="sh-label">Chi nhánh làm việc phiên này</label>
+                {list.map((b) => {
+                  const bid = b.id || b;
+                  const active = changeBranch === bid;
+                  return (
+                    <button type="button" key={bid} className="sh-send" disabled={loginBusy}
+                      style={active ? { marginTop: 10, background: ORANGE, color: NAVY } : { marginTop: 10 }}
+                      onClick={() => setChangeBranch(bid)}>
+                      {b.name || b}{active ? ' ✓' : ''}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+            {err && <div className="sh-msg">{err}</div>}
+            <button className="sh-send" disabled={loginBusy}>{loginBusy ? 'Đang đặt mật khẩu...' : 'Đặt mật khẩu & vào Hub'}</button>
+            <button type="button" className="sh-send" style={{ background: '#e5e7eb', color: '#24305E' }} disabled={loginBusy}
+              onClick={() => { setChangeFlow(null); setChangePw(''); setChangePw2(''); setErr(''); }}>
+              ‹ Quay lại đăng nhập
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   // ---- Màn hình đăng nhập ----
   if (!token) {
     return (
@@ -359,7 +482,7 @@ export default function StaffHub() {
         <div className="sh-login">
           <div className="sh-hd" style={{ borderRadius: 12 }}>
             <div className="sh-title">👥 Cổng nhân viên</div>
-            <div className="sh-sub">Nhập SĐT + PIN để làm việc</div>
+            <div className="sh-sub">Nhập SĐT + PIN + mật khẩu để làm việc</div>
           </div>
           <form className="sh-card" onSubmit={doLogin}>
             <label className="sh-label" style={{ marginTop: 4 }}>Số điện thoại</label>
@@ -369,6 +492,9 @@ export default function StaffHub() {
             <input className="sh-field" type="password" inputMode="numeric" maxLength={6}
               placeholder="••••••" style={{ letterSpacing: 8, textAlign: 'center', fontSize: 22, fontWeight: 800 }}
               value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))} />
+            <label className="sh-label">Mật khẩu</label>
+            <input className="sh-field" type="password" placeholder="Mật khẩu đăng nhập"
+              value={password} onChange={(e) => setPassword(e.target.value)} />
             {err && <div className="sh-msg">{err}</div>}
             <button className="sh-send" disabled={loginBusy}>{loginBusy ? 'Đang đăng nhập...' : 'Đăng nhập'}</button>
           </form>
@@ -405,6 +531,36 @@ export default function StaffHub() {
       {/* Gói "Chờ duyệt trên Hub" (2026-10-21): cụm Chờ duyệt ngay dưới header, trên 4 cụm cũ */}
       <ApprovalCluster token={token} branchId={branchId} onExpired={onExpired}
         onOpen={(t) => { setApprovalType(t); setScreen('choduyet'); }} />
+
+      {/* Gói #102 mục 5.2: thẻ tự đặt mật khẩu cho NV chưa có mật khẩu (van chuyển đổi trong phiên đang sống) */}
+      {emp && emp.has_password === false && (
+        <div className="sh-card">
+          <h3>🔐 Thiết lập mật khẩu đăng nhập</h3>
+          {setupDone ? (
+            <div style={{ fontSize: 13.5, lineHeight: 1.6, color: '#15803d' }}>
+              ✅ Đã thiết lập mật khẩu. Từ lần đăng nhập sau, đăng nhập Hub bằng <b>SĐT + PIN + mật khẩu</b> này.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.55 }}>
+                Tài khoản của bạn chưa có mật khẩu. Từ nay đăng nhập Hub cần thêm mật khẩu — hãy đặt ngay trong phiên này, nhập PIN để xác nhận chính chủ.
+              </div>
+              <label className="sh-label">Mã PIN (6 số)</label>
+              <input className="sh-field" type="password" inputMode="numeric" maxLength={6}
+                placeholder="••••••" style={{ letterSpacing: 8, textAlign: 'center', fontSize: 20, fontWeight: 800 }}
+                value={setupPin} onChange={(e) => setSetupPin(e.target.value.replace(/\D/g, '').slice(0, 6))} />
+              <label className="sh-label">Mật khẩu mới (8–72 ký tự)</label>
+              <input className="sh-field" type="password" placeholder="Mật khẩu mới"
+                value={setupPw} onChange={(e) => setSetupPw(e.target.value)} />
+              <label className="sh-label">Nhập lại mật khẩu mới</label>
+              <input className="sh-field" type="password" placeholder="Nhập lại mật khẩu mới"
+                value={setupPw2} onChange={(e) => setSetupPw2(e.target.value)} />
+              {setupErr && <div className="sh-msg" style={{ margin: '12px 0 0' }}>{setupErr}</div>}
+              <button className="sh-send" disabled={setupBusy} onClick={submitSetup}>{setupBusy ? 'Đang thiết lập...' : 'Thiết lập mật khẩu'}</button>
+            </>
+          )}
+        </div>
+      )}
 
       {BTNS.map((g) => (
         <div className="sh-group" key={g.group}>

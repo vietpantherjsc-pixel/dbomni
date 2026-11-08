@@ -26,18 +26,19 @@ export default function Staff() {
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);
-    const [newPin, setNewPin] = useState(null); // PIN vừa tạo/reset — chỉ hiện 1 lần
+    const [creds, setCreds] = useState(null); // {pin, password} vừa tạo/cấp lại — chỉ hiện 1 lần (gói #102: thêm mật khẩu tạm)
+    const [noPw, setNoPw] = useState(false); // Gói #102 mục 5.1: bộ lọc "Chưa có mật khẩu"
     const [savedMsg, setSavedMsg] = useState(''); // S10: thông báo thành công sau khi tạo NV (trước đây đóng form im lặng)
 
     const fetchAll = useCallback(async () => {
         const [e, r, b] = await Promise.all([
-            axios.get(API + '/employees', { params: { search: search || undefined, branch_id: branchId || undefined, per_page: 50 } }),
+            axios.get(API + '/employees', { params: { search: search || undefined, branch_id: branchId || undefined, no_password: noPw ? 1 : undefined, per_page: 50 } }),
             axios.get(API + '/roles'), axios.get(API + '/branches'),
         ]);
         setList(e.data?.data?.data || e.data?.data || []);
         setRoles(r.data?.data || []);
         setBranches(b.data?.data || b.data || []);
-    }, [search, branchId]);
+    }, [search, branchId, noPw]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
     if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
@@ -81,11 +82,13 @@ export default function Staff() {
             let r;
             if (editing) r = await axios.patch(API + '/employees/' + editing.id, payload);
             else r = await axios.post(API + '/employees', payload);
-            const d = r?.data?.data || r?.data || {};
+            const top = r?.data || {};
             setShowForm(false); fetchAll();
-            // Backend trả pin_code_plain khi vừa đặt PIN mới — hiện 1 lần duy nhất
-            if (d.pin_code_plain) setNewPin(d.pin_code_plain);
-            // S10: tạo mới mà không có PIN hiện kèm → báo thành công rõ ràng (toast tại trang)
+            // Backend trả pin_code_plain / password_plain ở cấp cao nhất khi vừa
+            // đặt PIN/mật khẩu mới — hiện 1 lần duy nhất (gói #102: tạo NV luôn
+            // kèm mật khẩu tạm tự sinh).
+            if (top.pin_code_plain || top.password_plain) setCreds({ pin: top.pin_code_plain || null, password: top.password_plain || null });
+            // S10: tạo mới mà không có thông tin đăng nhập hiện kèm → báo thành công rõ ràng (toast tại trang)
             else if (!editing) {
                 setSavedMsg('Đã tạo nhân viên ' + form.full_name.trim() + '.');
                 setTimeout(() => setSavedMsg(''), 4000);
@@ -97,10 +100,20 @@ export default function Staff() {
         try {
             const r = await axios.post(API + '/employees/' + id + '/reset-pin');
             const d = r?.data?.data || r?.data || {};
-            if (d.pin_code_plain) setNewPin(d.pin_code_plain);
+            if (d.pin_code_plain) setCreds({ pin: d.pin_code_plain });
             else alert('Đã đặt lại PIN.');
             fetchAll();
         } catch (e) { alert(e.response?.data?.message || 'Đặt lại PIN thất bại'); }
+    };
+    // Gói #102 mục 4.3: cấp lại mật khẩu — server tự sinh mật khẩu tạm, hiện 1 lần
+    const resetPassword = async (id) => {
+        try {
+            const r = await axios.post(API + '/employees/' + id + '/reset-password');
+            const d = r?.data?.data || {};
+            if (d.password_plain) setCreds({ password: d.password_plain });
+            else alert('Đã cấp lại mật khẩu.');
+            fetchAll();
+        } catch (e) { alert(e.response?.data?.message || 'Cấp lại mật khẩu thất bại'); }
     };
 
     return (
@@ -113,6 +126,10 @@ export default function Staff() {
                         <option value="">Tất cả chi nhánh</option>
                         {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
+                    <label className="flex items-center gap-1.5 text-[13px] text-gray-600 cursor-pointer select-none">
+                        <input type="checkbox" checked={noPw} onChange={(e) => setNoPw(e.target.checked)} className="accent-[#24305E]" />
+                        Chưa có mật khẩu
+                    </label>
                     {editable && <button onClick={openAdd} className="ml-auto px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">+ Thêm nhân viên</button>}
                 </div>
                 {savedMsg && (
@@ -129,7 +146,7 @@ export default function Staff() {
                         <tbody>
                             {list.map((e) => (
                                 <tr key={e.id} className="border-b border-gray-50">
-                                    <td className="px-4 py-3"><div className="font-medium">{e.full_name}</div><div className="text-gray-400 text-[12px]">{e.username ? '@' + e.username : 'chưa có TK đăng nhập'} · vào làm {fmtDate(e.start_date)}</div></td>
+                                    <td className="px-4 py-3"><div className="font-medium">{e.full_name}</div><div className="text-gray-400 text-[12px]">{e.username ? '@' + e.username : 'chưa có TK đăng nhập'} · vào làm {fmtDate(e.start_date)}</div>{e.has_password === false && <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Chưa có mật khẩu</span>}{e.has_password !== false && e.must_change_password && <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Đang giữ mật khẩu tạm</span>}</td>
                                     <td className="px-3 py-3">{e.phone}</td>
                                     <td className="px-3 py-3">{e.role?.name || '—'}</td>
                                     <td className="px-3 py-3">
@@ -143,6 +160,7 @@ export default function Staff() {
                                     {editable && <td className="px-4 py-3 text-right whitespace-nowrap">
                                         <button onClick={() => openEdit(e)} className="text-[#24305E] mr-3">Sửa</button>
                                         <button onClick={() => resetPin(e.id)} className="text-orange-500 mr-3">Đổi PIN</button>
+                                        <button onClick={() => resetPassword(e.id)} className="text-orange-500 mr-3">Cấp mật khẩu</button>
                                         <button onClick={() => remove(e.id)} className="text-red-500">Xóa</button>
                                     </td>}
                                 </tr>
@@ -183,7 +201,9 @@ export default function Staff() {
                                     </div></div>
                                 <div><label className="text-[12px] text-gray-500">Mã PIN 6 số (chấm công + POS/KDS)</label><input value={form.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder={editing ? 'Để trống = giữ nguyên' : 'Trống = tự sinh'} className={inp + ' font-mono tracking-widest'} /></div>
                                 <div><label className="text-[12px] text-gray-500">Tên đăng nhập (admin)</label><input value={form.username} onChange={(e) => set('username', e.target.value)} className={inp} /></div>
-                                <div><label className="text-[12px] text-gray-500">Mật khẩu {editing ? '(trống = giữ nguyên)' : ''}</label><input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} className={inp} /></div>
+                                {editing
+                                    ? <div><label className="text-[12px] text-gray-500">Mật khẩu (trống = giữ nguyên · đặt mới tối thiểu 8 ký tự)</label><input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} className={inp} /></div>
+                                    : <div><label className="text-[12px] text-gray-500">Mật khẩu đăng nhập Hub</label><div className="text-[12.5px] text-gray-500 border border-dashed border-gray-300 rounded px-3 py-2">Hệ thống tự sinh <b>mật khẩu tạm</b> và hiện 1 lần sau khi tạo — nhân viên phải đổi ở lần đăng nhập đầu.</div></div>}
                                 <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={form.is_active} onChange={(e) => set('is_active', e.target.checked)} /> Đang làm việc</label>
                                 <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={form.apply_responsibility} onChange={(e) => set('apply_responsibility', e.target.checked)} /> Áp dụng lương trách nhiệm</label>
                             </div>
@@ -195,14 +215,21 @@ export default function Staff() {
                     </div>
                 )}
 
-                {/* Modal hiện PIN mới — chỉ hiện 1 lần duy nhất sau khi tạo/reset */}
-                {newPin && (
-                    <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setNewPin(null)}>
+                {/* Modal hiện thông tin đăng nhập mới — chỉ hiện 1 lần duy nhất sau khi tạo/cấp lại (gói #102: PIN + mật khẩu tạm) */}
+                {creds && (
+                    <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setCreds(null)}>
                         <div className="bg-white rounded-xl w-full max-w-sm p-6 text-center" onClick={(e) => e.stopPropagation()}>
-                            <div className="text-[15px] font-bold text-[#24305E] mb-1">PIN mới của nhân viên</div>
-                            <div className="font-mono text-[34px] font-extrabold tracking-[10px] text-[#F5A623] my-4">{newPin}</div>
-                            <p className="text-[13px] text-gray-500 mb-5">Hãy ghi lại cho nhân viên ngay —<br />mã này sẽ <b>không hiện lại</b> lần nữa.</p>
-                            <button onClick={() => setNewPin(null)} className="px-8 py-2.5 rounded bg-[#24305E] text-white text-[14px] font-semibold">Đã ghi lại</button>
+                            <div className="text-[15px] font-bold text-[#24305E] mb-1">Thông tin đăng nhập mới của nhân viên</div>
+                            {creds.pin && (<>
+                                <div className="text-[12px] text-gray-500 mt-4">PIN</div>
+                                <div className="font-mono text-[34px] font-extrabold tracking-[10px] text-[#F5A623] my-1">{creds.pin}</div>
+                            </>)}
+                            {creds.password && (<>
+                                <div className="text-[12px] text-gray-500 mt-4">Mật khẩu tạm (phải đổi ở lần đăng nhập đầu · hết hạn sau 72 giờ)</div>
+                                <div className="font-mono text-[26px] font-extrabold tracking-[3px] text-[#24305E] my-1">{creds.password}</div>
+                            </>)}
+                            <p className="text-[13px] text-gray-500 mb-5">Hãy ghi lại cho nhân viên ngay —<br />thông tin này sẽ <b>không hiện lại</b> lần nữa.</p>
+                            <button onClick={() => setCreds(null)} className="px-8 py-2.5 rounded bg-[#24305E] text-white text-[14px] font-semibold">Đã ghi lại</button>
                         </div>
                     </div>
                 )}

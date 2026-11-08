@@ -18,6 +18,9 @@ class Employee extends Authenticatable
         'full_name', 'dob', 'start_date', 'phone', 'email', 'education', 'qualification',
         'username', 'password', 'pin_code', 'role_id', 'branch_id', 'is_active', 'avatar',
         'apply_responsibility',
+        // Gói #102: vòng đời mật khẩu đăng nhập Hub
+        'must_change_password', 'password_changed_at', 'password_reset_at',
+        'password_reset_by_user_id', 'password_reset_by_employee_id',
     ];
 
     protected $hidden = ['password', 'remember_token', 'pin_code']; // Gói 38: PIN không lộ trong API
@@ -29,6 +32,10 @@ class Employee extends Authenticatable
         'apply_responsibility' => 'boolean',
         'password' => 'hashed',
         'pin_code' => 'hashed', // Gói 38: PIN 6 số lưu hash bcrypt, không plaintext
+        // Gói #102: vòng đời mật khẩu đăng nhập Hub
+        'must_change_password' => 'boolean',
+        'password_changed_at' => 'datetime',
+        'password_reset_at' => 'datetime',
     ];
 
     public function role(): BelongsTo

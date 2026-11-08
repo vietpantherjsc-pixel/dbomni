@@ -1,35 +1,47 @@
-# MANIFEST — Gói dọn châm Zalo (2026-11-07)
+# MANIFEST — Gói mật khẩu đăng nhập lần đầu của nhân viên (#102)
 
-Zip `goi-don-cham-zalo-20261107.zip` — đúng **2 file**, cấu trúc từ repo root: giải nén đè thẳng vào `D:\WORK\VIBE`. **Không migration, không đổi dữ liệu, không đổi hành vi.**
+- **Ngày:** 2026-11-07
+- **Kiểm duyệt:** TESTER ✅ Tĩnh (§BR) + ✅ Sống (§BS) trên máy thử — 6/6 ca sống đạt trọn.
+- **Nội dung:** 7 file code (gồm 1 migration mới 000102) + file MANIFEST này.
+- **Cách áp:** giải nén đè thẳng vào thư mục gốc `D:\WORK\VIBE` (giữ nguyên cấu trúc `dbomni/` + `fnb-frontend/`).
 
-> Đây là gói **dọn dẹp sau khi đăng nhập Zalo đã thông** (gốc lỗi SĐT đã bắt được và vá xong ở máy chủ: bước đổi số dùng đúng `secret_key` của app). Hai việc duy nhất: gỡ dòng chẩn đoán tạm khỏi app + đưa bản vá phía server về local cho đồng bộ.
+## Gói này làm gì
 
-## Nội dung
+- Cổng đăng nhập Hub thành **SĐT + PIN + mật khẩu** (áp cho mọi bề mặt của phone-login): khóa chống dò mật khẩu riêng (sai 5 lần → khóa 15 phút, độc lập với khóa PIN), thông báo lỗi gộp không lộ yếu tố nào sai.
+- Nhân viên mới: Admin tạo hồ sơ → hệ thống **tự sinh mật khẩu tạm**, hiện đúng 1 lần trong hộp thoại kết quả tạo; mật khẩu tạm sống 72 giờ, nhân viên **bị ép đổi ở lần đăng nhập đầu** qua vé đổi dùng 1 lần (không có phiên nào được cấp trước khi đổi xong).
+- Quên mật khẩu: quản lý bấm **"Cấp mật khẩu"** ở Admin → hệ thống tự sinh mật khẩu tạm mới, phiên cũ của nhân viên bị thu hồi ngay.
+- Nhân viên cũ chưa có mật khẩu: trong phiên Hub đang sống có thẻ **"Thiết lập mật khẩu đăng nhập"** (xác nhận bằng PIN); Admin có bộ lọc + huy hiệu **"Chưa có mật khẩu"**.
+- Chuẩn mật khẩu khi đặt mới: tối thiểu 8, tối đa 72 ký tự (mật khẩu cũ 6–7 ký tự vẫn đăng nhập được).
 
-1. **`zalo-miniapp/src/pages/Account.jsx`** — gỡ dòng **"Kỹ thuật: …"** khỏi khung cam "Cần số điện thoại đã xác thực" (cả phần hiển thị lẫn cơ chế nuôi nó trong file này). Khung trở lại nguyên thiết kế gốc: tiêu đề + lời giải thích cho khách + 2 nút **Thử lại / Tiếp tục đặt món vãng lai**. Luồng đăng nhập Zalo không đổi một ly.
-2. **`dbomni/app/Services/ZaloAuthService.php`** — nguyên bản vá **đang chạy sống** ở máy chủ (bước đổi SĐT qua `/me/info` dùng `secret_key` thô theo tài liệu Zalo). Zip tổng trước đó ở local đang chứa bản trước vá — **nếu không đưa bản này về, một lần deploy local sau này sẽ làm lỗi 117 sống lại.** File này giống hệt bản trên máy chủ, không sửa thêm chữ nào. Các dòng log chẩn đoán phía server (`ZaloAuthService /me/info …`) vẫn giữ — đó là logging vận hành vĩnh viễn.
+## Các bước áp gói (theo thứ tự)
 
-## Trình tự áp
-
-1. Giải nén zip đè vào `D:\WORK\VIBE`.
-2. Chạy tại `D:\WORK\VIBE\dbomni`:
+1. Giải nén đè vào `D:\WORK\VIBE`.
+2. **Chạy migration 000102** — chạy tại `D:\WORK\VIBE\dbomni`:
+   `docker compose exec laravel.test php artisan migrate`
+   (thêm 5 cột vòng đời mật khẩu cho bảng `employees`: `must_change_password`, `password_changed_at`, `password_reset_at`, `password_reset_by_user_id`, `password_reset_by_employee_id`)
+3. **Restart backend** — chạy tại `D:\WORK\VIBE\dbomni`:
    `docker compose restart laravel.test`
-3. Chạy tại `D:\WORK\VIBE\zalo-miniapp` — dựng lại với 2 biến môi trường:
-   `$env:VITE_API_BASE="https://zma.daybreak.vn/api/online"`
-   `$env:VITE_MINIAPP_ID="<Mini App ID>"` (chính là giá trị `APP_ID` trong file `.env` của thư mục này)
+4. **Rebuild giao diện Admin** (Hub nằm trong cùng bản build này) — chạy tại `D:\WORK\VIBE\fnb-frontend`:
    `npm run build`
-   → cập nhật `app-config` theo tên asset mới (listCSS/listSyncJS/listAsyncJS) → chép thư mục `www` → deploy **Development**:
-   `zmp deploy --existing`
-   (KHÔNG thêm `-t`/`--testing`.)
 
-## Kiểm nhanh sau khi áp
+## Hai lưu ý quan trọng (từ vòng kiểm của TESTER)
 
-- Mở app trong Zalo → đăng nhập Zalo bình thường như hiện tại (đã thông) — không cần kiểm gì thêm về đăng nhập.
-- Nếu gặp lại khung cam (ví dụ dùng tài khoản Zalo chưa cấp quyền SĐT): khung chỉ còn tiêu đề + lời giải thích + 2 nút, **không còn dòng "Kỹ thuật: …"** ở dưới.
+1. **Áp gói này SAU gói phiên Hub** — gói phiên Hub đã có trong zip tổng cuối `goi-tong-cuoi-20261107.zip`. Nếu máy đã áp zip tổng cuối thì áp tiếp gói này là đúng thứ tự.
+2. **Áp gói KHÔNG thu hồi các phiên nhân viên đang đăng nhập** — đây là hành vi ĐÚNG theo thiết kế (để nhân viên cũ tự đặt mật khẩu ngay trong phiên đang sống), không phải lỗi. Cổng mật khẩu chỉ bắt đầu áp từ lần đăng nhập lạnh tiếp theo của mỗi nhân viên.
 
-## Bảng SHA-256 (sinh bằng script từ chính file trong zip)
+## Route mới (+2: tổng 532 → 534, đã chạy `php artisan route:list` thật trên máy thử)
 
-| File | Byte | SHA-256 |
-|---|---|---|
-| `dbomni/app/Services/ZaloAuthService.php` | 5934 | `63ce063d630151776c0f8eaa7ee6dcda93e650d21ac5080cac612dddcf9ba717` |
-| `zalo-miniapp/src/pages/Account.jsx` | 74478 | `560ce50217cfb4711468f1b9dc58a41acafa44dedcd36ef2a1a33e1253768f70` |
+- `POST /employee/password/change-with-ticket` — đổi mật khẩu bắt buộc bằng vé (chưa cần token).
+- `POST /employee/password/setup` — tự đặt mật khẩu trong phiên (token nhân viên + PIN xác nhận).
+
+## Bảng SHA-256 của các file trong zip (sinh bằng script)
+
+| File | SHA-256 |
+|---|---|
+| `dbomni/app/Http/Controllers/Api/EmployeeAuthController.php` | `8a263757156c75b032eea6e28969f89ae90e43805f58ba09581692f702e16c49` |
+| `dbomni/app/Http/Controllers/Api/EmployeeController.php` | `173b586471627bd7e80bc90cdc426e0c5009503a3300045d46e470bbb24be2a0` |
+| `dbomni/app/Models/Employee.php` | `b7de499cd237eeb9e33821d564fbf11881884dc4b77c97fbd46e8eb0444f9798` |
+| `dbomni/database/migrations/2026_11_07_000102_employee_password_lifecycle.php` | `e91edb5d64b3c61301611f08d4efd146a6794ed7a392072e0c3ac9f1315c5df1` |
+| `dbomni/routes/api.php` | `5c203ad5d0563fa4469c8017a22f45f945ddb4ac67ae635277e0589f41ede530` |
+| `fnb-frontend/src/pages/StaffHub.jsx` | `0243bf9d8e39775f3201eaa4536b0a99e3ffb33aca6ef2d0d6ebfb1e986651e0` |
+| `fnb-frontend/src/pages/admin/Staff.jsx` | `f515a694ae2a6a1a05b5efc297588851d24b54533307c84785b715293f4d9177` |

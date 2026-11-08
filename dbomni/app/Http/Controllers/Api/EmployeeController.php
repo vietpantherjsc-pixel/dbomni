@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Support\ApprovalActor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -25,6 +26,8 @@ class EmployeeController extends Controller
         }
         if ($request->filled('role_id')) $q->where('role_id', $request->integer('role_id'));
         if ($request->filled('is_active')) $q->where('is_active', $request->boolean('is_active'));
+        // Gói #102 mục 5.1: lọc nhóm "Chưa có mật khẩu" để quản lý xử lý dần
+        if ($request->filled('no_password') && $request->boolean('no_password')) $q->whereNull('password');
         if ($request->filled('search')) {
             $s = '%' . $request->string('search') . '%';
             $q->where(fn ($w) => $w->where('full_name', 'like', $s)
@@ -32,12 +35,19 @@ class EmployeeController extends Controller
                 ->orWhere('username', 'like', $s));
         }
 
-        return response()->json(['success' => true, 'data' => $q->paginate(min($request->integer('per_page', 20), 200))]); // Gói 38: per_page tối đa 200
+        $page = $q->paginate(min($request->integer('per_page', 20), 200)); // Gói 38: per_page tối đa 200
+        // Gói #102: gắn cờ trạng thái mật khẩu (hash vẫn ẩn theo $hidden của model)
+        $page->getCollection()->transform(function ($emp) {
+            $emp->setAttribute('has_password', !empty($emp->password));
+            return $emp;
+        });
+        return response()->json(['success' => true, 'data' => $page]);
     }
 
     public function show(int $id): JsonResponse
     {
         $emp = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])->findOrFail($id);
+        $emp->setAttribute('has_password', !empty($emp->password)); // Gói #102
         return response()->json(['success' => true, 'data' => $emp]);
     }
 
@@ -52,7 +62,10 @@ class EmployeeController extends Controller
             'education' => 'nullable|string|max:150',
             'qualification' => 'nullable|string|max:150',
             'username' => ['nullable', 'string', 'max:100', Rule::unique('employees', 'username')->ignore($ignoreId)],
-            'password' => 'nullable|string|min:6|max:100',
+            // Gói #102 mục 4.2: chuẩn mật khẩu khi ĐẶT mới là min:8 / max:72
+            // (nâng từ min:6) — áp cho đường gõ tay còn lại (sửa NV). Mật
+            // khẩu cũ 6–7 ký tự đã đặt từ trước vẫn đăng nhập bình thường.
+            'password' => 'nullable|string|min:8|max:72',
             // Gói 38: PIN lưu hash bcrypt — bỏ Rule::unique (DB không check được), check trùng bằng Hash::check ở store/update
             'pin_code' => ['nullable', 'string', 'size:6', 'regex:/^[0-9]{6}$/'],
             'role_id' => 'nullable|exists:job_roles,id',
@@ -108,7 +121,12 @@ class EmployeeController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $validated = $request->validate($this->rules());
+        // Gói #102 (Q1): tạo NV KHÔNG nhận mật khẩu gõ tay nữa — hệ thống tự
+        // sinh mật khẩu tạm (mục 1.1), nên bỏ hẳn luật password khỏi validate
+        // của đường tạo (giá trị gửi lên bị bỏ qua, không báo lỗi khó hiểu).
+        $storeRules = $this->rules();
+        unset($storeRules['password']);
+        $validated = $request->validate($storeRules);
         if ($deny = $this->guardRoleAssignment($request, $validated['role_id'] ?? null)) return $deny;
         // Gói 38: PIN lưu hash — sinh ngẫu nhiên hoặc check trùng PIN nhập tay bằng Hash::check
         if (empty($validated['pin_code'])) {
@@ -120,6 +138,15 @@ class EmployeeController extends Controller
             }
         }
         $validated['pin_code'] = $plainPin; // cast 'hashed' tự hash khi create
+        // Gói #102 mục 1.1: mật khẩu tạm tự sinh + cờ bắt buộc đổi + dấu vết
+        // lần cấp (tạo NV cũng là 1 lần cấp — Q2: mốc này tính hạn 72 giờ).
+        $plainPassword = $this->generateTempPassword();
+        $validated['password'] = $plainPassword; // cast 'hashed' tự hash khi create
+        $validated['must_change_password'] = true;
+        $validated['password_reset_at'] = now();
+        [$resetByUserId, $resetByEmployeeId] = ApprovalActor::ids($request->user());
+        $validated['password_reset_by_user_id'] = $resetByUserId;
+        $validated['password_reset_by_employee_id'] = $resetByEmployeeId;
         $branchIds = $validated['branch_ids'] ?? [];
         unset($validated['branch_ids']);
         $emp = Employee::create($validated);
@@ -129,7 +156,25 @@ class EmployeeController extends Controller
             'success' => true,
             'data' => $emp->load(['role:id,name', 'branch:id,name', 'branches:id,name']),
             'pin_code_plain' => $plainPin, // Gói 38: trả PIN plaintext 1 lần duy nhất để hiển thị
+            'password_plain' => $plainPassword, // Gói #102: mật khẩu tạm — plaintext 1 lần duy nhất để quản lý trao tay
         ], 201);
+    }
+
+    // Gói #102 mục 1.1/4.2: sinh mật khẩu tạm 8 ký tự chữ + số, bỏ ký tự dễ
+    // nhầm (0/O/1/l/I), đảm bảo có cả chữ lẫn số, nguồn ngẫu nhiên an toàn.
+    protected function generateTempPassword(): string
+    {
+        $letters = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
+        $digits = '23456789';
+        $all = $letters . $digits;
+        do {
+            $pw = '';
+            $max = strlen($all) - 1;
+            for ($i = 0; $i < 8; $i++) {
+                $pw .= $all[random_int(0, $max)];
+            }
+        } while (!preg_match('/[A-Za-z]/', $pw) || !preg_match('/[0-9]/', $pw));
+        return $pw;
     }
 
     // Gói 38: kiểm tra PIN đã tồn tại chưa (PIN lưu hash nên phải duyệt Hash::check)
@@ -161,6 +206,9 @@ class EmployeeController extends Controller
         }
         // Không gửi password mới -> giữ nguyên
         if (empty($validated['password'])) unset($validated['password']);
+        // Gói #102 (Q1): đường gõ tay ở sửa NV — ghi mốc đổi mật khẩu,
+        // KHÔNG đổi cờ must_change_password.
+        if (!empty($validated['password'])) $validated['password_changed_at'] = now();
         // Gói 38: PIN rỗng = không đổi (xóa key để cast hashed không hash chuỗi rỗng);
         // PIN mới thì check trùng rồi để cast hashed tự hash
         $plainPin = null;
@@ -216,14 +264,28 @@ class EmployeeController extends Controller
         return response()->json(['success' => true, 'data' => ['pin_code_plain' => $pin]]);
     }
 
-    // Đặt lại mật khẩu đăng nhập
+    // Cấp lại mật khẩu — Gói #102 mục 4.3: hệ thống TỰ SINH mật khẩu tạm
+    // (quản lý không gõ nữa) + hiển thị plaintext đúng 1 lần + đặt cờ bắt
+    // buộc đổi + ghi dấu vết cấp lại (cặp cột tác nhân) + thu hồi toàn bộ
+    // token. NV đăng nhập bằng mật khẩu tạm sẽ bị ép đổi ngay (luồng vé).
     public function resetPassword(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
         if ($deny = $this->guardResetTarget($request, $emp)) return $deny;
-        $validated = $request->validate(['password' => 'required|string|min:6|max:100']);
-        $emp->update(['password' => $validated['password']]);
-        $emp->tokens()->delete(); // Audit 2026-10-23 BM-10: thu hồi token khi đặt lại mật khẩu
-        return response()->json(['success' => true, 'message' => 'Đã đặt lại mật khẩu.']);
+        $plainPassword = $this->generateTempPassword();
+        [$resetByUserId, $resetByEmployeeId] = ApprovalActor::ids($request->user());
+        $emp->update([
+            'password' => $plainPassword, // cast 'hashed' tự hash
+            'must_change_password' => true,
+            'password_reset_at' => now(),
+            'password_reset_by_user_id' => $resetByUserId,
+            'password_reset_by_employee_id' => $resetByEmployeeId,
+        ]);
+        $emp->tokens()->delete(); // Audit 2026-10-23 BM-10: thu hồi token khi cấp lại mật khẩu
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã cấp mật khẩu tạm mới. Nhân viên sẽ phải đổi mật khẩu ở lần đăng nhập tiếp theo.',
+            'data' => ['password_plain' => $plainPassword], // plaintext 1 lần duy nhất để quản lý trao tay
+        ]);
     }
 }
