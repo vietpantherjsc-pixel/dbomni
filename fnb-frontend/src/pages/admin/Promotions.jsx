@@ -140,7 +140,7 @@ export default function Promotions() {
 
     const emptyForm = () => ({
         name: '', code: '', type: 'percent', value: '', scope: 'order', scope_ids: [],
-        min_order_amount: 0, max_discount_amount: '', gift_product_id: '', gift_quantity: 1,
+        min_order_amount: 0, min_order_enabled: false, max_discount_amount: '', gift_product_id: '', gift_quantity: 1,
         target: 'all', tier_ids: [], starts_at: '', expires_at: '', has_expires: false,
         days_of_week: [], use_days: false, time_from: '', time_to: '', use_time: false,
         channels: [], is_active: true, banner_url: '', // Spec kênh bán hàng: [] = mọi kênh (mặc định nhóm store khi tạo mới)
@@ -158,6 +158,25 @@ export default function Promotions() {
         ? <div className="text-[12px] mt-1 font-medium" style={{ color: 'var(--m-danger)' }}>⚠ {errs[k]}</div>
         : null;
     const errStyle = (k) => errs[k] ? { borderColor: 'var(--m-danger)' } : {};
+    // Lệnh Đại Vương 2026-11-08: trường "Giá trị đơn tối thiểu" LUÔN có ở mọi
+    // loại KM, cùng khuôn ô tích + ô nhập tiền (không tích = không áp dụng,
+    // gửi 0). Dùng chung cho cả 3 nhánh loại (percent · fixed/fixed_price/
+    // shipping · gift) để không lệch khuôn. LƯU Ý KỸ THUẬT: đây là hàm render
+    // gọi thẳng {renderMinOrderField()} — KHÔNG bọc thành component con, vì
+    // component định nghĩa trong thân sẽ bị dựng lại mỗi lần gõ phím làm ô
+    // nhập mất focus.
+    const renderMinOrderField = () => (
+        <div>
+            <label className="m-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input type="checkbox" checked={form.min_order_enabled} onChange={(e) => setForm({ ...form, min_order_enabled: e.target.checked })} />
+                Áp dụng giá trị đơn tối thiểu
+            </label>
+            <input type="number" min="0" value={form.min_order_amount} disabled={!form.min_order_enabled}
+                onChange={(e) => setForm({ ...form, min_order_amount: e.target.value })}
+                className="m-input w-full" placeholder="VD: 100000" style={errStyle('min_order_amount')} />
+            <FE k="min_order_amount" />
+        </div>
+    );
     // SPEC-02c: form động theo trigger — nguồn sự thật là form.auto_extra (chuỗi JSON);
     // lastValidExtra giữ object parse OK gần nhất để field không crash khi JSON đang sai.
     const [showAdv, setShowAdv] = useState(false);
@@ -300,7 +319,7 @@ export default function Promotions() {
                     auto_trigger: _tr || '', auto_valid_days: _vd ?? 7, auto_max_per_customer: _mp ?? 1,
                     auto_max_per_month: _mpm ?? '',
                     auto_extra: Object.keys(_extra).length ? JSON.stringify(_extra, null, 2) : '{}',
-                    min_order_amount: p.min_order_amount ?? 0, max_discount_amount: p.max_discount_amount ?? '',
+                    min_order_amount: p.min_order_amount ?? 0, min_order_enabled: Number(p.min_order_amount) > 0, max_discount_amount: p.max_discount_amount ?? '',
                     gift_product_id: p.gift_product_id || '', gift_quantity: p.gift_quantity || 1,
                     target: p.target, tier_ids: p.tier_ids || [],
                     starts_at: p.starts_at ? p.starts_at.slice(0, 16) : '', expires_at: p.expires_at ? p.expires_at.slice(0, 16) : '',
@@ -325,6 +344,7 @@ export default function Promotions() {
         if (form.code && form.code.trim().length > 20) e.code = 'Mã coupon tối đa 20 ký tự.';
         if (form.type !== 'gift' && form.type !== 'shipping' && !(Number(form.value) > 0)) e.value = 'Vui lòng nhập giá trị khuyến mại lớn hơn 0.';
         if (form.type === 'gift' && !form.gift_product_id) e.gift_product_id = 'Vui lòng chọn món sẽ tặng cho khách.';
+        if (form.min_order_enabled && !(Number(form.min_order_amount) > 0)) e.min_order_amount = 'Đã bật đơn tối thiểu — nhập số tiền lớn hơn 0.';
         if (form.type !== 'shipping' && form.scope !== 'order' && form.scope_ids.length === 0) e.scope_ids = `Vui lòng chọn ít nhất 1 ${SCOPE_LABELS[form.scope].toLowerCase()} áp dụng.`;
         if (form.auto_trigger) {
             try { JSON.parse(form.auto_extra || '{}'); }
@@ -358,7 +378,7 @@ export default function Promotions() {
                 value: form.type === 'gift' ? null : Number(form.value),
                 scope: form.type === 'shipping' ? 'order' : form.scope, // Gói 10c: KM ship luôn áp dụng cả hóa đơn
                 scope_ids: form.scope === 'order' ? null : form.scope_ids,
-                min_order_amount: Number(form.min_order_amount) || 0,
+                min_order_amount: form.min_order_enabled ? Number(form.min_order_amount) || 0 : 0,
                 max_discount_amount: form.max_discount_amount ? Number(form.max_discount_amount) : null,
                 gift_product_id: form.type === 'gift' ? Number(form.gift_product_id) : null,
                 gift_quantity: Number(form.gift_quantity) || 1,
@@ -671,17 +691,17 @@ export default function Promotions() {
                                             <input type="number" min="0" value={form.max_discount_amount} onChange={(e) => setForm({ ...form, max_discount_amount: e.target.value })}
                                                 placeholder="Không giới hạn" className="m-input w-full" />
                                         </div>
-                                        <div>
-                                            <label className="m-label">Đơn tối thiểu (đ)</label>
-                                            <input type="number" min="0" value={form.min_order_amount} onChange={(e) => setForm({ ...form, min_order_amount: e.target.value })} className="m-input w-full" />
-                                        </div>
+                                        {renderMinOrderField()}
                                     </div>
                                 )}
                                 {(form.type === 'fixed' || form.type === 'fixed_price' || form.type === 'shipping') && (
                                     <div className="mt-3 w-1/2 pr-2">
-                                        <label className="m-label">Tổng tiền hóa đơn tối thiểu (đ)</label>
-                                        <input type="number" min="0" value={form.min_order_amount} onChange={(e) => setForm({ ...form, min_order_amount: e.target.value })} className="m-input w-full" placeholder="VD: 100000" />
-                                        <div className="text-[11.5px] mt-1" style={{ color: 'var(--m-ink-faint)' }}>Không bắt buộc — để 0 nghĩa là không yêu cầu đơn tối thiểu.</div>
+                                        {renderMinOrderField()}
+                                    </div>
+                                )}
+                                {form.type === 'gift' && (
+                                    <div className="mt-3 w-1/2 pr-2">
+                                        {renderMinOrderField()}
                                     </div>
                                 )}
                             </div>

@@ -226,6 +226,21 @@ class VoucherController extends Controller
             ], 422));
         }
 
+        // Vá 500 tạo voucher (2026-11-08, log máy thử: SQLSTATE 1048
+        // 'min_order_amount' cannot be null): 3 cột NOT NULL có default ở DB
+        // mà rules đang để nullable — client gửi null tường minh (form Admin
+        // để trống ô đơn tối thiểu là gửi null) thì mảng validated giữ null
+        // và create()/update() ghi NULL thẳng vào cột, MySQL strict văng
+        // 1048 (default chỉ cứu khi KHÔNG gửi cột). Chuẩn hóa null → đúng
+        // default của cột tại điểm nghẽn validatePayload (phủ cả store lẻ,
+        // store hàng loạt và update). Cột nullable thật (max_discount_amount,
+        // usage_limit, per_customer_limit, starts_at, expires_at) giữ null.
+        foreach (['min_order_amount' => 0, 'is_active' => true, 'stack_with_promotion' => false] as $col => $def) {
+            if (array_key_exists($col, $data) && $data[$col] === null) {
+                $data[$col] = $def;
+            }
+        }
+
         // Các trường không nằm trong validate (prefix/quantity) không cho qua
         return collect($data)->except(['prefix', 'quantity', 'used_count'])->toArray();
     }

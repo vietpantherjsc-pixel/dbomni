@@ -20,6 +20,8 @@ use Illuminate\Support\Facades\DB;
 // Mọi endpoint ép branch_id từ token NV, không nhận từ client.
 class EmployeeInventoryController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
     private function emp(Request $request): Employee
     {
         /** @var Employee $emp */
@@ -73,7 +75,7 @@ class EmployeeInventoryController extends Controller
 
     public function materials(Request $request): JsonResponse
     {
-        $data = Material::with('category:id,name,sort_order')
+        $data = Material::with('category:id,name,sort_order', 'units')
             ->orderBy('name')
             ->get()
             ->map(fn ($m) => [
@@ -87,6 +89,13 @@ class EmployeeInventoryController extends Controller
                 'is_active' => (bool) $m->is_active, // Gói 55 p11w
                 'purchase_unit' => $m->purchase_unit,
                 'conversion_rate' => (float) ($m->conversion_rate ?: 1),
+                // Spec đặt hàng NCC §6A (2026-11-08): đơn vị quy đổi của từng
+                // nguyên liệu để form đặt hàng Hub có ô chọn đơn vị như Admin
+                // (trường cộng thêm — các trang Hub cũ bỏ qua).
+                'units' => $m->units->map(fn ($u) => [
+                    'unit_name' => $u->unit_name,
+                    'conversion_rate' => (float) $u->conversion_rate,
+                ])->values(),
             ]);
         return response()->json(['success' => true, 'data' => $data]);
     }
@@ -514,6 +523,107 @@ class EmployeeInventoryController extends Controller
         if ($request->filled('status')) $q->where('status', $request->input('status'));
         $per = min((int) $request->input('per_page', 20), 50);
         return response()->json(['success' => true, 'data' => $q->paginate($per)]);
+    }
+
+    // ---------- Đặt hàng NCC (spec 2026-11-08 §6A) ----------
+    // Khuôn NhapKho phía NV: chi nhánh lấy từ PHIÊN Hub (resolve theo danh
+    // sách phân công — branch_id lạ trong payload bị bỏ qua, T-10); logic
+    // nghiệp vụ dùng chung PurchaseOrderService với phía Admin (T-11).
+    // Phiếu đặt KHÔNG vào hàng chờ duyệt; NV tạo xong Đặt hàng được ngay.
+
+    private function poService(): \App\Services\PurchaseOrderService
+    {
+        return app(\App\Services\PurchaseOrderService::class);
+    }
+
+    /** Phiếu của chi nhánh phiên; khác chi nhánh → 404 (không lộ tồn tại). */
+    private function findBranchPurchaseOrder(Request $request, int $id): \App\Models\PurchaseOrder
+    {
+        $branchId = $this->resolveEmployeeBranch($this->emp($request), $request->input('branch_id'));
+        $po = \App\Models\PurchaseOrder::findOrFail($id);
+        if ((int) $po->branch_id !== (int) $branchId) {
+            abort(404);
+        }
+        return $po;
+    }
+
+    public function purchaseOrders(Request $request): JsonResponse
+    {
+        $emp = $this->emp($request);
+        $branchId = $this->resolveEmployeeBranch($emp, $request->input('branch_id'));
+        $q = \App\Models\PurchaseOrder::with(['branch', 'partner', 'createdByUser', 'createdByEmployee.role', 'items'])
+            ->where('branch_id', $branchId)
+            ->orderByDesc('id');
+        if ($request->filled('status')) $q->where('status', $request->input('status'));
+        $per = min((int) $request->input('per_page', 20), 50);
+        $page = $q->paginate($per);
+        $svc = $this->poService();
+        $page->getCollection()->transform(fn ($po) => $svc->present($po));
+        return response()->json(['success' => true, 'data' => $page]);
+    }
+
+    public function storePurchaseOrder(Request $request): JsonResponse
+    {
+        $emp = $this->emp($request);
+        $branchId = $this->resolveEmployeeBranch($emp, $request->input('branch_id'));
+        $v = $this->poService()->validatePayload($request, false);
+        $po = $this->poService()->create($v, $branchId, null, $emp->id);
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã tạo phiếu đặt hàng ' . $po->code . '.',
+            'data' => $this->poService()->present($po, true),
+        ], 201);
+    }
+
+    public function showPurchaseOrder(Request $request, int $id): JsonResponse
+    {
+        $po = $this->findBranchPurchaseOrder($request, $id);
+        return response()->json(['success' => true, 'data' => $this->poService()->present($po, true)]);
+    }
+
+    public function updatePurchaseOrder(Request $request, int $id): JsonResponse
+    {
+        $emp = $this->emp($request);
+        $po = $this->findBranchPurchaseOrder($request, $id);
+        if ((int) $po->created_by_employee_id !== (int) $emp->id) {
+            return response()->json(['success' => false, 'message' => 'Chỉ sửa được phiếu đặt do chính bạn tạo.'], 403);
+        }
+        $v = $this->poService()->validatePayload($request, false);
+        $po = $this->poService()->updateDraft($po, $v);
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã cập nhật phiếu đặt hàng ' . $po->code . '.',
+            'data' => $this->poService()->present($po, true),
+        ]);
+    }
+
+    public function markOrderedPurchaseOrder(Request $request, int $id): JsonResponse
+    {
+        // §6A/T-10 chỉ khóa SỬA + HỦY theo người tạo; chuyển Đã đặt là việc
+        // chung của chi nhánh (phiếu nháp của đồng nghiệp trong cùng CN cũng
+        // chuyển được) — phạm vi khóa ở đây là chi nhánh phiên.
+        $po = $this->findBranchPurchaseOrder($request, $id);
+        $po = $this->poService()->markOrdered($po);
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã chuyển phiếu ' . $po->code . ' sang Đã đặt.',
+            'data' => $this->poService()->present($po, true),
+        ]);
+    }
+
+    public function cancelPurchaseOrder(Request $request, int $id): JsonResponse
+    {
+        $emp = $this->emp($request);
+        $po = $this->findBranchPurchaseOrder($request, $id);
+        if ((int) $po->created_by_employee_id !== (int) $emp->id) {
+            return response()->json(['success' => false, 'message' => 'Chỉ hủy được phiếu đặt do chính bạn tạo.'], 403);
+        }
+        $po = $this->poService()->cancel($po, null, $emp->id);
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã hủy phiếu đặt hàng ' . $po->code . '.',
+            'data' => $this->poService()->present($po, true),
+        ]);
     }
 
     // Gói 55 p11aa: nhân viên tạo phiếu xuất (tạo nháp, admin chốt sau)

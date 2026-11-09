@@ -14,6 +14,8 @@ use Illuminate\Support\Str;
 
 class InboundController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
     /**
      * Tạo 1 lô nhập từ dữ liệu đã validate (dùng chung cho nhập lẻ và nhập nhiều dòng).
      * Gói 4: hỗ trợ đơn vị quy đổi — nhập theo đơn vị mua (chai/kg/túi),
@@ -130,6 +132,14 @@ class InboundController extends Controller
             'batch_code' => 'nullable|string|max:50',
         ]);
 
+        // Đợt vá gộp gác CN (2026-11-08): NV nhập nhanh → CN resolve theo
+        // phân công như khuôn inbound-receipt (gửi CN ngoài phân công → rơi
+        // về CN chính của NV); lô + phiếu chi tự sinh đi theo CN đã resolve.
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $validated['branch_id'] = $this->resolveEmployeeBranch($actor, $validated['branch_id']);
+        }
+
         // Sổ #75: cặp actor tính ngoài transaction để truyền xuống phiếu chi tự sinh.
         $actorIds = \App\Support\ApprovalActor::ids($request->user());
         $result = DB::transaction(function () use ($validated, $actorIds) {
@@ -170,6 +180,13 @@ class InboundController extends Controller
             'items.*.expired_at' => 'nullable|date|after:today',
             'items.*.batch_code' => 'nullable|string|max:50',
         ]);
+
+        // Đợt vá gộp gác CN (2026-11-08): như store() — CN resolve theo
+        // phân công cho actor Employee trước khi tạo lô + phiếu chi.
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $validated['branch_id'] = $this->resolveEmployeeBranch($actor, $validated['branch_id']);
+        }
 
         // Sổ #75: cặp actor tính ngoài transaction để truyền xuống phiếu chi tự sinh.
         $actorIds = \App\Support\ApprovalActor::ids($request->user());

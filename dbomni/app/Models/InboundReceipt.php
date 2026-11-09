@@ -34,6 +34,12 @@ class InboundReceipt extends Model
         return $this->belongsTo(Partner::class);
     }
 
+    // Spec Phiếu đặt hàng NCC (2026-11-08): phiếu nhập nhận hàng cho 1 phiếu đặt
+    public function purchaseOrder(): BelongsTo
+    {
+        return $this->belongsTo(PurchaseOrder::class, 'purchase_order_id');
+    }
+
     // Gói "Chờ duyệt trên Hub" (2026-10-21): người tạo phiếu
     public function createdByUser(): BelongsTo
     {

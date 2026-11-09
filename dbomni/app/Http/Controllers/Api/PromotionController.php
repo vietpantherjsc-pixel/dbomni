@@ -89,9 +89,25 @@ class PromotionController extends Controller
         ];
     }
 
+    // Vá cùng họ lỗi 500 voucher (2026-11-08): các cột NOT NULL có default
+    // ở DB mà rules đang để nullable (min_order_amount default 0 ·
+    // gift_quantity default 1 · is_active default true · stack_with_coupon
+    // default false) — client gửi null tường minh thì create()/update()
+    // ghi NULL thẳng vào cột, MySQL strict văng SQLSTATE 1048. Chuẩn hóa
+    // null → đúng default của cột; cột nullable thật giữ nguyên null.
+    private function normalizeNotNullDefaults(array $data): array
+    {
+        foreach (['min_order_amount' => 0, 'gift_quantity' => 1, 'is_active' => true, 'stack_with_coupon' => false] as $col => $def) {
+            if (array_key_exists($col, $data) && $data[$col] === null) {
+                $data[$col] = $def;
+            }
+        }
+        return $data;
+    }
+
     public function store(Request $request): JsonResponse
     {
-        $validated = $request->validate($this->rules(), $this->messages());
+        $validated = $this->normalizeNotNullDefaults($request->validate($this->rules(), $this->messages()));
 
         if ($validated['type'] === 'gift' && empty($validated['gift_product_id'])) {
             return response()->json([
@@ -122,7 +138,7 @@ class PromotionController extends Controller
         );
         // SPEC-02: unique code bỏ qua bản ghi hiện tại
         $rules['code'] = 'nullable|string|max:20|unique:promotions,code,' . $id;
-        $validated = $request->validate($rules, $this->messages());
+        $validated = $this->normalizeNotNullDefaults($request->validate($rules, $this->messages()));
         // SPEC-02b: kiểm tra gift cả khi sửa (gộp với dữ liệu cũ của bản ghi)
         $type = $validated['type'] ?? $promo->type;
         $giftId = array_key_exists('gift_product_id', $validated) ? $validated['gift_product_id'] : $promo->gift_product_id;

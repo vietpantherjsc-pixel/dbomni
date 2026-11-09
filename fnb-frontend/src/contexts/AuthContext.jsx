@@ -1,4 +1,6 @@
 import React, { createContext, useState, useContext } from 'react';
+import axios from 'axios';
+import { API } from '../utils/api';
 
 // Khởi tạo Context
 const AuthContext = createContext();
@@ -20,8 +22,15 @@ export const AuthProvider = ({ children }) => {
         localStorage.setItem('access_token', authToken);
     };
 
-    // Hàm xử lý đăng xuất
-    const logout = () => {
+    // Hàm xử lý đăng xuất — 2026-11-08: gọi server thu hồi ĐÚNG token hiện
+    // tại (POST /logout) theo kiểu best-effort TRƯỚC khi dọn localStorage:
+    // token còn trong localStorage lúc gọi để interceptor của utils/api.js
+    // gắn header; lỗi mạng thì bỏ qua, vẫn đăng xuất ở client như trước.
+    // (Hub/trang NV có logout riêng với kho token khác — không đi qua đây.)
+    const logout = async () => {
+        try {
+            await axios.post(`${API}/logout`);
+        } catch { /* best-effort: bỏ qua lỗi mạng */ }
         setUser(null);
         setToken(null);
         localStorage.removeItem('user');

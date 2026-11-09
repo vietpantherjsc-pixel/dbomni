@@ -78,6 +78,7 @@ use App\Http\Controllers\Api\InviteFriendsController; // "Mời bạn bè" (đ�
 use App\Http\Controllers\Api\ShiftLeaveController; // Gói 46: xin nghỉ theo ca
 use App\Http\Controllers\Api\ShiftSwapController; // Spec P4-B5: đổi ca thật giữa 2 NV
 use App\Http\Controllers\Api\StocktakeAdjustmentController; // Gói 55 p11ag: duyệt điều chỉnh kho từ chênh lệch kiểm kê
+use App\Http\Controllers\Api\PurchaseOrderController; // Spec Phiếu đặt hàng NCC (2026-11-08)
 
 // Gói 13: giới hạn 10 lần thử/phút chống dò mật khẩu
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
@@ -139,6 +140,13 @@ Route::middleware(['auth:sanctum', 'employee.active', 'ability:employee'])->pref
         Route::post('/inbound-receipts', [EmployeeInventoryController::class, 'storeInboundReceipt']);
         // K-R1: NV xem phiếu nhập nháp của mình
         Route::get('/inbound-receipts', [EmployeeInventoryController::class, 'myInboundReceipts']);
+        // Spec Phiếu đặt hàng NCC §6A (2026-11-08): đặt hàng tại Hub — chi nhánh theo phiên, không qua duyệt
+        Route::get('/purchase-orders', [EmployeeInventoryController::class, 'purchaseOrders']);
+        Route::post('/purchase-orders', [EmployeeInventoryController::class, 'storePurchaseOrder']);
+        Route::get('/purchase-orders/{id}', [EmployeeInventoryController::class, 'showPurchaseOrder'])->whereNumber('id');
+        Route::patch('/purchase-orders/{id}', [EmployeeInventoryController::class, 'updatePurchaseOrder'])->whereNumber('id');
+        Route::post('/purchase-orders/{id}/mark-ordered', [EmployeeInventoryController::class, 'markOrderedPurchaseOrder'])->whereNumber('id');
+        Route::post('/purchase-orders/{id}/cancel', [EmployeeInventoryController::class, 'cancelPurchaseOrder'])->whereNumber('id');
         Route::post('/outbound-receipts', [EmployeeInventoryController::class, 'storeOutboundReceipt']); // Gói 55 p11aa
         Route::post('/stock-transfers', [EmployeeInventoryController::class, 'storeStockTransfer']); // Gói 55 p11aa
         Route::get('/units', [UnitController::class, 'index']); // Gói 55 p11z: đơn vị tính cho NV chọn
@@ -186,6 +194,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', function (Request $request) {
         return $request->user();
     });
+
+    // Đăng xuất thật (2026-11-08): thu hồi đúng token đang gọi, phiên khác giữ nguyên
+    Route::post('/logout', [AuthController::class, 'logout']);
 
     // Danh mục & mặt hàng — Gói SEC: ghi mặt hàng chỉ role có products.manage (đọc mở cho POS)
     // Gói 55 p11ae: danh mục ghi cũng cần products.manage (trước đây NV bất kỳ sửa được)
@@ -442,6 +453,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/inbound-receipts/{id}/cancel', [InboundReceiptController::class, 'cancel'])->whereNumber('id');
         // K-R1: duyệt phiếu nhập nháp của NV (cần inventory.manage)
         Route::post('/inbound-receipts/{id}/approve', [InboundReceiptController::class, 'approve'])->whereNumber('id');
+    });
+    // Spec Phiếu đặt hàng NCC (2026-11-08): phiếu đặt hàng tới NCC — không qua duyệt
+    Route::middleware('permission:inventory.manage')->group(function () {
+        Route::get('/purchase-orders', [PurchaseOrderController::class, 'index']);
+        Route::post('/purchase-orders', [PurchaseOrderController::class, 'store']);
+        Route::get('/purchase-orders/{id}', [PurchaseOrderController::class, 'show'])->whereNumber('id');
+        Route::patch('/purchase-orders/{id}', [PurchaseOrderController::class, 'update'])->whereNumber('id');
+        Route::post('/purchase-orders/{id}/mark-ordered', [PurchaseOrderController::class, 'markOrdered'])->whereNumber('id');
+        Route::post('/purchase-orders/{id}/cancel', [PurchaseOrderController::class, 'cancel'])->whereNumber('id');
     });
     // Gói 55 p11z: phiếu xuất kho (trừ kho FIFO khi chốt) — Gói SEC
     Route::middleware('permission:inventory.manage')->group(function () {

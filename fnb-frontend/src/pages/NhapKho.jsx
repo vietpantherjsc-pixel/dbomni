@@ -162,6 +162,10 @@ export default function NhapKho({ embed } = {}) {
   const [paymentType, setPaymentType] = useState('paid'); // 'paid' | 'debt'
 
   const [saving, setSaving] = useState(false);
+  // Spec đặt hàng NCC §6A (2026-11-08): tạo phiếu nhập TỪ phiếu đặt — đổ sẵn
+  // từ embed.poPrefillId (nhúng trong Hub) hoặc ?po= (mở trực tiếp /nhap-kho)
+  const [poLink, setPoLink] = useState(null); // {id, code}
+  const poLoadedRef = React.useRef(false);
   const [success, setSuccess] = useState(null); // {code, grand, payLabel, supplierName}
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
@@ -241,6 +245,42 @@ export default function NhapKho({ embed } = {}) {
 
   useEffect(() => {
     if (token) loadAll(token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // Nạp phiếu đặt 1 lần để đổ sẵn form (chỉ khi phiếu đang Đã đặt)
+  useEffect(() => {
+    if (!token || poLoadedRef.current) return;
+    const poId = (embed && embed.poPrefillId)
+      || new URLSearchParams(window.location.search).get('po');
+    if (!poId) return;
+    poLoadedRef.current = true;
+    if (embed && embed.clearPoPrefill) embed.clearPoPrefill();
+    axios.get(API + '/employee/purchase-orders/' + poId, {
+      ...auth(token),
+      params: { branch_id: (embed && embed.branchId) || (sess && sess.branchId) || null },
+    }).then((r) => {
+      const po = r.data && r.data.data;
+      if (!po) return;
+      if (po.status !== 'ordered') {
+        toast('Phiếu đặt ' + po.code + ' không còn ở trạng thái Đã đặt.', true);
+        return;
+      }
+      setPoLink({ id: po.id, code: po.code });
+      if (po.partner_id) setSupplierId(String(po.partner_id));
+      setItems((po.items || []).map((it) => ({
+        key: 'po' + it.id + '_' + Math.random().toString(36).slice(2, 6),
+        materialId: it.material_id,
+        name: it.material_name,
+        purchaseUnit: it.unit_name || it.base_unit || '',
+        unit: it.base_unit || '',
+        conversionRate: 1,
+        qty: String(it.quantity),
+        unitCost: '',
+        expiredAt: '',
+      })));
+      toast('Đã đổ sẵn từ phiếu đặt ' + po.code + ' — sửa SL theo thực nhận, nhập giá từng dòng.');
+    }).catch((e) => { if (!expired(e)) toastErr(errMsg(e, 'Không tải được phiếu đặt hàng.')); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -334,6 +374,8 @@ export default function NhapKho({ embed } = {}) {
         shipping_fee: num(shipping),
         payment_type: paymentType,
         note: note.trim() || null,
+        // Spec đặt hàng NCC: liên kết phiếu đặt khi form được đổ sẵn từ phiếu đặt
+        ...(poLink ? { purchase_order_id: poLink.id } : {}),
         items: validItems.map((it) => ({
           material_id: it.materialId,
           purchase_quantity: qtyNum(it.qty),
@@ -352,6 +394,7 @@ export default function NhapKho({ embed } = {}) {
         priceWarnings: r.data && Array.isArray(r.data.price_warnings) ? r.data.price_warnings : [],
       });
       resetForm(false);
+      setPoLink(null); // đã gắn liên kết vào phiếu vừa tạo — phiếu nhập kế tiếp là phiếu thường
     } catch (e) {
       if (expired(e)) return;
       toastErr(errMsg(e, 'Tạo phiếu thất bại.'));
@@ -495,6 +538,12 @@ export default function NhapKho({ embed } = {}) {
             </section>
           ) : (
           <>
+          {poLink && (
+            <div className="nk-warn" style={{ margin: '12px 16px 0' }}>
+              📋 Đang tạo phiếu nhập từ phiếu đặt hàng <b>{poLink.code}</b> — số lượng/đơn vị đã đổ sẵn theo phiếu đặt, hãy sửa theo thực nhận và nhập giá. Phiếu đặt sẽ đóng <b>Đã nhận hàng</b> khi phiếu nhập này được duyệt.
+              <button onClick={() => setPoLink(null)} style={{ marginLeft: 8, border: 'none', background: 'none', color: '#8a5a00', fontWeight: 800, textDecoration: 'underline' }}>Bỏ liên kết</button>
+            </div>
+          )}
           <section className="nk-card">
             <h3>Thông tin phiếu</h3>
             <label className="nk-label" style={{ marginTop: 0 }}>Nhà cung cấp</label>

@@ -18,6 +18,21 @@ use Illuminate\Validation\ValidationException;
 // (ủ cốt cà phê/trà, nấu trân châu, làm kem...).
 class ProductionController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
+    // Đợt vá gộp gác chi nhánh (Đại Vương chốt 2026-11-08): khuôn gói Đặt
+    // hàng — actor Employee chỉ thao tác trong các CN được phân công, phiếu
+    // ngoài phân công coi như không tồn tại (404). Actor User giữ toàn quyền.
+    // Họ recipes (định mức) KHÔNG mang dữ kiện chi nhánh — không gác CN.
+    protected function denyProductionBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu chế biến.'], 404);
+        }
+        return null;
+    }
+
     // Danh sách định mức chế biến (kèm tên nguyên liệu)
     public function recipes(Request $request): JsonResponse
     {
@@ -110,6 +125,10 @@ class ProductionController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Production::with(['material', 'user', 'items.material'])->orderByDesc('id');
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $query->whereIn('branch_id', $actor->allBranchIds());
+        }
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));
         }
@@ -131,10 +150,20 @@ class ProductionController extends Controller
             'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency
         ]);
 
+        // Đợt vá gộp gác CN: NV chế biến → CN resolve theo phân công như
+        // khuôn inbound (gửi CN ngoài phân công → rơi về CN chính của NV).
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $validated['branch_id'] = $this->resolveEmployeeBranch($actor, $validated['branch_id']);
+        }
+
         // Gói 55 p11ac: nếu client_key đã tồn tại → trả bản ghi cũ, không trừ kho lại
         if (!empty($validated['client_key'])) {
             $existing = Production::where('client_key', $validated['client_key'])->first();
             if ($existing) {
+                // Gác CN cả ở đường idempotency: NV không đọc được phiếu của
+                // CN ngoài phân công qua client_key của người khác.
+                if ($deny = $this->denyProductionBranch($request, $existing->branch_id)) return $deny;
                 return response()->json([
                     'success' => true,
                     'message' => 'Phiếu đã được tạo trước đó.',
@@ -222,6 +251,7 @@ class ProductionController extends Controller
             if (!empty($validated['client_key']) && str_contains($e->getMessage(), 'client_key')) {
                 $existing = Production::where('client_key', $validated['client_key'])->first();
                 if ($existing) {
+                    if ($deny = $this->denyProductionBranch($request, $existing->branch_id)) return $deny;
                     return response()->json([
                         'success' => true,
                         'message' => 'Phiếu đã được tạo trước đó.',

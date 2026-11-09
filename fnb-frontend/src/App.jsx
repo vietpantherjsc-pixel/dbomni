@@ -16,6 +16,7 @@ import InviteFriends from './pages/admin/InviteFriends'; // "Mời bạn bè" (�
 import SapoConfig from './pages/admin/SapoConfig'; // Cầu nối Sapo — Phần B (2026-10-21)
 import Orders from './pages/admin/Orders';
 import Inventory from './pages/admin/Inventory';
+import PurchaseOrders from './pages/admin/PurchaseOrders'; // Spec Phiếu đặt hàng NCC (2026-11-08)
 import Customers from './pages/admin/Customers';
 import MemberTiers from './pages/admin/MemberTiers';
 import PointExchange from './pages/admin/PointExchange'; // Loyalty 2.0: Cửa hàng đổi điểm
@@ -46,6 +47,7 @@ import Loi3Chuyen from './pages/Loi3Chuyen'; // Trang NV tự báo lỗi 3 Chuy�
 import KiemKe from './pages/KiemKe'; // Gói 43: trang kiểm kê NV (public)
 import CheBien from './pages/CheBien'; // Gói 43: trang chế biến NV (public)
 import NhapKho from './pages/NhapKho'; // Gói 43: trang nhập hàng NV (public)
+import DatHang from './pages/DatHang'; // Spec Phiếu đặt hàng NCC §6A (2026-11-08): trang đặt hàng NV
 import XuatKho from './pages/XuatKho'; // Gói 55 p11z: trang xuất kho NV (public)
 import ChuyenKho from './pages/ChuyenKho'; // Gói 55 p11z: trang chuyển kho NV (public)
 import XinNghi from './pages/XinNghi'; // Gói 46: trang NV xin nghỉ theo ca (public)
@@ -101,6 +103,7 @@ const App = () => {
                     <Route path="/kiem-ke" element={<KiemKe />} />
                     <Route path="/che-bien" element={<CheBien />} />
                     <Route path="/nhap-kho" element={<NhapKho />} />
+                    <Route path="/dat-hang" element={<DatHang />} />
                     <Route path="/xuat-kho" element={<XuatKho />} /> {/* Gói 55 p11z */}
                     <Route path="/chuyen-kho" element={<ChuyenKho />} /> {/* Gói 55 p11z */}
                     <Route path="/xin-nghi" element={<XinNghi />} /> {/* Gói 46 */}
@@ -199,6 +202,15 @@ const App = () => {
                     <Route path="/admin/promotions" element={<PrivateRoute><Promotions /></PrivateRoute>} />
                     <Route path="/admin/rd" element={<PrivateRoute><Rd /></PrivateRoute>} />
 
+                    {/* Spec Phiếu đặt hàng NCC (2026-11-08): route tĩnh phải đứng trước :section */}
+                    <Route
+                        path="/admin/inventory/purchase-orders"
+                        element={
+                            <PrivateRoute>
+                                <PurchaseOrders />
+                            </PrivateRoute>
+                        }
+                    />
                     {/* Gói 4 (2026-10-04): trang Kho hàng thật */}
                     {/* Gói 55 p11: submenu kho — /admin/inventory/:section */}
                     <Route

@@ -48,7 +48,7 @@ class InboundReceiptController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $r = InboundReceipt::with(['branch', 'partner', 'items.material', 'items.batch'])->findOrFail($id);
+        $r = InboundReceipt::with(['branch', 'partner', 'items.material', 'items.batch', 'purchaseOrder:id,code'])->findOrFail($id);
         if ($deny = $this->denyReceiptBranch($request, $r->branch_id)) return $deny;
         return response()->json(['success' => true, 'data' => $r]);
     }
@@ -63,6 +63,23 @@ class InboundReceiptController extends Controller
             ? $this->resolveEmployeeBranch($actor, $request->input('branch_id'))
             : (int) $v['branch_id'];
 
+        // Spec đặt hàng NCC — vá delta theo TESTER (2026-11-08): phiếu nhập có
+        // gắn phiếu đặt thì phiếu đặt phải đang ĐÃ ĐẶT và CÙNG chi nhánh với
+        // phiếu nhập (điểm kiểm duy nhất ở store — cả Admin lẫn Hub đều qua
+        // đây; đường nhập thường không gắn thì không đổi hành vi).
+        if (!empty($v['purchase_order_id'])) {
+            $po = \App\Models\PurchaseOrder::find($v['purchase_order_id']);
+            if (!$po) {
+                return response()->json(['success' => false, 'message' => 'Phiếu đặt hàng liên kết không tồn tại.'], 422);
+            }
+            if ($po->status !== 'ordered') {
+                return response()->json(['success' => false, 'message' => 'Phiếu đặt hàng ' . $po->code . ' không ở trạng thái Đã đặt — không gắn phiếu nhập được.'], 422);
+            }
+            if ((int) $po->branch_id !== (int) $branchId) {
+                return response()->json(['success' => false, 'message' => 'Phiếu đặt hàng ' . $po->code . ' thuộc chi nhánh khác — phiếu nhập phải cùng chi nhánh với phiếu đặt.'], 422);
+            }
+        }
+
         // Gói 55 p11b: cảnh báo giá nhập tăng so với lần nhập gần nhất (cùng NL + NCC).
         // Chỉ cảnh báo, không chặn. Tính trước transaction (read-only).
         $priceWarnings = $this->detectPriceIncreases($v, $branchId);
@@ -74,6 +91,8 @@ class InboundReceiptController extends Controller
                     'code' => InboundReceipt::nextCode(),
                     'branch_id' => $branchId,
                     'partner_id' => $v['partner_id'] ?? null,
+                    // Spec đặt hàng NCC (2026-11-08): phiếu nhập nhận hàng cho 1 phiếu đặt
+                    'purchase_order_id' => $v['purchase_order_id'] ?? null,
                     'invoice_no' => $v['invoice_no'] ?? null,
                     'receipt_date' => $v['receipt_date'] ?? now()->toDateString(),
                     'tax_included' => (bool) ($v['tax_included'] ?? true),
@@ -148,6 +167,11 @@ class InboundReceiptController extends Controller
                     // Sổ #75: truyền cặp actor của chính người tạo (điểm gọi này
                     // chỉ chạy khi actor là User, giữ nguyên dấu như trước).
                     $this->createExpense($receipt, [$actor instanceof \App\Models\User ? $actor->id : null, $isEmployee ? $actor->id : null]);
+                    // Spec đặt hàng NCC §5.3: phiếu nhập Admin tạo = confirmed
+                    // ngay → đóng phiếu đặt liên kết ở phiếu xác nhận đầu tiên.
+                    if ($receipt->purchase_order_id) {
+                        \App\Models\PurchaseOrder::find($receipt->purchase_order_id)?->syncReceivedState();
+                    }
                 }
                 return $receipt;
             });
@@ -349,6 +373,11 @@ class InboundReceiptController extends Controller
             Transaction::where('related_type', 'inbound_receipt')->where('related_id', $receipt->id)->delete();
             // TESTER fix 🟡d: ghi vết NV hủy phiếu để hiện trong "Đã xử lý hôm nay" trên Hub
             $receipt->update(['status' => 'cancelled', 'cancelled_by_employee_id' => $cancelEmployeeId]);
+            // Spec đặt hàng NCC §5.3 (trường hợp lùi): hủy phiếu nhập liên kết
+            // → phiếu đặt quay lại Đã đặt nếu không còn phiếu xác nhận nào khác.
+            if ($receipt->purchase_order_id) {
+                \App\Models\PurchaseOrder::find($receipt->purchase_order_id)?->syncReceivedState();
+            }
         });
         return response()->json(['success' => true, 'message' => 'Đã hủy phiếu nhập.']);
     }
@@ -413,6 +442,11 @@ class InboundReceiptController extends Controller
                     'approved_at' => now(),
                 ]);
                 $this->createExpense($receipt, [$approveUserId, $approveEmployeeId]);
+                // Spec đặt hàng NCC §5.3: duyệt-confirmed cũng là mốc đóng
+                // phiếu đặt liên kết (đường NV Hub tạo nháp → duyệt tại đây).
+                if ($receipt->purchase_order_id) {
+                    \App\Models\PurchaseOrder::find($receipt->purchase_order_id)?->syncReceivedState();
+                }
                 return $receipt;
             });
         } catch (\Exception $e) {
@@ -430,6 +464,7 @@ class InboundReceiptController extends Controller
         $rules = [
             'branch_id' => ($requireBranch && !$isUpdate ? 'required' : 'nullable') . '|exists:branches,id',
             'partner_id' => 'nullable|exists:partners,id',
+            'purchase_order_id' => 'nullable|exists:purchase_orders,id', // Spec đặt hàng NCC (2026-11-08)
             'invoice_no' => 'nullable|string|max:100',
             'receipt_date' => 'nullable|date',
             'tax_included' => 'nullable|boolean',

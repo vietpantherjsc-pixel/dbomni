@@ -23,6 +23,8 @@ class CodeGenerator
             // Bổ sung 2026-10-20 (rà mã): phiếu thu/chi trước đây hardcode PT/PC trong Transaction::nextCode
             'receipt_income'  => ['prefix' => 'PT', 'digits' => 4],
             'receipt_expense' => ['prefix' => 'PC', 'digits' => 4],
+            // Spec Phiếu đặt hàng NCC (2026-11-08): tiền tố DDH tránh trùng mã đơn hàng
+            'purchase_order'  => ['prefix' => 'DDH', 'digits' => 4],
         ];
     }
 

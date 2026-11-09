@@ -80,6 +80,7 @@ const mainMenu = [
     { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: [
         { label: 'Danh sách tồn kho', path: '/admin/inventory' },
         { label: 'Nhập kho', path: '/admin/inventory/inbound' },
+        { label: 'Đặt hàng', path: '/admin/inventory/purchase-orders' },
         { label: 'Xuất kho', path: '/admin/inventory/outbound' },
         { label: 'Chuyển kho', path: '/admin/inventory/transfer' },
         { label: 'Kiểm kê kho', path: '/admin/inventory/stocktake' },

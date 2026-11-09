@@ -154,7 +154,6 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
   const [history, setHistory] = useState(null);
   const [exchanging, setExchanging] = useState(null);
   const [shopOpen, setShopOpen] = useState(false); // Cửa hàng điểm: hiện 3 món + Xem thêm
-  const [histOpen, setHistOpen] = useState(false); // Lịch sử: 10 giao dịch + Xem thêm
   const [mgState, setMgState] = useState(null); // Minigame (2026-11-01): thẻ game dưới Cửa hàng điểm
   const shopAnchorRef = useRef(null); // nút "Đổi điểm ngay" ở dải trạng thái cuộn xuống đây
 
@@ -284,11 +283,8 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     ['Giờ vàng theo hạng', (t) => (t.benefits?.tier_golden_hour ? '✓' : '—')],
     ['Ngày nhân đôi điểm', (t) => (t.benefits?.double_points_day ? '✓' : '—')],
   ];
-  const typeLabel = { earn: 'Tích điểm', redeem: 'Đổi điểm (cũ)', exchange: 'Đổi coupon', expire: 'Hết hạn', adjust: 'Điều chỉnh', revoke: 'Thu hồi' };
+  const typeLabel = { earn: 'Tích điểm', redeem: 'Đổi điểm (cũ)', exchange: 'Đổi coupon', expire: 'Điểm hết hạn', adjust: 'Điều chỉnh', revoke: 'Thu hồi' };
   const txns = history?.transactions || [];
-  const visibleTxns = histOpen ? txns : txns.slice(0, 10);
-  // Lô điểm sắp hết hạn nhất (tô cam trong lịch sử — nối với dải trạng thái hết hạn)
-  const soonestLotDate = (history?.lots || []).filter((l) => l.points_remaining > 0).map((l) => l.expires_at).sort()[0] || null;
 
   // Dòng phụ của món đổi: ĐÚNG 1 thông tin (quy tắc 7.1) — lượt sắp hết thắng, còn lại là tên ưu đãi
   const itemSub = (it) => {
@@ -464,35 +460,25 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
         </div>
       </Collapsible>
 
-      {/* Lịch sử điểm — 10 giao dịch gần nhất + Xem thêm; lô sắp hết hạn tô cam */}
+      {/* Lịch sử điểm — Phương án A + 3 sửa đổi (Đại Vương chốt 2026-11-09):
+          BỎ hẳn khối chi tiết lô/HSD; chỉ còn biến động điểm trong MỘT khung
+          cuộn ~300px (cuộn bên trong, bỏ nút Xem thêm/Thu gọn), mỗi dòng 1
+          dòng gọn như demo. Dòng trừ do hết hạn lấy từ bút toán type=expire
+          sẵn có của cơ chế loyalty:expire-points (chạy 01:00 hằng ngày,
+          ghi chú kèm lô + ngày tích) — khách thấy rõ vì sao điểm giảm. */}
       <Collapsible icon={<IcoReceipt />} title="Lịch sử điểm">
-        {history?.lots?.length > 0 && (
-          <div style={{ paddingTop: 10 }}>
-            {history.lots.map((l) => {
-              const soon = soonestLotDate && l.expires_at === soonestLotDate && l.points_remaining > 0;
-              return (
-                <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, padding: '5px 0', color: soon ? '#9a3412' : '#666', fontWeight: soon ? 700 : 400 }}>
-                  <span>Lô điểm (tích {fmtDate(l.earned_at)})</span>
-                  <span>Còn <b>{fmt(l.points_remaining)}</b> · HSD {fmtDate(l.expires_at)}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div style={{ paddingTop: 6 }}>
-          {visibleTxns.map((t) => (
-            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid #f5f5f5', fontSize: 13 }}>
-              <span>{typeLabel[t.type] || t.type}{t.note ? <span style={{ color: '#999' }}> · {t.note}</span> : ''}<br /><span style={{ fontSize: 11.5, color: '#999' }}>{fmtDate(t.created_at)}</span></span>
-              <b style={{ color: t.change > 0 ? '#059669' : '#dc2626' }}>{t.change > 0 ? '+' : ''}{fmt(t.change)}</b>
+        <div style={{ maxHeight: 300, overflowY: 'auto', paddingRight: 4, paddingTop: 6 }}>
+          {txns.map((t) => (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, padding: '7px 0', borderBottom: '1px solid #f5f5f5', fontSize: 13 }}>
+              <span style={{ ...clamp1, minWidth: 0 }}>
+                {typeLabel[t.type] || t.type}
+                {t.note ? <span style={{ color: '#999' }}> · {t.note}</span> : ''}
+                <span style={{ color: '#999' }}> · {String(t.created_at || '').slice(8, 10)}/{String(t.created_at || '').slice(5, 7)}</span>
+              </span>
+              <b style={{ color: t.change > 0 ? '#059669' : '#dc2626', flexShrink: 0 }}>{t.change > 0 ? '+' : ''}{fmt(t.change)}</b>
             </div>
           ))}
           {txns.length === 0 && <div className="zm-empty" style={{ padding: 16 }}>Chưa có biến động điểm.</div>}
-          {!histOpen && txns.length > 10 && (
-            <button className="zm-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={() => setHistOpen(true)}>Xem thêm {txns.length - 10} giao dịch ▾</button>
-          )}
-          {histOpen && txns.length > 10 && (
-            <button className="zm-btn-outline" style={{ marginTop: 10, minHeight: 44 }} onClick={() => setHistOpen(false)}>Thu gọn ▴</button>
-          )}
         </div>
       </Collapsible>
     </>
@@ -571,6 +557,20 @@ export default function Account() {
   const [accountCover, setAccountCover] = useState(() => {
     return storage.get('zm_account_cover') || '';
   });
+  // Vá cover B (2026-11-09): state trên đọc cache đúng 1 lần lúc mount —
+  // cold start qua QR mà hydrate về trễ hơn mốc đua 2s ở main.jsx là đọc
+  // trượt cache rỗng, mất hiển thị cả phiên dù dữ liệu còn. Đọc lại 1 lần
+  // khi hydrate xong; chỉ lấp khi state đang trống (không đè ảnh người
+  // dùng vừa đổi trong phiên).
+  useEffect(() => {
+    let alive = true;
+    storage.ready().then(() => {
+      if (!alive) return;
+      const v = storage.get('zm_account_cover');
+      if (v) setAccountCover((prev) => prev || v);
+    });
+    return () => { alive = false; };
+  }, []);
   // Gói Mini App 2026-10-30: mục Quét QR tích điểm chỉ hiện khi Admin bật công
   // tắc miniapp_qr_claim_entry (mặc định ẨN) — cờ đọc qua /shop-info công khai.
   const [qrClaimEntry, setQrClaimEntry] = useState(false);
@@ -579,10 +579,11 @@ export default function Account() {
   }, []);
   const coverInputRef = useRef(null);
   // Gói nén cover (2026-10-30): nén ảnh ngay trên máy trước khi lưu local —
-  // thu nhỏ cạnh dài về tối đa 1200px + mã hóa JPEG chất lượng 0.8 để data URL
-  // nhẹ đi nhiều lần, tránh phình/tràn bộ nhớ cục bộ. Ảnh vẫn CHỈ lưu trên máy
-  // này (không tải lên server). Ảnh đọc/nén không được → báo chọn ảnh khác,
-  // không lưu lặng lẽ.
+  // thu nhỏ cạnh dài + mã hóa JPEG để data URL nhẹ đi nhiều lần, tránh
+  // phình/tràn bộ nhớ cục bộ. Ảnh vẫn CHỈ lưu trên máy này (không tải lên
+  // server). Ảnh đọc/nén không được → báo chọn ảnh khác, không lưu lặng lẽ.
+  // Vá cover C (2026-11-09): nén nhẹ hơn nữa — cạnh dài tối đa 900px +
+  // JPEG 0.72 — vì native storage của Zalo có thể từ chối chuỗi quá lớn.
   const handleCoverChange = (e) => {
     const f = e.target.files?.[0];
     e.target.value = '';
@@ -595,7 +596,7 @@ export default function Account() {
       img.onerror = () => alert('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
       img.onload = () => {
         try {
-          const MAX = 1200;
+          const MAX = 900;
           const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
           const w = Math.max(1, Math.round(img.naturalWidth * scale));
           const h = Math.max(1, Math.round(img.naturalHeight * scale));
@@ -603,10 +604,21 @@ export default function Account() {
           canvas.width = w;
           canvas.height = h;
           canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-          const url = canvas.toDataURL('image/jpeg', 0.8);
+          const url = canvas.toDataURL('image/jpeg', 0.72);
           if (!url || !url.startsWith('data:image/jpeg')) throw new Error('compress failed');
           setAccountCover(url);
-          storage.set('zm_account_cover', url);
+          // Vá cover C+D (2026-11-09): ghi CÓ xác nhận qua setTracked —
+          // persist thất bại (native storage từ chối vì dung lượng) thì
+          // báo rõ cho người dùng thay vì nuốt lỗi như trước; đồng thời
+          // ghi châm chẩn đoán {ok, size, at} vào khóa 'zm_cover_diag'
+          // + console để vòng kiểm máy thật phân định nguyên nhân.
+          storage.setTracked('zm_account_cover', url).then((ok) => {
+            try { console.info('[cover-diag] persist', ok ? 'OK' : 'FAIL', 'size=', url.length); } catch {}
+            storage.set('zm_cover_diag', JSON.stringify({ ok, size: url.length, at: Date.now() }));
+            if (!ok) {
+              alert(`Không lưu được ảnh trên máy này (ảnh sau nén ${Math.round(url.length / 1024)} KB). Ảnh chỉ hiện trong lần mở này — thoát ra vào lại sẽ mất. Vui lòng chọn ảnh nhẹ hơn.`);
+            }
+          });
         } catch (err) {
           alert('Không nén được ảnh này. Vui lòng chọn ảnh khác.');
         }
@@ -926,8 +938,14 @@ export default function Account() {
             <div style={{ fontSize: 13, opacity: .85 }}>Thẻ thành viên</div>
             <div style={{ fontSize: 20, fontWeight: 800, margin: '4px 0' }}>{customer.name}</div>
             <div style={{ fontSize: 13 }}>{customer.member_code} · Hạng {customer.loyalty?.tier_name || customer.tier || 'Regular'}</div>
+            {/* Điểm chia 2 cột (Đại Vương chốt 2026-11-09): trái = Điểm khả
+                dụng (tổng dùng được, gồm cả điểm sắp hết hạn); phải = Điểm
+                sắp hết hạn — TỔNG điểm sẽ hết hạn trong 30 ngày tới (server
+                tính từ các lô, cửa sổ theo cấu hình points_expiry_warn_days
+                mặc định 30 — 1 con số tổng, không chi tiết lô). */}
             <div style={{ display: 'flex', gap: 24, marginTop: 12 }}>
-              <div><div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(customer.loyalty?.points ?? customer.points)}</div><div style={{ fontSize: 11, opacity: .85 }}>điểm</div></div>
+              <div><div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(customer.loyalty?.points ?? customer.points)}</div><div style={{ fontSize: 11, opacity: .85 }}>Điểm khả dụng</div></div>
+              <div><div style={{ fontSize: 22, fontWeight: 800, color: '#F5A623' }}>{fmt(customer.loyalty?.points_expiring_soon ?? 0)}</div><div style={{ fontSize: 11, opacity: .85 }}>Điểm sắp hết hạn</div></div>
             </div>
             {/* Phương án A (2026-10-21): dòng quy đổi điểm chuyển xuống đầu Cửa hàng điểm — thẻ chỉ còn "tôi là ai, tôi có bao nhiêu điểm" */}
           </div>
@@ -958,7 +976,10 @@ export default function Account() {
                 padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
               }}
             >
-              <span style={{ fontSize: 24 }}>🎫</span>
+              {/* Icon chốt phương án 1 (Đại Vương 2026-11-09, theo demo BA):
+                  phiếu coupon răng cưa + dấu % — thay emoji vé 🎫. Chỉ thay
+                  icon; khung thẻ/chữ/badge giữ nguyên. */}
+              <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true"><path d="M6 14a4 4 0 0 1 4-4h28a4 4 0 0 1 4 4v6a5 5 0 0 0 0 10v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4v-6a5 5 0 0 0 0-10v-6z" fill="#F5A623"/><path d="M29 12v24" stroke="#fff" strokeWidth="2.4" strokeDasharray="3.5 3.5"/><text x="17.5" y="31" fontSize="17" fontWeight="800" fill="#fff" textAnchor="middle">%</text></svg>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#9A3412' }}>Ưu đãi của tôi</span>
               {couponCount > 0 && (
                 <span style={{ fontSize: 11, color: '#F5A623', fontWeight: 700 }}>{couponCount} coupon</span>

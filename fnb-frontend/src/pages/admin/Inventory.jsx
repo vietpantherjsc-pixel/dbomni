@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 // S5(3): 401 trong các luồng nạp → hiện câu chuẩn hết phiên qua alert, có
 // khóa chống dội 30s để nhiều catch cùng chết phiên không xếp hàng alert.
@@ -22,7 +22,7 @@ function isOwnByUser(creatorUserId) {
 }
 import axios from 'axios';
 import SearchInput from '../../components/SearchInput';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
 import { fmtDate, fmtTime, fmtDateTime } from '../../utils/format';
@@ -1165,6 +1165,32 @@ function InboundTab({ materials, onDone, branchId, branches }) {
     const [showForm, setShowForm] = useState(false);
     const [detail, setDetail] = useState(null); // receipt chi tiết
     const [editing, setEditing] = useState(false);
+    // Spec đặt hàng NCC §5.1 (2026-11-08): mở từ chi tiết phiếu đặt bằng
+    // ?po=<id> → nạp phiếu đặt, mở form nhập đổ sẵn (CN khóa theo phiếu đặt).
+    const [searchParams, setSearchParams] = useSearchParams();
+    const [poPrefill, setPoPrefill] = useState(null);
+    const poConsumedRef = useRef(false);
+    useEffect(() => {
+        const poId = searchParams.get('po');
+        if (!poId || poConsumedRef.current) return;
+        poConsumedRef.current = true;
+        (async () => {
+            try {
+                const res = await axios.get(`${API}/purchase-orders/${poId}`);
+                const po = res.data?.data;
+                if (po && po.status === 'ordered') {
+                    setPoPrefill(po);
+                    setShowForm(true);
+                } else if (po) {
+                    alert('Phiếu đặt này không còn ở trạng thái Đã đặt nên không tạo phiếu nhập từ đây được.');
+                }
+            } catch (e) { alert(e.response?.data?.message || 'Không tải được phiếu đặt hàng'); }
+            const next = new URLSearchParams(searchParams);
+            next.delete('po');
+            setSearchParams(next, { replace: true });
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const fetchReceipts = async () => {
@@ -1289,8 +1315,9 @@ function InboundTab({ materials, onDone, branchId, branches }) {
             {showForm && (
                 <ReceiptForm
                     materials={materials} suppliers={suppliers} branchId={branchId}
-                    onClose={() => setShowForm(false)}
-                    onDone={() => { setShowForm(false); fetchReceipts(); onDone(); }}
+                    prefill={poPrefill}
+                    onClose={() => { setShowForm(false); setPoPrefill(null); }}
+                    onDone={() => { setShowForm(false); setPoPrefill(null); fetchReceipts(); onDone(); }}
                 />
             )}
             {detail && (
@@ -1305,8 +1332,13 @@ function InboundTab({ materials, onDone, branchId, branches }) {
 }
 
 // Form tạo phiếu nhập
-function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
-    const [partnerId, setPartnerId] = useState('');
+// Spec đặt hàng NCC §5.1/§5.2 (2026-11-08): prop prefill (chi tiết phiếu đặt)
+// → đổ sẵn NCC + dòng (SL/đơn vị theo dòng đặt, giá để trống), chi nhánh khóa
+// theo phiếu đặt, submit mang purchase_order_id + purchase_unit từng dòng để
+// phiếu nhập ghi đúng hệ số quy đổi (cột Đã nhận của phiếu đặt đọc từ đây).
+// Không có prefill → hành vi nguyên như cũ.
+function ReceiptForm({ materials, suppliers, branchId, prefill, onClose, onDone }) {
+    const [partnerId, setPartnerId] = useState(prefill?.partner_id ? String(prefill.partner_id) : '');
     const [invoiceNo, setInvoiceNo] = useState('');
     const [receiptDate, setReceiptDate] = useState(todayLocal());
     const [paymentType, setPaymentType] = useState('paid');
@@ -1315,7 +1347,11 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
     const [discount, setDiscount] = useState('');
     const [shipping, setShipping] = useState('');
     const [note, setNote] = useState('');
-    const [lines, setLines] = useState([]); // [{material_id, purchase_quantity, unit_cost, expired_at}]
+    const [lines, setLines] = useState(() => (prefill?.items || []).map((it) => ({
+        material_id: it.material_id, name: it.material_name, unit: it.base_unit,
+        purchase_unit: it.unit_name, conversion_rate: 1,
+        purchase_quantity: String(it.quantity), unit_cost: '', expired_at: '',
+    }))); // [{material_id, purchase_quantity, unit_cost, expired_at}]
     const [showPicker, setShowPicker] = useState(false); // Gói 55 p11aa: popup chọn NL
     const [categories, setCategories] = useState([]);
     const [submitting, setSubmitting] = useState(false);
@@ -1354,7 +1390,7 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
         setSubmitting(true);
         try {
             const res = await axios.post(`${API}/inbound-receipts`, {
-                branch_id: branchId,
+                branch_id: prefill?.branch_id ?? branchId,
                 partner_id: partnerId || null,
                 invoice_no: invoiceNo || null,
                 receipt_date: receiptDate,
@@ -1364,9 +1400,13 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                 shipping_fee: Number(shipping) || 0,
                 payment_type: paymentType,
                 note: note || null,
+                // Spec đặt hàng NCC: chỉ khi tạo từ phiếu đặt mới mang theo
+                // liên kết + đơn vị từng dòng (đường thường giữ nguyên payload cũ)
+                ...(prefill ? { purchase_order_id: prefill.id } : {}),
                 items: items.map((l) => ({
                     material_id: l.material_id,
                     purchase_quantity: Number(l.purchase_quantity),
+                    ...(prefill ? { purchase_unit: l.purchase_unit || null } : {}),
                     unit_cost: Number(l.unit_cost) || 0,
                     expired_at: l.expired_at || null,
                 })),
@@ -1384,6 +1424,12 @@ function ReceiptForm({ materials, suppliers, branchId, onClose, onDone }) {
                     <h2 className="font-bold text-[16px]">Tạo phiếu nhập hàng</h2>
                 </div>
                 <div className="flex-1 overflow-y-auto px-5 pb-4 space-y-3">
+                    {prefill && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-[13px] text-blue-800">
+                            Đang tạo phiếu nhập từ phiếu đặt hàng <b>{prefill.code}</b> — chi nhánh <b>{prefill.branch?.name}</b> (khóa theo phiếu đặt).
+                            Số lượng/đơn vị đã đổ sẵn theo phiếu đặt; hãy sửa theo thực nhận và nhập giá từng dòng.
+                        </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                         <label className="block">
                             <div className="text-[12px] text-gray-500 mb-1">Nhà cung cấp</div>
@@ -1567,6 +1613,9 @@ function ReceiptDetail({ receipt, suppliers, editing, setEditing, onClose, onDon
                                 <div><span className="text-gray-400">Số HĐ: </span><b>{r.invoice_no || '—'}</b></div>
                                 <div><span className="text-gray-400">Thanh toán: </span><b>{r.payment_type === 'paid' ? 'Trả ngay' : 'Công nợ'}</b></div>
                             </div>
+                            {r.purchase_order && (
+                                <div><span className="text-gray-400">Theo phiếu đặt hàng: </span><b className="text-[#24305E]">{r.purchase_order.code}</b></div>
+                            )}
                             {r.note && <div><span className="text-gray-400">Ghi chú: </span>{r.note}</div>}
                             <div className="border-t pt-2 mt-2">
                                 {r.items.map((it) => (

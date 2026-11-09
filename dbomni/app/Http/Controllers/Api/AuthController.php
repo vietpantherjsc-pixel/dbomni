@@ -22,9 +22,12 @@ class AuthController extends Controller
         // 2. Xác thực tài khoản admin (users)
         if (Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
             $user = User::where('email', $request->email)->firstOrFail();
-            // Đợt fix rà soát VPS (S5): thu hồi theo MỤC ĐÍCH — đăng nhập Admin chỉ
-            // thu hồi token 'auth_token' (phiên Admin), không đụng token mục đích khác.
-            $user->tokens()->where('name', 'auth_token')->delete();
+            // Phán của Đại Vương 2026-11-08: GIỮ hạn token 30 ngày (Sanctum),
+            // BỎ cơ chế giết phiên chéo — đăng nhập mới cấp thêm phiên độc
+            // lập, KHÔNG thu hồi token 'auth_token' cũ (trước đây mỗi lần
+            // đăng nhập ở máy/trình duyệt khác là phiên Admin đang dùng bị
+            // chết theo). Kết thúc phiên kể từ nay đi qua POST /logout (thu
+            // hồi đúng token đang gọi) hoặc các điểm thu hồi chủ động khác.
             $token = $user->createToken('auth_token', ['*'])->plainTextToken;
             return response()->json([
                 'message' => 'Đăng nhập thành công',
@@ -71,5 +74,18 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Email/tên đăng nhập hoặc mật khẩu không chính xác.'
         ], 401);
+    }
+
+    // Đăng xuất thật phía server (2026-11-08): thu hồi ĐÚNG token đang gọi
+    // — các phiên khác của cùng tài khoản không bị đụng. Áp cho mọi token
+    // API (User/Employee) qua nhóm auth:sanctum; KHÔNG thay đổi chính sách
+    // đăng nhập 1-phiên của nhánh Employee trong login().
+    public function logout(Request $request)
+    {
+        $accessToken = $request->user()?->currentAccessToken();
+        if ($accessToken instanceof \Laravel\Sanctum\PersonalAccessToken) {
+            $accessToken->delete();
+        }
+        return response()->json(['success' => true, 'message' => 'Đã đăng xuất.']);
     }
 }

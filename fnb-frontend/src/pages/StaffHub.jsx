@@ -3,6 +3,7 @@ import axios from 'axios';
 import { API } from '../utils/api';
 import DateInput from '../components/DateInput';
 import NhapKho from './NhapKho';
+import DatHang from './DatHang'; // Spec Phiếu đặt hàng NCC §6A (2026-11-08)
 import XuatKho from './XuatKho';
 import ChuyenKho from './ChuyenKho';
 import { ApprovalCluster, ApprovalsFlow } from './hub/Approvals'; // Gói "Chờ duyệt trên Hub" (2026-10-21)
@@ -227,18 +228,21 @@ export default function StaffHub() {
   const [setupDone, setSetupDone] = useState(false);
   const [err, setErr] = useState('');
   const [loginBusy, setLoginBusy] = useState(false);
-  const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi | choduyet
+  const [screen, setScreen] = useState('hub'); // hub | nhap | xuat | chuyen | thu | chi | choduyet | dathang
   const [approvalType, setApprovalType] = useState('inbound'); // loại phiếu mở từ cụm Chờ duyệt
+  // Spec đặt hàng NCC §6A: từ chi tiết phiếu đặt nhảy sang form Nhập kho đổ sẵn
+  const [nhapPoId, setNhapPoId] = useState(null);
 
   // Gói phiên Hub (2026-11-05): đăng nhập 2 pha trong cùng 1 luồng —
   // pha 1 SĐT+PIN lấy phiên + danh sách CN được phân công; NV nhiều CN thì
   // chọn CN ngay tại đây (server kiểm lại phân công qua branch_id), 1 CN
   // thì tự khóa luôn. CN là một phần của phiên: đổi CN = đăng xuất.
   const [pendingLogin, setPendingLogin] = useState(null); // { tk, info } chờ chọn CN
+  const [pickBranchId, setPickBranchId] = useState(0); // Vá UI Hub (2026-11-08): CN đang chọn ở ô xổ xuống màn chọn CN
   const finishLogin = (tk, info, bid) => {
     saveStaffSession(tk, info, bid);
     setToken(tk); setEmp(info); setBranchId(bid || 0);
-    setPendingLogin(null); setPhone(''); setPin(''); setPassword('');
+    setPendingLogin(null); setPhone(''); setPin(''); setPassword(''); setPickBranchId(0);
     setChangeFlow(null); setChangePw(''); setChangePw2(''); setChangeBranch(0);
   };
   const doLogin = async (e) => {
@@ -255,13 +259,28 @@ export default function StaffHub() {
       // Gói #102 mục 2.3: đang giữ mật khẩu tạm → server không cấp phiên mà
       // trả vé đổi mật khẩu; sang màn ép đổi (chọn CN tại đó — Q4).
       if (r.data && r.data.must_change_password && r.data.change_ticket) {
-        setChangeFlow({ ticket: r.data.change_ticket, info: r.data.employee || {} });
+        const cInfo = r.data.employee || {};
+        const cList = cInfo.branches || [];
+        // Vá UI Hub (2026-11-08): khởi tạo CN cho màn ép đổi ngay khi mở —
+        // CN chính thuộc list, không có thì phần tử đầu; ô xổ xuống luôn có
+        // giá trị nên submitChange không rơi vào bid=0 khi NV không chọn lại.
+        const cDef = cList.length
+          ? (cList.some((b) => Number(b.id || b) === Number(cInfo.branch_id)) ? cInfo.branch_id : (cList[0].id || cList[0]))
+          : 0;
+        setChangeBranch(cDef);
+        setChangeFlow({ ticket: r.data.change_ticket, info: cInfo });
         return;
       }
       const tk = r.data.access_token;
       const info = r.data.employee || {};
       const list = info.branches || [];
-      if (list.length > 1) { setPendingLogin({ tk, info }); return; }
+      if (list.length > 1) {
+        // Vá UI Hub (2026-11-08): chọn sẵn CN chính cho ô xổ xuống màn chọn CN
+        const pDef = list.some((b) => Number(b.id || b) === Number(info.branch_id)) ? info.branch_id : (list[0].id || list[0]);
+        setPickBranchId(pDef);
+        setPendingLogin({ tk, info });
+        return;
+      }
       finishLogin(tk, info, (list[0] && (list[0].id || list[0])) || info.branch_id || 0);
     } catch (e2) {
       // Gói #102 (Q6): 403 code password_setup_required → message của server
@@ -369,13 +388,21 @@ export default function StaffHub() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const embed = { token, emp, onBack: back, onExpired, branchId };
+  const embed = {
+    token, emp, onBack: back, onExpired, branchId,
+    // Spec đặt hàng NCC §6A: DatHang gọi để mở NhapKho đổ sẵn từ phiếu đặt;
+    // NhapKho đọc poPrefillId đúng 1 lần khi mount rồi StaffHub xóa.
+    goNhapPo: (poId) => { setNhapPoId(poId); setScreen('nhap'); },
+    poPrefillId: nhapPoId,
+    clearPoPrefill: () => setNhapPoId(null),
+  };
 
   const avatarLetter = ((emp && emp.full_name) || 'N').trim().charAt(0).toUpperCase();
 
   const BTNS = [
     { group: 'Kho', items: [
       { key: 'nhap', icon: '📥', label: 'Nhập kho' },
+      { key: 'dathang', icon: '🛒', label: 'Đặt hàng' },
       { key: 'xuat', icon: '📤', label: 'Xuất kho' },
       { key: 'chuyen', icon: '🔄', label: 'Chuyển kho' },
       { key: 'kiemke', icon: '📋', label: 'Kiểm kho', href: '/kiem-ke' },
@@ -411,13 +438,18 @@ export default function StaffHub() {
             <div className="sh-sub">{pendingLogin.info.full_name || ''} — chọn 1 lần cho cả phiên, muốn đổi chi nhánh thì đăng xuất rồi đăng nhập lại</div>
           </div>
           <div className="sh-card">
-            {list.map((b) => (
-              <button key={b.id || b} className="sh-send" style={{ marginTop: 10 }} disabled={loginBusy}
-                onClick={() => pickBranch(b.id || b)}>
-                {b.name || b}
-              </button>
-            ))}
+            <label className="sh-label" style={{ marginTop: 4 }}>Chi nhánh làm việc phiên này</label>
+            <select className="sh-branchsel" style={{ width: '100%' }} value={pickBranchId} disabled={loginBusy}
+              onChange={(e) => setPickBranchId(Number(e.target.value))}>
+              {list.map((b) => (
+                <option key={b.id || b} value={b.id || b}>{b.name || b}</option>
+              ))}
+            </select>
             {err && <div className="sh-msg">{err}</div>}
+            <button className="sh-send" disabled={loginBusy || !pickBranchId}
+              onClick={() => pickBranch(pickBranchId)}>
+              Vào Hub với chi nhánh này
+            </button>
             <button className="sh-send" style={{ background: '#e5e7eb', color: '#24305E' }} disabled={loginBusy}
               onClick={() => { setPendingLogin(null); setPin(''); setErr(''); }}>
               ‹ Quay lại đăng nhập
@@ -449,17 +481,12 @@ export default function StaffHub() {
             {list.length > 1 && (
               <>
                 <label className="sh-label">Chi nhánh làm việc phiên này</label>
-                {list.map((b) => {
-                  const bid = b.id || b;
-                  const active = changeBranch === bid;
-                  return (
-                    <button type="button" key={bid} className="sh-send" disabled={loginBusy}
-                      style={active ? { marginTop: 10, background: ORANGE, color: NAVY } : { marginTop: 10 }}
-                      onClick={() => setChangeBranch(bid)}>
-                      {b.name || b}{active ? ' ✓' : ''}
-                    </button>
-                  );
-                })}
+                <select className="sh-branchsel" style={{ width: '100%' }} value={changeBranch} disabled={loginBusy}
+                  onChange={(e) => setChangeBranch(Number(e.target.value))}>
+                  {list.map((b) => (
+                    <option key={b.id || b} value={b.id || b}>{b.name || b}</option>
+                  ))}
+                </select>
               </>
             )}
             {err && <div className="sh-msg">{err}</div>}
@@ -505,6 +532,7 @@ export default function StaffHub() {
 
   // ---- Form nhúng ----
   if (screen === 'nhap') return <NhapKho embed={embed} />;
+  if (screen === 'dathang') return <DatHang embed={embed} />;
   if (screen === 'xuat') return <XuatKho embed={embed} />;
   if (screen === 'chuyen') return <ChuyenKho embed={embed} />;
   if (screen === 'thu') return <TxnForm token={token} emp={emp} kind="income" onBack={back} onExpired={onExpired} branchId={branchId} branchName={branchName} />;

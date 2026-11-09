@@ -15,6 +15,20 @@ use Illuminate\Support\Facades\DB;
 // Luồng: tạo phiếu (chụp tồn hệ thống) -> nhập số thực đếm -> chốt (chỉ GHI NHẬN chênh lệch, không tự điều chỉnh kho).
 class StocktakeController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
+    // Đợt vá gộp gác chi nhánh (Đại Vương chốt 2026-11-08): khuôn gói Đặt
+    // hàng — actor Employee chỉ thao tác trong các CN được phân công, phiếu
+    // ngoài phân công coi như không tồn tại (404). Actor User giữ toàn quyền.
+    protected function denyStocktakeBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu kiểm kê.'], 404);
+        }
+        return null;
+    }
+
     // Gói 19 (2026-10-09): Lịch sử kiểm kho — chốt phiếu chỉ GHI NHẬN chênh lệch,
     // KHÔNG tự động điều chỉnh tồn kho (quản lý quyết định xử lý sau).
     public function index(Request $request): JsonResponse
@@ -23,6 +37,10 @@ class StocktakeController extends Controller
             ->orderByRaw('checked_at IS NULL DESC')
             ->orderByDesc('checked_at')
             ->orderByDesc('id');
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $query->whereIn('branch_id', $actor->allBranchIds());
+        }
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));
         }
@@ -39,9 +57,10 @@ class StocktakeController extends Controller
         return response()->json(['success' => true, 'data' => $list]);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $stocktake = Stocktake::with(['items.material.category', 'user', 'branch'])->findOrFail($id); // Gói 22: kèm loại NL
+        if ($deny = $this->denyStocktakeBranch($request, $stocktake->branch_id)) return $deny;
         return response()->json(['success' => true, 'data' => $stocktake]);
     }
 
@@ -55,6 +74,13 @@ class StocktakeController extends Controller
             'material_ids' => 'nullable|array',
             'material_ids.*' => 'exists:materials,id',
         ]);
+
+        // Đợt vá gộp gác CN: NV tạo phiếu → CN resolve theo phân công như
+        // khuôn inbound (gửi CN ngoài phân công → rơi về CN chính của NV).
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $validated['branch_id'] = $this->resolveEmployeeBranch($actor, $validated['branch_id']);
+        }
 
         // Sổ #78 (2026-11-04, cùng họ #75/#76): user_id của stocktakes là FK
         // users, bảng không có cột employee — tính phần User của actor TRƯỚC
@@ -106,6 +132,7 @@ class StocktakeController extends Controller
         ]);
 
         $stocktake = Stocktake::findOrFail($id);
+        if ($deny = $this->denyStocktakeBranch($request, $stocktake->branch_id)) return $deny;
         if ($stocktake->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Phiếu đã chốt, không thể sửa.'], 400);
         }
@@ -130,6 +157,12 @@ class StocktakeController extends Controller
             'checked_at' => 'nullable|date',
             'with_balance' => 'nullable|boolean',
         ]);
+
+        // Đợt vá gộp gác CN: chốt phiếu (động tồn khi with_balance) phải qua
+        // gác TRƯỚC transaction — phiếu ngoài phân công của NV → 404. Phiếu
+        // không tồn tại (branch null) giữ nguyên hành vi cũ trong transaction.
+        $stBranchId = Stocktake::where('id', $id)->value('branch_id');
+        if ($stBranchId !== null && ($deny = $this->denyStocktakeBranch($request, $stBranchId))) return $deny;
 
         try {
             $result = DB::transaction(function () use ($id, $validated) {

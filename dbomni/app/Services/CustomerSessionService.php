@@ -45,9 +45,15 @@ class CustomerSessionService
     /** Thu hồi phiên cũ nhất khi vượt quá giới hạn phiên hiệu lực. */
     public static function enforceLimit(Customer $customer): void
     {
+        // reorder() BẮT BUỘC trước orderBy('id'): relation sessions() đã
+        // ghim sẵn orderByDesc('id'), mà orderBy của Eloquent chỉ NỐI TIẾP
+        // chứ không thay thế — thiếu reorder() thì DESC vẫn là khóa chính,
+        // take($excess) cắt trúng các phiên MỚI NHẤT (gồm phiên vừa sinh)
+        // thay vì cũ nhất (LAUNCH đào ở §EK, 2026-11-09).
         $usable = $customer->sessions()
             ->whereNull('revoked_at')
             ->where('expires_at', '>', now())
+            ->reorder()
             ->orderBy('id')
             ->get();
         $excess = $usable->count() - static::MAX_SESSIONS;

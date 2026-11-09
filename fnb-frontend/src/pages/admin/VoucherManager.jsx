@@ -19,7 +19,7 @@ const BADGE = {
 
 const emptyForm = () => ({
   name: '', code: '', prefix: 'DB-', quantity: 1,
-  type: 'fixed', value: '', max_discount_amount: '', min_order_amount: '',
+  type: 'fixed', value: '', max_discount_amount: '', min_order_amount: '', min_order_enabled: false,
   usage_limit: '', per_customer_limit: '',
   starts_at: '', expires_at: '',
   stack_with_promotion: false,
@@ -95,7 +95,10 @@ export default function VoucherManager() {
     const f0 = {
       name: v.name || '', code: v.code || '', prefix: 'DB-', quantity: 1,
       type: v.type, value: v.value, max_discount_amount: v.max_discount_amount ?? '',
-      min_order_amount: v.min_order_amount ?? '',
+      // Lệnh Đại Vương 2026-11-08: đơn tối thiểu dạng ô tích — bản ghi có
+      // min > 0 thì tự tích sẵn + điền số; min = 0/null thì không tích.
+      min_order_amount: Number(v.min_order_amount) > 0 ? v.min_order_amount : '',
+      min_order_enabled: Number(v.min_order_amount) > 0,
       usage_limit: v.usage_limit ?? '', per_customer_limit: v.per_customer_limit ?? '',
       starts_at: toInputDT(v.starts_at), expires_at: toInputDT(v.expires_at),
       stack_with_promotion: !!v.stack_with_promotion,
@@ -117,6 +120,12 @@ export default function VoucherManager() {
   };
 
   const save = async () => {
+    // Đã tích đơn tối thiểu mà ô tiền trống/≤ 0 → chặn lưu (nhắc đỏ đã hiện
+    // ngay dưới ô trong form; alert thêm để NV thấy khi form đang cuộn).
+    if (form.min_order_enabled && !(Number(form.min_order_amount) > 0)) {
+      alert('Đã bật "Áp dụng giá trị đơn tối thiểu" — hãy nhập số tiền lớn hơn 0, hoặc bỏ tích nếu không áp dụng.');
+      return;
+    }
     const isEdit = modal?.mode === 'edit';
     const qty = Math.max(1, Math.min(500, Number(form.quantity) || 1));
     const payload = {
@@ -124,7 +133,9 @@ export default function VoucherManager() {
       type: form.type,
       value: Number(form.value) || 0,
       max_discount_amount: form.max_discount_amount === '' ? null : Number(form.max_discount_amount),
-      min_order_amount: form.min_order_amount === '' ? null : Number(form.min_order_amount),
+      // Không tích → 0 (không áp dụng tối thiểu); tích → số đã nhập.
+      // TUYỆT ĐỐI không gửi null — đó là gốc lỗi 500 SQLSTATE 1048 (2026-11-08).
+      min_order_amount: form.min_order_enabled ? Number(form.min_order_amount) : 0,
       usage_limit: form.usage_limit === '' ? null : Number(form.usage_limit),
       per_customer_limit: form.per_customer_limit === '' ? null : Number(form.per_customer_limit),
       starts_at: form.starts_at ? form.starts_at.replace('T', ' ') + ':00' : null,
@@ -356,8 +367,15 @@ export default function VoucherManager() {
                 </div>
               )}
               <div>
-                <label className="m-label">Đơn tối thiểu (đ)</label>
-                <input type="number" min={0} value={form.min_order_amount} onChange={(e) => set('min_order_amount', e.target.value)} className="m-input w-full" placeholder="0" />
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={form.min_order_enabled} onChange={(e) => set('min_order_enabled', e.target.checked)} className="w-4 h-4 shrink-0 accent-[#24305E]" />
+                  <span className="text-sm font-medium">Áp dụng giá trị đơn tối thiểu</span>
+                </label>
+                <input type="number" min={0} value={form.min_order_amount} disabled={!form.min_order_enabled}
+                  onChange={(e) => set('min_order_amount', e.target.value)} className="m-input w-full" placeholder="VD: 50000" />
+                {form.min_order_enabled && !(Number(form.min_order_amount) > 0) && (
+                  <div className="text-xs mt-1 font-medium" style={{ color: 'var(--m-danger)' }}>⚠ Đã bật đơn tối thiểu — nhập số tiền lớn hơn 0.</div>
+                )}
               </div>
               <div>
                 <label className="m-label">Tổng lượt dùng</label>

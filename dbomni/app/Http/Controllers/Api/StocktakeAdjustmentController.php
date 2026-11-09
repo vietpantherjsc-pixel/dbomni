@@ -15,11 +15,30 @@ use Illuminate\Support\Facades\DB;
 // Quản lý duyệt (permission:inventory.manage) mới thực hiện điều chỉnh kho thật.
 class StocktakeAdjustmentController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
+
+    // Đợt vá gộp gác chi nhánh (Đại Vương chốt 2026-11-08): bổ sung gác CN
+    // cạnh cơ chế chặn tự duyệt sẵn có — actor Employee chỉ thấy/thao tác
+    // đề xuất thuộc CN được phân công, ngoài phân công coi như không tồn
+    // tại (404). Gác CN chạy TRƯỚC chặn tự duyệt. Actor User giữ toàn quyền.
+    protected function denyAdjBranch(Request $request, $branchId): ?JsonResponse
+    {
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            return response()->json(['success' => false, 'message' => 'Không tìm thấy đề xuất điều chỉnh.'], 404);
+        }
+        return null;
+    }
+
     // Danh sách đề xuất (mặc định chỉ pending)
     public function index(Request $request): JsonResponse
     {
         $q = StocktakeAdjustment::with(['material:id,name,unit', 'branch:id,name', 'stocktake:id'])
             ->orderByDesc('id');
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $q->whereIn('branch_id', $actor->allBranchIds());
+        }
         if ($request->filled('branch_id')) $q->where('branch_id', $request->input('branch_id'));
         if ($request->filled('status')) {
             $q->where('status', $request->input('status'));
@@ -35,6 +54,7 @@ class StocktakeAdjustmentController extends Controller
     {
         $actor = $request->user();
         $adj = StocktakeAdjustment::with('material')->where('status', 'pending')->findOrFail($id);
+        if ($deny = $this->denyAdjBranch($request, $adj->branch_id)) return $deny;
         $material = $adj->material;
         if (!$material) {
             return response()->json(['success' => false, 'message' => 'Nguyên liệu không còn tồn tại.'], 422);
@@ -143,6 +163,7 @@ class StocktakeAdjustmentController extends Controller
     {
         $v = $request->validate(['note' => 'nullable|string|max:500']);
         $adj = StocktakeAdjustment::where('status', 'pending')->findOrFail($id);
+        if ($deny = $this->denyAdjBranch($request, $adj->branch_id)) return $deny;
         $actor = $request->user();
         // Gói chặn tự duyệt (2026-11-06): người sinh đề xuất không được tự từ chối.
         if ($deny = \App\Support\SelfApprovalGuard::check($adj, null, $adj->requested_by_employee_id, $request, 'stocktake_adjustment', 'reject')) return $deny;
