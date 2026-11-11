@@ -47,7 +47,7 @@ export default function LeaveRequests() {
     const [generalStatus, setGeneralStatus] = useState('pending');
     const [shiftStatus, setShiftStatus] = useState('pending');
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    if (!can('attendance.leaves.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
 
     return (
         <AdminLayout>
@@ -80,7 +80,7 @@ function GeneralTab({ can, TYPE_LABEL, status, setStatus }) { // Sổ #37: TYPE_
     }, [status]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    const editable = can('staff.edit');
+    const editable = can('attendance.leaves.approve');
     const decide = async (id, ok) => {
         // Audit UX 2026-10-21 (hạng 9): DUYỆT thì làm ngay, bỏ confirm thừa; từ chối giữ confirm
         if (!ok && !(await confirmInApp('Từ chối yêu cầu nghỉ này?'))) return; // Sổ #23
@@ -212,7 +212,7 @@ function ShiftTab({ can, status, setStatus }) {
         axios.get(API + '/work-shifts').then((r) => setShifts(r.data?.data || [])).catch((e) => noteExpired(e));
     }, []);
 
-    const editable = can('staff.edit');
+    const editable = can('attendance.leaves.approve');
     const decide = async (id, ok) => {
         // Lát 2e (2026-11-04): "Duyệt & gỡ ca" là thao tác hệ quả nặng nhất của
         // trang (gỡ ca khỏi lịch xếp) nhưng là nút duyệt duy nhất KHÔNG có cổng
@@ -368,7 +368,7 @@ function ShiftTab({ can, status, setStatus }) {
 // Spec P4-B5: quản lý duyệt/từ chối yêu cầu đổi ca (đã qua B xác nhận → duyệt là hoán đổi)
 function SwapTab({ can }) {
     const [list, setList] = useState([]);
-    const editable = can('staff.edit');
+    const editable = can('attendance.leaves.approve');
     const fetchAll = useCallback(async () => {
         try {
             const r = await axios.get(API + '/shift-swaps');

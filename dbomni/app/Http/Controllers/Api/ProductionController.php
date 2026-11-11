@@ -145,10 +145,21 @@ class ProductionController extends Controller
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
             'material_id' => 'required|exists:materials,id',
-            'quantity' => 'required|numeric|min:0.01',
+            // Gói chế biến theo mẻ (2026-11-11): ưu tiên batches (số mẻ, bước
+            // 0,5) — server tự tính quantity; quantity chỉ còn là đường cũ
+            // tương thích cho caller không gửi batches.
+            'quantity' => 'nullable|numeric|min:0.01',
+            'batches' => ['nullable', 'numeric', 'min:0.5', function (string $attribute, mixed $value, \Closure $fail) {
+                if (abs((float) $value * 2 - round((float) $value * 2)) > 1e-9) {
+                    $fail('Số mẻ phải là bội số của 0,5 (VD: 0,5 · 1 · 1,5 · 2).');
+                }
+            }],
             'note' => 'nullable|string|max:255',
             'client_key' => 'nullable|string|max:64', // Gói 55 p11ac: idempotency
         ]);
+        if (empty($validated['batches']) && empty($validated['quantity'])) {
+            return response()->json(['success' => false, 'message' => 'Thiếu số mẻ cần chế biến.'], 422);
+        }
 
         // Đợt vá gộp gác CN: NV chế biến → CN resolve theo phân công như
         // khuôn inbound (gửi CN ngoài phân công → rơi về CN chính của NV).
@@ -189,16 +200,33 @@ class ProductionController extends Controller
                     throw new Exception("Chưa có định mức chế biến cho {$material->name}.");
                 }
 
-                $qty = (float) $validated['quantity'];
+                // Gói chế biến theo mẻ (2026-11-11): có batches thì sản lượng
+                // do server tính = số mẻ × batch_output_qty; mọi dòng định mức
+                // bắt buộc đã cấu hình batch_output_qty > 0.
+                $batchCount = !empty($validated['batches']) ? (float) $validated['batches'] : null;
+                if ($batchCount !== null) {
+                    foreach ($recipes as $r) {
+                        if ((float) ($r->batch_output_qty ?? 0) <= 0) {
+                            throw new Exception("{$material->name} chưa cấu hình sản lượng mỗi mẻ. Vui lòng bổ sung ở tab Định mức trước khi chế biến theo mẻ.");
+                        }
+                    }
+                    $qty = $batchCount * (float) $recipes->first()->batch_output_qty;
+                } else {
+                    $qty = (float) $validated['quantity'];
+                }
 
                 // 1. Tính nguyên liệu thô cần trừ
                 // Gói 55 p11c: định mức tính theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
                 $needs = [];
                 foreach ($recipes as $r) {
-                    $batchOut = (float) ($r->batch_output_qty ?: 1);
-                    // Số mẻ = qty / batch_output_qty; NL cần = quantity_per_batch * số mẻ
-                    $batches = $qty / $batchOut;
-                    $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
+                    if ($batchCount !== null) {
+                        $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batchCount;
+                    } else {
+                        $batchOut = (float) ($r->batch_output_qty ?: 1);
+                        // Số mẻ = qty / batch_output_qty; NL cần = quantity_per_batch * số mẻ
+                        $batches = $qty / $batchOut;
+                        $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
+                    }
                 }
 
                 // 2. Trừ kho FIFO (ném Exception nếu thiếu)
@@ -223,6 +251,7 @@ class ProductionController extends Controller
                     'branch_id' => $validated['branch_id'],
                     'material_id' => $material->id,
                     'quantity' => $qty,
+                    'batches' => $batchCount, // Gói chế biến theo mẻ (2026-11-11): NULL khi đi đường quantity cũ
                     'user_id' => $productionUserId,
                     'note' => $validated['note'] ?? null,
                     'client_key' => $validated['client_key'] ?? null, // Gói 55 p11ac
@@ -264,7 +293,7 @@ class ProductionController extends Controller
             \Log::error('ProductionController@produce failed', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-                'input' => $request->only(['branch_id', 'material_id', 'quantity']),
+                'input' => $request->only(['branch_id', 'material_id', 'quantity', 'batches']),
             ]);
             // Gói SEC2: không lộ message SQL thô ra client
             $message = $e instanceof \Illuminate\Database\QueryException

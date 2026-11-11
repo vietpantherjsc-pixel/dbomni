@@ -21,6 +21,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Support\SalaryScope;
 
 // Gói 26: Lương theo giờ — tổng giờ công × đơn giá giờ + phụ cấp ăn + thưởng lễ − ứng lương.
 class SalaryController extends Controller
@@ -30,6 +31,10 @@ class SalaryController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $emp = Employee::with(['role:id,name', 'insurance'])->findOrFail($id);
+        // Cây phân quyền 3 tầng §3.3: tầng chức vụ không chạm lương (phòng thủ);
+        // Chủ Chi Nhánh chỉ thấy NV có phân công giao với CN mình.
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
         if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
             return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
@@ -391,7 +396,9 @@ class SalaryController extends Controller
     // ---------- Giờ công tháng (nhập tay) ----------
     public function saveRecord(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'month' => 'required|regex:/^\d{4}-\d{2}$/',
             'hours' => 'required|numeric|min:0|max:744',
@@ -402,8 +409,8 @@ class SalaryController extends Controller
             'other_deduction_note' => 'nullable|string|max:255',
             'note' => 'nullable|string|max:255',
         ]);
-        // Spec P4-B1: chặn sửa bản ghi lương của kỳ đã chốt
-        \App\Models\PayrollLock::assertUnlocked($validated['month']);
+        // Spec P4-B1 + §3.8: chặn sửa bản ghi lương khi CN chính của NV đã chốt kỳ
+        \App\Models\PayrollLock::assertUnlocked($validated['month'], (int) $emp->branch_id);
         $rec = SalaryRecord::updateOrCreate(
             ['employee_id' => $id, 'month' => $validated['month']],
             ['hours' => $validated['hours'], 'work_days' => $validated['work_days'] ?? 0,
@@ -413,6 +420,7 @@ class SalaryController extends Controller
              'other_deduction_note' => $validated['other_deduction_note'] ?? null,
              'note' => $validated['note'] ?? null]
         );
+        SalaryScope::log($request, 'edit', (int) $id, $validated['month'], 'Lưu bản ghi lương');
         return response()->json(['success' => true, 'data' => $rec]);
     }
 
@@ -420,7 +428,9 @@ class SalaryController extends Controller
     // GET /api/salary/{employee}/days?month=YYYY-MM
     public function getDays(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
         $start = Carbon::createFromFormat('Y-m-d', $month . '-01');
         $end = $start->copy()->endOfMonth();
@@ -478,9 +488,14 @@ class SalaryController extends Controller
             'days.*.meal_count' => 'nullable|integer|min:0|max:10',
             'days.*.meal_manual' => 'nullable|boolean',
         ]);
-        // Spec P4-B1: chặn sửa ngày công của kỳ đã chốt
-        foreach (array_unique(array_map(fn ($d) => substr((string) ($d['date'] ?? ''), 0, 7), $validated['days'])) as $m) {
-            if (preg_match('/^\d{4}-\d{2}$/', $m)) \App\Models\PayrollLock::assertUnlocked($m);
+        // Spec P4-B1 + §3.8: chặn sửa ngày công của CN đã chốt — kiểm theo
+        // từng (tháng × CN) của ngày gửi lên; CN chưa chốt vẫn sửa được.
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        foreach ($validated['days'] as $d) {
+            $m = substr((string) ($d['date'] ?? ''), 0, 7);
+            $br = !empty($d['branch_id']) ? (int) $d['branch_id'] : (int) $emp->branch_id;
+            if (preg_match('/^\d{4}-\d{2}$/', $m)) \App\Models\PayrollLock::assertBranchUnlocked($m, $br);
         }
         // Gói 30d: ngưỡng giờ tự tính suất ăn
         $mealThreshold = (float) Setting::get('meal_min_hours', 14.5);
@@ -527,6 +542,8 @@ class SalaryController extends Controller
                 );
             }
         });
+        $months = array_values(array_unique(array_map(fn ($d) => substr((string) ($d['date'] ?? ''), 0, 7), $validated['days'])));
+        SalaryScope::log($request, 'edit', (int) $id, $months[0] ?? null, 'Lưu chi tiết ngày công');
         return response()->json(['success' => true, 'message' => 'Đã lưu chi tiết ngày công.']);
     }
 
@@ -546,8 +563,11 @@ class SalaryController extends Controller
             'branch_id' => 'nullable|exists:branches,id',
         ]);
         $month = $v['month'];
-        // Spec P4-B1: chặn đổ giờ công vào kỳ đã chốt
-        \App\Models\PayrollLock::assertUnlocked($month);
+        // Spec P4-B1 + §3.8: Chủ Chi Nhánh chỉ đổ giờ cho CN mình; chặn đổ
+        // giờ vào CN đã chốt (đổ toàn hệ thì chặn khi bất kỳ CN nào đã chốt).
+        SalaryScope::assertNotEmployee($request);
+        $branchId = SalaryScope::resolveBranchId($request, $v['branch_id'] ?? null);
+        \App\Models\PayrollLock::assertUnlocked($month, $branchId);
         $start = Carbon::createFromFormat('Y-m-d', $month . '-01')->startOfDay();
         $end = $start->copy()->endOfMonth();
         $daysInMonth = $start->daysInMonth;
@@ -558,14 +578,17 @@ class SalaryController extends Controller
         // Audit 2026-10-23 A4-5: NV đã nghỉ việc nhưng CÓ chấm công trong kỳ vẫn
         // được đổ giờ (trước đây lọc is_active làm mất trắng công của họ)
         $attEmpIds = Attendance::whereBetween('date', [$from, $to])
-            ->when(!empty($v['branch_id']), fn ($q) => $q->where('branch_id', $v['branch_id']))
+            ->when(!empty($branchId), fn ($q) => $q->where('branch_id', $branchId))
             ->pluck('employee_id')->unique();
         $empQ = Employee::where(function ($q) use ($to, $attEmpIds) {
             $q->where(fn ($qq) => $qq->where('is_active', true)
                     ->where(fn ($s) => $s->whereNull('start_date')->orWhere('start_date', '<=', $to)))
                 ->orWhereIn('id', $attEmpIds);
         });
-        if (!empty($v['branch_id'])) $empQ->where('branch_id', $v['branch_id']);
+        // §EW 🟡: lọc NV theo CN phải tính cả pivot branch_employee (NV làm
+        // thêm CN qua pivot vẫn được đổ giờ ở CN đó) — cùng khuôn §3.2.
+        if (!empty($branchId)) $empQ->where(fn ($w) => $w->where('branch_id', $branchId)
+            ->orWhereHas('branches', fn ($b) => $b->where('branches.id', $branchId)));
         $employees = $empQ->orderBy('full_name')->get(['id', 'full_name', 'branch_id']);
         $empIds = $employees->pluck('id');
 
@@ -600,7 +623,7 @@ class SalaryController extends Controller
         // Gói 55: gom chấm công theo NV|ngày|chi nhánh (tách riêng từng CN)
         $attsByBranch = Attendance::whereBetween('date', [$from, $to])
             ->whereIn('employee_id', $empIds)
-            ->when(!empty($v['branch_id']), fn ($q) => $q->where('branch_id', $v['branch_id']))
+            ->when(!empty($branchId), fn ($q) => $q->where('branch_id', $branchId))
             ->get()
             ->groupBy(fn ($a) => $a->employee_id . '|' . $a->date->toDateString() . '|' . $a->branch_id);
 
@@ -704,39 +727,49 @@ class SalaryController extends Controller
             }
         });
 
+        SalaryScope::log($request, 'edit', null, $month, 'Đổ giờ công từ chấm công');
         return response()->json(['success' => true, 'data' => $summary + ['missing' => $missing]]);
     }
 
     // ---------- BHXH ----------
-    public function getInsurance(int $id): JsonResponse
+    public function getInsurance(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $ins = EmployeeInsurance::where('employee_id', $id)->first();
         return response()->json(['success' => true, 'data' => $ins]);
     }
 
     public function saveInsurance(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'base_amount' => 'required|numeric|min:0',
             'employer_pays_all' => 'nullable|boolean',
             'is_active' => 'nullable|boolean',
         ]);
-        \App\Models\PayrollLock::assertUnlocked(now()->format('Y-m'));
+        \App\Models\PayrollLock::assertUnlocked(now()->format('Y-m'), (int) $emp->branch_id);
         $ins = EmployeeInsurance::updateOrCreate(
             ['employee_id' => $id],
             ['base_amount' => $validated['base_amount'],
              'employer_pays_all' => $validated['employer_pays_all'] ?? false,
              'is_active' => $validated['is_active'] ?? true]
         );
+        SalaryScope::log($request, 'money', (int) $id, now()->format('Y-m'), 'Lưu cấu hình BHXH');
         return response()->json(['success' => true, 'data' => $ins]);
     }
 
-    public function deleteInsurance(int $id): JsonResponse
+    public function deleteInsurance(Request $request, int $id): JsonResponse
     {
-        \App\Models\PayrollLock::assertUnlocked(now()->format('Y-m'));
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertUnlocked(now()->format('Y-m'), (int) $emp->branch_id);
         EmployeeInsurance::where('employee_id', $id)->delete();
+        SalaryScope::log($request, 'money', (int) $id, now()->format('Y-m'), 'Xóa cấu hình BHXH');
         return response()->json(['success' => true, 'message' => 'Đã xóa cấu hình BHXH.']);
     }
 
@@ -754,6 +787,7 @@ class SalaryController extends Controller
             'is_active' => 'nullable|boolean',
         ]);
         $t = \App\Models\AllowanceType::create($v + ['sort_order' => 99]);
+        SalaryScope::log($request, 'config', null, null, 'Thêm loại phụ cấp: ' . $v['name']);
         return response()->json(['success' => true, 'data' => $t], 201);
     }
 
@@ -766,13 +800,16 @@ class SalaryController extends Controller
             'sort_order' => 'sometimes|integer',
         ]);
         $t->update($v);
+        SalaryScope::log($request, 'config', null, null, 'Sửa loại phụ cấp #' . $id);
         return response()->json(['success' => true, 'data' => $t]);
     }
 
     // Danh sách phụ cấp của 1 NV
-    public function employeeAllowances(int $id): JsonResponse
+    public function employeeAllowances(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $rows = \App\Models\EmployeeAllowance::with('type:id,name')->where('employee_id', $id)
             ->orderBy('month')->orderBy('id')->get();
         return response()->json(['success' => true, 'data' => $rows]);
@@ -780,30 +817,39 @@ class SalaryController extends Controller
 
     public function storeEmployeeAllowance(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $v = $request->validate([
             'allowance_type_id' => 'required|exists:allowance_types,id',
             'amount' => 'required|numeric|min:0',
             'month' => 'nullable|regex:/^\\d{4}-\\d{2}$/',
             'is_active' => 'nullable|boolean',
         ]);
-        if (!empty($v['month'])) \App\Models\PayrollLock::assertUnlocked($v['month']);
+        if (!empty($v['month'])) \App\Models\PayrollLock::assertUnlocked($v['month'], (int) $emp->branch_id);
         $a = \App\Models\EmployeeAllowance::create(['employee_id' => $id] + $v);
+        SalaryScope::log($request, 'money', (int) $id, $v['month'] ?? null, 'Thêm phụ cấp theo NV');
         return response()->json(['success' => true, 'data' => $a->load('type:id,name')], 201);
     }
 
-    public function destroyEmployeeAllowance(int $id): JsonResponse
+    public function destroyEmployeeAllowance(Request $request, int $id): JsonResponse
     {
         $a = \App\Models\EmployeeAllowance::findOrFail($id);
-        if ($a->month) \App\Models\PayrollLock::assertUnlocked($a->month);
+        $emp = Employee::findOrFail($a->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        if ($a->month) \App\Models\PayrollLock::assertUnlocked($a->month, (int) $emp->branch_id);
         $a->delete();
+        SalaryScope::log($request, 'money', (int) $a->employee_id, $a->month, 'Xóa phụ cấp theo NV');
         return response()->json(['success' => true, 'message' => 'Đã xóa phụ cấp.']);
     }
 
     // ---------- Mức lương ----------
-    public function history(int $id): JsonResponse
+    public function history(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         return response()->json(['success' => true, 'data' => [
             'wage_levels' => WageLevel::where('employee_id', $id)->orderBy('start_date', 'desc')->get(),
             'rank_wage_levels' => RankWageLevel::where('employee_id', $id)->orderBy('start_date', 'desc')->get(),
@@ -815,15 +861,18 @@ class SalaryController extends Controller
     // Thêm mức mới -> tự set end_date mức cũ = start_date mới − 1 ngày
     public function addWageLevel(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'hourly_rate' => 'required|numeric|min:0',
             'responsibility_rate' => 'nullable|numeric|min:0',
             'start_date' => 'required|date',
             'note' => 'nullable|string|max:255',
         ]);
-        // Spec P4-B1: mức mới ảnh hưởng từ start_date về sau → chặn nếu giao kỳ đã chốt
-        \App\Models\PayrollLock::assertLevelUnlocked($validated['start_date'], null);
+        // Spec P4-B1 + §3.8: mức mới ảnh hưởng từ start_date về sau → chặn
+        // nếu giao kỳ đã chốt của CN chính NV (mức theo NV đóng băng theo CN chính)
+        \App\Models\PayrollLock::assertLevelUnlocked($validated['start_date'], null, (int) $emp->branch_id);
 
         $level = DB::transaction(function () use ($id, $validated) {
             // Audit 2026-10-23 A4-3: chèn mức ở BẤT KỲ vị trí thời gian nào cũng
@@ -859,13 +908,17 @@ class SalaryController extends Controller
             ]);
         });
 
+        SalaryScope::log($request, 'config', (int) $id, substr($validated['start_date'], 0, 7), 'Thêm mức lương theo NV');
         return response()->json(['success' => true, 'data' => $level], 201);
     }
 
-    public function deleteWageLevel(int $id): JsonResponse
+    public function deleteWageLevel(Request $request, int $id): JsonResponse
     {
         $lv = WageLevel::findOrFail($id);
-        \App\Models\PayrollLock::assertLevelUnlocked($lv->start_date->toDateString(), $lv->end_date?->toDateString());
+        $emp = Employee::findOrFail($lv->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertLevelUnlocked($lv->start_date->toDateString(), $lv->end_date?->toDateString(), (int) $emp->branch_id);
         DB::transaction(function () use ($lv) {
             // Audit 2026-10-23 A4-3: xóa mức -> mức LIỀN TRƯỚC (kết thúc đúng
             // ngày trước ngày bắt đầu của mức bị xóa) tự kéo dài phủ khoảng
@@ -879,6 +932,7 @@ class SalaryController extends Controller
             }
             $lv->delete();
         });
+        SalaryScope::log($request, 'config', (int) $lv->employee_id, substr($lv->start_date->toDateString(), 0, 7), 'Xóa mức lương theo NV');
         return response()->json(['success' => true, 'message' => 'Đã xóa mức lương.']);
     }
 
@@ -886,14 +940,16 @@ class SalaryController extends Controller
     // Pattern giống hệt wage_levels: thêm mức mới -> tự set end_date mức cũ = start_date mới − 1 ngày
     public function addRankWageLevel(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'amount' => 'required|numeric|min:0',
             'start_date' => 'required|date',
             'note' => 'nullable|string|max:255',
         ]);
-        // Spec P4-B1: mức mới ảnh hưởng từ start_date về sau → chặn nếu giao kỳ đã chốt
-        \App\Models\PayrollLock::assertLevelUnlocked($validated['start_date'], null);
+        // Spec P4-B1 + §3.8: như addWageLevel — chặn nếu giao kỳ đã chốt của CN chính NV
+        \App\Models\PayrollLock::assertLevelUnlocked($validated['start_date'], null, (int) $emp->branch_id);
 
         $level = DB::transaction(function () use ($id, $validated) {
             // Audit 2026-10-23 A4-3: cùng cơ chế phân hoạch như addWageLevel
@@ -922,13 +978,17 @@ class SalaryController extends Controller
             ]);
         });
 
+        SalaryScope::log($request, 'config', (int) $id, substr($validated['start_date'], 0, 7), 'Thêm mức lương cấp bậc theo NV');
         return response()->json(['success' => true, 'data' => $level], 201);
     }
 
-    public function deleteRankWageLevel(int $id): JsonResponse
+    public function deleteRankWageLevel(Request $request, int $id): JsonResponse
     {
         $lv = RankWageLevel::findOrFail($id);
-        \App\Models\PayrollLock::assertLevelUnlocked($lv->start_date->toDateString(), $lv->end_date?->toDateString());
+        $emp = Employee::findOrFail($lv->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertLevelUnlocked($lv->start_date->toDateString(), $lv->end_date?->toDateString(), (int) $emp->branch_id);
         DB::transaction(function () use ($lv) {
             // Audit 2026-10-23 A4-3: mức liền trước kéo dài phủ khoảng trống
             $prev = RankWageLevel::where('employee_id', $lv->employee_id)
@@ -939,20 +999,23 @@ class SalaryController extends Controller
             }
             $lv->delete();
         });
+        SalaryScope::log($request, 'config', (int) $lv->employee_id, substr($lv->start_date->toDateString(), 0, 7), 'Xóa mức lương cấp bậc theo NV');
         return response()->json(['success' => true, 'message' => 'Đã xóa mức lương cấp bậc.']);
     }
 
     // ---------- Ứng lương ----------
     public function addAdvance(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'amount' => 'required|numeric|min:0',
             'date' => 'required|date',
             'note' => 'nullable|string|max:255',
         ]);
         $advMonth = substr($validated['date'], 0, 7);
-        \App\Models\PayrollLock::assertUnlocked($advMonth);
+        \App\Models\PayrollLock::assertUnlocked($advMonth, (int) $emp->branch_id);
         // Audit 2026-10-23 A4-6: chặn tổng ứng vượt DỰ KIẾN THỰC NHẬN của tháng
         // ứng (dự kiến = tổng lương tính theo dữ liệu hiện có TRƯỚC khi trừ ứng;
         // số này đã gồm các khoản ứng trước đó nên cộng lại phần đã ứng).
@@ -969,37 +1032,49 @@ class SalaryController extends Controller
             return response()->json(['success' => false, 'message' => 'Tổng ứng (' . number_format($existingAdvance + (float) $validated['amount'], 0, ',', '.') . 'đ) vượt dự kiến thực nhận tháng ' . substr($advMonth, 5, 2) . '/' . substr($advMonth, 0, 4) . ' (' . number_format($projected, 0, ',', '.') . 'đ theo dữ liệu lương hiện có). Hãy giảm khoản ứng hoặc bổ sung giờ công trước.'], 422);
         }
         $adv = SalaryAdvance::create(['employee_id' => $id] + $validated);
+        SalaryScope::log($request, 'money', (int) $id, $advMonth, 'Thêm khoản ứng lương');
         return response()->json(['success' => true, 'data' => $adv], 201);
     }
 
-    public function deleteAdvance(int $id): JsonResponse
+    public function deleteAdvance(Request $request, int $id): JsonResponse
     {
         $a = SalaryAdvance::findOrFail($id);
-        \App\Models\PayrollLock::assertUnlocked($a->date->format('Y-m'));
+        $emp = Employee::findOrFail($a->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertUnlocked($a->date->format('Y-m'), (int) $emp->branch_id);
         $a->delete();
+        SalaryScope::log($request, 'money', (int) $a->employee_id, $a->date->format('Y-m'), 'Xóa khoản ứng lương');
         return response()->json(['success' => true, 'message' => 'Đã xóa khoản ứng lương.']);
     }
 
     // ---------- Thưởng ----------
     public function addBonus(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'type' => ['required', \Illuminate\Validation\Rule::in(\App\Models\SharedCategory::activeCodes('bonus_types'))], // Spec danh mục dùng chung
             'amount' => 'required|numeric|min:0',
             'date' => 'required|date',
             'note' => 'nullable|string|max:255',
         ]);
-        \App\Models\PayrollLock::assertUnlocked(substr($validated['date'], 0, 7));
+        \App\Models\PayrollLock::assertUnlocked(substr($validated['date'], 0, 7), (int) $emp->branch_id);
         $bonus = Bonus::create(['employee_id' => $id] + $validated);
+        SalaryScope::log($request, 'money', (int) $id, substr($validated['date'], 0, 7), 'Thêm khoản thưởng');
         return response()->json(['success' => true, 'data' => $bonus], 201);
     }
 
-    public function deleteBonus(int $id): JsonResponse
+    public function deleteBonus(Request $request, int $id): JsonResponse
     {
         $b = Bonus::findOrFail($id);
-        \App\Models\PayrollLock::assertUnlocked($b->date->format('Y-m'));
+        $emp = Employee::findOrFail($b->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertUnlocked($b->date->format('Y-m'), (int) $emp->branch_id);
         $b->delete();
+        SalaryScope::log($request, 'money', (int) $b->employee_id, $b->date->format('Y-m'), 'Xóa khoản thưởng');
         return response()->json(['success' => true, 'message' => 'Đã xóa khoản thưởng.']);
     }
 
@@ -1022,14 +1097,16 @@ class SalaryController extends Controller
             'name' => $validated['name'],
             'multiplier' => $validated['multiplier'] ?? 2.0,
         ]);
+        SalaryScope::log($request, 'config', null, substr($validated['date'], 0, 7), 'Thêm ngày lễ: ' . $validated['name']);
         return response()->json(['success' => true, 'data' => $h], 201);
     }
 
-    public function deleteHoliday(int $id): JsonResponse
+    public function deleteHoliday(Request $request, int $id): JsonResponse
     {
         $h = Holiday::findOrFail($id);
         \App\Models\PayrollLock::assertUnlocked($h->date->format('Y-m'));
         $h->delete();
+        SalaryScope::log($request, 'config', null, $h->date->format('Y-m'), 'Xóa ngày lễ #' . $id);
         return response()->json(['success' => true, 'message' => 'Đã xóa ngày lễ.']);
     }
 
@@ -1050,6 +1127,7 @@ class SalaryController extends Controller
             \App\Models\PayrollLock::assertUnlocked(substr($validated['date'], 0, 7));
         }
         $h->update($validated);
+        SalaryScope::log($request, 'config', null, $h->date->format('Y-m'), 'Sửa ngày lễ #' . $id);
         return response()->json(['success' => true, 'data' => $h]);
     }
 
@@ -1086,6 +1164,7 @@ class SalaryController extends Controller
             'bhxh_employer_rate' => 'required|numeric|min:0|max:100',
         ]);
         foreach ($validated as $k => $v) Setting::set($k, $v);
+        SalaryScope::log($request, 'config', null, null, 'Lưu chính sách lương');
         return response()->json(['success' => true, 'data' => $validated]);
     }
 
@@ -1093,13 +1172,15 @@ class SalaryController extends Controller
     // PUT /api/salary/{employee}/violations  { month, violation_count (null = xóa đè → về tự động), violation_note }
     public function saveViolations(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $validated = $request->validate([
             'month' => 'required|regex:/^\d{4}-\d{2}$/',
             'violation_count' => 'nullable|integer|min:0|max:100',
             'violation_note' => 'nullable|string|max:255',
         ]);
-        \App\Models\PayrollLock::assertUnlocked($validated['month']);
+        \App\Models\PayrollLock::assertUnlocked($validated['month'], (int) $emp->branch_id);
         $attrs = ['violation_note' => $validated['violation_note'] ?? null];
         if (array_key_exists('violation_count', $validated)) {
             $attrs['violation_count'] = $validated['violation_count']; // null = xóa đè
@@ -1108,6 +1189,7 @@ class SalaryController extends Controller
             ['employee_id' => $id, 'month' => $validated['month']],
             $attrs
         );
+        SalaryScope::log($request, 'edit', (int) $id, $validated['month'], 'Lưu số lỗi vi phạm tháng');
         return response()->json(['success' => true, 'data' => $rec]);
     }
 
@@ -1115,7 +1197,9 @@ class SalaryController extends Controller
     // GET /api/salary/{employee}/deductions?month=YYYY-MM
     public function listDeductions(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $month = $request->query('month', Carbon::now()->format('Y-m'));
         if (!preg_match('/^\d{4}-\d{2}$/', (string) $month)) {
             return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
@@ -1133,7 +1217,9 @@ class SalaryController extends Controller
     // POST /api/salary/{employee}/deductions
     public function storeDeduction(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $v = $request->validate([
             'month' => 'required|regex:/^\d{4}-\d{2}$/',
             'name' => 'required|string|max:255',
@@ -1141,13 +1227,14 @@ class SalaryController extends Controller
             'note' => 'nullable|string|max:255',
             'kind' => 'nullable|in:other,fine',
         ]);
-        \App\Models\PayrollLock::assertUnlocked($v['month']);
+        \App\Models\PayrollLock::assertUnlocked($v['month'], (int) $emp->branch_id);
         $maxSort = (int) SalaryDeduction::where('employee_id', $id)->where('month', $v['month'])->max('sort_order');
         $d = SalaryDeduction::create([
             'employee_id' => $id, 'month' => $v['month'], 'name' => $v['name'],
             'amount' => $v['amount'], 'note' => $v['note'] ?? null, 'sort_order' => $maxSort + 1,
             'kind' => $v['kind'] ?? 'other',
         ]);
+        SalaryScope::log($request, 'money', (int) $id, $v['month'], 'Thêm khoản trừ khác: ' . $v['name']);
         return response()->json(['success' => true, 'data' => $d], 201);
     }
 
@@ -1155,7 +1242,10 @@ class SalaryController extends Controller
     public function updateDeduction(Request $request, int $id): JsonResponse
     {
         $d = SalaryDeduction::findOrFail($id);
-        \App\Models\PayrollLock::assertUnlocked($d->month);
+        $emp = Employee::findOrFail($d->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertUnlocked($d->month, (int) $emp->branch_id);
         $v = $request->validate([
             'name' => 'nullable|string|max:255',
             'amount' => 'nullable|numeric|min:0|max:999999999',
@@ -1164,15 +1254,20 @@ class SalaryController extends Controller
         ]);
         $d->fill(array_filter($v, fn ($x) => $x !== null));
         $d->save();
+        SalaryScope::log($request, 'money', (int) $d->employee_id, $d->month, 'Sửa khoản trừ khác #' . $id);
         return response()->json(['success' => true, 'data' => $d]);
     }
 
     // DELETE /api/salary/deductions/{id}
-    public function destroyDeduction(int $id): JsonResponse
+    public function destroyDeduction(Request $request, int $id): JsonResponse
     {
         $d = SalaryDeduction::findOrFail($id);
-        \App\Models\PayrollLock::assertUnlocked($d->month);
+        $emp = Employee::findOrFail($d->employee_id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        \App\Models\PayrollLock::assertUnlocked($d->month, (int) $emp->branch_id);
         $d->delete();
+        SalaryScope::log($request, 'money', (int) $d->employee_id, $d->month, 'Xóa khoản trừ khác #' . $id);
         return response()->json(['success' => true]);
     }
 
@@ -1181,7 +1276,9 @@ class SalaryController extends Controller
     // POST /api/salary/{employee}/deductions/bulk {month, items[], deleted_ids[]}
     public function bulkSaveDeductions(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id);
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
         $v = $request->validate([
             'month' => 'required|regex:/^\d{4}-\d{2}$/',
             'items' => 'present|array',
@@ -1193,7 +1290,7 @@ class SalaryController extends Controller
             'deleted_ids' => 'nullable|array',
             'deleted_ids.*' => 'integer',
         ]);
-        \App\Models\PayrollLock::assertUnlocked($v['month']);
+        \App\Models\PayrollLock::assertUnlocked($v['month'], (int) $emp->branch_id);
         DB::transaction(function () use ($v, $id) {
             if (!empty($v['deleted_ids'])) {
                 SalaryDeduction::where('employee_id', $id)->where('month', $v['month'])
@@ -1220,6 +1317,7 @@ class SalaryController extends Controller
                 }
             }
         });
+        SalaryScope::log($request, 'money', (int) $id, $v['month'], 'Lưu hàng loạt khoản trừ khác');
         return response()->json(['success' => true]);
     }
 
@@ -1232,19 +1330,23 @@ class SalaryController extends Controller
         if (!preg_match('/^\\d{4}-\\d{2}$/', $month)) {
             return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
         }
+        // Cây phân quyền 3 tầng §3.3: Chủ Chi Nhánh luôn xem đúng CN mình
+        // (tham số branch_id khác bị ép về CN mình); tầng chức vụ không vào đây.
+        SalaryScope::assertNotEmployee($request);
         $branchId = $request->query('branch_id');
         $branchId = $branchId ? (int) $branchId : null;
-        // Audit 2026-10-23 A4-4: kỳ đã chốt -> bảng tổng đọc từ SNAPSHOT
-        $lock = \App\Models\PayrollLock::get($month);
-        if ($lock && \Illuminate\Support\Facades\Schema::hasTable('payroll_lock_snapshots')) {
-            $snaps = \App\Models\PayrollLockSnapshot::where('lock_id', $lock->id)
+        $branchId = SalaryScope::resolveBranchId($request, $branchId);
+        // Audit 2026-10-23 A4-4: kỳ đã chốt TOÀN HỆ -> bảng tổng đọc từ SNAPSHOT
+        $legacy = \App\Models\PayrollLock::legacy($month);
+        if ($legacy && \Illuminate\Support\Facades\Schema::hasTable('payroll_lock_snapshots')) {
+            $snaps = \App\Models\PayrollLockSnapshot::where('lock_id', $legacy->id)
                 ->where('kind', 'row')->orderBy('id')->get();
             if ($snaps->isNotEmpty()) {
                 $rows = $snaps->map(fn ($sn) => $sn->data)
                     ->when($branchId, fn ($c) => $c->filter(fn ($r) => (int) ($r['branch_id'] ?? 0) === $branchId)->values())
                     ->all();
                 // Lọc theo CN thì tổng/giờ tính trên dòng đã lọc như đường live
-                $grandTotal = $branchId ? array_sum(array_column($rows, 'net')) : (float) $lock->net_total;
+                $grandTotal = $branchId ? array_sum(array_column($rows, 'net')) : (float) $legacy->net_total;
                 $grandHours = array_sum(array_column($rows, 'total_hours'));
                 $employees = Employee::whereIn('id', $snaps->pluck('employee_id')->unique())->get();
                 $start = Carbon::createFromFormat('Y-m-d', $month . '-01');
@@ -1260,7 +1362,42 @@ class SalaryController extends Controller
                 ]]);
             }
         }
+        // §3.8: kỳ chốt RỜI RẠC theo CN — dòng của CN đã chốt đọc từ snapshot
+        // của khóa CN đó, dòng CN chưa chốt tính live. Tổng = chốt + ước tính.
+        $locks = \App\Models\PayrollLock::forMonth($month);
         [$rows, $grandTotal, $grandHours, $employees] = $this->buildPayrollData($month, $branchId);
+        if ($locks->isNotEmpty() && \Illuminate\Support\Facades\Schema::hasTable('payroll_lock_snapshots')) {
+            $lockedBranchIds = $locks->whereNotNull('branch_id')->pluck('branch_id')
+                ->map(fn ($v) => (int) $v)->all();
+            if ($lockedBranchIds !== []) {
+                $snapRows = \App\Models\PayrollLockSnapshot::whereIn('lock_id', $locks->pluck('id'))
+                    ->where('kind', 'row')->orderBy('id')->get();
+                $rows = array_values(array_filter(
+                    $rows,
+                    fn ($r) => !in_array((int) ($r['branch_id'] ?? 0), $lockedBranchIds, true)
+                ));
+                foreach ($snapRows as $sn) {
+                    $d = $sn->data;
+                    if ($branchId && (int) ($d['branch_id'] ?? 0) !== $branchId) continue;
+                    $rows[] = $d;
+                }
+                $grandTotal = array_sum(array_column($rows, 'net'));
+                $grandHours = array_sum(array_column($rows, 'total_hours'));
+                $employees = Employee::whereIn('id', array_values(array_unique(array_column($rows, 'employee_id'))))->get();
+                $start = Carbon::createFromFormat('Y-m-d', $month . '-01');
+                return response()->json(['success' => true, 'data' => [
+                    'month' => $month,
+                    'month_label' => 'THÁNG ' . $start->format('m/Y'),
+                    'rows' => $rows,
+                    'grand_total' => $grandTotal,
+                    'grand_hours' => round($grandHours, 2),
+                    'employee_count' => count(array_unique(array_column($rows, 'employee_id'))),
+                    'single_branch' => (bool) $branchId,
+                    'from_snapshot' => true,
+                    'locked_branches' => $lockedBranchIds,
+                ]]);
+            }
+        }
         $start = Carbon::createFromFormat('Y-m-d', $month . '-01');
         return response()->json(['success' => true, 'data' => [
             'month' => $month,
@@ -1524,7 +1661,11 @@ class SalaryController extends Controller
     // Dùng chung cho lock() và lệnh artisan payroll:backfill-lock-snapshots.
     // LƯU Ý: phải gọi TRƯỚC khi snapshot tồn tại, vì show() ưu tiên đọc
     // snapshot khi kỳ đã chốt (chưa có snapshot thì tự rơi về tính live).
-    public function persistLockSnapshots(\App\Models\PayrollLock $lock, string $month, array $rows, $actor = null): void
+    // §3.8: khóa theo CN chỉ lưu snapshot DÒNG của CN đó ($withDetails=false)
+    // — snapshot detail là toàn bộ phiếu của NV (cả 2 CN), lưu nó sẽ đóng
+    // băng cả phần CN chưa chốt; phần detail của CN đã chốt vẫn được giữ
+    // bằng đóng băng ghi (saveDays/saveRecord chặn theo CN).
+    public function persistLockSnapshots(\App\Models\PayrollLock $lock, string $month, array $rows, $actor = null, bool $withDetails = true): void
     {
         if (!\Illuminate\Support\Facades\Schema::hasTable('payroll_lock_snapshots')) return;
         foreach ($rows as $r) {
@@ -1536,6 +1677,7 @@ class SalaryController extends Controller
                 'data' => $r,
             ]);
         }
+        if (!$withDetails) return;
         $empIds = array_values(array_unique(array_column($rows, 'employee_id')));
         foreach ($empIds as $eid) {
             $detailReq = Request::create('/api/salary/' . $eid, 'GET', ['month' => $month]);
@@ -1554,35 +1696,88 @@ class SalaryController extends Controller
     }
 
     // Spec P4-B1: trạng thái chốt của kỳ lương
+    // Spec P4-B1: trạng thái chốt của kỳ lương — theo (kỳ × CN) (§3.8).
+    // 'locked' giữ nghĩa cũ cho frontend hiện tại: khóa toàn hệ HOẶC mọi CN
+    // đang hoạt động đều đã chốt. 'locks' liệt kê từng khóa CN (Chủ Chi
+    // Nhánh chỉ thấy khóa CN mình).
     public function lockStatus(Request $request): JsonResponse
     {
         $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
-        $lock = \App\Models\PayrollLock::get($month);
-        $logs = \App\Models\PayrollLockLog::where('month', $month)->orderBy('id', 'desc')->limit(20)->get();
+        SalaryScope::assertNotEmployee($request);
+        $scopeBranch = SalaryScope::scopeBranchId($request->user());
+        $locks = \App\Models\PayrollLock::forMonth($month);
+        if ($scopeBranch !== null) {
+            $locks = $locks->filter(fn ($l) => $l->branch_id === null || (int) $l->branch_id === $scopeBranch)->values();
+        }
+        $legacy = $locks->firstWhere('branch_id', null);
+        $branchLocks = $locks->whereNotNull('branch_id')->values();
+        $activeBranchIds = \App\Models\Branch::where('is_active', true)->pluck('id')->map(fn ($v) => (int) $v)->all();
+        $lockedBranchIds = $branchLocks->pluck('branch_id')->map(fn ($v) => (int) $v)->all();
+        $allBranchesLocked = $activeBranchIds !== []
+            && count(array_diff($activeBranchIds, $lockedBranchIds)) === 0;
+        $logs = \App\Models\PayrollLockLog::where('month', $month)
+            ->when($scopeBranch !== null, fn ($q) => $q->where(fn ($w) => $w->where('branch_id', $scopeBranch)->orWhereNull('branch_id')))
+            ->orderBy('id', 'desc')->limit(20)->get();
         return response()->json(['success' => true, 'data' => [
             'month' => $month,
-            'locked' => (bool) $lock,
-            'locked_at' => $lock?->locked_at?->format('d/m/Y H:i'),
-            'locked_by' => $lock?->locked_by,
-            'net_total' => $lock ? (float) $lock->net_total : null,
-            'voucher_id' => $lock?->voucher_id,
+            'locked' => (bool) $legacy || $allBranchesLocked,
+            'legacy_locked' => (bool) $legacy,
+            'locked_at' => $legacy?->locked_at?->format('d/m/Y H:i'),
+            'locked_by' => $legacy?->locked_by,
+            'net_total' => $legacy ? (float) $legacy->net_total : null,
+            'voucher_id' => $legacy?->voucher_id,
+            'locks' => $branchLocks->map(fn ($l) => [
+                'branch_id' => (int) $l->branch_id,
+                'branch_name' => $l->branch?->name,
+                'locked_at' => $l->locked_at?->format('d/m/Y H:i'),
+                'locked_by' => $l->locked_by,
+                'net_total' => (float) $l->net_total,
+                'voucher_id' => $l->voucher_id,
+            ])->values(),
+            'locked_branches' => $lockedBranchIds,
             'logs' => $logs,
         ]]);
     }
 
-    // Spec P4-B1+B2: chốt lương tháng → khóa kỳ + tự sinh 1 phiếu chi
+    // Spec P4-B1+B2: chốt lương tháng → khóa kỳ + tự sinh 1 phiếu chi.
+    // §3.8: Chủ Chi Nhánh chốt đúng CN mình (branch_id bắt buộc theo tầng);
+    // Chủ Sở Hữu chốt từng CN (branch_id) hoặc chốt toàn hệ (không branch_id).
+    // Chốt toàn hệ khi đã có khóa CN rời rạc → 422 (tránh phiếu chi trùng).
     public function lock(Request $request): JsonResponse
     {
         $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
-        if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+        if (!preg_match('/^\\d{4}-\\d{2}$/', $month)) {
             return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
         }
-        if (\App\Models\PayrollLock::isLocked($month)) {
-            return response()->json(['success' => false, 'message' => "Kỳ lương {$month} đã chốt rồi."], 422);
+        SalaryScope::assertNotEmployee($request);
+        $scopeBranch = SalaryScope::scopeBranchId($request->user());
+        $branchId = $request->input('branch_id');
+        $branchId = $branchId !== null && $branchId !== '' ? (int) $branchId : null;
+        if ($scopeBranch !== null) {
+            if ($branchId !== null && $branchId !== $scopeBranch) {
+                return response()->json(['success' => false, 'message' => 'Bạn chỉ được chốt kỳ lương của chi nhánh mình.'], 403);
+            }
+            $branchId = $scopeBranch;
+        }
+        if ($branchId !== null && !\App\Models\Branch::where('id', $branchId)->exists()) {
+            return response()->json(['success' => false, 'message' => 'Chi nhánh không tồn tại.'], 422);
+        }
+        if ($branchId !== null) {
+            if (\App\Models\PayrollLock::isBranchLocked($month, $branchId)) {
+                return response()->json(['success' => false, 'message' => "Kỳ lương {$month} tại chi nhánh này đã chốt rồi."], 422);
+            }
+        } else {
+            if (\App\Models\PayrollLock::isLocked($month)) {
+                $hasBranchLocks = \App\Models\PayrollLock::where('month', $month)->whereNotNull('branch_id')->exists();
+                $msg = $hasBranchLocks
+                    ? "Kỳ lương {$month} đang chốt rời rạc theo từng chi nhánh — hãy chốt nốt từng chi nhánh còn lại."
+                    : "Kỳ lương {$month} đã chốt rồi.";
+                return response()->json(['success' => false, 'message' => $msg], 422);
+            }
         }
 
-        return DB::transaction(function () use ($request, $month) {
-            [$rows, $grandTotal] = $this->buildPayrollData($month, null);
+        return DB::transaction(function () use ($request, $month, $branchId) {
+            [$rows, $grandTotal] = $this->buildPayrollData($month, $branchId);
             if (empty($rows)) {
                 return response()->json(['success' => false, 'message' => 'Tháng này chưa có dữ liệu lương để chốt.'], 422);
             }
@@ -1590,6 +1785,7 @@ class SalaryController extends Controller
 
             $lock = \App\Models\PayrollLock::create([
                 'month' => $month,
+                'branch_id' => $branchId,
                 'locked_at' => now(),
                 'locked_by' => $userId,
                 'net_total' => $grandTotal,
@@ -1597,6 +1793,7 @@ class SalaryController extends Controller
 
             // B2: tự sinh 1 phiếu chi "Lương tháng MM/YYYY" (định dạng theo spec, không phải YYYY-MM)
             $monthLabel = Carbon::createFromFormat('Y-m-d', $month . '-01')->format('m/Y');
+            $branchName = $branchId ? (\App\Models\Branch::where('id', $branchId)->value('name') ?? ('CN #' . $branchId)) : null;
             $cat = \App\Models\TransactionCategory::where('type', 'expense')->where('name', 'Lương')->first();
             if (!$cat) {
                 // TESTER P4: DB chưa có danh mục chi "Lương" -> tự tạo, không bỏ qua lặng lẽ
@@ -1614,6 +1811,7 @@ class SalaryController extends Controller
                     'code' => \App\Models\Transaction::nextCode('expense'),
                     'type' => 'expense',
                     'category_id' => $cat->id,
+                    'branch_id' => $branchId,
                     'amount' => $grandTotal,
                     'paid_amount' => $status === 'paid' ? $grandTotal : 0,
                     'paid_at' => now()->toDateString(),
@@ -1623,19 +1821,26 @@ class SalaryController extends Controller
                     'approved_at' => now(),
                     'related_type' => 'payroll',
                     'related_id' => $lock->id,
-                    'note' => "Lương tháng {$monthLabel} (tự sinh khi chốt lương)",
+                    'note' => "Lương tháng {$monthLabel}" . ($branchName ? " — {$branchName}" : '') . " (tự sinh khi chốt lương)",
                     'created_by' => $userId,
                 ]);
                 $lock->update(['voucher_id' => $voucher->id]);
             }
 
-            // Audit 2026-10-23 A4-4: lưu SNAPSHOT theo NV tại thời điểm chốt
-            $this->persistLockSnapshots($lock, $month, $rows, $request->user());
+            // Audit 2026-10-23 A4-4: lưu SNAPSHOT theo NV tại thời điểm chốt.
+            // Khóa theo CN chỉ lưu snapshot dòng của CN đó (không snapshot detail).
+            $this->persistLockSnapshots($lock, $month, $rows, $request->user(), $branchId === null);
 
-            \App\Models\PayrollLock::log($month, 'lock', $userId, "Chốt lương tháng {$month}, tổng thực nhận " . number_format($grandTotal, 0, ',', '.') . 'đ');
+            \App\Models\PayrollLock::log(
+                $month, 'lock', $userId,
+                "Chốt lương tháng {$month}" . ($branchName ? " — {$branchName}" : '') . ", tổng thực nhận " . number_format($grandTotal, 0, ',', '.') . 'đ',
+                $branchId
+            );
+            SalaryScope::log($request, 'lock', null, $month, 'Chốt kỳ lương' . ($branchName ? ' — ' . $branchName : ''));
 
             return response()->json(['success' => true, 'data' => [
                 'month' => $month,
+                'branch_id' => $branchId,
                 'net_total' => $grandTotal,
                 'voucher_id' => $voucher?->id,
                 'voucher_code' => $voucher?->code,
@@ -1643,29 +1848,88 @@ class SalaryController extends Controller
         });
     }
 
-    // Spec P4-B1+B2: mở khóa kỳ lương (ghi log người + lý do) → phiếu chi tự sinh chuyển sang hủy
+    // Spec P4-B1+B2: mở khóa kỳ lương (ghi log người + lý do) → phiếu chi tự sinh chuyển sang hủy.
+    // §3.8: Chủ Chi Nhánh chỉ mở khóa CN mình; mở toàn hệ khi đang chốt rời
+    // rạc theo CN → 422 (mở từng CN).
     public function unlock(Request $request): JsonResponse
     {
         $v = $request->validate([
-            'month' => 'required|regex:/^\d{4}-\d{2}$/',
+            'month' => 'required|regex:/^\\d{4}-\\d{2}$/',
             'reason' => 'required|string|max:500',
+            'branch_id' => 'nullable|integer|exists:branches,id',
         ]);
         $month = $v['month'];
-        $lock = \App\Models\PayrollLock::get($month);
-        if (!$lock) {
-            return response()->json(['success' => false, 'message' => "Kỳ lương {$month} chưa chốt."], 422);
+        SalaryScope::assertNotEmployee($request);
+        $scopeBranch = SalaryScope::scopeBranchId($request->user());
+        $branchId = isset($v['branch_id']) ? (int) $v['branch_id'] : null;
+        if ($scopeBranch !== null) {
+            if ($branchId !== null && $branchId !== $scopeBranch) {
+                return response()->json(['success' => false, 'message' => 'Bạn chỉ được mở khóa kỳ lương của chi nhánh mình.'], 403);
+            }
+            $branchId = $scopeBranch;
+        }
+        if ($branchId !== null) {
+            $lock = \App\Models\PayrollLock::where('month', $month)->where('branch_id', $branchId)->first();
+            if (!$lock) {
+                if (\App\Models\PayrollLock::legacy($month)) {
+                    return response()->json(['success' => false, 'message' => "Kỳ lương {$month} đang chốt toàn hệ — hãy mở khóa toàn hệ."], 422);
+                }
+                return response()->json(['success' => false, 'message' => "Kỳ lương {$month} tại chi nhánh này chưa chốt."], 422);
+            }
+        } else {
+            $lock = \App\Models\PayrollLock::legacy($month);
+            if (!$lock) {
+                if (\App\Models\PayrollLock::where('month', $month)->whereNotNull('branch_id')->exists()) {
+                    return response()->json(['success' => false, 'message' => "Kỳ lương {$month} đang chốt rời rạc theo từng chi nhánh — hãy mở khóa từng chi nhánh."], 422);
+                }
+                return response()->json(['success' => false, 'message' => "Kỳ lương {$month} chưa chốt."], 422);
+            }
         }
 
-        return DB::transaction(function () use ($request, $lock, $month, $v) {
+        return DB::transaction(function () use ($request, $lock, $month, $v, $branchId) {
             if ($lock->voucher_id) {
                 $tx = \App\Models\Transaction::find($lock->voucher_id);
                 if ($tx && $tx->status !== 'cancelled') {
                     $tx->update(['status' => 'cancelled', 'paid_amount' => 0]);
                 }
             }
-            \App\Models\PayrollLock::log($month, 'unlock', $request->user()?->id, $v['reason']);
+            \App\Models\PayrollLock::log($month, 'unlock', $request->user()?->id, $v['reason'], $branchId);
             $lock->delete();
-            return response()->json(['success' => true, 'message' => "Đã mở khóa kỳ lương {$month}."], 200);
+            SalaryScope::log($request, 'unlock', null, $month, 'Mở khóa kỳ lương' . ($branchId ? " — CN #{$branchId}" : ''));
+            return response()->json(['success' => true, 'message' => "Đã mở khóa kỳ lương {$month}." . ($branchId ? " (CN #{$branchId})" : ''), 200]);
         });
+    }
+
+    // §3.7 mức B: ghi dấu lần xuất phiếu lương (ảnh vẽ ở frontend từ dữ kiện
+    // chi tiết — không có API export riêng nên frontend gọi beacon này sau
+    // khi vẽ xong). Không ghi lượt xem.
+    public function exportLog(Request $request, int $id): JsonResponse
+    {
+        $emp = Employee::findOrFail($id);
+        SalaryScope::assertNotEmployee($request);
+        SalaryScope::assertEmployeeVisible($request, $emp);
+        $month = $request->string('month', Carbon::now()->format('Y-m'))->toString();
+        if (!preg_match('/^\\d{4}-\\d{2}$/', $month)) {
+            return response()->json(['success' => false, 'message' => 'Tháng không hợp lệ (YYYY-MM).'], 422);
+        }
+        SalaryScope::log($request, 'export', (int) $id, $month, 'Xuất ảnh phiếu lương');
+        return response()->json(['success' => true]);
+    }
+
+    // §3.7: danh sách nhật ký lương — CHỈ Chủ Sở Hữu xem được.
+    public function auditLogs(Request $request): JsonResponse
+    {
+        $actor = $request->user();
+        if (!($actor instanceof \App\Models\User) || !$actor->isOwner()) {
+            return response()->json(['success' => false, 'message' => 'Chỉ Chủ Sở Hữu xem được nhật ký lương.'], 403);
+        }
+        $q = \App\Models\SalaryAuditLog::with(['employee:id,full_name', 'actorUser:id,name'])
+            ->orderByDesc('id');
+        if ($request->filled('month')) $q->where('month', $request->string('month'));
+        if ($request->filled('employee_id')) $q->where('employee_id', (int) $request->integer('employee_id'));
+        if ($request->filled('action')) $q->where('action', $request->string('action'));
+        if ($request->filled('actor_user_id')) $q->where('actor_user_id', (int) $request->integer('actor_user_id'));
+        $page = $q->paginate(min($request->integer('per_page', 50), 200));
+        return response()->json(['success' => true, 'data' => $page]);
     }
 }

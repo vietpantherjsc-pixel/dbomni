@@ -11,7 +11,7 @@ use Illuminate\Http\Request;
 
 // Spec Phiếu đặt hàng NCC (2026-11-08) — bề mặt Admin. Toàn bộ logic ở
 // PurchaseOrderService (dùng chung với Hub, T-11). Nhóm route:
-// permission:inventory.manage. Phiếu đặt KHÔNG qua hàng chờ duyệt.
+// permission:inventory.purchase.*. Phiếu đặt KHÔNG qua hàng chờ duyệt.
 class PurchaseOrderController extends Controller
 {
     use \App\Traits\ValidatesEmployeeBranch;
@@ -22,7 +22,7 @@ class PurchaseOrderController extends Controller
 
     // Vá khẩn cách ly chi nhánh (TESTER bấm sống 2026-11-08): khuôn
     // denyReceiptBranch của InboundReceiptController — actor là Employee
-    // (NV có inventory.manage qua role vẫn vào được bề mặt này) thì phiếu
+    // (NV có inventory.purchase.view qua role vẫn vào được bề mặt này) thì phiếu
     // ngoài chi nhánh phân công coi như không tồn tại (404 như bề mặt Hub).
     // Actor User (admin) không bị gác.
     protected function denyPoBranch(Request $request, $branchId): ?JsonResponse

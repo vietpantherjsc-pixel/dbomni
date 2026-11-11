@@ -2,9 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { QRCodeCanvas, QRCodeSVG } from 'qrcode.react';
 import { API } from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §3.4(d): tạo lại mã cần settings.secrets.edit
 
 // Gói 59: QR trang hub nhân viên (/nhan-vien) — xem, copy URL, tải PNG, tạo lại mã.
 export default function StaffHubQr() {
+    const { can } = useAuth();
     const [qr, setQr] = useState(null); // {token, url}
     const [loading, setLoading] = useState(true);
     const [copied, setCopied] = useState(false);
@@ -88,7 +90,7 @@ export default function StaffHubQr() {
                 <div className="flex flex-wrap gap-2 mt-4">
                     <button onClick={copyUrl} className="px-4 py-2 rounded border border-gray-300 text-[13px]">{copied ? '✓ Đã sao chép' : 'Sao chép link'}</button>
                     <button onClick={downloadPng} className="px-4 py-2 rounded bg-[#F5A623] text-[#24305E] text-[13px] font-semibold">⬇ Tải QR (PNG)</button>
-                    <button onClick={regen} className="px-4 py-2 rounded border border-red-300 text-red-600 text-[13px]">Tạo lại mã</button>
+                    <button onClick={regen} disabled={!can('settings.secrets.edit')} className="px-4 py-2 rounded border border-red-300 text-red-600 text-[13px] disabled:opacity-40">Tạo lại mã</button>
                 </div>
                 <p className="text-[12px] text-gray-400 mt-3">1 QR chung cho mọi chi nhánh. Tạo lại mã khi nghi QR bị lộ.</p>
             </div>

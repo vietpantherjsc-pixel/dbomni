@@ -24,14 +24,16 @@ use Illuminate\Support\Facades\Cache;
 // Ghi vết người xử lý là Employee thật qua ApprovalActor (cột *_employee_id).
 class EmployeeApprovalController extends Controller
 {
+    // Cây phân quyền chi tiết §2 (2026-11-10): mỗi loại phiếu trỏ sang khóa
+    // DUYỆT lá riêng của mục con đó — chặn tự duyệt giữ nguyên (ApprovalActor).
     public const TYPES = [
-        'inbound' => ['permission' => 'inventory.manage', 'model' => InboundReceipt::class, 'label' => 'Phiếu nhập kho', 'icon' => '📥'],
-        'outbound' => ['permission' => 'inventory.manage', 'model' => OutboundReceipt::class, 'label' => 'Phiếu xuất kho', 'icon' => '📤'],
-        'transfer' => ['permission' => 'inventory.manage', 'model' => StockTransfer::class, 'label' => 'Phiếu chuyển kho', 'icon' => '🔄'],
-        'stocktake_adjustment' => ['permission' => 'inventory.manage', 'model' => StocktakeAdjustment::class, 'label' => 'Điều chỉnh kiểm kê', 'icon' => '📋'],
-        'transaction' => ['permission' => 'finance.manage', 'model' => Transaction::class, 'label' => 'Phiếu thu/chi', 'icon' => '🧾'],
-        'shift_registration' => ['permission' => 'staff.edit', 'model' => ShiftRegistration::class, 'label' => 'Đăng ký ca', 'icon' => '📅'],
-        'leave_request' => ['permission' => 'staff.edit', 'model' => LeaveRequest::class, 'label' => 'Xin nghỉ phép', 'icon' => '🏖️'],
+        'inbound' => ['permission' => 'inventory.inbound.approve', 'model' => InboundReceipt::class, 'label' => 'Phiếu nhập kho', 'icon' => '📥'],
+        'outbound' => ['permission' => 'inventory.outbound.approve', 'model' => OutboundReceipt::class, 'label' => 'Phiếu xuất kho', 'icon' => '📤'],
+        'transfer' => ['permission' => 'inventory.transfer.approve', 'model' => StockTransfer::class, 'label' => 'Phiếu chuyển kho', 'icon' => '🔄'],
+        'stocktake_adjustment' => ['permission' => 'inventory.stocktake.approve', 'model' => StocktakeAdjustment::class, 'label' => 'Điều chỉnh kiểm kê', 'icon' => '📋'],
+        'transaction' => ['permission' => 'finance.transactions.approve', 'model' => Transaction::class, 'label' => 'Phiếu thu/chi', 'icon' => '🧾'],
+        'shift_registration' => ['permission' => 'attendance.registrations.approve', 'model' => ShiftRegistration::class, 'label' => 'Đăng ký ca', 'icon' => '📅'],
+        'leave_request' => ['permission' => 'attendance.leaves.approve', 'model' => LeaveRequest::class, 'label' => 'Xin nghỉ phép', 'icon' => '🏖️'],
     ];
 
     /** Nhãn nút hành động "từ chối" theo loại (nhóm kho = Hủy phiếu — mục 4.1 spec). */

@@ -4,49 +4,41 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Role;
+use App\Support\PermissionTree;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 // Gói 26: CRUD chức vụ + ma trận phân quyền.
+// Cây phân quyền chi tiết (spec đã khóa 10/11/2026 §1.1/§2): MỘT cây duy nhất
+// sinh từ PermissionTree — ma trận UI hiển thị đúng cây này, danh sách
+// trắng sinh từ cây này. Cụm lương (staff.salary.*) + settings.secrets là
+// tier_only — KHÔNG cấp qua chức vụ (phán (a) + (d)), lưu role chứa chúng
+// → 422 như khóa lạ (T-06).
 class RoleController extends Controller
 {
-    // Định nghĩa module/hành động cho UI ma trận quyền
-    public const MATRIX = [
-        ['key' => 'dashboard', 'label' => 'Tổng quan', 'actions' => ['view']],
-        ['key' => 'reports', 'label' => 'Báo cáo', 'actions' => ['view']],
-        ['key' => 'orders', 'label' => 'Hóa đơn', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'products', 'label' => 'Mặt hàng', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'menus', 'label' => 'Thực đơn', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'inventory', 'label' => 'Kho hàng', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'customers', 'label' => 'Khách hàng', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'promotions', 'label' => 'Khuyến mại', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'transactions', 'label' => 'Thu chi', 'actions' => ['view', 'create', 'edit', 'delete']],
-        ['key' => 'staff', 'label' => 'Nhân viên', 'actions' => ['view', 'edit']],
-        ['key' => 'attendance', 'label' => 'Chấm công', 'actions' => ['view', 'edit']],
-        ['key' => 'settings', 'label' => 'Thiết lập', 'actions' => ['view', 'edit']],
-    ];
-
     public function matrix(): JsonResponse
     {
-        return response()->json(['success' => true, 'data' => self::MATRIX]);
+        return response()->json(['success' => true, 'data' => PermissionTree::matrix()]);
     }
 
-    // Audit 2026-10-23 B-1: danh sách trắng khóa quyền hợp lệ = ma trận UI +
-    // các khóa nghiệp vụ đang dùng thật trong routes/controllers. Khóa '*'
-    // bị CẤM trong mọi role của nhân viên (chỉ User admin mới full quyền).
+    // Audit 2026-10-23 B-1: danh sách trắng khóa quyền hợp lệ = mọi lá cấp
+    // được qua chức vụ + wildcard tiền tố của chúng. Khóa '*' bị CẤM trong
+    // mọi role của nhân viên (chỉ User admin mới full quyền).
     public static function allowedPermissions(): array
     {
-        $allowed = [];
-        foreach (self::MATRIX as $m) {
-            foreach ($m['actions'] as $a) {
-                $allowed[] = $m['key'] . '.' . $a;
+        $allowed = PermissionTree::grantableLeaves();
+        foreach (PermissionTree::MODULES as $m) {
+            $hasTierOnly = false;
+            foreach ($m['children'] as $c) {
+                if (!empty($c['tier_only'])) { $hasTierOnly = true; continue; }
+                // Wildcard theo mục con (vd inventory.inbound.*)
+                $allowed[] = $m['key'] . '.' . $c['key'] . '.*';
             }
-            $allowed[] = $m['key'] . '.*';
-        }
-        foreach (['branches.manage', 'finance.manage', 'inventory.manage', 'inventory.adjust',
-                  'orders.bulk', 'orders.discount', 'products.bulk', 'products.manage',
-                  'customers.manage'] as $extra) {
-            $allowed[] = $extra;
+            // Wildcard theo module (vd inventory.*) — CHỈ khi module không
+            // chứa mục con tier_only (vd staff.* sẽ nuốt cả cụm lương).
+            if (!$hasTierOnly) {
+                $allowed[] = $m['key'] . '.*';
+            }
         }
         return array_values(array_unique($allowed));
     }

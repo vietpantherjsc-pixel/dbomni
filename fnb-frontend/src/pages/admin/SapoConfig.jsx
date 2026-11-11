@@ -4,6 +4,7 @@ import SearchInput from '../../components/SearchInput';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2.11/§3.4(d): cổng sapo.view; thẻ IMAP thuộc secrets
 
 // Cầu nối Sapo — Phần B (2026-10-21): giao diện Admin.
 // Tab 1: Map tên món Sapo (tên chưa map từ lần import gần nhất → chọn món DBOMNI)
@@ -20,6 +21,7 @@ const btnPrimary = 'bg-[#24305E] text-white rounded-lg px-4 py-2.5 text-sm font-
 const btnGhost = 'border rounded-lg px-3 py-2 text-sm active:bg-gray-50';
 
 export default function SapoConfig() {
+  const { can } = useAuth();
   const [tab, setTab] = useState('products');
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -33,6 +35,9 @@ export default function SapoConfig() {
   }, []);
 
   if (loading) return <AdminLayout><div className="p-6 text-sm">Đang tải...</div></AdminLayout>;
+
+  // Cây phân quyền §2.11: cổng trang settings.sapo.view.
+  if (!can('settings.sapo.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem cầu nối Sapo.</div></AdminLayout>);
 
   return (
     <AdminLayout>
@@ -709,7 +714,11 @@ function Suspects({ goTab }) {
 }
 
 // ---------------- Phần C: hộp thư IMAP ----------------
+// Cây phân quyền §3.4(d): App Password Sapo là bí mật tầng settings.secrets —
+// chỉ Owner thấy thẻ này; ô nhập mật khẩu luôn chỉ-ghi (backend chỉ trả cờ
+// password_set, không bao giờ trả lại giá trị).
 function ImapCard({ onChecked }) {
+  const { can } = useAuth();
   const [im, setIm] = useState({ host: '', port: 993, encryption: 'ssl', user: '', folder: 'INBOX', password_set: false });
   const [pw, setPw] = useState('');
   const [saving, setSaving] = useState(false);
@@ -743,6 +752,8 @@ function ImapCard({ onChecked }) {
     } catch (e) { setMsg(e.response?.data?.message || e.message); }
     finally { setChecking(false); if (onChecked) onChecked(); }
   };
+
+  if (!can('settings.secrets.view')) return null;
 
   return (
     <div className="bg-white rounded-xl border p-4">

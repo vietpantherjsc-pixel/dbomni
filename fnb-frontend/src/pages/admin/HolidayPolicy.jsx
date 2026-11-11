@@ -42,9 +42,9 @@ export default function HolidayPolicy() {
     };
     useEffect(() => { fetchAll(); }, []);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
-    const editable = can('staff.edit');
-    const canEditTypes = can('settings.edit'); // Gói 40: danh mục lỗi thuộc quyền settings.edit
+    if (!can('staff.salary.config')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
+    const editable = can('staff.salary.config');
+    const canEditTypes = can('staff.config.edit'); // Gói 40: danh mục lỗi thuộc quyền settings.edit
     const inp = 'border border-gray-300 rounded px-2 py-1.5 text-[13px] w-full';
     const btn = 'px-3 py-1.5 rounded text-[13px] font-medium ';
 
@@ -213,7 +213,7 @@ export default function HolidayPolicy() {
                     {/* Gói 40: Danh mục lỗi vi phạm 3 Chuyên */}
                     <div className="m-card p-4 lg:col-span-2">
                         <h3 className="font-bold mb-1">Danh mục lỗi vi phạm 3 Chuyên</h3>
-                        <p className="text-[12px] text-gray-500 mb-3">Số lỗi mặc định tự điền khi ghi nhận — vẫn sửa tay được từng lần. {!canEditTypes && 'Bạn không có quyền settings.edit nên chỉ xem.'}</p>
+                        <p className="text-[12px] text-gray-500 mb-3">Số lỗi mặc định tự điền khi ghi nhận — vẫn sửa tay được từng lần. {!canEditTypes && 'Bạn không có quyền cấu hình nhân sự nên chỉ xem.'}</p>
                         <div className="overflow-x-auto">
                             <table className="w-full text-[13px] min-w-[520px]">
                                 <thead><tr className="text-left text-gray-500 border-b border-gray-100">

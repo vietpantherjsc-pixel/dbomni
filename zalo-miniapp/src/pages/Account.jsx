@@ -557,6 +557,11 @@ export default function Account() {
   const [accountCover, setAccountCover] = useState(() => {
     return storage.get('zm_account_cover') || '';
   });
+  // Vá cover (phán Đại Vương 2026-11-09 ~21:12): lỗi của RIÊNG luồng cover
+  // hiện thành dòng chữ ngay trên banner qua state này, thay alert() gốc —
+  // khách thấy ngay trong trang, không phụ thuộc hộp thoại của webview
+  // (webview có thể nuốt alert gốc khiến khách tưởng app không phản hồi).
+  const [coverError, setCoverError] = useState('');
   // Vá cover B (2026-11-09): state trên đọc cache đúng 1 lần lúc mount —
   // cold start qua QR mà hydrate về trễ hơn mốc đua 2s ở main.jsx là đọc
   // trượt cache rỗng, mất hiển thị cả phiên dù dữ liệu còn. Đọc lại 1 lần
@@ -588,12 +593,17 @@ export default function Account() {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { alert('Ảnh tối đa 2MB.'); return; }
+    setCoverError('');
+    // Cổng file gốc nới 2MB → 20MB (phán 2026-11-09): chặng nén phía sau
+    // (900px · JPEG 0.72) đã gánh dung lượng — cổng cũ chặn oan ảnh chụp
+    // điện thoại đời mới 3–8MB vốn nén xuống chỉ còn ~100–300KB. 20MB là
+    // mức an toàn bộ nhớ cho FileReader/canvas trên máy yếu.
+    if (f.size > 20 * 1024 * 1024) { setCoverError('Ảnh tối đa 20MB. Vui lòng chọn ảnh nhẹ hơn.'); return; }
     const reader = new FileReader();
-    reader.onerror = () => alert('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
+    reader.onerror = () => setCoverError('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
     reader.onload = () => {
       const img = new Image();
-      img.onerror = () => alert('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
+      img.onerror = () => setCoverError('Không đọc được ảnh này. Vui lòng chọn ảnh khác.');
       img.onload = () => {
         try {
           const MAX = 900;
@@ -616,11 +626,11 @@ export default function Account() {
             try { console.info('[cover-diag] persist', ok ? 'OK' : 'FAIL', 'size=', url.length); } catch {}
             storage.set('zm_cover_diag', JSON.stringify({ ok, size: url.length, at: Date.now() }));
             if (!ok) {
-              alert(`Không lưu được ảnh trên máy này (ảnh sau nén ${Math.round(url.length / 1024)} KB). Ảnh chỉ hiện trong lần mở này — thoát ra vào lại sẽ mất. Vui lòng chọn ảnh nhẹ hơn.`);
+              setCoverError(`Không lưu được ảnh trên máy này (ảnh sau nén ${Math.round(url.length / 1024)} KB). Ảnh chỉ hiện trong lần mở này — thoát ra vào lại sẽ mất. Vui lòng chọn ảnh nhẹ hơn.`);
             }
           });
         } catch (err) {
-          alert('Không nén được ảnh này. Vui lòng chọn ảnh khác.');
+          setCoverError('Không nén được ảnh này. Vui lòng chọn ảnh khác.');
         }
       };
       img.src = reader.result;
@@ -648,7 +658,11 @@ export default function Account() {
   };
 
   // Spec đăng nhập SĐT + mật khẩu §3: nạp hồ sơ theo phiên token hiện tại.
-  const loadMe = async (silent) => {
+  // report (tùy chọn, vá boot an toàn 2026-11-09): object caller truyền vào
+  // để nhận lỗi gốc ở catch — boot dựa vào report.error.status mà phân biệt
+  // "server bác token dứt khoát" với "lỗi mạng thoáng qua". Caller cũ không
+  // truyền thì hành vi y như trước.
+  const loadMe = async (silent, report) => {
     setLoading(true);
     try {
       const c = await api.customerMe();
@@ -661,7 +675,7 @@ export default function Account() {
         api.myCoupons({ phone: c.phone, member_code: c.member_code }, 'active').then((list) => setCouponCount((list || []).length)).catch(() => {});
       }
       return c;
-    } catch (e) { if (!silent) alert(e.message); return null; }
+    } catch (e) { if (report) report.error = e; if (!silent) alert(e.message); return null; }
     finally { setLoading(false); }
   };
 
@@ -790,26 +804,55 @@ export default function Account() {
   // Ưu tiên token phiên; thiết bị cũ còn giữ cặp SĐT + mã thì đổi sang
   // token một lần qua code-login; cặp không còn hiệu lực (đã đặt mật khẩu
   // hoặc mã IMP) thì về trạng thái chưa đăng nhập.
+  // Vá boot an toàn (2026-11-09, cùng đợt vá gốc storage): CHỈ xóa phiên
+  // khi server TRẢ LỜI và bác token dứt khoát — 401/403, hoặc 422 (token
+  // không resolve được thì /customer rơi vào nhánh bắt nhập SĐT + mã).
+  // Lỗi mạng/thoáng qua (fetch chết không status, hoặc 5xx) thì GIỮ
+  // token và thử lại: bản cũ xóa phiên sau BẤT KỲ lỗi loadMe nào, biến
+  // một lần mạng chớp lúc mở lạnh thành mất phiên vĩnh viễn. Lượt khôi
+  // phục cũng chạy lại sau storage.ready() — hydrate về muộn (race 2s ở
+  // main.jsx) thì lượt đầu có thể chưa thấy token trong cache.
   useEffect(() => {
+    let cancelled = false;
+    const state = { attempts: 0, done: false };
+    const retryLater = () => {
+      if (cancelled || state.done || state.attempts >= 3) return;
+      state.attempts += 1;
+      storage.ready().then(() => {
+        if (!cancelled) setTimeout(() => { if (!cancelled) boot(); }, 700);
+      });
+    };
     const boot = async () => {
+      if (state.done) return;
       if (getSession()?.token) {
-        const c = await loadMe(true);
-        if (c) { setPhone(c.phone); return; }
-        clearSession();
+        const report = {};
+        const c = await loadMe(true, report);
+        if (c) { state.done = true; if (!cancelled) setPhone(c.phone); return; }
+        const st = report.error?.status;
+        if (!(st === 401 || st === 403 || st === 422)) { retryLater(); return; }
+        clearSession(); // server bác dứt khoát — mới xóa
       }
       const p = getProfile();
       if (p?.phone && p?.member_code) {
         setPhone(p.phone);
-        const r = await api.codeLogin({ phone: p.phone, member_code: p.member_code });
-        if (r.success && r.data?.session_token) {
-          setSession({ token: r.data.session_token, expires_at: r.data.session_expires_at || null });
-          const c = await loadMe(true);
-          if (c) return;
-        }
-        setProfile(null);
+        try {
+          const r = await api.codeLogin({ phone: p.phone, member_code: p.member_code });
+          if (r.success && r.data?.session_token) {
+            setSession({ token: r.data.session_token, expires_at: r.data.session_expires_at || null });
+            await loadMe(true);
+            state.done = true;
+            return;
+          }
+          state.done = true;
+          setProfile(null); // server trả lời dứt khoát: cặp hết hiệu lực
+        } catch { retryLater(); } // lỗi mạng — giữ nguyên cặp, thử lại sau
+      } else {
+        state.done = true;
       }
     };
     boot();
+    storage.ready().then(() => { if (!cancelled && !state.done) boot(); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -840,6 +883,14 @@ export default function Account() {
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         </button>
+        {/* Dòng lỗi của luồng cover (phán 2026-11-09): hiện ngay góc trên-trái
+            banner, thay alert() gốc — vùng này trống (nút camera ở phải) và
+            không lọt xuống vùng card đè cạnh dưới banner. */}
+        {coverError && (
+          <div role="alert" style={{ position: 'absolute', top: 10, left: 10, maxWidth: 'calc(100% - 70px)', background: '#fff1f2', color: '#b91c1c', border: '1px solid #fecdd3', borderRadius: 10, padding: '8px 10px', fontSize: 12.5, lineHeight: 1.45, boxShadow: '0 2px 8px rgba(0,0,0,.18)', zIndex: 3 }}>
+            {coverError}
+          </div>
+        )}
       </div>
       {!customer && (
         <>

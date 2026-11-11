@@ -42,22 +42,44 @@ export const AuthProvider = ({ children }) => {
         return user?.roles?.includes(role);
     };
 
-    const hasPermission = (permission) => {
-        return user?.permissions?.includes(permission);
+    // Cây phân quyền chi tiết §1.4/§2.0A: khớp wildcard tiền tố đa tầng
+    // ('inventory.*' khớp mọi lá dưới inventory.; 'inventory.inbound.*'
+    // khớp mọi lá dưới inventory.inbound.) + '*' toàn phần (chỉ còn trong
+    // dữ kiện cũ — role mới không được lưu '*').
+    const matchesPerm = (perms, permission) => {
+        if (perms.includes('*') || perms.includes(permission)) return true;
+        return perms.some((p) => p.endsWith('.*') && permission.startsWith(p.slice(0, -1)));
     };
 
-    // Gói 26: kiểm tra quyền cho cả 2 loại tài khoản.
-    // - Tài khoản admin cũ (type 'user'): full quyền (tương thích ngược).
-    // - Nhân viên (type 'employee'): theo ma trận roles.permissions, hỗ trợ "*".
+    // 7 lá lương duy nhất tầng Chủ Chi Nhánh được đi qua (CheckPermission
+    // ở server là cổng chốt — frontend chỉ ẩn UI).
+    const SALARY_LEAVES = ['staff.salary.summary.view', 'staff.salary.detail.view', 'staff.salary.edit', 'staff.salary.money', 'staff.salary.config', 'staff.salary.lock', 'staff.salary.export'];
+
+    // Gói 26 + cây phân quyền 3 tầng (2026-11-10): kiểm tra quyền cho 3 loại tài khoản.
+    // - Tài khoản quản trị tầng Chủ Sở Hữu (type 'user', account_tier 'owner'
+    //   hoặc chưa có tier — mặc định sau migration): full quyền.
+    // - Tài khoản quản trị tầng Chủ Chi Nhánh (account_tier 'branch_owner'):
+    //   CHỈ 7 lá lương trong CN mình, mọi route khác -> 403 ở server.
+    // - Nhân viên (type 'employee'): theo ma trận roles.permissions, hỗ trợ
+    //   wildcard tiền tố đa tầng ('*', 'module.*', 'module.muccon.*').
     const can = (permission) => {
         if (!user) return false;
-        if (user.type === 'user' || !user.type) return true;
-        const perms = user.permissions || [];
-        return perms.includes('*') || perms.includes(permission);
+        if (user.type === 'user' || !user.type) {
+            if (user.account_tier === 'branch_owner') return SALARY_LEAVES.includes(permission);
+            return true;
+        }
+        return matchesPerm(user.permissions || [], permission);
     };
 
+    const hasPermission = (permission) => can(permission);
+
+    // Tầng tài khoản quản trị (đọc từ payload /login — AuthController trả
+    // account_tier/owner_branch_id/must_change_password).
+    const isBranchOwner = user?.type === 'user' && user?.account_tier === 'branch_owner';
+    const isOwner = user?.type === 'user' && user?.account_tier !== 'branch_owner';
+
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, hasRole, hasPermission, can }}>
+        <AuthContext.Provider value={{ user, token, login, logout, hasRole, hasPermission, can, isBranchOwner, isOwner }}>
             {children}
         </AuthContext.Provider>
     );

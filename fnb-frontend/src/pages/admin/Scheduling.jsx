@@ -257,8 +257,8 @@ export default function Scheduling() {
         try { localStorage.setItem(draftKey, JSON.stringify(drafts)); } catch { /* bỏ qua */ }
     }, [draftKey, drafts]);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    if (!can('attendance.schedules.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    const editable = can('attendance.schedules.edit');
     const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] w-full';
     const shiftWeek = (delta) => { const m = mondayOf(week); m.setDate(m.getDate() + delta * 7); setWeek(fmtD(m)); };
     const branchName = branches.find((b) => String(b.id) === String(branchId))?.name || 'Tất cả chi nhánh';

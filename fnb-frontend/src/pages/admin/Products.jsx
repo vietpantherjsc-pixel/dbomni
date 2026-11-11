@@ -161,7 +161,7 @@ const Products = () => {
     const branchCtx = useBranch();
     const ctxBranchId = (branchCtx && branchCtx.branchId) || '0'; // Gói 25
     const { can } = useAuth();
-    const canBulk = can('products.bulk'); // Gói 33: CHỈ admin cấp cao nhất
+    const canBulk = can('products.list.bulk'); // Gói 33: CHỈ admin cấp cao nhất
     const [products, setProducts] = useState([]);
     const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [categories, setCategories] = useState([]);

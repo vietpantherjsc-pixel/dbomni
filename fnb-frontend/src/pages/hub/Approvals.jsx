@@ -314,7 +314,7 @@ function ListView({ A, token, emp, type, branchName, onBack, onOpen, onExpired }
 // ---------------- Công nợ chờ thu (Remedy NV-G5, 2026-11-06) ----------------
 // Mục dưới danh sách chờ duyệt của màn Thu-chi: phiếu ĐÃ duyệt còn nợ (kể cả
 // phiếu không gắn đối tác). Tải độc lập với danh sách chờ duyệt; 403 (không có
-// finance.manage) thì ẩn hẳn. Ghi thanh toán qua POST /employee/debts/{id}/pay
+// finance.transactions.pay) thì ẩn hẳn. Ghi thanh toán qua POST /employee/debts/{id}/pay
 // — PIN step-up như duyệt phiếu, server ủy quyền nguyên vẹn vào pay().
 function DebtsSection({ A, token, emp, onExpired }) {
   const [items, setItems] = useState([]);

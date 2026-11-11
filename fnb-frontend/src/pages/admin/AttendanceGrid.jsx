@@ -122,7 +122,7 @@ export default function AttendanceGrid() {
         if (d > fmtD(new Date())) return alert('Chưa thể nhập giờ cho ngày tương lai.');
         if (info.payroll_locked) return alert(`Kỳ lương tháng ${d.slice(0, 7)} đã khóa — mở khóa tại trang Lương mới nhập/sửa được giờ.`);
         if (info.status === 'leave') return alert(`Ngày này đã duyệt nghỉ phép cho ${r.full_name} — muốn nhập giờ, hủy duyệt nghỉ phép trước tại trang Nghỉ phép.`);
-        if (!can('staff.edit')) return;
+        if (!can('attendance.grid.edit')) return;
         setManualErr('');
         setManual({
             empId: r.id, name: r.full_name, date: d,
@@ -157,7 +157,7 @@ export default function AttendanceGrid() {
         setSavingM(false);
     };
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    if (!can('attendance.grid.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
 
     const days = data.days?.length ? data.days : [];
     const shiftWeek = (delta) => { const m = mondayOf(week); m.setDate(m.getDate() + delta * 7); setWeek(fmtD(m)); };
@@ -234,7 +234,7 @@ export default function AttendanceGrid() {
                                                             </span>
                                                         ) : info && info.payroll_locked ? (
                                                             <span className="text-gray-300" title="Kỳ lương tháng này đã khóa">🔒</span>
-                                                        ) : info && can('staff.edit') && d <= fmtD(new Date()) ? (
+                                                        ) : info && can('attendance.grid.edit') && d <= fmtD(new Date()) ? (
                                                             <span className="text-gray-300 font-bold text-[14px] group-hover:text-gray-500" title="Nhập giờ chấm công thủ công">+</span>
                                                         ) : (
                                                             <span className="text-gray-300">—</span>
@@ -265,7 +265,7 @@ export default function AttendanceGrid() {
                                 <div className="flex justify-between"><span className="text-gray-500">Giờ theo lịch</span><span>{detail.info.scheduled_hours ?? '—'}</span></div>
                             </div>
                             <div className="flex justify-end gap-2 mt-5">
-                                {can('staff.edit') && detail.info.attendance_id ? (
+                                {can('attendance.grid.edit') && detail.info.attendance_id ? (
                                     <button onClick={() => setEditT({ id: detail.info.attendance_id, name: detail.name, date: detail.date, checkIn: fmtTime(detail.info.check_in) || '', checkOut: fmtTime(detail.info.check_out) || '', reason: '', pairCount: detail.info.pair_count || 1 })} className="px-4 py-2 rounded border border-[#24305E] text-[#24305E] text-[13px] font-medium">Sửa giờ</button>
                                 ) : null}
                                 <button onClick={() => setDetail(null)} className="px-4 py-2 rounded bg-[#24305E] text-white text-[13px] font-medium">Đóng</button>

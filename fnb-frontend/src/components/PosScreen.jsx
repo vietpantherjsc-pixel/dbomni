@@ -165,10 +165,21 @@ export default function PosScreen({ onBackToApp }) {
   const notifBoxRef = useRef(null);
 
   // Gói 53: kêu "ting" bằng Web Audio (không cần file mp3)
+  // Gói chuông (2026-11-11): dùng MỘT AudioContext chung + resume trước khi
+  // phát — bản cũ tạo context mới mỗi lần kêu → Chrome treo 'suspended' nên
+  // ting im tiếng trước lần chạm đầu tiên vào trang.
+  const tingCtxRef = useRef(null);
+  const getTingCtx = () => {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!tingCtxRef.current) tingCtxRef.current = new Ctx();
+    return tingCtxRef.current;
+  };
   const playTing = () => {
     try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new Ctx();
+      const ctx = getTingCtx();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       const o = ctx.createOscillator();
       const g = ctx.createGain();
       o.connect(g); g.connect(ctx.destination);
@@ -178,6 +189,19 @@ export default function PosScreen({ onBackToApp }) {
       o.start(); o.stop(ctx.currentTime + 0.6);
     } catch { /* bỏ qua */ }
   };
+
+  // Gói chuông (2026-11-11): mở khóa âm thanh ở cử chỉ đầu tiên (chạm / gõ phím)
+  useEffect(() => {
+    const unlock = () => {
+      try {
+        const ctx = getTingCtx();
+        if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+      } catch { /* bỏ qua */ }
+    };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
+    return () => { document.removeEventListener('pointerdown', unlock); document.removeEventListener('keydown', unlock); };
+  }, []);
 
   // Gói 53: poll đơn KDS mỗi 10s — badge số đơn + phát hiện đơn mới
   useEffect(() => {

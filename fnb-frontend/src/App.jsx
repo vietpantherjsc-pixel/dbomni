@@ -58,6 +58,7 @@ import LeaveRequests from './pages/admin/LeaveRequests'; // Gói 35: yêu cầu 
 import Scheduling from './pages/admin/Scheduling'; // Gói 35: đăng ký & xếp ca
 import Violations from './pages/admin/Violations'; // Gói 40: lỗi 3 Chuyên
 import AttendanceQr from './pages/admin/AttendanceQr'; // Gói 35: QR chấm công
+import AdminAccounts from './pages/admin/AdminAccounts'; // Cây phân quyền §2.0A: tài khoản quản trị 2 tầng
 
 // Gói 1 (2026-10-04): bọc 2 màn hình để nút "Về App" điều hướng được
 // (component thật cần prop onBackToApp / onBackToClient).
@@ -286,6 +287,7 @@ const App = () => {
                     {/* Gói 26: Nhân sự */}
                     <Route path="/admin/staff" element={<PrivateRoute><Staff /></PrivateRoute>} />
                     <Route path="/admin/staff/roles" element={<PrivateRoute><Roles /></PrivateRoute>} />
+                    <Route path="/admin/admin-accounts" element={<PrivateRoute><AdminAccounts /></PrivateRoute>} />
                     <Route path="/admin/staff/salary" element={<PrivateRoute><Salary /></PrivateRoute>} />
                     <Route path="/admin/staff/holiday-policy" element={<PrivateRoute><HolidayPolicy /></PrivateRoute>} />
                     {/* Gói 35: Chấm công */}

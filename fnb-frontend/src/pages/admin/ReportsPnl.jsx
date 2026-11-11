@@ -11,6 +11,7 @@ const noteExpired = (e) => {
 };
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2: cổng reports.pnl.view
 import DateInput from '../../components/DateInput';
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { API } from '../../utils/api';
@@ -27,6 +28,7 @@ import {
 
 
 export default function ReportsPnl() {
+    const { can } = useAuth();
     const [branches, setBranches] = useState([]);
     // C3 (2026-10-21): CN của báo cáo = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
     // với dropdown sidebar ('0' = Tất cả ở cả hai nơi).
@@ -88,6 +90,9 @@ export default function ReportsPnl() {
             ? fmtD(meta.compare_from)
             : fmtD(meta.compare_from) + ' – ' + fmtD(meta.compare_to)) + ')'
         : '';
+
+    // Cây phân quyền §2: cổng trang reports.pnl.view.
+    if (!can('reports.pnl.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem báo cáo P&L.</div></AdminLayout>);
 
     return (
         <AdminLayout>

@@ -17,7 +17,7 @@ const BASE = import.meta.env.VITE_API_BASE || '/api';
 
 // Gói PNL kênh sàn (2026-10-31): tab nhập phí marketing sàn theo (kênh × CN × tháng).
 // Số do sàn tổng hợp gửi ngày đầu tháng sau, nhập tay 1 lần/tháng. API nằm trong
-// nhóm quyền tài chính (finance.manage) như thu-chi.
+// nhóm quyền finance.channels.
 const fmtVND = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(Number(n) || 0)) + 'đ';
 
 function AdjustTab() {
@@ -44,7 +44,7 @@ function AdjustTab() {
       });
       setDrafts(dr);
     } catch (e) {
-      if (e.response?.status === 403) setErr('Bạn không có quyền tài chính (finance.manage) nên không xem/nhập được đối soát sàn.');
+      if (e.response?.status === 403) setErr('Bạn không có quyền xem đối soát sàn (finance.channels.view) nên không xem/nhập được đối soát sàn.');
       else setErr(e.response?.data?.message || 'Không tải được dữ liệu đối soát.');
       setRows([]);
     }

@@ -117,21 +117,29 @@ function exportPayslipPNG(payroll) {
     a.click();
 }
 
-// Spec P4-B1/B2: thanh chốt + khóa kỳ lương
-function PayrollLockBar({ month }) {
+// Spec P4-B1/B2 + cây phân quyền §3.8: thanh chốt + khóa kỳ lương theo
+// (kỳ × CN). Chủ Sở Hữu chốt từng CN hoặc chốt toàn hệ; Chủ Chi Nhánh chỉ
+// chốt/mở đúng CN mình (branch_id ép ở server, frontend khóa sẵn lựa chọn).
+function PayrollLockBar({ month, branches, isBranchOwner, ownerBranchId }) {
     const [st, setSt] = useState(null);
     const [showHist, setShowHist] = useState(false);
+    const [unlockTarget, setUnlockTarget] = useState(null); // null = toàn hệ, số = CN
     const [unlockReason, setUnlockReason] = useState('');
     const [showUnlock, setShowUnlock] = useState(false);
+    // Owner: '' = chốt toàn hệ; Chủ CN: khóa sẵn CN mình.
+    const [lockBranch, setLockBranch] = useState('');
+    const effectiveBranch = isBranchOwner ? (ownerBranchId ? String(ownerBranchId) : '') : lockBranch;
 
     const load = () => axios.get(API + '/salary-lock/status', { params: { month } })
         .then((r) => setSt(r.data?.data)).catch((e) => noteExpired(e));
     useEffect(() => { load(); }, [month]);
 
     const doLock = async () => {
-        if (!(await confirmInApp('Chốt lương tháng ' + month + '? Sau khi chốt sẽ khóa toàn bộ giờ công/mức lương/thưởng/trừ/BHXH của kỳ và tự sinh 1 phiếu chi.'))) return; // Sổ #23
+        const bid = effectiveBranch ? Number(effectiveBranch) : null;
+        const label = bid ? ('chi nhánh ' + (branches.find((b) => String(b.id) === String(bid))?.name || ('#' + bid))) : 'toàn hệ thống';
+        if (!(await confirmInApp('Chốt lương tháng ' + month + ' cho ' + label + '? Sau khi chốt sẽ khóa giờ công/mức lương/thưởng/trừ/BHXH của phạm vi này và tự sinh 1 phiếu chi.'))) return; // Sổ #23
         try {
-            const r = await axios.post(API + '/salary-lock/lock', { month });
+            const r = await axios.post(API + '/salary-lock/lock', { month, branch_id: bid });
             alert('Đã chốt lương tháng ' + month + ' — tổng thực nhận ' + Number(r.data.data.net_total).toLocaleString('vi-VN') + 'đ'
                 + (r.data.data.voucher_code ? ' (phiếu chi ' + r.data.data.voucher_code + ')' : ''));
             load();
@@ -140,24 +148,59 @@ function PayrollLockBar({ month }) {
     const doUnlock = async () => {
         if (!unlockReason.trim()) return alert('Nhập lý do mở khóa');
         try {
-            await axios.post(API + '/salary-lock/unlock', { month, reason: unlockReason.trim() });
-            setShowUnlock(false); setUnlockReason(''); load();
+            await axios.post(API + '/salary-lock/unlock', { month, reason: unlockReason.trim(), branch_id: unlockTarget === null ? undefined : unlockTarget });
+            setShowUnlock(false); setUnlockReason(''); setUnlockTarget(null); load();
         } catch (e) { alert(e.response?.data?.message || 'Mở khóa thất bại'); }
     };
+    const askUnlock = (branchId) => { setUnlockTarget(branchId); setUnlockReason(''); setShowUnlock(true); };
 
     if (!st) return null;
+    const lockedBranches = st.locks || [];
+    const unlockedBranches = (branches || []).filter((b) => !(st.locked_branches || []).includes(Number(b.id)));
+    // Chủ CN chỉ thấy CN mình trong danh sách chọn (đã khóa sẵn effectiveBranch).
+    const lockOptions = isBranchOwner ? [] : unlockedBranches;
+    const fullyLocked = st.locked;
+    const unlockLabel = unlockTarget === null ? 'toàn hệ thống' : ('chi nhánh ' + (branches.find((b) => String(b.id) === String(unlockTarget))?.name || ('#' + unlockTarget)));
+
     return (
         <div className="mb-4">
-            <div className={'flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 ' + (st.locked ? 'bg-green-50 border-green-300' : 'bg-amber-50 border-amber-300')}>
-                {st.locked ? (<>
-                    <span className="text-[14px] font-bold text-green-700">🔒 Đã chốt lương tháng {month}</span>
-                    <span className="text-[13px] text-gray-600">({st.locked_at} — tổng thực nhận {Number(st.net_total).toLocaleString('vi-VN')}đ)</span>
-                    <button onClick={() => setShowUnlock(true)} className="px-3 py-1.5 rounded border border-red-300 text-red-600 text-[13px]">Mở khóa</button>
-                </>) : (<>
-                    <span className="text-[14px] text-amber-700">Kỳ lương tháng {month} chưa chốt.</span>
-                    <button onClick={doLock} className="px-4 py-1.5 rounded bg-[#24305E] text-white text-[13px] font-medium">Chốt lương tháng</button>
+            <div className={'rounded-lg border px-4 py-3 ' + (fullyLocked ? 'bg-green-50 border-green-300' : 'bg-amber-50 border-amber-300')}>
+                {st.legacy_locked ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-[14px] font-bold text-green-700">🔒 Đã chốt lương tháng {month} (toàn hệ)</span>
+                        <span className="text-[13px] text-gray-600">({st.locked_at} — tổng thực nhận {Number(st.net_total).toLocaleString('vi-VN')}đ)</span>
+                        <button onClick={() => askUnlock(null)} className="px-3 py-1.5 rounded border border-red-300 text-red-600 text-[13px]">Mở khóa toàn hệ</button>
+                    </div>
+                ) : (<>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-[14px] text-amber-700">Kỳ lương tháng {month} chưa chốt{fullyLocked ? '' : ' toàn bộ'}.</span>
+                        {!fullyLocked && (
+                            <>
+                                {isBranchOwner ? (
+                                    <span className="text-[13px] font-medium text-gray-700">Chi nhánh của bạn</span>
+                                ) : (
+                                    <select value={lockBranch} onChange={(e) => setLockBranch(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-[13px] bg-white">
+                                        <option value="">Toàn hệ thống</option>
+                                        {lockOptions.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                    </select>
+                                )}
+                                <button onClick={doLock} className="px-4 py-1.5 rounded bg-[#24305E] text-white text-[13px] font-medium">Chốt lương tháng</button>
+                            </>
+                        )}
+                    </div>
+                    {lockedBranches.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                            {lockedBranches.map((l) => (
+                                <div key={l.branch_id} className="flex flex-wrap items-center gap-3 text-[13px]">
+                                    <span className="font-bold text-green-700">🔒 {l.branch_name || ('CN #' + l.branch_id)} đã chốt</span>
+                                    <span className="text-gray-600">({l.locked_at} — thực nhận {Number(l.net_total).toLocaleString('vi-VN')}đ)</span>
+                                    <button onClick={() => askUnlock(l.branch_id)} className="px-3 py-1 rounded border border-red-300 text-red-600 text-[12px]">Mở khóa</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </>)}
-                <button onClick={() => setShowHist(!showHist)} className="text-[13px] text-gray-500 underline">Lịch sử chốt/mở khóa</button>
+                <button onClick={() => setShowHist(!showHist)} className="text-[13px] text-gray-500 underline mt-1">Lịch sử chốt/mở khóa</button>
             </div>
             {showHist && st.logs?.length > 0 && (
                 <div className="mt-2 border rounded-lg bg-white text-[13px]">
@@ -166,7 +209,7 @@ function PayrollLockBar({ month }) {
                             <span className={l.action === 'lock' ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
                                 {l.action === 'lock' ? 'Chốt' : 'Mở khóa'}
                             </span>
-                            <span className="text-gray-400">{l.created_at?.slice(0, 16).replace('T', ' ')}</span>
+                            <span className="text-gray-400">{String(l.created_at || '').slice(0, 16).replace('T', ' ')}</span>
                             <span className="text-gray-600">{l.reason}</span>
                         </div>
                     ))}
@@ -175,7 +218,7 @@ function PayrollLockBar({ month }) {
             {showUnlock && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowUnlock(false)}>
                     <div className="bg-white rounded-lg p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-                        <h3 className="font-bold mb-3">Mở khóa kỳ lương tháng {month}</h3>
+                        <h3 className="font-bold mb-3">Mở khóa kỳ lương tháng {month} ({unlockLabel})</h3>
                         <p className="text-[13px] text-gray-500 mb-2">Phiếu chi tự sinh sẽ chuyển sang trạng thái hủy. Lý do được ghi vào lịch sử.</p>
                         <textarea value={unlockReason} onChange={(e) => setUnlockReason(e.target.value)} rows={3}
                             placeholder="Lý do mở khóa *" className="w-full border border-gray-300 rounded px-3 py-2 text-[13px]" />
@@ -190,6 +233,66 @@ function PayrollLockBar({ month }) {
     );
 }
 
+// Cây phân quyền §3.7 mức B: nhật ký lương — chỉ ghi thao tác làm thay đổi
+// (sửa · khoản tiền · cấu hình · chốt/mở khóa · xuất phiếu), không ghi lượt
+// xem. Trang này chỉ Chủ Sở Hữu xem được (backend 403 với tầng khác).
+const SALARY_AUDIT_LABELS = {
+    edit: 'Sửa lương', money: 'Khoản tiền', config: 'Cấu hình lương',
+    lock: 'Chốt kỳ', unlock: 'Mở khóa', export: 'Xuất phiếu',
+};
+function SalaryAuditLogTab({ month }) {
+    const [logs, setLogs] = useState([]);
+    const [action, setAction] = useState('');
+    const [loading, setLoading] = useState(false);
+    const load = () => {
+        setLoading(true);
+        axios.get(API + '/salary-audit-logs', { params: { month, action: action || undefined, per_page: 50 } })
+            .then((r) => { const d = r.data?.data; setLogs(Array.isArray(d) ? d : (d?.data || [])); })
+            .catch((e) => noteExpired(e))
+            .finally(() => setLoading(false));
+    };
+    useEffect(() => { load(); }, [month, action]); // eslint-disable-line
+    return (
+        <div>
+            <div className="flex gap-2 items-center mb-3">
+                <span className="text-[13px] text-gray-500">Nhật ký lương tháng {month} — chỉ ghi thao tác làm thay đổi, không ghi lượt xem.</span>
+                <select value={action} onChange={(e) => setAction(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-[13px] bg-white ml-auto">
+                    <option value="">Tất cả hành động</option>
+                    {Object.entries(SALARY_AUDIT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+            </div>
+            {loading && <div className="text-gray-500 text-sm">Đang tải...</div>}
+            {!loading && logs.length === 0 && <div className="text-gray-500 text-sm">Chưa có ghi nhận nào trong tháng này.</div>}
+            {logs.length > 0 && (
+                <div className="overflow-x-auto border border-gray-200 rounded-lg bg-white">
+                    <table className="w-full text-[13px] min-w-[640px]">
+                        <thead>
+                            <tr className="text-left text-gray-500 bg-gray-50">
+                                <th className="px-3 py-2 font-medium">Thời gian</th>
+                                <th className="px-3 py-2 font-medium">Người thao tác</th>
+                                <th className="px-3 py-2 font-medium">Hành động</th>
+                                <th className="px-3 py-2 font-medium">Nhân viên</th>
+                                <th className="px-3 py-2 font-medium">Chi tiết</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {logs.map((l) => (
+                                <tr key={l.id} className="border-t border-gray-100">
+                                    <td className="px-3 py-2 whitespace-nowrap">{String(l.created_at || '').slice(0, 16).replace('T', ' ')}</td>
+                                    <td className="px-3 py-2">{l.actor_user?.name || (l.actor_employee_id ? 'NV #' + l.actor_employee_id : '—')}</td>
+                                    <td className="px-3 py-2">{SALARY_AUDIT_LABELS[l.action] || l.action}</td>
+                                    <td className="px-3 py-2">{l.employee?.full_name || '—'}</td>
+                                    <td className="px-3 py-2 text-gray-600">{l.detail || ''}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Spec tổng lương (Đại Vương chốt 2026-10-19): redesign tab Tổng lương — 16 cột
 // (15 cột spec + 10b Lương ngày lễ tách riêng). 1 dòng/(NV, chi nhánh).
 function TotalSalaryTab({ month }) {
@@ -197,8 +300,12 @@ function TotalSalaryTab({ month }) {
     const [loading, setLoading] = useState(false);
     // C3 (2026-10-21): chế độ xem theo CN = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
     // với dropdown sidebar ('all' tại tab này = '0' — Tất cả — ở context).
+    // Cây phân quyền §3.3: Chủ Chi Nhánh chỉ thấy CN mình — ẩn bộ chuyển CN,
+    // ép viewMode về CN của tài khoản (server cũng ép lại ở summary()).
+    const { isBranchOwner, user } = useAuth();
+    const ownerBranchId = user?.owner_branch_id;
     const { branchId: ctxBranchId, setBranchId: setCtxBranchId } = useBranch();
-    const viewMode = ctxBranchId === '0' ? 'all' : ctxBranchId;
+    const viewMode = isBranchOwner ? String(ownerBranchId || '') : (ctxBranchId === '0' ? 'all' : ctxBranchId);
     const setViewMode = (v) => setCtxBranchId(v === 'all' ? '0' : String(v));
     const [branches, setBranches] = useState([]);
 
@@ -231,6 +338,7 @@ function TotalSalaryTab({ month }) {
 
     return (
         <div>
+            {!isBranchOwner && (
             <div className="flex gap-2 mb-4 flex-wrap items-center">
                 <button onClick={() => setViewMode('all')}
                     className={'px-4 py-2 rounded-full text-[13px] font-medium border ' + (viewMode === 'all' ? 'bg-[#24305E] text-white border-[#24305E]' : 'bg-white text-gray-600 border-gray-300')}>
@@ -243,6 +351,10 @@ function TotalSalaryTab({ month }) {
                     </button>
                 ))}
             </div>
+            )}
+            {isBranchOwner && data?.rows?.[0] && (
+                <div className="text-[13px] text-gray-500 mb-4">Chi nhánh của bạn: <b className="text-gray-700">{data.rows[0].branch_name}</b></div>
+            )}
 
             {loading && <div className="text-gray-500 text-sm">Đang tính...</div>}
 
@@ -343,7 +455,7 @@ function TotalSalaryTab({ month }) {
 
 // Gói 26: Bảng lương theo giờ (đúng mẫu Excel của Đại Vương).
 export default function Salary() {
-    const { can } = useAuth();
+    const { can, isOwner, isBranchOwner, user } = useAuth();
     // Spec danh mục dùng chung: loại thưởng đọc từ API, fallback cứng
     const BONUS_TYPE_LABELS = labelMap(useSharedCategories('bonus_types', []), BONUS_TYPE_LABELS_FB);
     const bonusTypeItems = useSharedCategories('bonus_types', Object.entries(BONUS_TYPE_LABELS_FB).map(([code, name]) => ({ code, name })));
@@ -388,11 +500,28 @@ export default function Salary() {
     const [impResult, setImpResult] = useState(null);
 
     const fetchEmployees = useCallback(async () => {
+        // Cây phân quyền §3.3: Chủ Chi Nhánh không được gọi GET /employees
+        // (cần staff.employees.view) — lấy danh sách NV từ chính dòng tổng
+        // lương của CN mình (summary đã ép phạm vi ở server).
+        if (isBranchOwner) {
+            try {
+                const r = await axios.get(API + '/salary-summary', { params: { month } });
+                const rows = r.data?.data?.rows || [];
+                const seen = new Map();
+                rows.forEach((row) => {
+                    if (!seen.has(row.employee_id)) seen.set(row.employee_id, { id: row.employee_id, full_name: row.full_name, branch: { name: row.branch_name } });
+                });
+                const list = [...seen.values()];
+                setEmployees(list);
+                if (!empId && list.length) setEmpId(String(list[0].id));
+            } catch (e) { noteExpired(e); }
+            return;
+        }
         const res = await axios.get(API + '/employees', { params: { is_active: 1, per_page: 100 } });
         const list = res.data?.data?.data || res.data?.data || [];
         setEmployees(list);
         if (!empId && list.length) setEmpId(String(list[0].id));
-    }, [empId]);
+    }, [empId, isBranchOwner, month]);
 
     const fetchPayroll = useCallback(async () => {
         if (!empId) return;
@@ -448,8 +577,15 @@ export default function Salary() {
         axios.get(API + '/branches').then((r) => setBranches(r.data?.data || r.data || [])).catch((e) => noteExpired(e));
     }, []);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    // Cây phân quyền §2.8: cổng trang = có lá xem tổng hợp hoặc xem chi tiết;
+    // các thao tác tách theo đúng lá backend (edit/money/config/lock/export).
+    if (!can('staff.salary.summary.view') && !can('staff.salary.detail.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem bảng lương.</div></AdminLayout>);
+    const canEdit = can('staff.salary.edit');
+    const canMoney = can('staff.salary.money');
+    const canConfig = can('staff.salary.config');
+    const canLock = can('staff.salary.lock');
+    const canExport = can('staff.salary.export');
+    const editable = canEdit; // tên cũ: ngày công / lỗi chuyên cần / ghi chú tháng
     const s = payroll?.summary, ins = payroll?.insurance;
     const inp = 'border border-gray-300 rounded px-2 py-1.5 text-[13px] w-full';
     const btn = 'px-3 py-1.5 rounded text-[13px] font-medium ';
@@ -547,6 +683,14 @@ export default function Salary() {
         </tr>
     );
 
+    // Cây phân quyền §3.7: xuất ảnh phiếu lương → ghi dấu 'export' vào nhật
+    // ký lương (beacon; lỗi beacon không chặn việc tải ảnh).
+    const doExport = () => {
+        if (!payroll) return;
+        exportPayslipPNG(payroll);
+        axios.post(API + '/salary/' + empId + '/export-log', { month }).catch(() => {});
+    };
+
     return (
         <AdminLayout>
             <div className="p-5">
@@ -556,18 +700,18 @@ export default function Salary() {
                         {employees.map((e) => <option key={e.id} value={e.id}>{e.full_name} — {e.branch?.name}</option>)}
                     </select>
                     <MonthInput value={month} onChange={(v) => { if (v && guardSwitch()) setMonth(v); }} className="border border-gray-300 rounded px-3 py-2 text-[13px]" style={{ width: 120 }} />
-                    {payroll && editable && <button onClick={() => exportPayslipPNG(payroll)} className={btn + 'bg-[#24305E] text-white'}>⬇ Xuất ảnh</button>}
-                    {editable && <button onClick={openImport} className={btn + 'bg-[#24305E] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
+                    {payroll && canExport && <button onClick={doExport} className={btn + 'bg-[#24305E] text-white'}>⬇ Xuất ảnh</button>}
+                    {canEdit && <button onClick={openImport} className={btn + 'bg-[#24305E] text-white'} title="Lấy giờ check-in/out thực tế đổ vào bảng lương">Đổ giờ công từ chấm công</button>}
                 </div>
 
                 <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 mb-4">
-                    {[['sheet', 'Bảng lương'], ['days', 'Chi tiết ngày công'], ['other', 'Mức lương / Ứng / Thưởng / BHXH'], ['total', 'Tổng lương']].map(([k, l]) => (
+                    {[['sheet', 'Bảng lương'], ['days', 'Chi tiết ngày công'], ['other', 'Mức lương / Ứng / Thưởng / BHXH'], ['total', 'Tổng lương']].concat(isOwner ? [['audit', 'Nhật ký lương']] : []).map(([k, l]) => (
                         <button key={k} onClick={() => setTab(k)} className={'px-4 py-2.5 text-[13px] whitespace-nowrap border-b-2 -mb-px ' + (tab === k ? 'border-[#24305E] text-[#24305E] font-medium' : 'border-transparent text-gray-500')}>{l}</button>
                     ))}
                 </div>
 
-                {/* Spec P4-B1/B2: chốt + khóa kỳ lương */}
-                {editable && <PayrollLockBar month={month} />}
+                {/* Spec P4-B1/B2 + §3.8: chốt + khóa kỳ lương theo (kỳ × CN) */}
+                {canLock && <PayrollLockBar month={month} branches={branches} isBranchOwner={isBranchOwner} ownerBranchId={user?.owner_branch_id} />}
 
                 {loading && <div className="text-gray-500 text-sm">Đang tính...</div>}
 
@@ -687,10 +831,10 @@ export default function Salary() {
                             {hist?.wage_levels?.map((w) => (
                                 <div key={w.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
                                     <span>{fmt(w.hourly_rate)}đ/h <span className="text-gray-400">({fmtDate(w.start_date)} → {fmtDate(w.end_date) || 'nay'})</span></span>
-                                    {editable && <button onClick={() => del(API + '/salary/wage-levels/' + w.id)} className="text-red-500 text-[12px]">Xóa</button>}
+                                    {canConfig && <button onClick={() => del(API + '/salary/wage-levels/' + w.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
                             ))}
-                            {editable && <div className="grid grid-cols-2 gap-2 mt-3">
+                            {canConfig && <div className="grid grid-cols-2 gap-2 mt-3">
                                 <input type="number" placeholder="Lương cơ bản/h *" value={wlForm.hourly_rate} onChange={(e) => setWlForm({ ...wlForm, hourly_rate: e.target.value })} className={inp} />
                                 <DateInput value={wlForm.start_date} onChange={(v) => setWlForm({ ...wlForm, start_date: v })} className={inp} />
                                 <input placeholder="Ghi chú" value={wlForm.note} onChange={(e) => setWlForm({ ...wlForm, note: e.target.value })} className={inp} />
@@ -704,10 +848,10 @@ export default function Salary() {
                             {hist?.rank_wage_levels?.map((w) => (
                                 <div key={w.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
                                     <span>{fmt(w.amount)}đ/h <span className="text-gray-400">({fmtDate(w.start_date)} → {fmtDate(w.end_date) || 'nay'})</span></span>
-                                    {editable && <button onClick={() => del(API + '/salary/rank-wage-levels/' + w.id)} className="text-red-500 text-[12px]">Xóa</button>}
+                                    {canConfig && <button onClick={() => del(API + '/salary/rank-wage-levels/' + w.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
                             ))}
-                            {editable && <div className="grid grid-cols-2 gap-2 mt-3">
+                            {canConfig && <div className="grid grid-cols-2 gap-2 mt-3">
                                 <input type="number" placeholder="Lương cấp bậc/h *" value={rankForm.amount} onChange={(e) => setRankForm({ ...rankForm, amount: e.target.value })} className={inp} />
                                 <DateInput value={rankForm.start_date} onChange={(v) => setRankForm({ ...rankForm, start_date: v })} className={inp} />
                                 <input placeholder="Ghi chú" value={rankForm.note} onChange={(e) => setRankForm({ ...rankForm, note: e.target.value })} className={inp} />
@@ -720,10 +864,10 @@ export default function Salary() {
                             {hist?.advances?.filter((a) => a.date?.startsWith(month)).map((a) => (
                                 <div key={a.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
                                     <span>{fmt(a.amount)}đ <span className="text-gray-400">({fmtDate(a.date)}{a.note ? ' — ' + a.note : ''})</span></span>
-                                    {editable && <button onClick={() => del(API + '/salary/advances/' + a.id)} className="text-red-500 text-[12px]">Xóa</button>}
+                                    {canMoney && <button onClick={() => del(API + '/salary/advances/' + a.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
                             ))}
-                            {editable && <div className="grid grid-cols-3 gap-2 mt-3">
+                            {canMoney && <div className="grid grid-cols-3 gap-2 mt-3">
                                 <input type="number" placeholder="Số tiền *" value={advForm.amount} onChange={(e) => setAdvForm({ ...advForm, amount: e.target.value })} className={inp} />
                                 <DateInput value={advForm.date} onChange={(v) => setAdvForm({ ...advForm, date: v })} className={inp} />
                                 <input placeholder="Ghi chú" value={advForm.note} onChange={(e) => setAdvForm({ ...advForm, note: e.target.value })} className={inp} />
@@ -736,10 +880,10 @@ export default function Salary() {
                             {hist?.bonuses?.filter((b) => b.date?.startsWith(month)).map((b) => (
                                 <div key={b.id} className="flex items-center justify-between text-[13px] border-b border-gray-100 py-2">
                                     <span>{BONUS_TYPE_LABELS[b.type] || b.type}: {fmt(b.amount)}đ <span className="text-gray-400">({fmtDate(b.date)}{b.note ? ' — ' + b.note : ''})</span></span>
-                                    {editable && <button onClick={() => del(API + '/salary/bonuses/' + b.id)} className="text-red-500 text-[12px]">Xóa</button>}
+                                    {canMoney && <button onClick={() => del(API + '/salary/bonuses/' + b.id)} className="text-red-500 text-[12px]">Xóa</button>}
                                 </div>
                             ))}
-                            {editable && <div className="grid grid-cols-2 gap-2 mt-3">
+                            {canMoney && <div className="grid grid-cols-2 gap-2 mt-3">
                                 <select value={bonusForm.type} onChange={(e) => setBonusForm({ ...bonusForm, type: e.target.value })} className={inp}>
                                     {bonusTypeItems.map((t) => <option key={t.code} value={t.code}>Thưởng {t.name.toLowerCase()}</option>)}
                                 </select>
@@ -764,7 +908,7 @@ export default function Salary() {
                         </div>
                         <div className="m-card p-4">
                             <h3 className="font-bold mb-2">BHXH nhân viên</h3>
-                            {editable ? (<>
+                            {canMoney ? (<>
                                 <div className="grid grid-cols-2 gap-2">
                                     <input type="number" placeholder="Mức lương đóng *" value={insForm.base_amount} onChange={(e) => setInsForm({ ...insForm, base_amount: e.target.value })} className={inp} />
                                     <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={insForm.employer_pays_all} onChange={(e) => setInsForm({ ...insForm, employer_pays_all: e.target.checked })} /> DN đóng thay cả phần NLĐ</label>
@@ -777,9 +921,9 @@ export default function Salary() {
                             </>) : <p className="text-[13px] text-gray-500">Chưa cấu hình / không có quyền sửa.</p>}
                         </div>
 
-                        {/* Spec P4-B6: phụ cấp nhiều loại */}
+                        {/* Spec P4-B6: phụ cấp nhiều loại — lá staff.salary.money */}
                         <div className="m-card p-4 md:col-span-2">
-                            <AllowanceManager empId={empId} month={month} editable={editable} btn={btn} inp={inp} />
+                            <AllowanceManager empId={empId} month={month} editable={canMoney} btn={btn} inp={inp} />
                         </div>
 
                         <div className="m-card p-4 md:col-span-2">
@@ -790,19 +934,19 @@ export default function Salary() {
                                         <th className="py-2 font-medium">Tên khoản trừ</th>
                                         <th className="py-2 font-medium">Số tiền</th>
                                         <th className="py-2 font-medium">Lý do</th>
-                                        {editable && <th className="py-2 w-10"></th>}
+                                        {canMoney && <th className="py-2 w-10"></th>}
                                     </tr></thead>
                                     <tbody>
                                         {deductions.map((d, i) => (
                                             <tr key={d.id || 'new-' + i} className="border-b border-gray-50">
-                                                <td className="py-1.5 pr-2"><div className="flex items-center gap-1.5"><input disabled={!editable} value={d.name || ''} onChange={(e) => updDed(i, 'name', e.target.value)} className={inp + ' flex-1 min-w-0'} placeholder="VD: Tạm ứng" />
+                                                <td className="py-1.5 pr-2"><div className="flex items-center gap-1.5"><input disabled={!canMoney} value={d.name || ''} onChange={(e) => updDed(i, 'name', e.target.value)} className={inp + ' flex-1 min-w-0'} placeholder="VD: Tạm ứng" />
                                                     {d.kind === 'fine' && <span className="text-[10px] text-white bg-red-600 font-bold px-1.5 py-0.5 rounded whitespace-nowrap">PHẠT</span>}</div></td>
-                                                <td className="py-1.5 pr-2"><input disabled={!editable} type="number" min="0" value={d.amount ?? ''} onChange={(e) => updDed(i, 'amount', e.target.value)} className={inp + ' !w-32'} placeholder="0" /></td>
-                                                <td className="py-1.5 pr-2"><input disabled={!editable} value={d.note || ''} onChange={(e) => updDed(i, 'note', e.target.value)} className={inp} placeholder="Lý do" /></td>
-                                                {editable && <td className="py-1.5"><button onClick={() => delDedRow(i)} className="text-red-500 text-[14px]" title="Xóa dòng">✕</button></td>}
+                                                <td className="py-1.5 pr-2"><input disabled={!canMoney} type="number" min="0" value={d.amount ?? ''} onChange={(e) => updDed(i, 'amount', e.target.value)} className={inp + ' !w-32'} placeholder="0" /></td>
+                                                <td className="py-1.5 pr-2"><input disabled={!canMoney} value={d.note || ''} onChange={(e) => updDed(i, 'note', e.target.value)} className={inp} placeholder="Lý do" /></td>
+                                                {canMoney && <td className="py-1.5"><button onClick={() => delDedRow(i)} className="text-red-500 text-[14px]" title="Xóa dòng">✕</button></td>}
                                             </tr>
                                         ))}
-                                        {deductions.length === 0 && <tr><td colSpan={editable ? 4 : 3} className="py-6 text-center text-gray-400">Chưa có khoản trừ khác.</td></tr>}
+                                        {deductions.length === 0 && <tr><td colSpan={canMoney ? 4 : 3} className="py-6 text-center text-gray-400">Chưa có khoản trừ khác.</td></tr>}
                                     </tbody>
                                 </table>
                             </div>
@@ -810,8 +954,8 @@ export default function Salary() {
                                 <span className="text-gray-500">Tổng trừ khác</span>
                                 <b className="text-[#24305E]">{fmt(deductions.reduce((t, d) => t + (Number(d.amount) || 0), 0))}đ</b>
                             </div>
-                            <input placeholder="Ghi chú tháng" value={monthNote} onChange={(e) => setMonthNote(e.target.value)} className={inp + ' mt-2'} disabled={!editable} />
-                            {editable && <div className="flex gap-2 mt-3">
+                            <input placeholder="Ghi chú tháng" value={monthNote} onChange={(e) => setMonthNote(e.target.value)} className={inp + ' mt-2'} disabled={!canMoney} />
+                            {canMoney && <div className="flex gap-2 mt-3">
                                 <button onClick={() => addDed('other')} className={btn + 'border border-gray-300'}>＋ Thêm khoản trừ</button>
                                 <button onClick={() => addDed('fine')} className={btn + 'border border-red-300 text-red-600'}>⚠ Phạt tiền</button>
                                 <button onClick={saveDeductions} className={btn + 'bg-[#24305E] text-white'}>Lưu</button>
@@ -823,6 +967,11 @@ export default function Salary() {
                 {/* Gói 55: Tab Tổng lương */}
                 {tab === 'total' && (
                     <TotalSalaryTab month={month} />
+                )}
+
+                {/* Cây phân quyền §3.7: Tab Nhật ký lương (chỉ Chủ Sở Hữu) */}
+                {tab === 'audit' && isOwner && (
+                    <SalaryAuditLogTab month={month} />
                 )}
             </div>
 
@@ -843,6 +992,7 @@ export default function Salary() {
                                     <label className="text-[12px] text-gray-500">Tháng</label>
                                     <MonthInput value={impMonth} onChange={setImpMonth} className={inp + ' mt-1'} />
                                 </div>
+                                {!isBranchOwner && (
                                 <div>
                                     <label className="text-[12px] text-gray-500">Chi nhánh</label>
                                     <select value={impBranch} onChange={(e) => setImpBranch(e.target.value)} className={inp + ' mt-1'}>
@@ -850,6 +1000,7 @@ export default function Salary() {
                                         {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                                     </select>
                                 </div>
+                                )}
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={() => setImpOpen(false)} disabled={impLoading} className="flex-1 h-11 rounded-xl border border-gray-300 text-[14px]">Hủy</button>

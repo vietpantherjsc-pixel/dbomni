@@ -11,7 +11,8 @@ class Production extends Model
 {
     protected $guarded = [];
 
-    protected $casts = ['quantity' => 'decimal:2'];
+    // Gói chế biến theo mẻ (2026-11-11): batches = số mẻ đã nhập (NULL = phiếu đường cũ)
+    protected $casts = ['quantity' => 'decimal:2', 'batches' => 'decimal:2'];
 
     public function material(): BelongsTo
     {

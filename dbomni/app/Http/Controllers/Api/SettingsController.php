@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Models\User;
 use App\Support\CatalogCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,6 +12,10 @@ use Illuminate\Http\Request;
 // Gói 6 (2026-10-05): Cập nhật cấu hình hệ thống (phí ship...).
 class SettingsController extends Controller
 {
+    // §3.4(d): khóa BÍ MẬT — chỉ Chủ Sở Hữu được đọc/ghi; backend không bao
+    // giờ trả lại giá trị (chỉ cờ "đã cấu hình" ở endpoint riêng). Khóa
+    // ZaloPay nằm trong .env, không qua bảng settings.
+    public const SECRET_KEYS = ['sapo_imap_password_enc', 'staff_hub_token'];
     // Gói 8a: lấy toàn bộ cấu hình (thuế, giá...)
     public function index(): JsonResponse
     {
@@ -121,6 +126,16 @@ class SettingsController extends Controller
             'settings.*' => 'nullable|string|max:255',
         ]);
 
+        // §3.4(d): khóa bí mật chỉ Chủ Sở Hữu được ghi — actor khác (kể cả
+        // Employee có settings.general.edit) gửi key bí mật -> 403.
+        $actor = $request->user();
+        if (!($actor instanceof User && $actor->isOwner())) {
+            $blocked = array_intersect(array_keys($validated['settings']), self::SECRET_KEYS);
+            if ($blocked !== []) {
+                return response()->json(['success' => false, 'message' => 'Khóa cấu hình này chỉ Chủ Sở Hữu được thay đổi.'], 403);
+            }
+        }
+
         foreach ($validated['settings'] as $key => $value) {
             Setting::set($key, $value ?? '');
         }
@@ -213,7 +228,7 @@ class SettingsController extends Controller
         ]]);
     }
 
-    /** POST /settings/privacy-policy — lưu riêng (permission:settings.edit ở route). */
+    /** POST /settings/privacy-policy — lưu riêng (permission:settings.general.edit ở route). */
     public function updatePrivacyPolicy(Request $request): JsonResponse
     {
         $v = $request->validate([

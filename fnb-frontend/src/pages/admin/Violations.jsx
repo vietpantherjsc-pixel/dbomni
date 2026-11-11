@@ -54,8 +54,8 @@ export default function Violations() {
     }, [month, empFilter, branchId]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    if (!can('staff.violations.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    const editable = can('staff.violations.edit');
     const inp = 'border border-gray-300 rounded px-2 py-1.5 text-[13px] w-full';
     const btn = 'px-3 py-1.5 rounded text-[13px] font-medium ';
 

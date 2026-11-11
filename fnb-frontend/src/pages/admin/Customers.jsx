@@ -7,7 +7,7 @@ import { fmtDate, fmtDateTime } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 import { confirmInApp } from '../../utils/confirmInApp'; // Spec mật khẩu khách §5.3/§7.4
-import { useAuth } from '../../contexts/AuthContext'; // Form sửa thông tin khách (2026-11-07): cổng quyền customers.manage như các trang Admin khác
+import { useAuth } from '../../contexts/AuthContext'; // Form sửa thông tin khách (2026-11-07): cổng quyền customers.list.edit như các trang Admin khác
 
 
 // =====================================================================
@@ -29,7 +29,7 @@ export default function Customers() {
     // Form sửa thông tin khách (Đại Vương chốt 2026-11-07): PATCH /customers/{id}
     // đã có sẵn phía backend — form này chỉ bổ sung phía giao diện trong modal.
     const { can } = useAuth();
-    const canManage = can('customers.manage');
+    const canManage = can('customers.list.edit');
     const [tiers, setTiers] = useState([]);
     const [showEdit, setShowEdit] = useState(false);
     const [editForm, setEditForm] = useState({ name: '', phone: '', birthday: '', note: '', membership_tier_id: '' });

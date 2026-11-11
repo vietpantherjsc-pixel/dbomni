@@ -206,7 +206,21 @@ class AttendanceController extends Controller
         for ($i = 0; $i < 7; $i++) $days[] = $monday->copy()->addDays($i)->toDateString();
 
         $empQ = Employee::where('is_active', true)->select('id', 'full_name', 'branch_id');
-        if (!empty($v['branch_id'])) $empQ->where('branch_id', $v['branch_id']);
+        // §EW 🟡: lọc theo CN phải tính cả pivot branch_employee (NV làm
+        // thêm CN qua pivot vẫn hiện ở lưới của CN đó) — cùng khuôn §3.2.
+        if (!empty($v['branch_id'])) $empQ->where(fn ($w) => $w->where('branch_id', $v['branch_id'])
+            ->orWhereHas('branches', fn ($b) => $b->where('branches.id', $v['branch_id'])));
+        // §3.2: actor Employee chỉ thấy NV thuộc CN phân công của mình.
+        $gridActor = $request->user();
+        if ($gridActor instanceof Employee) {
+            $mine = $gridActor->allBranchIds();
+            if (!empty($v['branch_id']) && !in_array((int) $v['branch_id'], $mine, true)) {
+                $empQ->whereRaw('1 = 0');
+            } else {
+                $empQ->where(fn ($w) => $w->whereIn('branch_id', $mine)
+                    ->orWhereHas('branches', fn ($b) => $b->whereIn('branches.id', $mine)));
+            }
+        }
         $employees = $empQ->orderBy('full_name')->get();
 
         $atts = Attendance::whereIn('date', $days)
@@ -235,12 +249,17 @@ class AttendanceController extends Controller
 
         // Spec nhập giờ từ lưới (2026-10-31): tháng đã khóa kỳ của TỪNG ô (tuần có
         // thể vắt 2 tháng) — frontend hiện 🔒 và chặn nhập; endpoint chặn độc lập.
-        $lockedMonths = [];
+        // §3.8: khóa theo (tháng × CN chính của NV) — CN này chốt không khóa
+        // ô của NV thuộc CN khác.
+        $lockedKeys = [];
+        $gridBranchIds = $employees->pluck('branch_id')->filter()->unique()->values()->all();
         foreach (collect($days)->map(fn ($d) => substr($d, 0, 7))->unique() as $m) {
-            if (\App\Models\PayrollLock::isLocked($m)) $lockedMonths[$m] = true;
+            foreach ($gridBranchIds as $bid) {
+                if (\App\Models\PayrollLock::isLocked($m, (int) $bid)) $lockedKeys[$m . '|' . (int) $bid] = true;
+            }
         }
 
-        $rows = $employees->map(function ($e) use ($days, $atts, $scheds, $leaveDays, $lockedMonths) {
+        $rows = $employees->map(function ($e) use ($days, $atts, $scheds, $leaveDays, $lockedKeys) {
             $cells = [];
             foreach ($days as $d) {
                 $key = $e->id . '|' . $d;
@@ -280,7 +299,7 @@ class AttendanceController extends Controller
                     'attendance_id' => optional($dayRecs->sortBy('check_in')->first())->id,
                     'pair_count' => $dayRecs->count(),
                     // Spec nhập giờ từ lưới (2026-10-31): cờ khóa kỳ theo tháng của ô (chỉ THÊM, field cũ giữ nguyên)
-                    'payroll_locked' => isset($lockedMonths[substr($d, 0, 7)]),
+                    'payroll_locked' => isset($lockedKeys[substr($d, 0, 7) . '|' . (int) ($e->branch_id ?? 0)]),
                     'status' => $status,
                     'check_in' => $firstIn, 'check_out' => $lastOut,
                     'hours' => $hours, 'scheduled_hours' => $scheduledMin > 0 ? round($scheduledMin / 60, 1) : null,
@@ -370,7 +389,8 @@ class AttendanceController extends Controller
         $att = Attendance::findOrFail($id);
         // Spec nhập giờ từ lưới (2026-10-31, mục 2.3 — Đại Vương duyệt riêng): tháng
         // của bản ghi đã khóa kỳ thì SỬA giờ cũng bị chặn như tạo mới
-        \App\Models\PayrollLock::assertUnlocked(Carbon::parse($att->date)->format('Y-m'));
+        // §3.8: đóng băng theo CN của bản ghi chấm công.
+        \App\Models\PayrollLock::assertUnlocked(Carbon::parse($att->date)->format('Y-m'), $att->branch_id ? (int) $att->branch_id : null);
         $newIn = array_key_exists('check_in', $v) && $v['check_in'] ? Carbon::parse($v['check_in']) : $att->check_in;
         $newOut = array_key_exists('check_out', $v) && $v['check_out'] ? Carbon::parse($v['check_out']) : $att->check_out;
         if ($newIn && $newOut && $newOut->lte($newIn)) {
@@ -422,7 +442,8 @@ class AttendanceController extends Controller
             if ($date > now()->toDateString()) {
                 abort(422, 'Chưa thể nhập giờ cho ngày tương lai.');
             }
-            \App\Models\PayrollLock::assertUnlocked(substr($date, 0, 7));
+            // §3.8: đóng băng theo CN chính của NV được nhập giờ.
+            \App\Models\PayrollLock::assertUnlocked(substr($date, 0, 7), $emp->branch_id ? (int) $emp->branch_id : null);
             // Phép ĐÃ DUYỆT phủ ngày (tính lại đúng cách grid() đang tính)
             $onLeave = LeaveRequest::where('employee_id', $emp->id)->where('status', 'approved')
                 ->where('date_from', '<=', $date)

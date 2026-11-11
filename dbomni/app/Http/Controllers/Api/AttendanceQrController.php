@@ -50,7 +50,7 @@ class AttendanceQrController extends Controller
     {
         $branch = Branch::findOrFail($id);
         // Bổ sung Mảng 4 (TESTER rà soát) A3-6: khóa CN người gọi như show() —
-        // tránh NV có staff.edit tạo lại QR của CN khác (làm chết QR đang dán
+        // tránh NV có attendance.shifts.edit tạo lại QR của CN khác (làm chết QR đang dán
         // tại CN đó và nhận token mới)
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee && !in_array((int) $id, $actor->allBranchIds(), true)) {

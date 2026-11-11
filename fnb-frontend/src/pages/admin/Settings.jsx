@@ -11,6 +11,7 @@ const noteExpired = (e) => {
 };
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2.11: gác thẻ theo mục settings
 import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import TimeInput from '../../components/TimeInput'; // Gói 55 p2: ô nhập giờ 24h (không dùng input type=time)
@@ -236,8 +237,13 @@ const BranchManager = () => {
 // Gói 7p (2026-10-05): Trang Thiết lập — Đại Vương tự pick màu chủ đạo giao diện.
 // Fix runtime zip tổng (mục 9): card Thiết lập dạng thu gọn — mặc định đóng,
 // bấm tiêu đề mới xổ nội dung. Trạng thái giữ trong từng card khi còn ở trang.
-const CollapsibleCard = ({ title, first = false, dirty = false, onTouch = null, children }) => {
+// Cây phân quyền §2.11: thẻ ẩn hẳn khi tài khoản không có lá view của mục
+// settings tương ứng (Owner thấy hết; Chủ Chi Nhánh không có lá settings nào
+// nên trang Thiết lập trống với thông báo ở dưới).
+const CollapsibleCard = ({ title, first = false, dirty = false, onTouch = null, perm = null, children }) => {
+    const { can } = useAuth();
     const [open, setOpen] = useState(false);
+    if (perm && !can(perm)) return null;
     return (
         <div className={first ? 'm-card p-6' : 'm-card p-6 mt-4'}>
             <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
@@ -255,6 +261,9 @@ const CollapsibleCard = ({ title, first = false, dirty = false, onTouch = null, 
 };
 
 const Settings = () => {
+    const { can } = useAuth();
+    // Cây phân quyền §2.11: trang trống hẳn khi không có lá view settings nào.
+    const canSeeAny = ['settings.general.view', 'settings.online.view', 'settings.payments.view', 'settings.sapo.view', 'settings.secrets.view'].some((p) => can(p));
     // Audit UX 2026-10-21 (hạng 7): theo dõi thẻ nào có thay đổi chưa lưu + chặn rời trang
     const [dirtyMap, setDirtyMap] = useState({});
     const markDirty = (k) => setDirtyMap((d) => (d[k] ? d : { ...d, [k]: true }));
@@ -512,6 +521,8 @@ const Settings = () => {
         }
     };
 
+    if (!canSeeAny) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Thiết lập.</div></AdminLayout>);
+
     return (
         <AdminLayout>
             <div className="p-6 max-w-[900px] mx-auto">
@@ -523,7 +534,7 @@ const Settings = () => {
                     </div>
                 )}
 
-                <CollapsibleCard title="Màu chủ đạo giao diện" first dirty={!!dirtyMap.theme} onTouch={() => markDirty('theme')}>
+                <CollapsibleCard title="Màu chủ đạo giao diện" perm="settings.general.view" first dirty={!!dirtyMap.theme} onTouch={() => markDirty('theme')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Chọn màu Đại Vương thích — áp dụng ngay cho sidebar, nút bấm, biểu đồ trên web admin, POS và Zalo Mini App.
                     </p>
@@ -581,7 +592,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Logo thương hiệu (2026-10-21): áp ngay khi tải lên như cover — không dirty badge */}
-                <CollapsibleCard title="Logo thương hiệu">
+                <CollapsibleCard title="Logo thương hiệu" perm="settings.general.view">
                     <p className="text-sm mb-4" style={{ color: 'var(--m-ink-soft)' }}>
                         Logo hiện ở đỉnh sidebar Admin thay cho chữ "DBOmni POS". Ảnh jpg/png/webp ≤ 1MB, giữ nguyên tỷ lệ gốc (không cắt xén), hiển thị cao tối đa 40px trong thanh sidebar.
                     </p>
@@ -617,7 +628,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 47: Font chữ */}
-                <CollapsibleCard title="Font chữ giao diện" dirty={!!dirtyMap.font} onTouch={() => markDirty('font')}>
+                <CollapsibleCard title="Font chữ giao diện" perm="settings.general.view" dirty={!!dirtyMap.font} onTouch={() => markDirty('font')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Tất cả font đều hỗ trợ đầy đủ tiếng Việt. Bấm để xem trước ngay trên toàn trang.
                     </p>
@@ -646,7 +657,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Spec P4: Kho + Nhân sự + Báo cáo */}
-                <CollapsibleCard title="Kho &amp; Nhân sự" dirty={!!dirtyMap.p4} onTouch={() => markDirty('p4')}>
+                <CollapsibleCard title="Kho &amp; Nhân sự" perm="settings.general.view" dirty={!!dirtyMap.p4} onTouch={() => markDirty('p4')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Ngưỡng cảnh báo BTP, giờ grace chấm công, trạng thái phiếu chi khi chốt lương, ngưỡng vượt giờ.
                     </p>
@@ -690,7 +701,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 55 p11af (P0-13/P0-14): Chính sách khuyến mại */}
-                <CollapsibleCard title="Chính sách khuyến mại" dirty={!!dirtyMap.promo} onTouch={() => markDirty('promo')}>
+                <CollapsibleCard title="Chính sách khuyến mại" perm="settings.general.view" dirty={!!dirtyMap.promo} onTouch={() => markDirty('promo')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Mỗi đơn chỉ áp 1 khuyến mại cao nhất. Việc cộng dồn KM + coupon do từng
                         chương trình tự bật: mục "Cho phép cộng dồn với coupon" trong form Khuyến mại
@@ -733,7 +744,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 55 p11ag: Ngưỡng kiểm soát kho & nhập hàng (chống thất thoát) */}
-                <CollapsibleCard title="Kiểm soát kho & nhập hàng" dirty={!!dirtyMap.inv} onTouch={() => markDirty('inv')}>
+                <CollapsibleCard title="Kiểm soát kho & nhập hàng" perm="settings.general.view" dirty={!!dirtyMap.inv} onTouch={() => markDirty('inv')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Các ngưỡng cảnh báo/chặn tự động để chống thất thoát kho và giá nhập bất thường.
                     </p>
@@ -781,7 +792,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 8a: Thuế & giá */}
-                <CollapsibleCard title="Thuế & giá" dirty={!!dirtyMap.tax} onTouch={() => markDirty('tax')}>
+                <CollapsibleCard title="Thuế & giá" perm="settings.general.view" dirty={!!dirtyMap.tax} onTouch={() => markDirty('tax')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Cấu hình chung về thuế GTGT. Món nào có thuế suất riêng thì đặt tại form Mặt hàng (tab Thuế).
                     </p>
@@ -816,7 +827,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 8f: Số thập phân */}
-                <CollapsibleCard title="Số thập phân" dirty={!!dirtyMap.dec} onTouch={() => markDirty('dec')}>
+                <CollapsibleCard title="Số thập phân" perm="settings.general.view" dirty={!!dirtyMap.dec} onTouch={() => markDirty('dec')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Tùy chỉnh số chữ số thập phân hiển thị cho từng loại số liệu (0–4).
                     </p>
@@ -862,7 +873,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 55 p11ab: Quy tắc sinh mã */}
-                <CollapsibleCard title="Quy tắc sinh mã" dirty={!!dirtyMap.code} onTouch={() => markDirty('code')}>
+                <CollapsibleCard title="Quy tắc sinh mã" perm="settings.general.view" dirty={!!dirtyMap.code} onTouch={() => markDirty('code')}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Cấu hình tiền tố và số chữ số cho từng loại mã. Áp dụng cho mã mới sinh ra sau khi lưu.
                         Mã mới nối liền, không dấu gạch (VD: PN202610210001).
@@ -942,7 +953,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 22: Quản lý chi nhánh */}
-                <CollapsibleCard title="Chi nhánh">
+                <CollapsibleCard title="Chi nhánh" perm="branches.list.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Thêm/sửa/bật-tắt chi nhánh. Tọa độ dùng để tính phí ship cho đơn Zalo Mini App.
                     </p>
@@ -950,7 +961,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 52: Phương thức thanh toán */}
-                <CollapsibleCard title="Phương thức thanh toán">
+                <CollapsibleCard title="Phương thức thanh toán" perm="settings.payments.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Thêm/sửa/xóa phương thức. Bấm chip POS/Zalo để bật/tắt theo kênh bán.
                     </p>
@@ -958,7 +969,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 55: Tên thay thế món (alias) */}
-                <CollapsibleCard title="Tên thay thế món">
+                <CollapsibleCard title="Tên thay thế món" perm="products.list.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Map tên món cũ (từ file Excel/app khác) về món hiện tại để import đúng.
                     </p>
@@ -966,7 +977,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 52: Đơn vị tính */}
-                <CollapsibleCard title="Đơn vị tính">
+                <CollapsibleCard title="Đơn vị tính" perm="settings.general.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Dùng chung toàn hệ thống — chọn trong các chức năng nhập liệu.
                     </p>
@@ -974,7 +985,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 52: Mẫu in — 🟠5 Audit 2026-10-21: vào theo dõi chưa lưu như 8 thẻ native */}
-                <CollapsibleCard title="Mẫu in Bill & Tem" dirty={!!dirtyMap.print}>
+                <CollapsibleCard title="Mẫu in Bill & Tem" perm="settings.general.view" dirty={!!dirtyMap.print}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Bật/tắt từng dòng và sửa nội dung. Bill khổ K80, tem 50×30.
                     </p>
@@ -985,7 +996,7 @@ const Settings = () => {
                     chuyển thành trang riêng trong menu Thu chi (/admin/accounts, /admin/prepaid-expenses) */}
 
                 {/* Gói 59: QR Nhân viên */}
-                <CollapsibleCard title="QR Nhân viên">
+                <CollapsibleCard title="QR Nhân viên" perm="settings.secrets.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Mã QR mở trang hub nhân viên (/nhan-vien). In và dán tại quầy để nhân viên quét.
                     </p>
@@ -993,7 +1004,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói 60: Giao hàng AhaMove / Lalamove — 🟠5: vào theo dõi chưa lưu */}
-                <CollapsibleCard title="Giao hàng" dirty={!!dirtyMap.delivery}>
+                <CollapsibleCard title="Giao hàng" perm="settings.online.view" dirty={!!dirtyMap.delivery}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         AhaMove (chính) / Lalamove (dự phòng). API key cấu hình trong file .env của backend.
                     </p>
@@ -1001,7 +1012,7 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* SPEC-01: Thanh toán Zalo Mini App — 🟠5: vào theo dõi chưa lưu */}
-                <CollapsibleCard title="Thanh toán Zalo Mini App" dirty={!!dirtyMap.zalopay}>
+                <CollapsibleCard title="Thanh toán Zalo Mini App" perm="settings.payments.view" dirty={!!dirtyMap.zalopay}>
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Chuyển khoản (BANK) / Trả tại quán (COD) qua Checkout SDK. 0đ phí giao dịch.
                     </p>
@@ -1009,12 +1020,12 @@ const Settings = () => {
                 </CollapsibleCard>
 
                 {/* Gói chính sách Mini App vào Cài đặt Admin: thẻ NGAY SAU thẻ thanh toán Zalo (cụm Mini App) */}
-                <CollapsibleCard title="Chính sách — Điều khoản Mini App" dirty={!!dirtyMap.privacy}>
+                <CollapsibleCard title="Chính sách — Điều khoản Mini App" perm="settings.online.view" dirty={!!dirtyMap.privacy}>
                     <PrivacyPolicySettings onDirty={() => markDirty('privacy')} onSaved={() => clearDirty('privacy')} />
                 </CollapsibleCard>
 
                 {/* Spec danh mục dùng chung: 13 tab */}
-                <CollapsibleCard title="Danh mục dùng chung">
+                <CollapsibleCard title="Danh mục dùng chung" perm="settings.general.view">
                     <p className="text-sm mb-5" style={{ color: 'var(--m-ink-soft)' }}>
                         Các danh sách nghiệp vụ dùng chung toàn hệ thống (loại thanh toán, loại đơn, loại KM...).
                         Tắt 1 giá trị thì các dropdown tương ứng sẽ không hiện nó nữa.

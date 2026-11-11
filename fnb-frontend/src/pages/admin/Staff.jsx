@@ -41,8 +41,8 @@ export default function Staff() {
     }, [search, branchId, noPw]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    if (!can('staff.employees.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Nhân viên.</div></AdminLayout>);
+    const editable = can('staff.employees.edit');
     const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] w-full';
     const set = (k, v) => setForm({ ...form, [k]: v });
 

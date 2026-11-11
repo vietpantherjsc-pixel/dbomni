@@ -171,17 +171,23 @@ export default function CheBien() {
     } finally { setRecipeLoading(false); }
   };
 
-  const qtyNum = parseFloat(String(qty).replace(',', '.')) || 0;
-  // Gói 55 p11c: định mức theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
-  const batchOut = recipe?.batch_output_qty ? Number(recipe.batch_output_qty) : 1;
-  const batches = batchOut > 0 ? qtyNum / batchOut : 0;
+  // Gói chế biến theo mẻ (2026-11-11): NV chỉ nhập SỐ MẺ (bước 0,5) —
+  // sản lượng do server tính = mẻ × batch_output_qty; phần xem trước ở đây
+  // tính thẳng theo số mẻ (NL cần = định mức/mẻ × số mẻ), không qua sản
+  // lượng như bản cũ.
+  const batchesNum = parseFloat(String(qty).replace(',', '.')) || 0;
+  const batchOutRaw = recipe?.batch_output_qty != null ? Number(recipe.batch_output_qty) : null;
+  const hasBatchOut = batchOutRaw != null && batchOutRaw > 0;
+  const batchOut = hasBatchOut ? batchOutRaw : 1; // chỉ để hiển thị khi thiếu cấu hình
+  const outQty = hasBatchOut ? batchesNum * batchOutRaw : 0;
+  const batchesValid = batchesNum >= 0.5 && Math.abs(batchesNum * 2 - Math.round(batchesNum * 2)) < 1e-9;
   const rows = (recipe && recipe.recipes ? recipe.recipes : []).map((rc) => {
-    const need = Number(rc.quantity || 0) * batches;
+    const need = Number(rc.quantity || 0) * batchesNum;
     const stock = Number(rc.stock_qty || 0);
     return { ...rc, need, stock, short: need - stock > 1e-9 };
   });
   const anyShort = rows.some((r) => r.short);
-  const canConfirm = materialId && qtyNum > 0 && rows.length > 0 && !anyShort && !saving;
+  const canConfirm = materialId && batchesValid && hasBatchOut && rows.length > 0 && !anyShort && !saving;
 
   const [confirming, setConfirming] = useState(false); // UX 2026-10-26 (🟠27): bước xác nhận riêng trước khi trừ kho FIFO thật (trước đây bấm 1 nút là trừ ngay)
   // Gói phiên Hub (2026-11-05): chạy sản xuất chạy thẳng không qua duyệt →
@@ -212,7 +218,7 @@ export default function CheBien() {
     try {
       const r = await axios.post(API + '/employee/productions', {
         material_id: parseInt(materialId, 10),
-        quantity: qtyNum,
+        batches: batchesNum,
         note: note.trim() || undefined,
         pin_token: pinToken,
       }, auth(token));
@@ -290,15 +296,21 @@ export default function CheBien() {
               ))}
             </select>
 
-            <label className="cb-label">Số lượng ({selMat && selMat.unit ? selMat.unit : 'đơn vị'})</label>
+            <label className="cb-label">Số mẻ</label>
             <input
               className="cb-field"
               type="text"
               inputMode="decimal"
               value={qty}
               onChange={(e) => setQty(e.target.value.replace(/[^\d.,]/g, ''))}
-              placeholder="VD: 10"
+              placeholder="VD: 1,5"
             />
+            {materialId && recipe && hasBatchOut && (
+              <div className="cb-stock" style={{ marginTop: 6 }}>Mỗi mẻ ra {fmtQty(batchOutRaw)} {selMat && selMat.unit ? selMat.unit : ''} · nhập theo bước 0,5 mẻ</div>
+            )}
+            {batchesNum > 0 && !batchesValid && (
+              <div className="cb-msg" style={{ margin: '8px 0 0' }}>Số mẻ phải từ 0,5 và theo bước 0,5 (0,5 · 1 · 1,5 · 2…).</div>
+            )}
 
             {materialId && (
               <React.Fragment>
@@ -306,7 +318,15 @@ export default function CheBien() {
                   <div className="cb-empty">Đang tải định mức...</div>
                 ) : rows.length > 0 ? (
                   <React.Fragment>
+                    {!hasBatchOut && (
+                      <div className="cb-msg" style={{ margin: '10px 0 0' }}>
+                        ⚠ Món này chưa cấu hình sản lượng mỗi mẻ. Báo quản lý bổ sung ở tab Định mức — chưa chế biến theo mẻ được.
+                      </div>
+                    )}
                     <label className="cb-label">Nguyên liệu sẽ bị trừ kho</label>
+                    {hasBatchOut && batchesValid && (
+                      <div style={{ fontSize: 13.5, marginBottom: 4 }}>→ Thành phẩm nhận: <b>{fmtQty(outQty)} {selMat && selMat.unit ? selMat.unit : ''}</b> ({fmtQty(batchesNum)} mẻ × {fmtQty(batchOutRaw)} {selMat && selMat.unit ? selMat.unit : ''}/mẻ)</div>
+                    )}
                     <table className="cb-tbl">
                       <thead>
                         <tr>
@@ -321,7 +341,7 @@ export default function CheBien() {
                             <td>
                               <div>{r.raw_material ? r.raw_material.name : ''}</div>
                               <div className={'cb-stock' + (r.short ? ' bad' : '')}>
-                                Định mức: {fmtQty(r.quantity)}{r.raw_material && r.raw_material.unit ? ' ' + r.raw_material.unit : ''}/{batchOut > 1 ? `${fmtQty(batchOut)} ` : '1 '}{selMat && selMat.unit ? selMat.unit : ''}/mẻ
+                                Định mức: {fmtQty(r.quantity)}{r.raw_material && r.raw_material.unit ? ' ' + r.raw_material.unit : ''}/{hasBatchOut ? `${fmtQty(batchOut)} ` : '? '}{selMat && selMat.unit ? selMat.unit : ''}/mẻ
                               </div>
                             </td>
                             <td style={{ textAlign: 'right' }} className="cb-need">
@@ -334,9 +354,9 @@ export default function CheBien() {
                         ))}
                       </tbody>
                     </table>
-                    {anyShort && qtyNum > 0 && (
+                    {anyShort && batchesNum > 0 && (
                       <div className="cb-msg" style={{ margin: '10px 0 0' }}>
-                        ⚠ Không đủ tồn kho cho số lượng này. Giảm số lượng hoặc nhập kho thêm.
+                        ⚠ Không đủ tồn kho cho số mẻ này. Giảm số mẻ hoặc nhập kho thêm.
                       </div>
                     )}
                   </React.Fragment>
@@ -361,7 +381,7 @@ export default function CheBien() {
               <div style={{ marginTop: 14, border: '1.5px solid #F5A623', background: '#fffbeb', borderRadius: 12, padding: '12px 14px' }}>
                 <div style={{ fontWeight: 800, fontSize: 14.5, color: '#92400e', marginBottom: 6 }}>⚠ Chế biến là trừ kho ngay — kiểm tra lần cuối</div>
                 <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>
-                  Tạo <b>{fmtQty(qtyNum)} {recipe?.material?.unit || ''}</b> bán thành phẩm, trừ {rows.length} nguyên liệu theo định mức (FIFO). Thao tác này ghi phiếu ngay, muốn sửa phải qua quản lý.
+                  Chế biến <b>{fmtQty(batchesNum)} mẻ</b> → ra <b>{fmtQty(outQty)} {recipe?.material?.unit || ''}</b> bán thành phẩm, trừ {rows.length} nguyên liệu theo định mức (FIFO). Thao tác này ghi phiếu ngay, muốn sửa phải qua quản lý.
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                   <button onClick={() => setConfirming(false)} style={{ flex: 1, minHeight: 48, borderRadius: 12, border: '1px solid #d1d5db', background: '#fff', fontWeight: 700, fontSize: 14.5 }}>Kiểm tra lại</button>
@@ -386,14 +406,14 @@ export default function CheBien() {
                 <div className="cb-hn">{h.material_name}</div>
                 <div className="cb-hd2">{fmtHM(h.created_at)} · {h.employee_name || ''}</div>
               </div>
-              <div className="cb-hq">{fmtQty(h.quantity)}{h.unit ? ' ' + h.unit : ''}</div>
+              <div className="cb-hq">{h.batches != null ? `${fmtQty(h.batches)} mẻ · ` : ''}{fmtQty(h.quantity)}{h.unit ? ' ' + h.unit : ''}</div>
             </div>
           ))
         )}
       </section>
 
       <div className="cb-note">
-        📌 <b>Lưu ý:</b> Bấm "Xác nhận chế biến" là kho nguyên liệu <b>trừ ngay</b> theo định mức (FIFO). Kiểm tra kỹ số lượng trước khi xác nhận.
+        📌 <b>Lưu ý:</b> Bấm "Xác nhận chế biến" là kho nguyên liệu <b>trừ ngay</b> theo định mức (FIFO). Kiểm tra kỹ số mẻ trước khi xác nhận.
       </div>
 
       {pinPrompt && (

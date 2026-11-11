@@ -40,6 +40,11 @@ class AuthController extends Controller
                     'type' => 'user',
                     'roles' => $user->getRoleNames(),
                     'permissions' => $user->getAllPermissions()->pluck('name'),
+                    // Cây phân quyền §2.0A: tầng tài khoản + CN sở hữu + cờ bắt
+                    // buộc đổi mật khẩu tạm (frontend ép đổi ở lần đầu).
+                    'account_tier' => $user->account_tier,
+                    'owner_branch_id' => $user->owner_branch_id,
+                    'must_change_password' => (bool) $user->must_change_password,
                 ]
             ]);
         }
@@ -74,6 +79,32 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Email/tên đăng nhập hoặc mật khẩu không chính xác.'
         ], 401);
+    }
+
+    // §2.0A: đổi mật khẩu tạm ở lần đăng nhập đầu — dùng chung luật mạnh
+    // với khách (CustomerPasswordValidator: min 8 + chữ + IN HOA + ký tự
+    // đặc biệt, cấm chuỗi liên tiếp). Route này KHÔNG gắn middleware
+    // permission (người đang bị cờ must_change_password vẫn đổi được).
+    public function changePassword(Request $request)
+    {
+        $actor = $request->user();
+        if (!($actor instanceof User)) {
+            return response()->json(['success' => false, 'message' => 'Chỉ tài khoản quản trị đổi mật khẩu tại đây.'], 403);
+        }
+        $v = $request->validate([
+            'current_password' => 'required|string',
+            'password' => 'required|string',
+            'password_confirmation' => 'required|string|same:password',
+        ]);
+        if (!Hash::check($v['current_password'], $actor->password)) {
+            return response()->json(['success' => false, 'message' => 'Mật khẩu hiện tại không đúng.'], 422);
+        }
+        $errors = \App\Support\CustomerPasswordValidator::errors($v['password']);
+        if ($errors !== []) {
+            return response()->json(['success' => false, 'message' => 'Mật khẩu chưa đạt yêu cầu.', 'errors' => $errors], 422);
+        }
+        $actor->update(['password' => $v['password'], 'must_change_password' => false]);
+        return response()->json(['success' => true, 'message' => 'Đã đổi mật khẩu.']);
     }
 
     // Đăng xuất thật phía server (2026-11-08): thu hồi ĐÚNG token đang gọi

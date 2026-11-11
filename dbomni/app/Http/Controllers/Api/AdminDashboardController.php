@@ -19,6 +19,17 @@ class AdminDashboardController extends Controller
     {
         // Gói 55 p11ad: cache 5 phút theo chi nhánh + ngày (dashboard nhiều query nặng)
         $branchKey = $request->query('branch_id') ?: 'all';
+        // §3.5: actor Employee chỉ thấy số của CN phân công — ép CN về CN
+        // chính khi không chọn hoặc chọn CN ngoài phạm vi; khóa cache tách
+        // theo actor để không rò số liệu CN khác qua cache dùng chung.
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $mine = $actor->allBranchIds();
+            $reqBranch = (int) ($request->query('branch_id') ?: 0);
+            $effective = ($reqBranch > 0 && in_array($reqBranch, $mine, true)) ? $reqBranch : (int) $actor->branch_id;
+            $request->query->set('branch_id', (string) $effective);
+            $branchKey = 'emp' . $actor->id . ':' . $effective;
+        }
         $cacheKey = 'dashboard:stats:' . $branchKey . ':' . now()->format('Y-m-d');
         $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($request) {
             return $this->buildStats($request);

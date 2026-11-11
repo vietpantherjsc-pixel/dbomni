@@ -52,7 +52,7 @@ use Illuminate\Support\Facades\Schema;
 // =====================================================================
 class ReportController extends Controller
 {
-    // Audit 2026-10-23 B-5: NV có reports.view chỉ xem báo cáo trong phạm vi CN
+    // Audit 2026-10-23 B-5: NV có lá reports.*.view chỉ xem báo cáo trong phạm vi CN
     // phân công — chọn CN ngoài phạm vi -> 403; không chọn CN -> ép về CN chính.
     protected function guardReportBranch(Request $request): ?JsonResponse
     {
@@ -859,18 +859,53 @@ class ReportController extends Controller
         $end = $monthEnd->format('Y-m-d');
         $branchId = (int) ($p['branch_id'] ?? 0);
 
-        // Kỳ đã chốt → dùng số chốt (P&L toàn hệ thống, không lọc CN vì chốt theo tháng)
-        if ($branchId === 0 && \Illuminate\Support\Facades\Schema::hasTable('payroll_locks')) {
-            $lock = \App\Models\PayrollLock::where('month', $month)->first();
+        // §3.8: kỳ đã chốt → dùng số chốt. Khóa toàn hệ (branch_id NULL)
+        // dùng cho mọi góc xem; khóa theo CN chỉ dùng khi đang xem đúng CN
+        // đó. Góc toàn hệ đang chốt rời rạc theo CN thì cộng số chốt của
+        // các CN đã chốt + ước tính phần CN chưa chốt (xem khối dưới).
+        if (\Illuminate\Support\Facades\Schema::hasTable('payroll_locks')) {
+            $lock = \App\Models\PayrollLock::get($month, $branchId > 0 ? $branchId : null);
             if ($lock) {
                 return ['value' => (float) $lock->net_total, 'locked' => true];
             }
         }
 
-        // Chưa chốt → ước tính đầy đủ: giờ × đơn giá + ăn + thưởng − trừ khác − ứng − BHXH
+        // §3.8: góc toàn hệ khi đã chốt rời rạc theo CN — tổng = Σ net_total
+        // các khóa CN đã chốt + ước tính phần CN chưa chốt. Không còn ngày
+        // công nào ở CN chưa chốt thì tổng = đúng số chốt (locked = true).
+        if ($branchId === 0 && \Illuminate\Support\Facades\Schema::hasTable('payroll_locks')) {
+            $branchLocks = \App\Models\PayrollLock::where('month', $month)->whereNotNull('branch_id')->get();
+            if ($branchLocks->isNotEmpty()) {
+                $lockedSum = (float) $branchLocks->sum('net_total');
+                $lockedIds = $branchLocks->pluck('branch_id')->map(fn ($v) => (int) $v)->all();
+                $rest = $this->estimatePayrollForMonth($month, $start, $end, 0, $lockedIds);
+                if ($rest === null) return ['value' => round($lockedSum), 'locked' => true];
+                return ['value' => round($lockedSum + $rest), 'locked' => false];
+            }
+        }
+
+        $estimate = $this->estimatePayrollForMonth($month, $start, $end, $branchId);
+        if ($estimate === null) return null; // chưa có dữ liệu chấm công → fallback
+        return ['value' => round($estimate), 'locked' => false];
+    }
+
+    /**
+     * Ước tính lương 1 tháng từ ngày công + khoản theo tháng.
+     * $onlyBranchId > 0: chỉ tính ngày công của CN đó (góc xem 1 CN).
+     * $excludeBranchIds: bỏ ngày công các CN này; khoản theo tháng của NV
+     * chỉ tính khi CN chính của NV không nằm trong danh sách loại (khuôn
+     * engine buildPayrollData: khoản theo tháng chỉ hiện ở dòng CN chính).
+     * Trả null khi không còn ngày công nào trong phạm vi (để caller fallback).
+     * LƯU Ý: ước tính vẫn là xấp xỉ — đơn giá lấy theo mức hiện hành, không
+     * theo mức từng ngày như engine chốt (xem §DT).
+     */
+    private function estimatePayrollForMonth(string $month, string $start, string $end, int $onlyBranchId = 0, array $excludeBranchIds = []): ?float
+    {
+        // Chưa chốt → ước tính đầy đủ: giờ × đơn giá + ăn + thưởng + phụ cấp − trừ khác − ứng − BHXH
         $hoursMap = DB::table('salary_days')
             ->whereBetween('date', [$start, $end])
-            ->when($branchId > 0, fn($q) => $q->where('branch_id', $branchId))
+            ->when($onlyBranchId > 0, fn($q) => $q->where('branch_id', $onlyBranchId))
+            ->when($excludeBranchIds !== [], fn ($q) => $q->whereNotIn('branch_id', $excludeBranchIds))
             ->selectRaw('employee_id, SUM(hours) as total_hours, SUM(meal_count) as total_meals')
             ->groupBy('employee_id')
             ->get()->keyBy('employee_id');
@@ -885,6 +920,13 @@ class ReportController extends Controller
             ->whereBetween('date', [$start, $end])->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
         $deducts = DB::table('salary_deductions')->whereIn('employee_id', $empIds)
             ->where('month', $month)->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
+        // §3.8/§DT: phụ cấp theo NV trước đây không được cộng vào ước tính
+        // (lệch 5.300.000 ở 10/2026) — cộng theo đúng khuôn engine
+        // (dòng theo tháng + dòng áp dụng mọi tháng, chỉ NV đang hưởng).
+        $allowances = DB::table('employee_allowances')->whereIn('employee_id', $empIds)
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->where('month', $month)->orWhereNull('month'))
+            ->selectRaw('employee_id, SUM(amount) as t')->groupBy('employee_id')->pluck('t', 'employee_id');
         $insMap = \App\Models\EmployeeInsurance::whereIn('employee_id', $empIds)->where('is_active', true)->get()->keyBy('employee_id');
         $rBhxh = (float) \App\Models\Setting::get('bhxh_emp_bhxh', 8)
             + (float) \App\Models\Setting::get('bhxh_emp_bhyt', 1.5)
@@ -902,17 +944,24 @@ class ReportController extends Controller
                 $rate = $lv ? (float) $lv->hourly_rate : 0;
             }
             $net = (float) $h->total_hours * $rate
-                + (float) ($h->total_meals ?? 0) * $mealPrice
-                + (float) ($bonuses[$empId] ?? 0)
-                - (float) ($deducts[$empId] ?? 0)
-                - (float) ($advances[$empId] ?? 0);
-            $ins = $insMap->get($empId);
-            if ($ins && !$ins->employer_pays_all) {
-                $net -= (float) $ins->base_amount * $rBhxh / 100;
+                + (float) ($h->total_meals ?? 0) * $mealPrice;
+            // Khoản theo tháng chỉ tính khi CN chính của NV chưa chốt
+            // (CN chính đã chốt thì các khoản này đã nằm trong net_total
+            // của khóa CN đó — cộng nữa là trùng).
+            $moneyMain = $excludeBranchIds === [] || !in_array((int) ($emp->branch_id ?? 0), $excludeBranchIds, true);
+            if ($moneyMain) {
+                $net += (float) ($bonuses[$empId] ?? 0)
+                    + (float) ($allowances[$empId] ?? 0)
+                    - (float) ($deducts[$empId] ?? 0)
+                    - (float) ($advances[$empId] ?? 0);
+                $ins = $insMap->get($empId);
+                if ($ins && !$ins->employer_pays_all) {
+                    $net -= (float) $ins->base_amount * $rBhxh / 100;
+                }
             }
             $total += $net;
         }
-        return ['value' => round($total), 'locked' => false];
+        return $total;
     }
 
     /** Cột kép Thu/Chi/Lợi nhuận theo từng bucket của kỳ. */
@@ -1660,7 +1709,24 @@ class ReportController extends Controller
         $emps = \App\Models\Employee::with('branch:id,name')->whereIn('id', $empIds)->get()->keyBy('id');
 
         // Lương thực nhận: dùng số chốt nếu có, không thì ước tính từ controller lương
-        $locked = \App\Models\PayrollLock::get($month);
+        // §3.8: cờ khóa theo (tháng × CN đang xem) — khóa CN khác không làm
+        // CN này hiện "đã chốt". Góc toàn hệ chỉ hiện "đã chốt" khi còn khóa
+        // toàn hệ đời trước HOẶC mọi CN đang hoạt động đều đã chốt; chốt rời
+        // rạc 1 CN thì locked = false + locked_branches liệt kê CN đã chốt.
+        if ($branchId > 0) {
+            $locked = \App\Models\PayrollLock::isLocked($month, (int) $branchId);
+            $lockedBranches = $locked ? [(int) $branchId] : [];
+        } else {
+            $lockedBranches = \App\Models\PayrollLock::lockedBranchIds($month);
+            if (in_array(null, $lockedBranches, true)) {
+                $lockedBranches = \App\Models\Branch::where('is_active', true)
+                    ->pluck('id')->map(fn ($v) => (int) $v)->all();
+            }
+            $activeBranches = \App\Models\Branch::where('is_active', true)
+                ->pluck('id')->map(fn ($v) => (int) $v)->all();
+            $locked = \App\Models\PayrollLock::legacy($month) !== null
+                || ($activeBranches !== [] && count(array_diff($activeBranches, $lockedBranches)) === 0);
+        }
         $netMap = [];
         if ($locked) {
             [$rows] = (new \App\Http\Controllers\Api\SalaryController())->buildPayrollData($month, $branchId ?: null);
@@ -1689,6 +1755,7 @@ class ReportController extends Controller
         return response()->json(['success' => true, 'data' => [
             'month' => $month,
             'locked' => (bool) $locked,
+            'locked_branches' => $lockedBranches, // §3.8: CN nào đã chốt trong kỳ (góc toàn hệ)
             'over_hours_threshold' => $overHours,
             'rows' => $rows,
             'top_hours' => array_slice($rows, 0, 5),

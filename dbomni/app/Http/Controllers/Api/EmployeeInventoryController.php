@@ -387,8 +387,14 @@ class EmployeeInventoryController extends Controller
     public function productionMaterials(Request $request): JsonResponse
     {
         // Gói 55 p11o: BTP = NL có định mức chế biến (thay cho type cũ)
+        // Gói chế biến theo mẻ (2026-11-11): lọc thêm loại "Bán thành phẩm" —
+        // chỉ món thuộc loại này VÀ có định mức mới được chế biến (Đại Vương
+        // chốt). Loại xác định theo TÊN: schema material_categories không có
+        // slug/code, cột materials.type đã bỏ dùng từ Gói 55 p11o.
         $semiIds = \App\Models\ProductionRecipe::distinct()->pluck('material_id');
-        $data = Material::whereIn('id', $semiIds)->orderBy('name')
+        $data = Material::whereIn('id', $semiIds)
+            ->whereHas('category', fn ($q) => $q->where('name', 'Bán thành phẩm'))
+            ->orderBy('name')
             ->get(['id', 'name', 'unit']);
         return response()->json(['success' => true, 'data' => $data]);
     }
@@ -426,7 +432,15 @@ class EmployeeInventoryController extends Controller
         }
         $v = $request->validate([
             'material_id' => 'required|exists:materials,id',
-            'quantity' => 'required|numeric|min:0.01',
+            // Gói chế biến theo mẻ (2026-11-11): ưu tiên batches (số mẻ, bước
+            // 0,5) — server tự tính quantity; quantity chỉ còn là đường cũ
+            // tương thích cho caller không gửi batches.
+            'quantity' => 'nullable|numeric|min:0.01',
+            'batches' => ['nullable', 'numeric', 'min:0.5', function (string $attribute, mixed $value, \Closure $fail) {
+                if (abs((float) $value * 2 - round((float) $value * 2)) > 1e-9) {
+                    $fail('Số mẻ phải là bội số của 0,5 (VD: 0,5 · 1 · 1,5 · 2).');
+                }
+            }],
             'note' => 'nullable|string|max:500',
         ]);
         $material = Material::findOrFail($v['material_id']);
@@ -435,15 +449,36 @@ class EmployeeInventoryController extends Controller
         if ($recipes->isEmpty()) {
             return response()->json(['success' => false, 'message' => 'Chưa có định mức cho nguyên liệu này.'], 422);
         }
+        // Gói chế biến theo mẻ (2026-11-11): có batches thì sản lượng do
+        // server tính = số mẻ × batch_output_qty; mọi dòng định mức bắt buộc
+        // đã cấu hình batch_output_qty > 0.
+        $batchCount = !empty($v['batches']) ? (float) $v['batches'] : null;
+        if ($batchCount !== null) {
+            foreach ($recipes as $r) {
+                if ((float) ($r->batch_output_qty ?? 0) <= 0) {
+                    return response()->json(['success' => false, 'message' => $material->name . ' chưa cấu hình sản lượng mỗi mẻ. Vui lòng báo quản lý bổ sung ở tab Định mức trước khi chế biến theo mẻ.'], 422);
+                }
+            }
+            $quantity = $batchCount * (float) $recipes->first()->batch_output_qty;
+        } elseif (!empty($v['quantity'])) {
+            $quantity = (float) $v['quantity'];
+        } else {
+            return response()->json(['success' => false, 'message' => 'Thiếu số mẻ cần chế biến.'], 422);
+        }
         try {
             $movementIds = []; // Gói 55 p11af: nhận id nhật ký xuất kho để gắn production_id sau
-            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv, &$movementIds) {
+            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv, &$movementIds, $quantity, $batchCount) {
                 $needs = [];
                 foreach ($recipes as $r) {
-                    // Gói 55 p11c: định mức theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
-                    $batchOut = (float) ($r->batch_output_qty ?: 1);
-                    $batches = (float) $v['quantity'] / $batchOut;
-                    $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
+                    if ($batchCount !== null) {
+                        // Gói chế biến theo mẻ (2026-11-11): NL cần = định mức/mẻ × số mẻ
+                        $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batchCount;
+                    } else {
+                        // Gói 55 p11c: định mức theo mẻ — quantity là NL cho 1 mẻ (batch_output_qty đơn vị BTP)
+                        $batchOut = (float) ($r->batch_output_qty ?: 1);
+                        $batches = $quantity / $batchOut;
+                        $needs[$r->raw_material_id] = ($needs[$r->raw_material_id] ?? 0) + (float) $r->quantity * $batches;
+                    }
                 }
                 // Gói 55 p11af: ghi nhật ký xuất kho từng lô, gắn production_id sau
                 $deducted = $inv->deductMaterialsDetailed((int) $emp->branch_id, $needs, [
@@ -457,12 +492,13 @@ class EmployeeInventoryController extends Controller
                         $inputCost += (float) $ln['quantity'] * (float) $ln['unit_cost'];
                     }
                 }
-                $btpUnitCost = (float) $v['quantity'] > 0 ? $inputCost / (float) $v['quantity'] : 0;
-                $inv->addStock((int) $emp->branch_id, (int) $material->id, (float) $v['quantity'], null, null, $btpUnitCost);
+                $btpUnitCost = $quantity > 0 ? $inputCost / $quantity : 0;
+                $inv->addStock((int) $emp->branch_id, (int) $material->id, $quantity, null, null, $btpUnitCost);
                 $production = Production::create([
                     'branch_id' => $emp->branch_id,
                     'material_id' => $material->id,
-                    'quantity' => $v['quantity'],
+                    'quantity' => $quantity,
+                    'batches' => $batchCount, // Gói chế biến theo mẻ (2026-11-11): NULL khi đi đường quantity cũ
                     'employee_id' => $emp->id,
                     'note' => $v['note'] ?? null,
                 ]);
@@ -497,6 +533,7 @@ class EmployeeInventoryController extends Controller
                 'material_name' => $p->material?->name,
                 'unit' => $p->material?->unit,
                 'quantity' => (float) $p->quantity,
+                'batches' => $p->batches !== null ? (float) $p->batches : null, // Gói chế biến theo mẻ (2026-11-11)
                 'employee_name' => $p->employee?->full_name,
                 'created_at' => $p->created_at,
             ]);

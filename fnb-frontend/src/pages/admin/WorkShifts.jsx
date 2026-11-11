@@ -61,8 +61,8 @@ export default function WorkShifts() {
     }, [branchId]);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    if (!can('attendance.shifts.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    const editable = can('attendance.shifts.edit');
     const inp = 'border border-gray-300 rounded px-3 py-2 text-[13px] w-full';
     const set = (k, v) => setForm({ ...form, [k]: v });
     const branchName = (id) => branches.find((b) => String(b.id) === String(id))?.name;

@@ -44,12 +44,37 @@ class ViolationController extends Controller
         return [$month, $start->toDateString(), $start->copy()->endOfMonth()->toDateString()];
     }
 
+    // §3.2: actor Employee chỉ thấy vi phạm của NV giao CN với mình —
+    // lọc theo branch_id của phiếu HOẶC theo NV (NV có CN chính/pivot
+    // giao với actor). Actor User không bị giới hạn.
+    private function scopeViolationsToActor(Request $request, $q)
+    {
+        $actor = $request->user();
+        if (!$actor instanceof Employee) return $q;
+        $mine = $actor->allBranchIds();
+        $empIds = Employee::where(fn ($w) => $w->whereIn('branch_id', $mine)
+            ->orWhereHas('branches', fn ($b) => $b->whereIn('branches.id', $mine)))->pluck('id');
+        return $q->where(fn ($w) => $w->whereIn('branch_id', $mine)->orWhereIn('employee_id', $empIds));
+    }
+
+    private function assertViolationVisible(Request $request, Violation $item): ?JsonResponse
+    {
+        $actor = $request->user();
+        if (!$actor instanceof Employee) return null;
+        $emp = $item->employee ?? Employee::find($item->employee_id);
+        if (!$emp || empty(array_intersect($actor->allBranchIds(), $emp->allBranchIds()))) {
+            return response()->json(['success' => false, 'message' => 'Vi phạm không thuộc phạm vi chi nhánh của bạn.'], 404);
+        }
+        return null;
+    }
+
     // GET /api/violations?month=YYYY-MM&employee_id=&branch_id=
     public function index(Request $request): JsonResponse
     {
         [$month, $from, $to] = $this->monthRange($request);
         $q = Violation::with(['employee:id,full_name', 'type:id,category,name'])
             ->whereBetween('date', [$from, $to]);
+        $q = $this->scopeViolationsToActor($request, $q);
         if ($request->filled('employee_id')) $q->where('employee_id', $request->integer('employee_id'));
         if ($request->filled('branch_id')) $q->where('branch_id', $request->integer('branch_id'));
         $items = $q->orderBy('date', 'desc')->orderBy('id', 'desc')->get()
@@ -70,6 +95,9 @@ class ViolationController extends Controller
         $type = ViolationType::findOrFail($v['violation_type_id']);
         $emp = Employee::findOrFail($v['employee_id']);
         $actor = $request->user();
+        if ($actor instanceof Employee && empty(array_intersect($actor->allBranchIds(), $emp->allBranchIds()))) {
+            return response()->json(['success' => false, 'message' => 'Nhân viên không thuộc phạm vi chi nhánh của bạn.'], 404);
+        }
         $item = Violation::create([
             'employee_id' => $emp->id,
             'violation_type_id' => $type->id,
@@ -88,6 +116,7 @@ class ViolationController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $item = Violation::findOrFail($id);
+        if ($deny = $this->assertViolationVisible($request, $item)) return $deny;
         $v = $request->validate([
             'violation_type_id' => 'nullable|exists:violation_types,id',
             'points' => 'nullable|integer|min:1|max:100',
@@ -107,9 +136,11 @@ class ViolationController extends Controller
     }
 
     // DELETE /api/violations/{id}
-    public function destroy(int $id): JsonResponse
+    public function destroy(Request $request, int $id): JsonResponse
     {
-        Violation::findOrFail($id)->delete();
+        $item = Violation::findOrFail($id);
+        if ($deny = $this->assertViolationVisible($request, $item)) return $deny;
+        $item->delete();
         return response()->json(['success' => true]);
     }
 
@@ -117,7 +148,9 @@ class ViolationController extends Controller
     public function summary(Request $request): JsonResponse
     {
         [$month, $from, $to] = $this->monthRange($request);
-        $rows = Violation::whereBetween('date', [$from, $to])
+        $rows = Violation::whereBetween('date', [$from, $to]);
+        $rows = $this->scopeViolationsToActor($request, $rows);
+        $rows = $rows
             ->selectRaw('employee_id, SUM(points) as total_points')
             ->groupBy('employee_id')->get()
             ->map(fn ($r) => ['employee_id' => (int) $r->employee_id, 'total_points' => (int) $r->total_points]);

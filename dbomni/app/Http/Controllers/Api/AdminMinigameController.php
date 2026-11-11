@@ -11,7 +11,7 @@ use Illuminate\Http\Request;
 
 // Minigame (2026-11-01) — Admin: cấu hình + số liệu vận hành + phiên bất
 // thường + thu hồi điểm theo phiên (spec 5.6). Route nằm trong nhóm quyền
-// customers.manage như khu Loyalty (mirror CheckPermission).
+// customers.minigame.* như khu Loyalty (mirror CheckPermission).
 class AdminMinigameController extends Controller
 {
     public function __construct(private MinigameService $service)

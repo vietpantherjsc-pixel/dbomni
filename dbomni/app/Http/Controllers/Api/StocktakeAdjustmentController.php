@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 
 // Gói 55 p11b: duyệt đề xuất điều chỉnh kho từ chênh lệch kiểm kê.
 // Chốt phiếu kiểm kê chỉ ghi nhận; vượt ngưỡng → sinh đề xuất pending.
-// Quản lý duyệt (permission:inventory.manage) mới thực hiện điều chỉnh kho thật.
+// Quản lý duyệt (permission:inventory.stocktake.approve) mới thực hiện điều chỉnh kho thật.
 class StocktakeAdjustmentController extends Controller
 {
     use \App\Traits\ValidatesEmployeeBranch;

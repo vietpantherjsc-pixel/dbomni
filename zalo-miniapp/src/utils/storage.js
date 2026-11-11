@@ -21,51 +21,121 @@ const loadApis = () => {
 // ghi kết quả persist gần nhất {ok, size, at} để vòng máy thật đối chiếu.
 export const KEYS = ['zm_branch', 'zm_profile', 'zm_zalo_profile', 'zm_account_cover', 'zm_cart', 'zm_ref', 'zm_groups', 'zm_last_order', 'zm_oa_followed', 'zm_session', 'zm_cover_diag'];
 
-// Nhận diện môi trường Zalo (2026-11-07): ngoài dấu hiệu cũ ZaloJSBridge
-// phải nhận thêm ZaloJavaScriptInterface — cầu nối hiện hành mà chính
-// zmp-sdk v2 dùng để gọi native (bản cũ chỉ chờ ZaloJSBridge nên trong
-// Zalo thật hàm này trả false vĩnh viễn: đăng nhập Zalo bị chặn ở cổng
-// not_zalo và storage lặng lẽ rơi về nhánh localStorage dự phòng).
-const isZalo = () => {
+const hasBridge = () => {
     try { return typeof window !== 'undefined' && (!!window.ZaloJSBridge || !!window.ZaloJavaScriptInterface); } catch { return false; }
 };
+
+// ── Chốt tầng lưu (vá gốc 2026-11-09) ─────────────────────────────────────
+// Tầng lưu ('native' = kho MPDS của Zalo qua SDK · 'local' = localStorage
+// của webview) được quyết MỘT LẦN cho cả phiên bằng một lần DÒ THẬT
+// (getStorage qua SDK), thay vì đoán cầu nối ở từng lần đọc/ghi như trước:
+// cách đoán cũ có thể rẽ hydrate sang "kho bóng" localStorage trong khi
+// lần ghi sau lại xuống native → ghi một nơi, đọc một nơi, mở lạnh mất hết.
+// Dò thành công = native sống → chốt native vĩnh viễn trong phiên. Dò
+// thất bại khi CÓ dấu hiệu cầu nối (đang ở trong Zalo, cầu có thể chưa ấm
+// lúc mở lạnh qua QR) thì thử lại vài nhịp ngắn trước khi chốt local;
+// không có cầu nối (trình duyệt dev thường) → chốt local ngay.
+let layerPromise = null;
+let pinnedLayer = null; // 'native' | 'local' sau khi đã chốt
+let probeData = null;   // kết quả getStorage của lần dò — hydrate dùng lại
+
+async function probeNative(apis) {
+    const attempts = hasBridge() ? 3 : 1;
+    for (let i = 0; i < attempts; i++) {
+        try {
+            const data = await apis.getStorage({ keys: KEYS });
+            probeData = (data && typeof data === 'object') ? data : {};
+            return true;
+        } catch {
+            if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400));
+        }
+    }
+    return false;
+}
+
+function ensureLayer() {
+    if (layerPromise) return layerPromise;
+    layerPromise = (async () => {
+        const apis = await loadApis();
+        pinnedLayer = (apis?.getStorage && apis?.setStorage && await probeNative(apis)) ? 'native' : 'local';
+        return pinnedLayer;
+    })();
+    return layerPromise;
+}
 
 const cache = {};
 // Vá cover B (2026-11-09): hydrate giữ promise đang chạy để nơi khác chờ
 // được mốc "nạp xong" (storage.ready()) — trước đây chỉ có cờ true đặt
 // TRƯỚC khi nạp thật, không ai biết khi nào dữ liệu đã về cache.
 let hydratePromise = null;
+let hydrateSettled = false;
+// Khóa bị ghi TRONG LÚC hydrate chưa xong: hydrate về sau không được đè
+// lên giá trị vừa ghi mới (đua hydrate — bản vá dirty-guard 2026-11-09).
+const dirtyDuringHydrate = new Set();
+const markDirty = (key) => { if (!hydrateSettled) dirtyDuringHydrate.add(key); };
 
 export function hydrateStorage() {
     if (hydratePromise) return hydratePromise;
     hydratePromise = (async () => {
-        if (isZalo()) {
-            try {
-                const apis = await loadApis();
-                if (apis?.getStorage) {
-                    const { data } = await apis.getStorage({ keys: KEYS });
-                    for (const k of KEYS) cache[k] = data?.[k] ?? null;
-                }
-            } catch { /* giữ null */ }
+        const layer = await ensureLayer();
+        if (layer === 'native') {
+            let data = probeData;
+            if (!data) {
+                try {
+                    const apis = await loadApis();
+                    data = await apis?.getStorage?.({ keys: KEYS });
+                } catch { data = null; }
+            }
+            probeData = null;
+            // ⭐ GỐC LỖI MẤT PHIÊN/COVER Ở MỞ LẠNH (kết án 2026-11-09):
+            // getStorage của zmp-sdk resolve ra OBJECT PHẲNG { key: value }
+            // (getDataFromStorage trả thẳng, functionHandler không bọc vỏ) —
+            // bản cũ đọc `const { data } = await ...` nên data luôn undefined
+            // và MỌI khóa bị gán null vào cache ở mọi lần mở lạnh, dù dữ liệu
+            // gốc trong máy còn nguyên. Đọc phẳng tại đây; lớp bọc { data }
+            // chỉ mở khi tầng trên không chứa khóa nào của mình (phòng thủ
+            // cho biến thể SDK khác), không bao giờ gán null oan nữa.
+            let flat = (data && typeof data === 'object') ? data : {};
+            if (!KEYS.some((k) => k in flat) && flat.data && typeof flat.data === 'object') flat = flat.data;
+            for (const k of KEYS) {
+                if (dirtyDuringHydrate.has(k)) continue;
+                cache[k] = flat[k] ?? null;
+            }
         } else {
             for (const k of KEYS) {
+                if (dirtyDuringHydrate.has(k)) continue;
                 try { cache[k] = localStorage.getItem(k); } catch { cache[k] = null; }
             }
         }
+        dirtyDuringHydrate.clear();
+        hydrateSettled = true;
     })();
     return hydratePromise;
 }
 
-// Vá cover C (2026-11-09): persist TRẢ kết quả true/false thay vì nuốt
-// lỗi lặng lẽ — nơi gọi cần biết ghi thật thành công hay không thì dùng
-// storage.setTracked(); các nơi gọi cũ (set/remove) giữ nguyên hành vi.
+// Vá cover C (2026-11-09) + vá gốc 2026-11-09: persist TRẢ kết quả
+// true/false ĐÚNG SỰ THẬT —
+// - Ghi: SDK resolve kèm { errorKeys } liệt kê các key bị native TỪ CHỐI
+//   (vd quá giới hạn tổng 5MB của kho MPDS); key của mình nằm trong đó
+//   = ghi THẤT BẠI dù promise resolve (bản cũ không xét → báo OK giả).
+// - Xóa (value null): phải gọi removeStorage THẬT — đường setStorage của
+//   SDK tự LOẠI giá trị null trước khi gửi xuống native nên ghi null
+//   không xóa được gì (bản cũ xóa phiên/đăng xuất chỉ xóa ở cache).
 const persist = async (key, value) => {
-    if (isZalo()) {
+    const layer = await ensureLayer();
+    if (layer === 'native') {
         try {
             const apis = await loadApis();
+            if (value === null || value === undefined) {
+                if (apis?.removeStorage) {
+                    const res = await apis.removeStorage({ keys: [key] });
+                    return !(Array.isArray(res?.errorKeys) && res.errorKeys.includes(key));
+                }
+                return false;
+            }
             if (apis?.setStorage) {
-                await apis.setStorage({ data: { [key]: value } });
-                return true;
+                const res = await apis.setStorage({ data: { [key]: value } });
+                return !(Array.isArray(res?.errorKeys) && res.errorKeys.includes(key));
             }
             return false;
         } catch { return false; }
@@ -90,6 +160,7 @@ export const storage = {
         const v = value === null || value === undefined ? null
             : (typeof value === 'string' ? value : JSON.stringify(value));
         cache[key] = v;
+        markDirty(key);
         persist(key, v);
     },
     // Như set() nhưng TRẢ promise kết quả ghi thật (true/false) — dùng cho
@@ -98,6 +169,7 @@ export const storage = {
         const v = value === null || value === undefined ? null
             : (typeof value === 'string' ? value : JSON.stringify(value));
         cache[key] = v;
+        markDirty(key);
         return persist(key, v);
     },
     // Promise resolved khi hydrate (nạp dữ liệu lưu vào cache) đã xong —
@@ -105,10 +177,13 @@ export const storage = {
     ready() { return hydratePromise ?? Promise.resolve(); },
     remove(key) {
         cache[key] = null;
+        markDirty(key);
         persist(key, null);
     },
     hydrate: hydrateStorage,
-    isZalo,
+    // Tương thích ngược cho caller cũ: đã chốt tầng thì trả theo tầng,
+    // chưa chốt thì dựa vào dấu hiệu cầu nối như trước.
+    isZalo() { return pinnedLayer ? pinnedLayer === 'native' : hasBridge(); },
 };
 
 export default storage;

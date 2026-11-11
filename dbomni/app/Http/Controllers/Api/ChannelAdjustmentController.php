@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 // Gói "PNL kênh sàn đầy đủ" (2026-10-31): nhập phí marketing sàn theo
-// (kênh × chi nhánh × tháng). Route nằm trong nhóm permission:finance.manage
+// (kênh × chi nhánh × tháng). Route nằm trong nhóm permission:finance.channels.*
 // (mirror CheckPermission) như phiếu thu-chi. Chỉ 1 con số: marketing_fee.
 class ChannelAdjustmentController extends Controller
 {

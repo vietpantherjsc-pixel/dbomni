@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2.11: cổng settings.online.view
 
 // Gói 6 (2026-10-05): Cấu hình bán online — phí ship + tọa độ chi nhánh (để Mini App tính khoảng cách).
 // Gói 10: bọc AdminLayout để có sidebar (trước đây bị mất).
@@ -20,6 +21,7 @@ const imgSrc = (u) => {
 };
 
 export default function OnlineConfig() {
+  const { can } = useAuth();
   const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
     const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '8000' });
   // Gói 9: cover trang chủ Mini App
@@ -147,6 +149,9 @@ export default function OnlineConfig() {
       setBranches(await api('/branches'));
     } catch (e) { alert(e.response?.data?.message || 'Thao tác thất bại. Vui lòng thử lại.'); }
   };
+
+  // Cây phân quyền §2.11: cổng trang settings.online.view.
+  if (!can('settings.online.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem cấu hình Zalo Mini App.</div></AdminLayout>);
 
   const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500';
 

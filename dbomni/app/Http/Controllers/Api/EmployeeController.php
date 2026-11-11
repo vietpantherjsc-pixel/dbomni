@@ -18,6 +18,17 @@ class EmployeeController extends Controller
         $q = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])
             ->orderBy('full_name');
 
+        // §3.2: actor Employee chỉ thấy NV có tập CN giao với mình (CN chính
+        // hoặc pivot). Chọn CN ngoài phạm vi -> danh sách rỗng, không 404.
+        $mine = $this->actorBranchIds($request);
+        if ($mine !== null) {
+            if ($request->filled('branch_id') && !in_array($request->integer('branch_id'), $mine, true)) {
+                $q->whereRaw('1 = 0');
+            } else {
+                $q = $this->scopeToActorBranches($q, $mine);
+            }
+        }
+
         // Gói 26c: NV thuộc CN nếu branch_id chính = CN đó HOẶC có trong pivot branch_employee
         if ($request->filled('branch_id')) {
             $bid = $request->integer('branch_id');
@@ -44,9 +55,10 @@ class EmployeeController extends Controller
         return response()->json(['success' => true, 'data' => $page]);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
         $emp = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])->findOrFail($id);
+        if ($deny = $this->assertTargetVisible($request, $emp)) return $deny;
         $emp->setAttribute('has_password', !empty($emp->password)); // Gói #102
         return response()->json(['success' => true, 'data' => $emp]);
     }
@@ -77,6 +89,44 @@ class EmployeeController extends Controller
             'apply_responsibility' => 'nullable|boolean',
             'avatar' => 'nullable|string|max:255',
         ];
+    }
+
+    // §3.2 — phân vùng Nhân sự cho actor Employee: tập CN của actor
+    // (CN chính + pivot). Actor User (quản trị) không bị giới hạn ở đây
+    // (tầng Chủ Chi Nhánh đã bị chặn ở middleware vì staff.* không nằm
+    // trong 7 lá lương của tầng đó).
+    protected function actorBranchIds(Request $request): ?array
+    {
+        $actor = $request->user();
+        return $actor instanceof Employee ? $actor->allBranchIds() : null;
+    }
+
+    protected function scopeToActorBranches($q, array $mine)
+    {
+        return $q->where(fn ($w) => $w->whereIn('branch_id', $mine)
+            ->orWhereHas('branches', fn ($b) => $b->whereIn('branches.id', $mine)));
+    }
+
+    protected function assertTargetVisible(Request $request, Employee $target): ?JsonResponse
+    {
+        $mine = $this->actorBranchIds($request);
+        if ($mine === null) return null;
+        if (empty(array_intersect($mine, $target->allBranchIds()))) {
+            return response()->json(['success' => false, 'message' => 'Nhân viên không thuộc phạm vi chi nhánh của bạn.'], 404);
+        }
+        return null;
+    }
+
+    protected function assertBranchesInScope(Request $request, array $branchIds): ?JsonResponse
+    {
+        $mine = $this->actorBranchIds($request);
+        if ($mine === null) return null;
+        foreach ($branchIds as $bid) {
+            if (!in_array((int) $bid, $mine, true)) {
+                return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
+            }
+        }
+        return null;
     }
 
     // Audit 2026-10-23 B-1: Employee thao tác không được vượt quyền của chính mình:
@@ -127,6 +177,7 @@ class EmployeeController extends Controller
         $storeRules = $this->rules();
         unset($storeRules['password']);
         $validated = $request->validate($storeRules);
+        if ($deny = $this->assertBranchesInScope($request, array_merge([(int) $validated['branch_id']], array_map('intval', $validated['branch_ids'] ?? [])))) return $deny;
         if ($deny = $this->guardRoleAssignment($request, $validated['role_id'] ?? null)) return $deny;
         // Gói 38: PIN lưu hash — sinh ngẫu nhiên hoặc check trùng PIN nhập tay bằng Hash::check
         if (empty($validated['pin_code'])) {
@@ -200,7 +251,12 @@ class EmployeeController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
+        if ($deny = $this->assertTargetVisible($request, $emp)) return $deny;
         $validated = $request->validate($this->rules($id));
+        $newBranches = [];
+        if (isset($validated['branch_id'])) $newBranches[] = (int) $validated['branch_id'];
+        if (!empty($validated['branch_ids'])) $newBranches = array_merge($newBranches, array_map('intval', $validated['branch_ids']));
+        if ($deny = $this->assertBranchesInScope($request, $newBranches)) return $deny;
         if (array_key_exists('role_id', $validated)) {
             if ($deny = $this->guardRoleAssignment($request, $validated['role_id'])) return $deny;
         }
@@ -247,9 +303,11 @@ class EmployeeController extends Controller
         return array_values(array_unique(array_map('intval', $ids)));
     }
 
-    public function destroy(int $id): JsonResponse
+    public function destroy(Request $request, int $id): JsonResponse
     {
-        Employee::findOrFail($id)->delete();
+        $emp = Employee::findOrFail($id);
+        if ($deny = $this->assertTargetVisible($request, $emp)) return $deny;
+        $emp->delete();
         return response()->json(['success' => true, 'message' => 'Đã xóa nhân viên.']);
     }
 
@@ -257,6 +315,7 @@ class EmployeeController extends Controller
     public function resetPin(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
+        if ($deny = $this->assertTargetVisible($request, $emp)) return $deny;
         if ($deny = $this->guardResetTarget($request, $emp)) return $deny;
         $pin = $this->generateUniquePin($id);
         $emp->update(['pin_code' => $pin]); // cast 'hashed' tự hash
@@ -271,6 +330,7 @@ class EmployeeController extends Controller
     public function resetPassword(Request $request, int $id): JsonResponse
     {
         $emp = Employee::findOrFail($id);
+        if ($deny = $this->assertTargetVisible($request, $emp)) return $deny;
         if ($deny = $this->guardResetTarget($request, $emp)) return $deny;
         $plainPassword = $this->generateTempPassword();
         [$resetByUserId, $resetByEmployeeId] = ApprovalActor::ids($request->user());

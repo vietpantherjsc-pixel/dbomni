@@ -2054,9 +2054,12 @@ function MaterialPicker({ materials, categories, onSelect, onClose, multi = fals
 // ================= TAB CHẾ BIẾN =================
 function ProductionTab({ materials, matById, onDone, branchId }) {
     const [history, setHistory] = useState([]);
-    const [produce, setProduce] = useState({ material_id: '', quantity: '', note: '' });
+    const [produce, setProduce] = useState({ material_id: '', batches: '', note: '' });
+    const [recipeInfo, setRecipeInfo] = useState(null); // {loading, lines, batchOut} của BTP đang chọn
 
-    const semis = materials.filter((m) => m.is_semi_finished);
+    // Gói chế biến theo mẻ (2026-11-11): ô chọn chỉ hiện món thuộc loại
+    // "Bán thành phẩm" VÀ có định mức (is_semi_finished suy từ định mức).
+    const semis = materials.filter((m) => m.is_semi_finished && m.category?.name === 'Bán thành phẩm');
 
     const fetchData = async () => {
         try {
@@ -2066,19 +2069,41 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
     };
     useEffect(() => { fetchData(); }, [branchId]);
 
+    const pickMaterial = async (id) => {
+        setProduce((p) => ({ ...p, material_id: id }));
+        setRecipeInfo(null);
+        if (!id) return;
+        setRecipeInfo({ loading: true, lines: [], batchOut: null });
+        try {
+            const res = await axios.get(`${API}/production-recipes`, { params: { material_id: id } });
+            const lines = res.data?.data || [];
+            const batchOut = lines.length && lines[0].batch_output_qty != null ? Number(lines[0].batch_output_qty) : null;
+            setRecipeInfo({ loading: false, lines, batchOut });
+        } catch (err) { console.error('Lỗi tải định mức:', err); setRecipeInfo({ loading: false, lines: [], batchOut: null }); }
+    };
+
+    const batchesNum = Number(produce.batches) || 0;
+    const batchesValid = batchesNum >= 0.5 && Math.abs(batchesNum * 2 - Math.round(batchesNum * 2)) < 1e-9;
+    const outQty = recipeInfo && recipeInfo.batchOut > 0 ? batchesNum * recipeInfo.batchOut : 0;
+    const canProduce = produce.material_id && batchesValid && recipeInfo && !recipeInfo.loading && recipeInfo.lines.length > 0 && recipeInfo.batchOut > 0;
+
     const handleProduce = async () => {
-        if (!produce.material_id || !produce.quantity) return alert('Chọn bán thành phẩm và số lượng cần chế biến');
-        if (!window.confirm(`Chế biến ${produce.quantity} ${matById(produce.material_id)?.unit} ${matById(produce.material_id)?.name}? Nguyên liệu thô sẽ bị trừ kho.`)) return;
+        if (!produce.material_id) return alert('Chọn bán thành phẩm cần chế biến');
+        if (!batchesValid) return alert('Số mẻ phải từ 0,5 và theo bước 0,5 (0,5 · 1 · 1,5 · 2…).');
+        if (!recipeInfo || recipeInfo.lines.length === 0) return alert('Bán thành phẩm này chưa có định mức.');
+        if (!(recipeInfo.batchOut > 0)) return alert('Bán thành phẩm này chưa cấu hình sản lượng mỗi mẻ — bổ sung ở tab Định mức trước.');
+        if (!window.confirm(`Chế biến ${batchesNum.toLocaleString('vi-VN')} mẻ → ra ${outQty.toLocaleString('vi-VN')} ${matById(produce.material_id)?.unit} ${matById(produce.material_id)?.name}? Nguyên liệu thô sẽ bị trừ kho.`)) return;
         try {
             const res = await axios.post(`${API}/productions`, {
                 branch_id: branchId,
                 material_id: Number(produce.material_id),
-                quantity: Number(produce.quantity),
+                batches: batchesNum,
                 note: produce.note || null,
             });
             if (res.data?.success) {
                 alert(res.data.message);
-                setProduce({ material_id: '', quantity: '', note: '' });
+                setProduce({ material_id: '', batches: '', note: '' });
+                setRecipeInfo(null);
                 fetchData(); onDone();
             }
         } catch (err) { alert(err.response?.data?.message || 'Chế biến thất bại'); }
@@ -2094,16 +2119,16 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                     <div className="grid grid-cols-2 gap-3">
                         <div className="col-span-2">
                             <label className="text-xs text-gray-500">Bán thành phẩm *</label>
-                            <select value={produce.material_id} onChange={(e) => setProduce({ ...produce, material_id: e.target.value })}
+                            <select value={produce.material_id} onChange={(e) => pickMaterial(e.target.value)}
                                 className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]">
                                 <option value="">-- Chọn --</option>
                                 {semis.map((m) => <option key={m.id} value={m.id}>{m.name} ({m.unit})</option>)}
                             </select>
                         </div>
                         <div>
-                            <label className="text-xs text-gray-500">Số lượng * ({matById(produce.material_id)?.unit || '...'})</label>
-                            <input type="number" min="0" step="any" value={produce.quantity}
-                                onChange={(e) => setProduce({ ...produce, quantity: e.target.value })}
+                            <label className="text-xs text-gray-500">Số mẻ *</label>
+                            <input type="number" min="0.5" step="0.5" value={produce.batches}
+                                onChange={(e) => setProduce({ ...produce, batches: e.target.value })}
                                 className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                         </div>
                         <div>
@@ -2112,7 +2137,24 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                                 className="w-full mt-1 px-3 py-2 text-[13px] border border-gray-300 rounded focus:outline-none focus:border-[#24305E]" />
                         </div>
                     </div>
-                    <button onClick={handleProduce} className="mt-3 px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547]">
+                    {produce.material_id && (
+                        <div className="mt-3 text-[12.5px] leading-relaxed">
+                            {!recipeInfo || recipeInfo.loading ? (
+                                <span className="text-gray-400">Đang tải định mức…</span>
+                            ) : recipeInfo.lines.length === 0 ? (
+                                <span className="text-red-500">Chưa có định mức — không chế biến được.</span>
+                            ) : !(recipeInfo.batchOut > 0) ? (
+                                <span className="text-red-500">⚠ Chưa cấu hình sản lượng mỗi mẻ — bổ sung ở tab Định mức trước khi chế biến theo mẻ.</span>
+                            ) : (
+                                <React.Fragment>
+                                    <div>Mỗi mẻ ra <b>{Number(recipeInfo.batchOut).toLocaleString('vi-VN')} {matById(produce.material_id)?.unit}</b>{batchesValid && <span> · Chế biến <b>{batchesNum.toLocaleString('vi-VN')} mẻ</b> → ra <b>{outQty.toLocaleString('vi-VN')} {matById(produce.material_id)?.unit}</b></span>}</div>
+                                    {batchesValid && <div className="text-gray-500">NL cần trừ: {recipeInfo.lines.map((l) => `${l.raw_material?.name} ${(Number(l.quantity) * batchesNum).toLocaleString('vi-VN')} ${l.raw_material?.unit || ''}`).join(' · ')}</div>}
+                                    {produce.batches && !batchesValid && <div className="text-red-500">Số mẻ phải từ 0,5 và theo bước 0,5 (0,5 · 1 · 1,5 · 2…).</div>}
+                                </React.Fragment>
+                            )}
+                        </div>
+                    )}
+                    <button onClick={handleProduce} disabled={!canProduce} className="mt-3 px-5 py-2.5 bg-[#24305E] text-white text-[13px] font-medium rounded hover:bg-[#1B2547] disabled:opacity-40">
                         Chế biến
                     </button>
                     <p className="text-[11px] text-gray-400 mt-2">Trừ nguyên liệu thô theo định mức (FIFO) và nhập lô mới cho bán thành phẩm.</p>
@@ -2123,7 +2165,7 @@ function ProductionTab({ materials, matById, onDone, branchId }) {
                     {history.map((p) => (
                         <div key={p.id} className="text-[13px] border-b border-gray-50 py-2">
                             <div className="flex justify-between">
-                                <span className="font-medium">{p.material?.name} — {Number(p.quantity).toLocaleString('vi-VN')} {p.material?.unit}</span>
+                                <span className="font-medium">{p.material?.name} — {p.batches != null ? `${Number(p.batches).toLocaleString('vi-VN')} mẻ · ` : ''}{Number(p.quantity).toLocaleString('vi-VN')} {p.material?.unit}</span>
                                 <span className="text-gray-400 text-xs">{fmtDateTime(p.created_at)}</span>
                             </div>
                             <div className="text-xs text-gray-500">

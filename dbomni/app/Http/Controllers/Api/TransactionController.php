@@ -349,7 +349,7 @@ class TransactionController extends Controller
         ]]);
     }
 
-    // Gói 59: quản lý duyệt phiếu do NV tạo (route đặt trong group permission:finance.manage).
+    // Gói 59: quản lý duyệt phiếu do NV tạo (route permission:finance.transactions.approve).
     // Gói "Chờ duyệt trên Hub" (2026-10-21): ghi vết Employee qua ApprovalActor; chặn cả phiếu đã từ chối.
     public function approve(Request $request, $id): JsonResponse
     {
@@ -375,7 +375,7 @@ class TransactionController extends Controller
 
     /**
      * Gói "Chờ duyệt trên Hub" (2026-10-21, ĐÃ CHỐT — mục 4.3 spec): từ chối phiếu thu/chi.
-     * Dùng chung cho Admin (route permission:finance.manage) và Hub (EmployeeApprovalController gọi lại).
+     * Dùng chung cho Admin (route permission:finance.transactions.approve) và Hub (EmployeeApprovalController gọi lại).
      * Lý do BẮT BUỘC (trim không rỗng, tối đa 500 ký tự). Phiếu bị từ chối = hồ sơ đóng (terminal):
      * không sửa, không gửi lại, không duyệt lại — muốn xử lý lại thì tạo phiếu mới.
      */

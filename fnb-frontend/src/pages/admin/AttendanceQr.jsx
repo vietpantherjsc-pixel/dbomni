@@ -56,8 +56,8 @@ export default function AttendanceQr() {
     }, [branchId]);
     useEffect(() => { fetchQr(); }, [fetchQr]);
 
-    if (!can('staff.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
-    const editable = can('staff.edit');
+    if (!can('attendance.qr.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem mục Chấm công.</div></AdminLayout>);
+    const editable = can('attendance.shifts.edit');
 
     const copyUrl = async () => {
         if (!qr?.url) return;

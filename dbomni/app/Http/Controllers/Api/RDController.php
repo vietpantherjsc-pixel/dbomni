@@ -30,7 +30,7 @@ use Illuminate\Support\Str;
 
 // SPEC R&D (2026-10-21, Đại Vương chốt):
 // - Menu cấp 1 "R&D" (ngoại lệ UI-MAP đã được duyệt), trang /admin/rd 3 tab.
-// - Phân quyền: XEM = products.manage hoặc reports.view; GHI/DUYỆT = products.manage.
+// - Phân quyền: XEM = products.rd.view hoặc reports.overview.view; GHI/DUYỆT = products.rd.edit.
 // - Giá vốn nháp tính ĐÚNG logic ProductController::calcCost (lô mới nhất ÷ hệ số quy đổi).
 // - Hòa vốn đúng công thức spec 5.2 (số bán thật; biến phí gồm giá vốn NL + chiết khấu kênh).
 class RDController extends Controller
@@ -38,10 +38,12 @@ class RDController extends Controller
     // ================= dùng chung =================
 
     /**
-     * Quyền xem: products.manage HOẶC reports.view.
+     * Quyền xem: products.rd.view HOẶC reports.overview.view.
      * Mirror ĐÚNG ngữ nghĩa CheckPermission (Gói 26): User (admin) = full quyền;
      * Employee = còn hoạt động + ma trận roles.permissions qua Role::hasPermission().
      * Không dùng Spatie can() — User không được gán quyền Spatie (hotfix 2026-10-21).
+     * Cây phân quyền §2 (10/11/2026): khóa cũ products.manage / reports.view
+     * không còn tồn tại trong role nào sau chuyển đổi — kiểm đúng lá mới.
      */
     private function canView(Request $request): bool
     {
@@ -54,7 +56,7 @@ class RDController extends Controller
                 return false;
             }
             $role = $actor->role;
-            return $role && ($role->hasPermission('products.manage') || $role->hasPermission('reports.view'));
+            return $role && ($role->hasPermission('products.rd.view') || $role->hasPermission('reports.overview.view'));
         }
         return false;
     }
@@ -590,16 +592,17 @@ class RDController extends Controller
         if ($source === 'auto_salary') {
             $salary = app(SalaryController::class);
             $total = 0.0;
-            $allLocked = $branchId === null;
+            $allLocked = true;
             foreach ($months as $m) {
-                if ($branchId === null) {
-                    $lock = PayrollLock::get($m['ym']);
-                    if ($lock) {
-                        $total += (float) $lock->net_total;
-                        continue;
-                    }
-                    $allLocked = false;
+                // §3.8: khóa theo CN (fallback khóa toàn hệ) khi có branch;
+                // toàn hệ chỉ dùng khóa toàn hệ — CN đã chốt mà chưa chốt
+                // toàn hệ thì dữ liệu live đã đóng băng nên tổng vẫn khớp.
+                $lock = PayrollLock::get($m['ym'], $branchId);
+                if ($lock) {
+                    $total += (float) $lock->net_total;
+                    continue;
                 }
+                $allLocked = false;
                 [, $grand] = $salary->buildPayrollData($m['ym'], $branchId);
                 $total += (float) $grand;
             }

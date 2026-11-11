@@ -2,8 +2,8 @@
   "app": {
     "title": "Daybreak",
     "headerTitle": "Daybreak",
-    "headerColor": "#24305E",
-    "textColor": "white",
+    "headerColor": "#FFFFFF",
+    "textColor": "black",
     "leftButton": "back",
     "statusBar": "normal",
     "actionBarHidden": false,
@@ -11,17 +11,15 @@
     "hideIOSSafeAreaBottom": false
   },
   "listSyncJS": [
-  "assets/index.DQ31cnL9.module.js"
+    "assets/index.DCiwzzi6.module.js"
   ],
   "listAsyncJS": [
-    "assets/GameRules.BZRvmsu0.module.js",
-    "assets/HungTranChau.EfU0_CW9.module.js",
+    "assets/GameRules.Bd79Q0U9.module.js",
+    "assets/HungTranChau.Ddt5DD-O.module.js",
     "assets/index.DshJxjbc.module.js",
     "assets/index.es.BVyZxF6u.module.js"
   ],
   "listCSS": [
     "assets/index-H-8xWDL2.css"
   ]
-
-
 }

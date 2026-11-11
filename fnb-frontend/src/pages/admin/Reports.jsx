@@ -16,6 +16,7 @@ import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import MonthInput, { validMonth } from '../../components/MonthInput';
 import { API } from '../../utils/api';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2: gác tab báo cáo theo lá view
 
 // =====================================================================
 // Gói 58 (2026-10-14): Tái cấu trúc theo demo v4 — 8 tab:
@@ -476,6 +477,22 @@ export default function Reports() {
         ['ops', 'Vận hành'],
         ['hr', 'Nhân sự'],
     ];
+    // Cây phân quyền §2: mỗi tab báo cáo gác 1 lá view; tab Nhân sự là mặt
+    // xem tổng lương thứ hai (staff.salary.summary.view — không mở chi tiết
+    // từng người, đúng phân biệt §3.3: P&L/tổng lương = số gộp).
+    const { can } = useAuth();
+    const TAB_PERMS = {
+        overview: 'reports.overview.view', rev: 'reports.revenue.view',
+        cash: 'reports.cash.view', pnl: 'reports.pnl.view',
+        waste: 'reports.inventory.view', menu: 'reports.menu.view',
+        cancelled: 'reports.cancelled.view', ops: 'reports.operations.view',
+        hr: 'staff.salary.summary.view',
+    };
+    const visibleTabs = TABS.filter(([k]) => can(TAB_PERMS[k]));
+    useEffect(() => {
+        if (visibleTabs.length && !visibleTabs.some(([k]) => k === tab)) setTab(visibleTabs[0][0]);
+    }, [tab, visibleTabs]); // eslint-disable-line
+    if (visibleTabs.length === 0) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem báo cáo.</div></AdminLayout>);
 
     return (
         <AdminLayout>
@@ -539,7 +556,7 @@ export default function Reports() {
 
                 {/* Tabs */}
                 <nav className="tabs">
-                    {TABS.map(([k, lb]) => (
+                    {visibleTabs.map(([k, lb]) => (
                         <button key={k} className={'tab-btn' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}>{lb}</button>
                     ))}
                 </nav>

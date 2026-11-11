@@ -13,7 +13,7 @@ use Illuminate\Validation\Rule;
 // Spec danh mục dùng chung (Đại Vương chốt 2026-10-19): CRUD 13 tab danh mục nghiệp vụ.
 // - GET /api/shared-categories?group= : public, chỉ bản ghi active (dropdown).
 //   Riêng group=payment_channels là ẢO — đọc động từ price_lists (kênh active).
-// - Các endpoint còn lại cần quyền settings.edit (route).
+// - Các endpoint còn lại cần quyền settings.general.edit (route).
 class SharedCategoryController extends Controller
 {
     // Public: dropdown — [{code, name}] active, theo sort_order

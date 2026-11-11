@@ -93,7 +93,7 @@ class ShiftController extends Controller
             $isStale = $existing->opened_at && $existing->opened_at->toDateString() < now()->toDateString();
             $actor = $request->user();
             $isManager = $actor instanceof \App\Models\User
-                || ($actor instanceof \App\Models\Employee && $actor->role && $actor->role->hasPermission('finance.manage'));
+                || ($actor instanceof \App\Models\Employee && $actor->role && $actor->role->hasPermission('finance.transactions.create'));
             if ($isStale && $isManager) {
                 $this->autoCloseStaleShift($existing, $actor);
             } else {
@@ -135,7 +135,7 @@ class ShiftController extends Controller
 
         $shift = Shift::where('id', $id)->where('status', 'open')->firstOrFail();
 
-        // Gói 55 p11ae: chỉ chủ ca hoặc quản lý (finance.manage) được thêm chi.
+        // Gói 55 p11ae: chỉ chủ ca hoặc quản lý (finance.transactions.create) được thêm chi.
         // performed_by ghi NGƯỜI GỌI thực tế, không ghi chủ ca (chống xóa dấu vết).
         if (!self::canManageShift($request->user(), $shift)) {
             return response()->json(['success' => false, 'message' => 'Chỉ chủ ca hoặc quản lý mới được thêm phiếu chi.'], 403);
@@ -165,7 +165,7 @@ class ShiftController extends Controller
 
         $shift = Shift::with('expenses')->where('id', $id)->where('status', 'open')->firstOrFail();
 
-        // Gói 55 p11ae: chỉ chủ ca hoặc quản lý (finance.manage) được chốt ca.
+        // Gói 55 p11ae: chỉ chủ ca hoặc quản lý (finance.transactions.create) được chốt ca.
         if (!self::canManageShift($request->user(), $shift)) {
             return response()->json(['success' => false, 'message' => 'Chỉ chủ ca hoặc quản lý mới được chốt ca.'], 403);
         }
@@ -261,14 +261,14 @@ class ShiftController extends Controller
         return trim((string) ($actor->full_name ?? $actor->name ?? $actor->username ?? ''));
     }
 
-    // Gói 55 p11ae: chỉ chủ ca (người mở ca) hoặc quản lý (finance.manage) được thêm chi/chốt ca.
+    // Gói 55 p11ae: chỉ chủ ca (người mở ca) hoặc quản lý (finance.transactions.create) được thêm chi/chốt ca.
     // Ca cũ (chưa có opened_by_name) fallback so với cashier_name để không gãy.
     private static function canManageShift($actor, Shift $shift): bool
     {
         if ($actor instanceof \App\Models\User) return true; // admin bypass, giống CheckPermission
         if ($actor instanceof \App\Models\Employee) {
             $role = $actor->role;
-            if ($role && $role->hasPermission('finance.manage')) return true; // quản lý
+            if ($role && $role->hasPermission('finance.transactions.create')) return true; // quản lý
             $me = self::actorDisplayName($actor);
             if ($me !== '') {
                 $opener = trim((string) ($shift->opened_by_name ?: $shift->cashier_name));

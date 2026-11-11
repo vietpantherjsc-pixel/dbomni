@@ -13,8 +13,10 @@ import axios from 'axios';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import { Navigate } from 'react-router-dom';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useBranch } from '../../contexts/BranchContext';
+import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2: cổng dashboard.view
 import { API } from '../../utils/api';
 
 // =====================================================================
@@ -104,6 +106,7 @@ function StockAlerts({ branchId }) {
 }
 
 const Dashboard = () => {
+    const { can, isBranchOwner } = useAuth();
     const [range, setRange] = useState('today');
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -152,6 +155,14 @@ const Dashboard = () => {
                 if (v !== null && v !== undefined) setPrimeCostPct(v);
             }).catch((e) => noteExpired(e));
     }, [range, branchId]);
+
+    // Cây phân quyền §2: cổng trang dashboard.view. Chủ Chi Nhánh không có lá
+    // này — đưa thẳng về Bảng lương (trang duy nhất của tầng đó) thay vì
+    // hiện trang trống; các vai khác thiếu quyền thì báo không có quyền.
+    if (!can('dashboard.view')) {
+        if (isBranchOwner) return <Navigate to="/admin/staff/salary" replace />;
+        return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem Tổng quan.</div></AdminLayout>);
+    }
 
     return (
         <AdminLayout>

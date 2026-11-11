@@ -12,7 +12,7 @@ use Illuminate\Validation\Rule;
 
 // Spec 5 — UI quản lý voucher (2026-10-21, lệnh Đại Vương qua PM):
 // backend CRUD voucher MỚI TOÀN BỘ (trước đây chưa có đường tạo nào).
-// Ghi (POST/PUT/DELETE): cùng middleware phân quyền KM (products.manage) ở routes.
+// Ghi (POST/PUT/DELETE): cùng middleware phân quyền KM (products.vouchers.*) ở routes.
 // Đọc (GET): mở cho mọi tài khoản đã đăng nhập (như /promotions).
 class VoucherController extends Controller
 {

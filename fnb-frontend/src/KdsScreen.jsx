@@ -499,7 +499,7 @@ function BookShipPop({ ord, onClose, onRefresh }) {
 
 // Khối giao hàng trên thẻ đơn ở cột Chờ Giao: khung phí + nút trạng thái chạy
 // theo delivery_status (mục 3 + 6). Đơn giao nằm yên ở cột này suốt quá trình.
-function DeliveryPanel({ ord, btnBase, timeoutMin, onBook, onStartManual, onToManual, onAdvance, onFail, onComplete }) {
+function DeliveryPanel({ ord, btnBase, timeoutMin, carrierAvailable, onBook, onStartManual, onToManual, onAdvance, onFail, onComplete }) {
   const ds = ord.delivery_status || '';
   const isManual = ord.delivery_provider === 'manual';
   const customerFee = Number(ord.shipping_fee || 0);
@@ -522,7 +522,9 @@ function DeliveryPanel({ ord, btnBase, timeoutMin, onBook, onStartManual, onToMa
         </div>
         {isManual && (
           <>
-            <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+            {carrierAvailable && (
+              <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+            )}
             <button onClick={() => onStartManual(ord)} className={`${btnBase} bg-sky-600 hover:bg-sky-500 text-white`}>🛵 Chạy lại Quán Tự Đặt</button>
           </>
         )}
@@ -567,9 +569,13 @@ function DeliveryPanel({ ord, btnBase, timeoutMin, onBook, onStartManual, onToMa
       <>
         <div className="w-full px-3 py-2 rounded-xl bg-slate-900/70 border border-slate-700 text-xs font-semibold space-y-0.5">
           <div>Phí ship khách đã trả: <b className="font-mono">{fmtMoney(customerFee)}</b></div>
-          <div className="text-slate-400">Phí hãng dự kiến: — bấm Đặt Giao Hàng để xem</div>
+          {carrierAvailable
+            ? <div className="text-slate-400">Phí hãng dự kiến: — bấm Đặt Giao Hàng để xem</div>
+            : <div className="text-slate-400">Chưa cấu hình hãng giao — quán tự giao</div>}
         </div>
-        <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+        {carrierAvailable && (
+          <button onClick={() => onBook(ord)} className={`${btnBase} bg-emerald-600 hover:bg-emerald-500 text-white`}>🚚 Đặt Giao Hàng</button>
+        )}
         <button onClick={() => onStartManual(ord)} className={`${btnBase} bg-sky-600 hover:bg-sky-500 text-white`}>🛵 Quán Tự Đặt Giao Hàng</button>
       </>
     );
@@ -633,20 +639,52 @@ export default function KdsScreen({ onBackToClient }) {
   const [reprintOrd, setReprintOrd] = useState(null);
   const [printedTem, setPrintedTem] = useState({}); // orderId -> true
   const [printedBill, setPrintedBill] = useState({});
-  const previousOrderCount = useRef(0);
+  const seenIdsRef = useRef(null); // Gói chuông (2026-11-11): tập id đơn đã thấy trên bảng; null = chưa ghi mốc lượt nạp đầu
+  const audioCtxRef = useRef(null); // Gói chuông (2026-11-11): MỘT AudioContext chung, tạo lười 1 lần
   // Spec KDS book ship: popup đặt ship + popup lý do giao thất bại + ngưỡng
   // cảnh báo tìm tài xế (đọc từ /delivery/config, mặc định 5 phút)
   const [bookOrdId, setBookOrdId] = useState(null);
   const [failOrd, setFailOrd] = useState(null);
   const [failReason, setFailReason] = useState('');
   const [deliveryTimeout, setDeliveryTimeout] = useState(5);
+  // Gói ẩn nút hãng KDS (Đại Vương chốt 2026-11-11): mặc định FALSE (ẩn nút
+  // "Đặt Giao Hàng") — chỉ bật khi /delivery/config trả về có ít nhất 1 hãng
+  // enabled && configured; gọi lỗi cũng giữ FALSE (fail-safe Quán Tự Đặt).
+  const [carrierAvailable, setCarrierAvailable] = useState(false);
   const [, setTick] = useState(0); // nhịp 1s cho đồng hồ đang tìm tài xế
   const alertedSearchRef = useRef(new Set()); // đơn đã kêu chuông quá ngưỡng (tránh kêu lặp mỗi nhịp poll)
 
+  // Gói chuông (2026-11-11): MỘT AudioContext chung, tạo lười 1 lần — bản cũ
+  // tạo context mới mỗi lần kêu và không resume → Chrome treo 'suspended'
+  // trước lần chạm đầu tiên, chuông kêu mà không ra tiếng.
+  const getAudioCtx = () => {
+    if (!audioCtxRef.current) {
+      try { audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
+    }
+    return audioCtxRef.current;
+  };
+
+  // Mở khóa âm thanh ở cử chỉ đầu tiên (chạm / gõ phím): chính sách autoplay
+  // của trình duyệt chỉ cho phát tiếng sau khi người dùng đã tương tác.
+  useEffect(() => {
+    const unlock = () => {
+      const ctx = getAudioCtx();
+      if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+    };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
+    return () => {
+      document.removeEventListener('pointerdown', unlock);
+      document.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
   const playNotificationSound = () => {
     if (!soundEnabled) return;
+    const audioCtx = getAudioCtx();
+    if (!audioCtx) return;
     try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.connect(gain);
@@ -668,10 +706,17 @@ export default function KdsScreen({ onBackToClient }) {
       if (res.data.success) {
         setPollFails(0);
         const newOrders = res.data.data;
-        if (newOrders.length > previousOrderCount.current && previousOrderCount.current !== 0) {
-          playNotificationSound();
+        // Gói chuông (2026-11-11): kích hoạt theo ĐƠN MỚI XUẤT HIỆN (id chưa
+        // từng thấy) — bản cũ đếm TỔNG số đơn nên hụt ca đơn cũ vừa xong +
+        // đơn mới vào cùng nhịp (tổng không đổi). Lượt nạp thành công đầu
+        // tiên chỉ ghi mốc, không kêu.
+        if (seenIdsRef.current === null) {
+          seenIdsRef.current = new Set(newOrders.map((o) => o.id));
+        } else {
+          const hasFresh = newOrders.some((o) => !seenIdsRef.current.has(o.id));
+          newOrders.forEach((o) => seenIdsRef.current.add(o.id));
+          if (hasFresh) playNotificationSound();
         }
-        previousOrderCount.current = newOrders.length;
         // Spec KDS book ship mục 4: chuông 1 lần cho mỗi đơn tìm tài xế quá ngưỡng
         newOrders.forEach((o) => {
           if (o.status === 'ready' && o.delivery_status === 'searching_driver' && o.delivery_searching_since
@@ -703,6 +748,9 @@ export default function KdsScreen({ onBackToClient }) {
     setReprintOrd(null);
     setBookOrdId(null);
     setFailOrd(null);
+    // Gói chuông (2026-11-11): đổi chi nhánh → ghi mốc lại tập đơn đã thấy,
+    // lượt nạp đầu của chi nhánh mới không kêu oan cho đơn đang có sẵn.
+    seenIdsRef.current = null;
   }, [selectedBranch]);
 
   // Spec KDS book ship: ngưỡng cảnh báo tìm tài xế từ cấu hình giao hàng
@@ -712,8 +760,11 @@ export default function KdsScreen({ onBackToClient }) {
       .then((res) => {
         const m = Number(res.data?.data?.failover_timeout_minutes);
         if (m > 0) setDeliveryTimeout(m);
+        // Gói ẩn nút hãng KDS (2026-11-11): hãng dùng được = enabled && configured
+        const providers = res.data?.data?.providers || {};
+        setCarrierAvailable(Object.values(providers).some((p) => p && p.enabled && p.configured));
       })
-      .catch(() => { /* giữ mặc định 5 phút */ });
+      .catch(() => { /* giữ mặc định 5 phút + carrierAvailable = false */ });
   }, []);
 
   // Nhịp 1 giây cho đồng hồ đếm trên thẻ đang tìm tài xế
@@ -983,7 +1034,7 @@ export default function KdsScreen({ onBackToClient }) {
                   <Eye className="w-3.5 h-3.5" /> Xem
                 </button>
                 {ord.order_type === 'delivery' ? (
-                  <DeliveryPanel ord={ord} btnBase={btnBase} timeoutMin={deliveryTimeout}
+                  <DeliveryPanel ord={ord} btnBase={btnBase} timeoutMin={deliveryTimeout} carrierAvailable={carrierAvailable}
                     onBook={openBook} onStartManual={startManual} onToManual={toManual}
                     onAdvance={advanceManual} onFail={(o) => { setFailOrd(o); setFailReason(''); }}
                     onComplete={(o) => handleUpdateStatus(o.code, 'completed')} />

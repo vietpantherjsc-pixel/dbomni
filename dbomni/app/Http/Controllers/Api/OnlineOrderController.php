@@ -795,15 +795,31 @@ class OnlineOrderController extends Controller
         } else {
             $customer->load('tier');
         }
-        // Gói 12a: lịch sử Tài khoản ẩn đơn hoàn thành quá 24h (đơn chưa xong vẫn hiện kể cả qua ngày)
+        // Gói 12a + phán Đại Vương 2026-11-09: lịch sử Tài khoản ẩn đơn ĐÃ KẾT
+        // THÚC (hoàn thành HOẶC hủy) quá 24h kể từ mốc kết thúc; đơn chưa kết
+        // thúc vẫn hiện kể cả qua ngày. Mốc kết thúc = completed_at / cancelled_at,
+        // đơn cũ thiếu dấu mốc thì dùng updated_at (khuôn fallback của 12a).
         $cutoff = now()->subHours(24);
         $orders = $customer->orders()
             ->where(function ($q) use ($cutoff) {
-                $q->where('status', '!=', 'completed')
-                    ->orWhere('completed_at', '>', $cutoff)
+                $q->whereNotIn('status', ['completed', 'cancelled'])
+                    ->orWhere(function ($q2) use ($cutoff) {
+                        $q2->where('status', 'completed')
+                            ->where('completed_at', '>', $cutoff);
+                    })
                     ->orWhere(function ($q2) use ($cutoff) {
                         // Đơn cũ hoàn thành trước khi có cột completed_at: dùng updated_at làm mốc
-                        $q2->whereNull('completed_at')->where('updated_at', '>', $cutoff);
+                        $q2->where('status', 'completed')
+                            ->whereNull('completed_at')->where('updated_at', '>', $cutoff);
+                    })
+                    ->orWhere(function ($q2) use ($cutoff) {
+                        $q2->where('status', 'cancelled')
+                            ->where('cancelled_at', '>', $cutoff);
+                    })
+                    ->orWhere(function ($q2) use ($cutoff) {
+                        // Đơn hủy thiếu dấu cancelled_at: dùng updated_at làm mốc
+                        $q2->where('status', 'cancelled')
+                            ->whereNull('cancelled_at')->where('updated_at', '>', $cutoff);
                     });
             })
             ->limit(10)->get(['id', 'code', 'total_amount', 'status', 'payment_status', 'created_at']);
@@ -1458,18 +1474,24 @@ class OnlineOrderController extends Controller
 
     // Theo dõi đơn hàng theo mã (public)
     /**
-     * Gói 12a: đơn có quá hạn tra cứu trên Mini App không?
-     * - Đơn chưa hoàn thành: luôn xem được (kể cả qua ngày).
-     * - Đơn đã hoàn thành: chỉ xem trong 24h kể từ completed_at.
+     * Gói 12a + phán Đại Vương 2026-11-09: đơn có quá hạn tra cứu trên Mini App không?
+     * - Đơn chưa kết thúc: luôn xem được (kể cả qua ngày).
+     * - Đơn đã kết thúc (hoàn thành/hủy): chỉ xem trong 24h kể từ mốc kết
+     *   thúc (completed_at / cancelled_at; thiếu dấu thì dùng updated_at).
      */
     private function isExpiredForMiniApp(Order $order): bool
     {
-        if ($order->status !== 'completed') {
+        // Phán Đại Vương 2026-11-09: cổng áp cho cả hai trạng thái KẾT THÚC
+        // (hoàn thành + hủy) — trước đây chỉ khóa 'completed' nên đơn hủy
+        // tra cứu được vĩnh viễn. Khuôn này phải khớp truy vấn danh sách
+        // ở customer() — sửa một nơi thì sửa cả hai.
+        if (!in_array($order->status, ['completed', 'cancelled'], true)) {
             return false;
         }
-        // Đơn cũ hoàn thành trước khi có cột completed_at: dùng updated_at làm mốc
-        $doneAt = $order->completed_at ?? $order->updated_at;
-        return $doneAt && $doneAt->lt(now()->subHours(24));
+        // Mốc kết thúc theo trạng thái; đơn cũ thiếu dấu mốc thì dùng
+        // updated_at (khuôn fallback của Gói 12a).
+        $doneAt = ($order->status === 'cancelled' ? $order->cancelled_at : $order->completed_at) ?? $order->updated_at;
+        return $doneAt && $doneAt->lte(now()->subHours(24));
     }
 
     public function track(Request $request, string $code): JsonResponse
@@ -1495,7 +1517,8 @@ class OnlineOrderController extends Controller
             return response()->json(['success' => false, 'message' => 'Không tìm thấy đơn hoặc SĐT không khớp.'], 404);
         }
 
-        // Gói 12a: đơn hoàn thành quá 24h thì ẩn khỏi Mini App
+        // Gói 12a + phán 2026-11-09: đơn đã kết thúc (hoàn thành/hủy) quá
+        // 24h kể từ mốc kết thúc thì ẩn khỏi Mini App
         // (server vẫn giữ đủ để tính điểm và hạng thành viên).
         if ($this->isExpiredForMiniApp($order)) {
             return response()->json(['success' => false, 'message' => 'Đơn đã quá hạn tra cứu.'], 404);

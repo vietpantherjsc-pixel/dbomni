@@ -62,74 +62,77 @@ const Icon = ({ name, className = 'w-5 h-5' }) => {
 // Demo tối ưu menu admin (Đại Vương chốt 2026-10-19): gom 10 nhóm theo nghiệp vụ.
 // Nguyên tắc: không đổi route, chỉ sắp xếp lại menu. "Đối tác tích hợp" ẩn khỏi menu (route giữ).
 const mainMenu = [
-    { path: '/admin', label: 'Tổng quan', icon: 'home' },
+    { path: '/admin', label: 'Tổng quan', icon: 'home', perm: 'dashboard.view' },
     // Nhóm Bán hàng (mới): Hóa đơn + POS + KDS + Bàn
-    { path: '/admin/orders', label: 'Bán hàng', icon: 'receipt', children: [
-        { label: 'Hóa đơn', path: '/admin/orders' },
-        { label: 'Bán hàng (POS)', path: '/pos' },
-        { label: 'Bếp (KDS)', path: '/kds' },
-        { label: 'Bàn', path: '/admin/tables' },
+    { path: '/admin/orders', label: 'Bán hàng', icon: 'receipt', permAny: ['orders.list.view', 'orders.create', 'branches.tables.view'], children: [
+        { label: 'Hóa đơn', path: '/admin/orders', perm: 'orders.list.view' },
+        { label: 'Bán hàng (POS)', path: '/pos', perm: 'orders.create' },
+        { label: 'Bếp (KDS)', path: '/kds', perm: 'orders.list.view' },
+        { label: 'Bàn', path: '/admin/tables', perm: 'branches.tables.view' },
     ] },
     // Nhóm Hàng hóa (mới): Mặt hàng + Thực đơn (Hiển thị thành tab trong trang cha)
-    { path: '/admin/products', label: 'Hàng hóa', icon: 'tag', children: [
-        { label: 'Danh sách mặt hàng', path: '/admin/products' },
-        { label: 'Danh mục', path: '/admin/categories' },
-        { label: 'Nhóm tùy chọn', path: '/admin/option-groups' },
-        { label: 'Danh sách thực đơn', path: '/admin/menus' },
+    { path: '/admin/products', label: 'Hàng hóa', icon: 'tag', permAny: ['products.list.view', 'products.categories.view', 'products.options.view', 'products.menus.view'], children: [
+        { label: 'Danh sách mặt hàng', path: '/admin/products', perm: 'products.list.view' },
+        { label: 'Danh mục', path: '/admin/categories', perm: 'products.categories.view' },
+        { label: 'Nhóm tùy chọn', path: '/admin/option-groups', perm: 'products.options.view' },
+        { label: 'Danh sách thực đơn', path: '/admin/menus', perm: 'products.menus.view' },
     ] },
-    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', children: [
-        { label: 'Danh sách tồn kho', path: '/admin/inventory' },
-        { label: 'Nhập kho', path: '/admin/inventory/inbound' },
-        { label: 'Đặt hàng', path: '/admin/inventory/purchase-orders' },
-        { label: 'Xuất kho', path: '/admin/inventory/outbound' },
-        { label: 'Chuyển kho', path: '/admin/inventory/transfer' },
-        { label: 'Kiểm kê kho', path: '/admin/inventory/stocktake' },
-        { label: 'Nhà cung cấp', path: '/admin/suppliers' },
+    { path: '/admin/inventory', label: 'Kho hàng', icon: 'box', permAny: ['inventory.stock.view', 'inventory.inbound.view', 'inventory.purchase.view', 'inventory.outbound.view', 'inventory.transfer.view', 'inventory.stocktake.view', 'inventory.partners.view'], children: [
+        { label: 'Danh sách tồn kho', path: '/admin/inventory', perm: 'inventory.stock.view' },
+        { label: 'Nhập kho', path: '/admin/inventory/inbound', perm: 'inventory.inbound.view' },
+        { label: 'Đặt hàng', path: '/admin/inventory/purchase-orders', perm: 'inventory.purchase.view' },
+        { label: 'Xuất kho', path: '/admin/inventory/outbound', perm: 'inventory.outbound.view' },
+        { label: 'Chuyển kho', path: '/admin/inventory/transfer', perm: 'inventory.transfer.view' },
+        { label: 'Kiểm kê kho', path: '/admin/inventory/stocktake', perm: 'inventory.stocktake.view' },
+        { label: 'Nhà cung cấp', path: '/admin/suppliers', perm: 'inventory.partners.view' },
     ] },
-    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', children: [
-        { label: 'Danh sách thu chi', path: '/admin/transactions' },
-        { label: 'Danh mục thu chi', path: '/admin/transaction-categories' },
-        { label: 'Quản lý quỹ', path: '/admin/accounts' },
-        { label: 'Chi phí trả trước', path: '/admin/prepaid-expenses' },
-        { label: 'Đối tác', path: '/admin/partners' },
+    { path: '/admin/transactions', label: 'Thu chi', icon: 'wallet', permAny: ['finance.transactions.view', 'finance.categories.view', 'inventory.partners.view'], children: [
+        { label: 'Danh sách thu chi', path: '/admin/transactions', perm: 'finance.transactions.view' },
+        { label: 'Danh mục thu chi', path: '/admin/transaction-categories', perm: 'finance.categories.view' },
+        { label: 'Quản lý quỹ', path: '/admin/accounts', perm: 'finance.transactions.view' },
+        { label: 'Chi phí trả trước', path: '/admin/prepaid-expenses', perm: 'finance.transactions.view' },
+        { label: 'Đối tác', path: '/admin/partners', perm: 'inventory.partners.view' },
     ] },
     // Nhóm Nhân sự (gộp): Hồ sơ + Công & Ca + Lương & Kỷ luật
-    { path: '/admin/staff', label: 'Nhân sự', icon: 'users', perm: 'staff.view', children: [
-        { label: 'Danh sách nhân viên', path: '/admin/staff' },
-        { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles' },
-        { label: 'Bảng chấm công', path: '/admin/attendance' },
-        { label: 'Ca làm việc', path: '/admin/attendance/shifts' },
-        { label: 'Đăng ký & Xếp ca', path: '/admin/attendance/scheduling' },
-        { label: 'Yêu cầu nghỉ', path: '/admin/attendance/requests' },
-        { label: 'QR chấm công', path: '/admin/attendance/qr' },
-        { label: 'Bảng lương', path: '/admin/staff/salary' },
-        { label: 'Cấu hình Lương', path: '/admin/staff/holiday-policy' },
-        { label: 'Lỗi 3 Chuyên', path: '/admin/attendance/violations' },
+    // Cây phân quyền §2: mục con gác đúng lá; Chủ Chi Nhánh chỉ thấy Bảng
+    // lương + Cấu hình Lương (can() đã chặn mọi lá ngoài lương với tầng này).
+    { path: '/admin/staff', label: 'Nhân sự', icon: 'users', permAny: ['staff.employees.view', 'staff.roles.view', 'staff.salary.summary.view', 'staff.salary.detail.view', 'staff.salary.config', 'attendance.grid.view', 'attendance.shifts.view', 'attendance.schedules.view', 'attendance.leaves.view', 'attendance.qr.view', 'staff.violations.view'], children: [
+        { label: 'Danh sách nhân viên', path: '/admin/staff', perm: 'staff.employees.view' },
+        { label: 'Chức vụ & phân quyền', path: '/admin/staff/roles', perm: 'staff.roles.view' },
+        { label: 'Tài khoản quản trị', path: '/admin/admin-accounts', perm: 'staff.roles.edit', ownerOnly: true },
+        { label: 'Bảng chấm công', path: '/admin/attendance', perm: 'attendance.grid.view' },
+        { label: 'Ca làm việc', path: '/admin/attendance/shifts', perm: 'attendance.shifts.view' },
+        { label: 'Đăng ký & Xếp ca', path: '/admin/attendance/scheduling', perm: 'attendance.schedules.view' },
+        { label: 'Yêu cầu nghỉ', path: '/admin/attendance/requests', perm: 'attendance.leaves.view' },
+        { label: 'QR chấm công', path: '/admin/attendance/qr', perm: 'attendance.qr.view' },
+        { label: 'Bảng lương', path: '/admin/staff/salary', permAny: ['staff.salary.summary.view', 'staff.salary.detail.view'] },
+        { label: 'Cấu hình Lương', path: '/admin/staff/holiday-policy', perm: 'staff.salary.config' },
+        { label: 'Lỗi 3 Chuyên', path: '/admin/attendance/violations', perm: 'staff.violations.view' },
     ] },
     // Nhóm Khách hàng & Khuyến mại (mới)
-    { path: '/admin/customers', label: 'Khách hàng & KM', icon: 'user', children: [
-        { label: 'Danh sách khách hàng', path: '/admin/customers' },
-        { label: 'Thẻ thành viên', path: '/admin/member-tiers' },
-        { label: 'Cửa hàng đổi điểm', path: '/admin/point-exchange' },
-        { label: 'Khuyến mại', path: '/admin/promotions' },
+    { path: '/admin/customers', label: 'Khách hàng & KM', icon: 'user', permAny: ['customers.list.view', 'customers.tiers.view', 'customers.exchange.view', 'products.promotions.view'], children: [
+        { label: 'Danh sách khách hàng', path: '/admin/customers', perm: 'customers.list.view' },
+        { label: 'Thẻ thành viên', path: '/admin/member-tiers', perm: 'customers.tiers.view' },
+        { label: 'Cửa hàng đổi điểm', path: '/admin/point-exchange', perm: 'customers.exchange.view' },
+        { label: 'Khuyến mại', path: '/admin/promotions', perm: 'products.promotions.view' },
     ] },
     // Báo cáo: 1 trang 8 tabs (bỏ 3 submenu trùng, deep-link giữ)
-    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart' },
+    { path: '/admin/reports', label: 'Báo cáo', icon: 'chart', permAny: ['reports.overview.view', 'reports.revenue.view', 'reports.pnl.view', 'reports.cash.view', 'reports.inventory.view', 'reports.hr.view', 'reports.operations.view', 'reports.menu.view', 'reports.cancelled.view', 'reports.revenue.export'] },
     // SPEC R&D (2026-10-21, Đại Vương duyệt NGOẠI LỆ UI-MAP): nhóm cấp 1 riêng "R&D".
-    // Xem = products.manage hoặc reports.view (permAny).
-    { path: '/admin/rd', label: 'R&D', icon: 'flask', permAny: ['products.manage', 'reports.view'] },
+    // Xem = products.rd.view hoặc reports.overview.view (permAny).
+    { path: '/admin/rd', label: 'R&D', icon: 'flask', permAny: ['products.rd.view', 'reports.overview.view'] },
     // Nhóm Kênh online (mới): Kênh bán hàng + Zalo Mini App + QR Order (bỏ "Đối tác tích hợp" khỏi menu)
-    { path: '/admin/price-lists', label: 'Kênh online', icon: 'tag', children: [
-        { label: 'Kênh bán hàng', path: '/admin/price-lists' },
-        { label: 'Zalo Mini App — Cấu hình', path: '/admin/online' },
-        { label: 'Zalo Mini App — Mời bạn bè', path: '/admin/online/invite-friends' },
-        { label: 'Cầu nối Sapo', path: '/admin/sapo' },
-        { label: 'QR Order', path: '/admin/qr-order' },
+    { path: '/admin/price-lists', label: 'Kênh online', icon: 'tag', permAny: ['products.prices.view', 'settings.online.view', 'customers.invite.view', 'settings.sapo.view'], children: [
+        { label: 'Kênh bán hàng', path: '/admin/price-lists', perm: 'products.prices.view' },
+        { label: 'Zalo Mini App — Cấu hình', path: '/admin/online', perm: 'settings.online.view' },
+        { label: 'Zalo Mini App — Mời bạn bè', path: '/admin/online/invite-friends', perm: 'customers.invite.view' },
+        { label: 'Cầu nối Sapo', path: '/admin/sapo', perm: 'settings.sapo.view' },
+        { label: 'QR Order', path: '/admin/qr-order', perm: 'settings.online.view' },
     ] },
 ];
 
 const AdminLayout = ({ children }) => {
-    const { user, logout, can } = useAuth();
+    const { user, logout, can, isOwner, isBranchOwner } = useAuth();
     const { branchId, setBranchId } = useBranch();
     const location = useLocation();
     const navigate = useNavigate();
@@ -240,7 +243,15 @@ const AdminLayout = ({ children }) => {
                 {mainRow}
                 {hasSub && expanded && !collapsed && (
                     <div className="mt-0.5 mb-1 space-y-0.5">
-                        {item.children.map((child) => {
+                        {item.children.filter((child) => {
+                            // Cây phân quyền §2: mục con ẩn khi thiếu lá của nó;
+                            // mục chỉ Owner (Tài khoản quản trị) ẩn với mọi vai khác.
+                            if (typeof child === 'string') return true;
+                            if (child.ownerOnly && !isOwner) return false;
+                            if (child.perm && !can(child.perm)) return false;
+                            if (child.permAny && !child.permAny.some((p) => can(p))) return false;
+                            return true;
+                        }).map((child) => {
                             // Gói 5: child có thể là string (link về trang cha) hoặc {label, path}
                             // Gói 7l: mục con không thụt vào (tránh nhảy dòng), full-width như mục chính
                             const label = typeof child === 'string' ? child : child.label;
@@ -343,9 +354,9 @@ const AdminLayout = ({ children }) => {
                     <div>{renderMenu(mainMenu)}</div>
                 </nav>
 
-                {/* Thiết lập (đáy) */}
+                {/* Thiết lập (đáy) — hiện khi có bất kỳ lá settings.*.view nào */}
                 <div className="p-2.5 border-t" style={{ borderColor: 'var(--m-line)' }}>
-                    {renderItem({ path: '/admin/settings', label: 'Thiết lập', icon: 'gear' })}
+                    {['settings.general.view', 'settings.online.view', 'settings.payments.view', 'settings.sapo.view', 'settings.secrets.view'].some((p) => can(p)) && renderItem({ path: '/admin/settings', label: 'Thiết lập', icon: 'gear' })}
                 </div>
             </aside>
             {mobileOpen && (
@@ -380,7 +391,7 @@ const AdminLayout = ({ children }) => {
                             <div className="hidden sm:block leading-tight">
                                 <div className="text-[12.5px] font-semibold text-white">{user?.name || 'Quản trị'}</div>
                                 <div className="text-[10.5px] capitalize text-white/60">
-                                    {(user?.roles || []).join(', ') || 'Nhân viên'}
+                                    {isBranchOwner ? 'Chủ Chi Nhánh' : isOwner ? 'Chủ Sở Hữu' : (user?.roles || []).join(', ') || 'Nhân viên'}
                                 </div>
                             </div>
                         </div>
