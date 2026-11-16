@@ -26,6 +26,7 @@ class PurchaseOrderService
             'branch_id' => ($withBranch ? 'required' : 'nullable') . '|exists:branches,id',
             'partner_id' => 'required|exists:partners,id',
             'order_date' => 'nullable|date',
+            'expected_date' => 'nullable|date',
             'note' => 'nullable|string|max:1000',
             'as_status' => 'nullable|in:draft,ordered',
             'items' => 'required|array|min:1|max:200',
@@ -66,6 +67,7 @@ class PurchaseOrderService
                 'partner_id' => $v['partner_id'],
                 'status' => $ordered ? 'ordered' : 'draft',
                 'order_date' => $v['order_date'] ?? now()->toDateString(),
+                'expected_date' => $v['expected_date'] ?? null,
                 'note' => $v['note'] ?? null,
                 'created_by_user_id' => $userId,
                 'created_by_employee_id' => $employeeId,
@@ -91,6 +93,7 @@ class PurchaseOrderService
                 'branch_id' => $v['branch_id'] ?? $po->branch_id,
                 'partner_id' => $v['partner_id'],
                 'order_date' => $v['order_date'] ?? $po->order_date?->toDateString(),
+                'expected_date' => $v['expected_date'] ?? $po->expected_date?->toDateString(),
                 'note' => $v['note'] ?? null,
             ]);
             $po->items()->delete();
@@ -198,6 +201,7 @@ class PurchaseOrderService
             ] : null,
             'status' => $po->status,
             'order_date' => $po->order_date?->toDateString(),
+            'expected_date' => $po->expected_date?->toDateString(),
             'note' => $po->note,
             'items_count' => $po->relationLoaded('items') ? $po->items->count() : $po->items()->count(),
             'created_by_user_id' => $po->created_by_user_id,

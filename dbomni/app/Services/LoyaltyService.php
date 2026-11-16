@@ -11,6 +11,8 @@ use App\Models\PointTransaction;
 use App\Models\Setting;
 use Carbon\Carbon;
 use Exception;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 // Gói 5 (2026-10-05): Tích điểm / đổi điểm / tự động nâng hạng thành viên.
 // Loyalty 2.0 (2026-10-21): lô điểm FIFO có HSD, hạng theo cửa sổ trượt, điểm
@@ -123,6 +125,53 @@ class LoyaltyService
     }
 
     /**
+     * ĐIỂM CHỐT DUY NHẤT của mốc tích điểm mới (spec-doi-moc-tich-diem,
+     * Đại Vương chốt 2026-11-13): điểm chỉ cộng tại giao điểm "ĐÃ TRẢ +
+     * ĐÃ HOÀN THÀNH". Trong 1 transaction khóa dòng đơn, nạp lại đơn rồi
+     * cộng khi và chỉ khi đủ 4 điều kiện cùng lúc: có khách ·
+     * payment_status = paid · status = completed · chưa có dấu earn
+     * (orders.points_earned_at). Thiếu bất kỳ điều kiện nào → không làm
+     * gì, không lỗi (no-op êm): mốc nào đến sau (trả tiền hay hoàn thành)
+     * sẽ kích hoạt earn qua 5 điểm gọi N1–N5. Đủ điều kiện → earnForOrder
+     * nguyên công thức + đóng dấu earn + phát 4 trigger coupon CP-01/02/
+     * 03/10 (dời CÙNG mốc với điểm theo mục 6 của spec, fail-soft như
+     * khuôn cũ ở Confirmer — lỗi phát coupon không bao giờ chặn đơn).
+     */
+    public function earnWhenSettled(Order $order): void
+    {
+        if (!$order->customer_id) {
+            return;
+        }
+        DB::transaction(function () use ($order) {
+            $locked = Order::lockForUpdate()->find($order->id);
+            if (!$locked || !$locked->customer_id) return;
+            if ($locked->payment_status !== 'paid') return;
+            if ($locked->status !== 'completed') return;
+            if ($locked->points_earned_at !== null) return;
+            $customer = Customer::find($locked->customer_id);
+            if (!$customer) return;
+            $locked->points_earned = $this->earnForOrder($customer, $locked, (float) $locked->total_amount);
+            $locked->points_earned_at = now();
+            $locked->save();
+            try {
+                $couponService = app(AutoIssueCouponService::class);
+                // CP-01: đơn đầu tiên (truyền đơn nguồn để ghi source_order_id)
+                $couponService->onFirstOrder($customer, $locked);
+                // CP-02: referral (cả 2 bên)
+                $couponService->onReferralFirstOrder($locked);
+                // CP-03: tích tem
+                $couponService->onOrderStamp($customer, $locked);
+                // CP-10: coupon đơn tiếp theo (chỉ Mini App — service tự gác kênh)
+                $couponService->onNextOrderCoupon($customer, $locked);
+            } catch (\Throwable $e) {
+                Log::warning('[Coupon] Auto-issue failed', [
+                    'order' => $locked->code, 'msg' => $e->getMessage(),
+                ]);
+            }
+        });
+    }
+
+    /**
      * Hoàn điểm đã đổi khi hủy đơn.
      * Loyalty 2.0: chỉ còn áp cho đơn CŨ (trước chuyển đổi) có points_redeemed;
      * điểm hoàn vào 1 lô mới (HSD tính từ lúc hoàn) để sổ lô luôn nhất quán.
@@ -149,14 +198,29 @@ class LoyaltyService
 
     /**
      * Gói 13: thu hồi điểm đã TÍCH khi hủy đơn (chống gian lận tích điểm rồi hủy).
-     * Gói 55 p11ae: earnForOrder() LUÔN cộng total_spent dù points_earned = 0, nên hủy đơn
-     * đã paid phải trừ lại total_spent trong mọi trường hợp; chỉ skip phần trừ ĐIỂM khi
-     * points_earned = 0. Tham số $hadPaid cho biết đơn đã từng paid (earn đã chạy) —
-     * đơn held hủy khi chưa paid thì earn chưa bao giờ chạy, không được trừ total_spent.
+     * Gói 55 p11ae: earnForOrder() LUÔN cộng total_spent dù points_earned = 0, nên
+     * đơn ĐÃ EARN phải trừ lại total_spent trong mọi trường hợp; chỉ skip phần trừ
+     * ĐIỂM khi points_earned = 0. Từ spec dời mốc (2026-11-13): "đã earn" xác định
+     * bằng DẤU points_earned_at (xem khối chú thích dưới), không còn bằng $hadPaid.
      */
-    public function revokeEarn(Order $order, bool $hadPaid = false): void
+    // $context (spec-hoan-tac-xac-nhan mục 2, 2026-11-12): 'cancel' = đường
+    // hủy đơn (mặc định, hành vi cũ nguyên vẹn) · 'undo' = hoàn tác xác
+    // nhận thanh toán — CHỈ đổi câu note của PointTransaction để phân biệt
+    // được nguồn thu hồi, cơ chế trừ điểm/total_spent giữ nguyên 1 khuôn.
+    // Spec dời mốc tích điểm (2026-11-13 mục 4–5): thước quyết định đổi
+    // sang DẤU earn (orders.points_earned_at) — "đã paid" không còn đồng
+    // nghĩa "đã earn" (đơn paid chưa hoàn thành chưa earn gì cả). Tham số
+    // $hadPaid giữ trong chữ ký cho các caller hiện hữu (R1–R4) nhưng
+    // KHÔNG còn vai trò quyết định. Đơn chưa có dấu → chưa từng earn →
+    // không trừ gì (điểm/total_spent sạch theo cấu trúc). Trừ xong →
+    // xóa dấu + points_earned = 0 (như luật reset của gói hoàn tác).
+    public function revokeEarn(Order $order, bool $hadPaid = false, string $context = 'cancel'): void
     {
-        if (!$order->customer_id || !$hadPaid) {
+        if (!$order->customer_id) {
+            return;
+        }
+        $stamp = Order::where('id', $order->id)->value('points_earned_at');
+        if (!$stamp) {
             return;
         }
         $customer = Customer::lockForUpdate()->findOrFail($order->customer_id);
@@ -179,10 +243,17 @@ class LoyaltyService
                 'order_id' => $order->id,
                 'change' => -$order->points_earned,
                 'type' => 'revoke',
-                'note' => "Thu hồi điểm đã tích do hủy đơn {$order->code}",
+                'note' => $context === 'undo'
+                    ? "Thu hồi điểm đã tích do hoàn tác xác nhận thanh toán đơn {$order->code}"
+                    : "Thu hồi điểm đã tích do hủy đơn {$order->code}",
             ]);
         }
         $customer->save();
+        // Spec dời mốc (mục 5): trừ xong → xóa dấu earn + points_earned = 0
+        // trên đơn (cả bản ghi DB lẫn bản trong bộ nhớ của caller).
+        Order::where('id', $order->id)->update(['points_earned_at' => null, 'points_earned' => 0]);
+        $order->points_earned_at = null;
+        $order->points_earned = 0;
     }
 
     // =====================================================================
@@ -204,13 +275,16 @@ class LoyaltyService
         ];
     }
 
-    /** Tạo 1 lô điểm; HSD chụp theo cấu hình TẠI THỜI ĐIỂM tạo (spec mục 1.2). */
-    public function createLot(Customer $customer, int $points, string $sourceType, ?int $orderId = null, ?Carbon $earnedAt = null): PointLot
+    /** Tạo 1 lô điểm; HSD chụp theo cấu hình TẠI THỜI ĐIỂM tạo (spec mục 1.2).
+     * N-4: $manualSource chỉ truyền khi là lô ghi tay (adjustPoints) —
+     * lô hệ thống (earn/hoàn điểm) giữ NULL. */
+    public function createLot(Customer $customer, int $points, string $sourceType, ?int $orderId = null, ?Carbon $earnedAt = null, ?string $manualSource = null): PointLot
     {
         $earnedAt = $earnedAt ?? now();
         return PointLot::create([
             'customer_id' => $customer->id,
             'source_type' => $sourceType,
+            'manual_source' => $manualSource,
             'source_order_id' => $orderId,
             'points_initial' => $points,
             'points_remaining' => $points,
@@ -285,7 +359,7 @@ class LoyaltyService
      * Khách phải đã được lockForUpdate ở transaction ngoài. Trả về phân bổ.
      * @return array<int, array{lot_id:int, points:int}>
      */
-    public function spendFifo(Customer $customer, int $points, string $type, string $note, ?int $orderId = null, ?int $exchangeItemId = null): array
+    public function spendFifo(Customer $customer, int $points, string $type, string $note, ?int $orderId = null, ?int $exchangeItemId = null, ?string $manualSource = null): array
     {
         $this->syncLotsToBalance($customer);
         if ($this->availablePoints($customer) < $points) {
@@ -311,6 +385,7 @@ class LoyaltyService
                 'point_exchange_item_id' => $exchangeItemId,
                 'change' => -$take,
                 'type' => $type,
+                'manual_source' => $manualSource,
                 'note' => $note,
             ]);
             $allocation[] = ['lot_id' => $lot->id, 'points' => $take, 'transaction_id' => $tx->id];
@@ -379,7 +454,13 @@ class LoyaltyService
 
     /** Chi tiêu cửa sổ trượt: tổng total_amount đơn đã thanh toán, không hủy,
      *  có gắn khách, trong [now − window_days, now] (spec mục 3.1). Thời điểm
-     *  thanh toán lấy theo paid_at nếu có, không thì updated_at của đơn paid. */
+     *  thanh toán lấy theo paid_at nếu có, không thì updated_at của đơn paid.
+     *  Spec dời mốc tích điểm (2026-11-13 mục 7): tập đơn đổi sang
+     *  paid + COMPLETED (cùng tập với cột total_spent và spentByGoods —
+     *  khép lớp lệch "đơn đang bay" của sổ #113); neo cửa sổ đổi sang
+     *  completed_at, dự phòng paid_at khi completed_at trống (đơn lịch
+     *  sử/import). evaluateUpgrade chạy trong earn nên tại thời điểm xét,
+     *  đơn vừa hoàn thành luôn nằm trong tập. */
     public function windowSpent(Customer $customer, ?Carbon $at = null): float
     {
         $at = $at ?? now();
@@ -388,13 +469,13 @@ class LoyaltyService
         // (revenueAmount) — khớp cơ số earnForOrder/total_spent.
         return (float) Order::where('customer_id', $customer->id)
             ->where('payment_status', 'paid')
-            ->where('status', '!=', 'cancelled')
+            ->where('status', 'completed')
             ->where(function ($q) use ($at, $days) {
                 $from = $at->copy()->subDays($days);
                 $q->where(function ($q2) use ($from, $at) {
-                    $q2->whereNotNull('paid_at')->whereBetween('paid_at', [$from, $at]);
+                    $q2->whereNotNull('completed_at')->whereBetween('completed_at', [$from, $at]);
                 })->orWhere(function ($q2) use ($from, $at) {
-                    $q2->whereNull('paid_at')->whereBetween('updated_at', [$from, $at]);
+                    $q2->whereNull('completed_at')->whereBetween('paid_at', [$from, $at]);
                 });
             })
             ->get(['total_amount', 'shipping_fee', 'online_channel'])

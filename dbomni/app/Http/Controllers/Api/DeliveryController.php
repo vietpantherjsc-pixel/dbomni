@@ -17,71 +17,7 @@ use Illuminate\Http\Request;
 //   đơn · đặt hãng · hủy tìm/chuyển tay · chế độ tay · đính chính ghim)
 class DeliveryController extends Controller
 {
-    /**
-     * Báo giá live từ hai hãng cho checkout Mini App.
-     * Không cần auth (giá công khai), nhưng rate-limit ở route.
-     */
-    public function quote(Request $request, DeliveryService $service): JsonResponse
-    {
-        $validated = $request->validate([
-            'branch_id' => 'required|exists:branches,id',
-            'dropoff_address' => 'required|string|max:500',
-            'dropoff_lat' => 'nullable|numeric|between:-90,90',
-            'dropoff_lng' => 'nullable|numeric|between:-180,180',
-            'subtotal' => 'required|numeric|min:0',
-            'cod_amount' => 'nullable|numeric|min:0',
-        ]);
-
-        $branch = Branch::find($validated['branch_id']);
-        if (empty($branch->latitude) || empty($branch->longitude)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Chi nhánh chưa cấu hình tọa độ — quán sẽ xác nhận phí ship qua điện thoại.',
-            ], 422);
-        }
-
-        $result = $service->quote([
-            'pickup_lat' => (float) $branch->latitude,
-            'pickup_lng' => (float) $branch->longitude,
-            'pickup_address' => $branch->address ?? $branch->name,
-            'dropoff_lat' => isset($validated['dropoff_lat']) ? (float) $validated['dropoff_lat'] : null,
-            'dropoff_lng' => isset($validated['dropoff_lng']) ? (float) $validated['dropoff_lng'] : null,
-            'dropoff_address' => $validated['dropoff_address'],
-            'cod_amount' => (int) ($validated['cod_amount'] ?? 0),
-        ]);
-
-        if (!$result['success']) {
-            return response()->json(['success' => false, 'message' => $result['error']], 422);
-        }
-
-        // Gộp gói 2 hãng → chọn gói mặc định "nhanh" rẻ nhất
-        $packages = [];
-        foreach ($result['providers'] as $code => $p) {
-            foreach ($p['packages'] as $pkg) {
-                $packages[] = array_merge($pkg, ['provider' => $code, 'provider_label' => $p['label']]);
-            }
-        }
-        $subtotal = (int) $validated['subtotal'];
-        foreach ($packages as &$pkg) {
-            $support = $service->applySupport($subtotal, $pkg['fee']);
-            $pkg['shop_support'] = $support['support'];
-            $pkg['customer_pays'] = $support['charged'];
-        }
-        unset($pkg);
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'packages' => $packages,
-                'default_package' => 'nhanh',
-                'support_threshold' => $service->supportThreshold(),
-                'support_amount' => $service->supportAmount(),
-                // Phí khóa tại thời điểm chốt đơn — frontend gửi lại package đã chọn
-                'quote_expires_note' => 'Giá được khóa khi bấm đặt đơn',
-            ],
-        ]);
-    }
-
+    use \App\Traits\ValidatesEmployeeBranch;
     /** Admin thử tạo lại đơn hãng cho đơn đang chờ xử lý (checklist #11). */
     public function retry(Request $request, Order $order, DeliveryService $service): JsonResponse
     {
@@ -165,7 +101,7 @@ class DeliveryController extends Controller
     private function denyBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
         }
         return null;

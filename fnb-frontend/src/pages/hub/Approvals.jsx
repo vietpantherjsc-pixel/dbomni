@@ -8,7 +8,14 @@ import { API } from '../../utils/api';
 // duyệt/từ chối kèm nhập lại PIN + nhắc tên chi nhánh của phiếu.
 // =====================================================================
 
+// HD-1 (2026-11-15): rule .sh-wrap phải nằm NGAY trong CSS này — bản sao
+// đúng định nghĩa ở StaffHub.jsx. Trước đây ApprovalsFlow đã mang class
+// sh-wrap ở gốc nhưng rule chỉ sống trong <style> của StaffHub; màn
+// choduyet thay toàn bộ StaffHub nên style đó không được nạp → luồng
+// duyệt trải full bề ngang desktop (~1.256px) thay vì cột 480px chuẩn Hub.
 const CSS = `
+.sh-wrap{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;min-height:100vh;background:#f4f5f7;color:#1a1d26;padding-bottom:calc(24px + env(safe-area-inset-bottom));}
+.sh-wrap button{font-family:inherit;}
 .ap-sec{background:#fff;border:1px solid #e3e8f2;border-radius:16px;padding:14px;margin:12px 12px 0;}
 .ap-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;color:#24305E;margin-bottom:10px;}
 .ap-total{background:#F5A623;color:#3a2a00;font-size:12px;font-weight:800;border-radius:12px;padding:2px 10px;}
@@ -36,8 +43,8 @@ const CSS = `
 .ap-hd-t{font-size:15px;font-weight:800;color:#24305E;flex:1;}
 .ap-branch{font-size:11.5px;color:#8a93a6;}
 .ap-kv{background:#fff;border:1px solid #eef1f6;border-radius:13px;padding:4px 13px;margin:0 12px 10px;}
-.ap-kv .r{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f1f4fa;font-size:12.5px;}
-.ap-kv .r:last-child{border:0;}
+.ap-kv > .r{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f1f4fa;font-size:12.5px;}
+.ap-kv > .r:last-child{border:0;}
 .ap-k{color:#8a93a6;}
 .ap-v{font-weight:700;color:#24305E;text-align:right;}
 .ap-tbl{width:100%;border-collapse:collapse;background:#fff;font-size:12.5px;}
@@ -87,6 +94,16 @@ const fmtDateTime = (s) => {
   if (isNaN(d)) return String(s);
   const p = (x) => String(x).padStart(2, '0');
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+// HD-3 (2026-11-15): ngày thuần dd/mm/yyyy theo chuẩn hệ thống — cùng cách
+// parse giờ địa phương như fmtDateTime (receipt_date về dạng ISO có giờ,
+// lấy theo ngày địa phương của máy người dùng mới khớp ngày trên mã phiếu).
+const fmtDate = (s) => {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d)) return String(s);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
 };
 function waitLabel(iso) {
   if (!iso) return '';
@@ -596,7 +613,7 @@ function DetailView({ A, token, emp, type, id, onBack, onActed, onExpired }) {
       {confirm && (
         <ConfirmDialog A={A} token={token} emp={emp} type={type} id={id}
           action={confirm} rec={rec} branchNames={branchNames}
-          onClose={() => setConfirm(null)} onDone={doneAction} />
+          onClose={() => setConfirm(null)} onDone={doneAction} onExpired={onExpired} />
       )}
     </div>
   );
@@ -624,7 +641,7 @@ function DetailBody({ type, rec }) {
           {kv([
             ['Mã phiếu', rec.code], ['Chi nhánh', rec.branch && rec.branch.name],
             ['Nhà cung cấp', rec.partner && rec.partner.name], ['Người tạo', creator],
-            ['Ngày phiếu', rec.receipt_date], ['Ghi chú', rec.note],
+            ['Ngày phiếu', fmtDate(rec.receipt_date)], ['Ghi chú', rec.note],
           ])}
           <div className="ap-kv"><table className="ap-tbl">
             <thead><tr><th>Nguyên liệu</th><th className="r">SL</th><th className="r">Đơn giá</th><th className="r">Thành tiền</th></tr></thead>
@@ -753,7 +770,7 @@ function DetailBody({ type, rec }) {
 }
 
 // ---------------- Hộp xác nhận duyệt/từ chối (mục 4.4 + 5b spec) ----------------
-function ConfirmDialog({ A, token, emp, type, id, action, rec, branchNames, onClose, onDone }) {
+function ConfirmDialog({ A, token, emp, type, id, action, rec, branchNames, onClose, onDone, onExpired }) {
   const meta = TYPES_META[type] || {};
   const reasonMode = REASON_MODE[type] || 'none';
   const [reason, setReason] = useState('');

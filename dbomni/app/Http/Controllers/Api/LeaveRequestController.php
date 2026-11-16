@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 // Gói 35: Yêu cầu nghỉ / đổi ca — NV tạo, admin duyệt/từ chối.
 class LeaveRequestController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // NV tạo yêu cầu (chỉ của chính mình)
     public function store(Request $request): JsonResponse
     {
@@ -56,7 +57,7 @@ class LeaveRequestController extends Controller
         // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thấy yêu cầu của CN mình
         $actor = $request->user();
         if ($actor instanceof Employee) {
-            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
+            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $this->effectiveBranchScope($actor)));
         }
         $items = $q->get()->map(function ($m) {
             // Họ #28: ngày thuần Y-m-d trong mảng thuần (xem myList).
@@ -74,7 +75,7 @@ class LeaveRequestController extends Controller
         $actor = $request->user();
         if ($actor instanceof Employee) {
             $empBranch = (int) (Employee::where('id', $lr->employee_id)->value('branch_id') ?? 0);
-            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+            if (!in_array($empBranch, $this->effectiveBranchScope($actor), true)) {
                 return response()->json(['success' => false, 'message' => 'Yêu cầu thuộc chi nhánh bạn không được phân công.'], 403);
             }
         }
@@ -120,7 +121,7 @@ class LeaveRequestController extends Controller
         $actor = $request->user();
         // Gói "Chờ duyệt trên Hub" (2026-10-21): Employee từ chối → ghi handled_by_employee_id
         [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($actor);
-        $lr->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
+        $lr->update(['status' => 'rejected', 'reject_reason' => ($v['reason'] ?? null) ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

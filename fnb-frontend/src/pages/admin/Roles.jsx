@@ -6,6 +6,44 @@ import { API } from '../../utils/api';
 
 const ACTION_LABELS = { view: 'Xem', create: 'Thêm', edit: 'Sửa', delete: 'Xóa', approve: 'Duyệt', pay: 'Ghi thanh toán', adjust: 'Điều chỉnh', export: 'Xuất', bulk: 'Hàng loạt', discount: 'Giảm giá', points: 'Điểm', money: 'Tiền', config: 'Cấu hình', lock: 'Chốt khóa' };
 
+// Spec ma trận phân quyền (Đại Vương chốt demo 15/11/2026): 11 cột hành
+// động cấp được qua chức vụ, đúng thứ tự + nhãn của spec mục 1 (nhãn lấy
+// từ ACTION_LABELS; riêng cột points dùng nhãn "Thao tác điểm" theo demo
+// đã duyệt). Hành động chỉ có ở cụm tier_only (money/config/lock) không
+// thành cột vì các hàng đó không có ô tích.
+const MATRIX_COLS = ['view', 'create', 'edit', 'delete', 'approve', 'pay', 'adjust', 'bulk', 'discount', 'points', 'export']
+    .map((a) => [a, a === 'points' ? 'Thao tác điểm' : ACTION_LABELS[a]]);
+
+// CSS khối ma trận (khóa theo demo đã duyệt): khung cuộn 2 chiều cao tối
+// đa 640px · hàng đầu cột ghim trên · cột tên mục ghim trái · hàng 44px.
+const PMX_CSS = `
+.pmx-scroll{overflow:auto;max-height:640px;max-width:100%;border:1px solid #E5E7EB;border-radius:12px;}
+table.pmx{border-collapse:separate;border-spacing:0;width:100%;min-width:1020px;}
+.pmx thead th{position:sticky;top:0;z-index:5;background:#EEF1F7;color:#24305E;font-size:12px;font-weight:800;text-align:center;padding:10px 6px;border-bottom:2px solid #D8DEE9;white-space:nowrap;}
+.pmx th.pmx-name,.pmx td.pmx-name{position:sticky;left:0;z-index:4;min-width:300px;max-width:300px;text-align:left;}
+.pmx thead th.pmx-name{z-index:6;padding-left:14px;}
+.pmx td.pmx-name{background:#fff;box-shadow:2px 0 0 #E5E7EB;padding:6px 10px 6px 14px;}
+.pmx tbody td{border-bottom:1px solid #F1F2F6;padding:0 6px;height:44px;text-align:center;vertical-align:middle;}
+.pmx-item-name{font-size:13px;font-weight:600;line-height:1.35;}
+.pmx-scope{display:inline-block;font-size:10.5px;font-weight:600;color:#8A93A6;background:#F3F4F6;border-radius:99px;padding:1px 7px;margin-left:6px;vertical-align:1px;white-space:nowrap;}
+.pmx tr.pmx-mod td{background:#E8ECF5;border-bottom:1px solid #D8DEE9;height:40px;}
+.pmx tr.pmx-mod td.pmx-name{background:#E8ECF5;}
+.pmx-mod-name{font-size:13.5px;font-weight:800;color:#24305E;}
+.pmx-mod-count{font-size:11.5px;color:#5B6B96;font-weight:700;font-variant-numeric:tabular-nums;}
+.pmx tr.pmx-item:hover td{background:#F8FAFF;}
+.pmx tr.pmx-item:hover td.pmx-name{background:#F8FAFF;}
+.pmx-cb{width:19px;height:19px;accent-color:#24305E;cursor:pointer;vertical-align:middle;}
+.pmx-cb:disabled{cursor:not-allowed;opacity:.55;}
+.pmx-none{color:#D4D9E3;font-size:13px;}
+.pmx-toggle{border:none;background:none;color:#24305E;font-size:12px;font-weight:600;text-decoration:underline;cursor:pointer;white-space:nowrap;padding:6px 4px;}
+.pmx td.pmx-tier-note{text-align:left;font-size:12px;color:#B45309;padding:6px 10px 6px 14px;background:#FFFBEB;}
+.pmx tr.pmx-tier td.pmx-name{background:#FFFBEB;}
+.pmx tr.pmx-tier td.pmx-tier-cell{background:#FFFBEB;}
+.pmx-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:#6B7280;margin-top:10px;}
+.pmx-count{font-size:12.5px;color:#6B7280;margin-bottom:10px;}
+.pmx-count b{color:#24305E;font-variant-numeric:tabular-nums;}
+`;
+
 // Cây phân quyền chi tiết (spec đã khóa 10/11/2026 §2/§2.0): ma trận vẽ theo
 // cây backend cấp (GET /roles/matrix — 11 module · 47 mục con · lá
 // module.muccon.hanhdong). Cụm lương (staff.salary.*) + settings.secrets là
@@ -22,7 +60,6 @@ export default function Roles() {
     const [showForm, setShowForm] = useState(false);
     const [loadError, setLoadError] = useState('');
     const [loading, setLoading] = useState(true); // S10: lần mở đầu chưa tải xong phải hiện trạng thái tải, không hiện bảng rỗng
-    const [collapsed, setCollapsed] = useState({});
     const [stripNote, setStripNote] = useState('');
 
     const fetchAll = async () => {
@@ -112,6 +149,13 @@ export default function Roles() {
 
     const scopeLabel = (s) => s === 'branch' ? 'Theo CN' : 'Toàn hệ thống';
 
+    // Spec ma trận (15/11/2026) mục 1.3: dòng đếm trực tiếp trên form —
+    // số lá CẤP ĐƯỢC (không tính cụm tier_only) đang tích, cùng phép đếm
+    // isCovered với các ô tích.
+    const formLeafCount = matrix
+        .flatMap((m) => (m.children || []).filter((c) => !c.tier_only).flatMap((c) => c.leaves || []))
+        .filter((l) => isCovered(perms, l)).length;
+
     return (
         <AdminLayout>
             <div className="p-5">
@@ -145,7 +189,8 @@ export default function Roles() {
                         {editable && <button onClick={openAdd} className="w-full mt-2 px-3 py-2 rounded border border-dashed border-gray-300 text-[13px] text-gray-500">+ Thêm chức vụ</button>}
                     </div>
 
-                    <div className="m-card p-4">
+                    {/* minWidth 0: grid item không được phình theo bề ngang bảng (S-05) — khung .pmx-scroll phải cuộn nội bộ */}
+                    <div className="m-card p-4" style={{ minWidth: 0 }}>
                         {showForm ? (<>
                             <div className="flex flex-wrap items-center gap-3 mb-4">
                                 <h3 className="font-bold text-[14px]">{editing ? 'Sửa: ' + editing.name : 'Chức vụ mới'}</h3>
@@ -155,47 +200,64 @@ export default function Roles() {
                                 <button onClick={closeForm} className="px-3 py-2 rounded border border-gray-300 text-[13px] text-gray-500">Hủy</button>
                             </div>
                             {stripNote && <p className="text-amber-600 text-[12px] mb-3">{stripNote}</p>}
-                            <div className="space-y-3">
-                                {matrix.map((m) => (
-                                    <div key={m.key} className="border border-gray-100 rounded-lg overflow-hidden">
-                                        <button type="button" onClick={() => setCollapsed({ ...collapsed, [m.key]: !collapsed[m.key] })}
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 bg-gray-50 text-left">
-                                            <span className="text-gray-400 text-[12px]">{collapsed[m.key] ? '▸' : '▾'}</span>
-                                            <span className="font-bold text-[13px]">{m.label}</span>
-                                            <span className="text-[11px] text-gray-400 ml-auto">{scopeLabel(m.scope)}</span>
-                                        </button>
-                                        {!collapsed[m.key] && (m.children || []).map((c) => (
-                                            <div key={c.key} className="px-3 py-2.5 border-t border-gray-50">
-                                                <div className="flex items-center gap-2 flex-wrap">
-                                                    <span className="font-medium text-[13px]">{c.group ? c.group + ' — ' : ''}{c.label}</span>
-                                                    <span className="text-[11px] text-gray-400">{scopeLabel(c.scope || m.scope)}</span>
-                                                    {!c.tier_only && editable && (c.leaves || []).length > 1 && (
-                                                        <button type="button" onClick={() => toggleChild(c)} className="text-[11px] text-[#24305E] underline ml-auto">
-                                                            {(c.leaves || []).every((l) => isCovered(perms, l)) ? 'Bỏ hết' : 'Chọn hết'}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                {c.tier_only ? (
-                                                    <p className="text-[12px] text-amber-600 mt-1">Chỉ 2 tầng tài khoản (Chủ Sở Hữu · Chủ Chi Nhánh) — không cấp qua chức vụ.</p>
-                                                ) : (
-                                                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5">
-                                                        {(c.leaves || []).map((leaf) => {
-                                                            const act = leaf.split('.').pop();
-                                                            return (
-                                                                <label key={leaf} className="flex items-center gap-1.5 text-[12px] cursor-pointer min-h-[36px]" title={leaf}>
-                                                                    <input type="checkbox" disabled={!editable} className="w-4 h-4 accent-[#24305E]"
-                                                                        checked={isCovered(perms, leaf)}
-                                                                        onChange={() => togglePerm(leaf)} />
-                                                                    {ACTION_LABELS[act] || act}
-                                                                </label>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                ))}
+                            <style>{PMX_CSS}</style>
+                            <p className="pmx-count">Vai này đang có <b>{formLeafCount}</b> quyền</p>
+                            <div className="pmx-scroll">
+                                <table className="pmx">
+                                    <thead>
+                                        <tr>
+                                            <th className="pmx-name">Mục quyền</th>
+                                            {MATRIX_COLS.map(([act, label]) => <th key={act}>{label}</th>)}
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {matrix.map((m) => {
+                                            const grantable = (m.children || []).filter((c) => !c.tier_only);
+                                            const modTotal = grantable.reduce((n, c) => n + (c.leaves || []).length, 0);
+                                            const modOn = grantable.reduce((n, c) => n + (c.leaves || []).filter((l) => isCovered(perms, l)).length, 0);
+                                            return (
+                                                <React.Fragment key={m.key}>
+                                                    <tr className="pmx-mod">
+                                                        <td className="pmx-name"><span className="pmx-mod-name">{m.label}</span><span className="pmx-scope">{scopeLabel(m.scope)}</span></td>
+                                                        <td colSpan={MATRIX_COLS.length} style={{ textAlign: 'right', paddingRight: 14 }}><span className="pmx-mod-count">{modOn}/{modTotal} quyền</span></td>
+                                                        <td></td>
+                                                    </tr>
+                                                    {(m.children || []).map((c) => c.tier_only ? (
+                                                        <tr key={c.key} className="pmx-tier">
+                                                            <td className="pmx-name"><span className="pmx-item-name">{c.group ? c.group + ' — ' : ''}{c.label}</span><span className="pmx-scope">{scopeLabel(c.scope || m.scope)}</span></td>
+                                                            <td className="pmx-tier-note" colSpan={MATRIX_COLS.length}>🔒 Chỉ 2 tầng tài khoản (Chủ Sở Hữu · Chủ Chi Nhánh) — không cấp qua chức vụ.</td>
+                                                            <td className="pmx-tier-cell"></td>
+                                                        </tr>
+                                                    ) : (
+                                                        <tr key={c.key} className="pmx-item">
+                                                            <td className="pmx-name"><span className="pmx-item-name">{c.group ? c.group + ' — ' : ''}{c.label}</span><span className="pmx-scope">{scopeLabel(c.scope || m.scope)}</span></td>
+                                                            {MATRIX_COLS.map(([act]) => {
+                                                                const leaf = (c.leaves || []).find((l) => l.split('.').pop() === act);
+                                                                return (
+                                                                    <td key={act}>{leaf ? (
+                                                                        <input type="checkbox" disabled={!editable} className="pmx-cb" title={leaf}
+                                                                            checked={isCovered(perms, leaf)}
+                                                                            onChange={() => togglePerm(leaf)} />
+                                                                    ) : <span className="pmx-none">—</span>}</td>
+                                                                );
+                                                            })}
+                                                            <td>{editable && (c.leaves || []).length > 1 && (
+                                                                <button type="button" onClick={() => toggleChild(c)} className="pmx-toggle">
+                                                                    {(c.leaves || []).every((l) => isCovered(perms, l)) ? 'Bỏ hết' : 'Chọn hết'}
+                                                                </button>
+                                                            )}</td>
+                                                        </tr>
+                                                    ))}
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="pmx-legend">
+                                <span>— = mục này không có hành động đó (không tồn tại quyền đó trong cây thật)</span>
+                                <span>Nhãn cạnh tên mục: phạm vi dữ kiện của mục (Theo CN / Toàn hệ thống)</span>
                             </div>
                         </>) : <p className="text-gray-400 text-[13px]">Chọn một chức vụ để xem/sửa phân quyền.</p>}
                     </div>

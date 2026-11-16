@@ -12,11 +12,12 @@ use Illuminate\Support\Facades\DB;
 
 class InventoryController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Audit 2026-10-23 B-5: NV chỉ xem/điều chỉnh tồn thuộc CN phân công.
     protected function denyStockBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
         }
         return null;
@@ -80,7 +81,7 @@ class InventoryController extends Controller
 
         $stocks = Batch::whereIn('material_id', $btpIds)->where('status', 'active')
             ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
-            ->when($branchId === 0 && $request->user() instanceof \App\Models\Employee, fn ($q) => $q->whereIn('branch_id', $request->user()->allBranchIds()))
+            ->when($branchId === 0 && $request->user() instanceof \App\Models\Employee, fn ($q) => $q->whereIn('branch_id', $this->effectiveBranchScope($request->user())))
             ->selectRaw('material_id, branch_id, SUM(current_quantity) as stock')
             ->groupBy('material_id', 'branch_id')->get();
 
@@ -118,7 +119,7 @@ class InventoryController extends Controller
             ->whereNotNull('expired_at')
             ->where('expired_at', '<=', $today->copy()->addDays(30)->toDateString())
             ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
-            ->when($branchId === 0 && $request->user() instanceof \App\Models\Employee, fn ($q) => $q->whereIn('branch_id', $request->user()->allBranchIds()))
+            ->when($branchId === 0 && $request->user() instanceof \App\Models\Employee, fn ($q) => $q->whereIn('branch_id', $this->effectiveBranchScope($request->user())))
             ->orderBy('expired_at')->get()
             ->map(function ($b) use ($today) {
                 $days = $today->diffInDays(\Carbon\Carbon::parse($b->expired_at), false);

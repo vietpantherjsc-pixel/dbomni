@@ -9,26 +9,17 @@ use App\Models\Order;
 use App\Models\Referral;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 // "Mời bạn bè" (thay Affiliate Gói 46 — đổi tên 2026-10-20 theo chốt Đại Vương):
 // Mini App đã chuyển sang giới thiệu nhận coupon CP-02 (SPEC-02), không còn điểm affiliate.
 // Dữ liệu: referrals (lời mời hoàn tất) + orders.referred_by (đơn phát sinh) + customer_coupons
 // (voucher CP-02 đã phát, issue_trigger='referral').
-// Route cũ /affiliate/* giữ nguyên trỏ vào đây + log deprecated (bỏ ở phiên bản sau).
+// (Route cũ /affiliate/* + log deprecated đã gỡ ở gói dọn mồ côi 2026-11-13.)
 class InviteFriendsController extends Controller
 {
-    private function logDeprecated(Request $request): void
-    {
-        if (str_contains($request->path(), 'affiliate')) {
-            Log::warning('[Deprecated] Route /affiliate/* đã đổi tên thành /invite-friends/* — cập nhật client.');
-        }
-    }
-
     // Top thành viên mời bạn bè theo tháng: lượt mời thành công + đơn phát sinh + voucher đã phát.
     public function top(Request $request): JsonResponse
     {
-        $this->logDeprecated($request);
         $v = $request->validate([
             'month' => 'required|date_format:Y-m',
             'limit' => 'nullable|integer|min:1|max:100',
@@ -107,7 +98,6 @@ class InviteFriendsController extends Controller
     // Danh sách đơn hàng phát sinh từ lời mời: tìm theo mã đơn / người mời / khoảng ngày.
     public function orders(Request $request): JsonResponse
     {
-        $this->logDeprecated($request);
         $v = $request->validate([
             'code' => 'nullable|string|max:50',
             'referrer' => 'nullable|string|max:50', // tên hoặc SĐT người mời

@@ -34,6 +34,7 @@ use App\Http\Controllers\Api\CouponController; // SPEC-02: ví coupon
 use App\Http\Controllers\Api\ProductAliasController; // Gói 55
 use App\Http\Controllers\Api\UnitController; // Gói 52
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\RevenueTargetController; // Chỉ số 360 đợt 2 (N-3): mục tiêu doanh thu tháng
 use App\Http\Controllers\Api\ChannelAdjustmentController; // Gói PNL kênh sàn (2026-10-31): đối soát phí marketing sàn theo tháng
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\StocktakeController;
@@ -279,10 +280,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/overview', [ReportController::class, 'overview'])->middleware('permission:reports.overview.view');
     Route::get('/reports/inventory', [ReportController::class, 'inventory'])->middleware('permission:reports.inventory.view');
     Route::get('/reports/pnl', [ReportController::class, 'pnl'])->middleware('permission:reports.pnl.view');
+    // Chỉ số 360 đợt 2 (N-3): mục tiêu doanh thu tháng (CN × tháng) + TC-3.
+    // Đọc + ghi cùng gác lá thật mới finance.targets.edit (phương án (a),
+    // Phụ lục khóa: cổng theo tài nguyên, không theo trang). Endpoint chỉ
+    // trả dòng mục tiêu, không chứa số P&L nào; trang PNL giữ nguyên
+    // reports.pnl.view — Chủ CN vẫn không mở được trang PNL.
+    Route::get('/reports/revenue-targets', [RevenueTargetController::class, 'index'])->middleware('permission:finance.targets.edit');
+    Route::post('/reports/revenue-targets', [RevenueTargetController::class, 'store'])->middleware('permission:finance.targets.edit');
     // Spec P4-C5: tổng hợp thu/chi theo danh mục + kỳ
     Route::get('/reports/cash-summary', [ReportController::class, 'cashSummary'])->middleware('permission:reports.cash.view');
     // Spec P4-C6: báo cáo nhân sự tổng hợp
-    Route::get('/reports/hr-summary', [ReportController::class, 'hrSummary'])->middleware('permission:reports.hr.view');
+    Route::get('/reports/hr-summary', [ReportController::class, 'hrSummary'])->middleware('permission:staff.salary.summary.view');
     // Gói 56 (2026-10-14): KPI vận hành trong ngày
     Route::get('/reports/operations', [ReportController::class, 'operations'])->middleware('permission:reports.operations.view');
     // Gói 57: Menu Engineering + xuất Excel chi tiết bill
@@ -290,6 +298,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/revenue/export', [ReportController::class, 'exportRevenue'])->middleware('permission:reports.revenue.export');
     // Gói 55 p11ag: báo cáo đơn hủy theo nhân viên (chống gian lận)
     Route::get('/reports/cancelled-by-staff', [ReportController::class, 'cancelledByStaff'])->middleware('permission:reports.cancelled.view');
+    // Chỉ số 360 đợt 1 (spec 2026-11-15): tab Khách hàng (KH-1→KH-5 +
+    // khối Marketing MK-1→MK-3 gác thêm trong controller) + chỉ số nhân sự
+    // theo tuần (NS-1 SPLH/labor% · NS-2 tuân thủ ca).
+    Route::get('/reports/customers', [ReportController::class, 'customers'])->middleware('permission:reports.customers.view');
+    Route::get('/reports/hr-metrics', [ReportController::class, 'hrMetrics'])->middleware('permission:staff.salary.summary.view');
 
     // Đơn hàng — Audit 2026-10-23 B-2/B-6/BM-04: đọc cần orders.view, tạo orders.create, thao tác ghi orders.edit
     Route::get('/orders', [OrderController::class, 'index'])->middleware('permission:orders.list.view');
@@ -572,6 +585,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Gói 6: nhân viên xác nhận đơn online (đã nhận tiền -> trừ kho, vào KDS)
     Route::post('/orders/{id}/confirm-payment', [OnlineOrderController::class, 'confirmPayment'])->middleware('permission:orders.edit');
+    // Nút hoàn tác xác nhận thanh toán (2026-11-12): dùng chung orders.edit với nút xác nhận (Đại Vương chốt phân quyền)
+    Route::post('/orders/{id}/undo-payment', [OnlineOrderController::class, 'undoPayment'])->middleware('permission:orders.edit');
     // Gói 11: tạo mã QR tích điểm cho đơn POS
     Route::post('/orders/{id}/claim-qr', [OrderController::class, 'claimQr'])->middleware('permission:orders.edit');
 
@@ -708,9 +723,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // "Mời bạn bè" (đổi tên từ Affiliate Gói 46, 2026-10-20): top người mời + đơn phát sinh
     Route::get('/invite-friends/top', [InviteFriendsController::class, 'top'])->middleware('permission:customers.invite.view');
     Route::get('/invite-friends/orders', [InviteFriendsController::class, 'orders'])->middleware('permission:customers.invite.view');
-    // Deprecated: route cũ giữ 1 phiên bản (controller tự log deprecated)
-    Route::get('/affiliate/top', [InviteFriendsController::class, 'top'])->middleware('permission:customers.invite.view');
-    Route::get('/affiliate/orders', [InviteFriendsController::class, 'orders'])->middleware('permission:customers.invite.view');
 
     // Gói 26: Nhân sự — ghi (mỗi đường gác đúng khóa lá cây §2).
     Route::apiResource('roles', RoleController::class)->only(['store', 'update', 'destroy'])->parameters(['roles' => 'id'])->middleware('permission:staff.roles.edit');
@@ -808,6 +820,7 @@ Route::prefix('online')->group(function () {
     Route::get('/ship-config', [OnlineOrderController::class, 'shipConfig'])->middleware('throttle:online-read');
     Route::get('/geocode', [OnlineOrderController::class, 'geocode'])->middleware('throttle:30,1'); // Gói 50e: geocode qua backend
     Route::get('/geocode/suggest', [OnlineOrderController::class, 'geocodeSuggest'])->middleware('throttle:30,1'); // Gói 50f: gợi ý địa chỉ
+    Route::get('/geocode/place', [OnlineOrderController::class, 'geocodePlace'])->middleware('throttle:30,1'); // Gói geocode lai NDAMaps (2026-11-13): tọa độ bản ghi khi khách chọn gợi ý NDAMaps
     Route::get('/geocode/reverse', [OnlineOrderController::class, 'geocodeReverse'])->middleware('throttle:30,1'); // Gói 55 p3: GPS -> địa chỉ
     // Gói 55 p11ac: proxy tỉnh/thành + xã/phường (Zalo WebView chặn domain lạ)
     Route::get('/provinces', [OnlineOrderController::class, 'provinces'])->middleware('throttle:online-read');
@@ -837,17 +850,19 @@ Route::prefix('online')->group(function () {
     // SPEC-01: thanh toán Zalo Mini App 2 giai đoạn
     Route::get('/payment/zalo-config', [PaymentController::class, 'zaloConfig'])->middleware('throttle:online-read');
     Route::post('/checkout-orders', [PaymentController::class, 'checkoutOrders'])->middleware('throttle:60,1');
+    // Gói Checkout SDK (2026-11-10): gắn mã đơn phía SDK về đơn quán (để
+    // notify đối chiếu) + cấp lại params cho nút "Thanh toán tiếp" (spec §3)
+    Route::post('/orders/{code}/payment/sdk-link', [PaymentController::class, 'linkSdkOrder'])->middleware('throttle:60,1');
+    Route::post('/orders/{code}/payment/repay-params', [PaymentController::class, 'repayParams'])->middleware('throttle:60,1');
     // SPEC-02: ví coupon + referral + tích tem
     Route::get('/coupons/my', [CouponController::class, 'myCoupons'])->middleware('throttle:online-read');
     Route::get('/coupons/stamps', [CouponController::class, 'myStamps'])->middleware('throttle:online-read');
     Route::get('/coupons/referral', [CouponController::class, 'myReferral'])->middleware('throttle:online-read');
-    Route::post('/coupons/validate', [CouponController::class, 'validateCoupon'])->middleware('throttle:online-read')->middleware('throttle:60,1');
     // Gói 49: sổ địa chỉ giao hàng (public, xác thực customer_id)
     Route::get('/addresses', [CustomerAddressController::class, 'index'])->middleware('throttle:online-read');
     Route::post('/addresses', [CustomerAddressController::class, 'store'])->middleware('throttle:60,1');
     Route::patch('/addresses/{id}', [CustomerAddressController::class, 'update'])->middleware('throttle:60,1');
     Route::delete('/addresses/{id}', [CustomerAddressController::class, 'destroy'])->middleware('throttle:60,1');
-    Route::post('/shipping-fee', [OnlineOrderController::class, 'shippingFee'])->middleware('throttle:online-read')->middleware('throttle:60,1');
     Route::post('/promotions/eligible', [OnlineOrderController::class, 'eligiblePromotions'])->middleware('throttle:online-read')->middleware('throttle:60,1');
     Route::post('/voucher/validate', [OnlineOrderController::class, 'validateVoucher'])->middleware('throttle:30,1'); // Audit 2026-10-21 🟠8
     // Loyalty 2.0: Cửa hàng điểm + lịch sử điểm (định danh Spec 3 trong controller)
@@ -873,12 +888,12 @@ Route::prefix('online')->group(function () {
     Route::post('/customer/session/code-login', [CustomerSessionController::class, 'codeLogin'])->middleware('throttle:30,1');
     Route::post('/customer/session/logout', [CustomerSessionController::class, 'logout'])->middleware('throttle:30,1');
     Route::patch('/customer/profile/email', [CustomerSessionController::class, 'updateEmail'])->middleware('throttle:30,1');
+    // Spec Quan tâm OA trong app 2026-11-12: đồng bộ trạng thái follow OA về server (khách từ phiên).
+    Route::post('/customer/oa-follow', [CustomerSessionController::class, 'updateOaFollow'])->middleware('throttle:30,1');
     Route::post('/orders', [OnlineOrderController::class, 'store'])->middleware('throttle:60,1');
     Route::get('/orders/{code}', [OnlineOrderController::class, 'track'])->middleware('throttle:online-read');
-    Route::post('/orders/{code}/transfer-notified', [OnlineOrderController::class, 'transferNotified'])->middleware('throttle:order-action'); // Spec QR 2026-10-21: khách báo đã CK — F17: limiter theo mã đơn
+    Route::post('/orders/{code}/transfer-mark', [OnlineOrderController::class, 'transferMark'])->middleware('throttle:order-action'); // Gói vá sau vòng S Mục 4 (2026-11-12): nút "Đã chuyển khoản" mới — CHỈ ghi mốc customer_notified_at, không đổi trạng thái thanh toán
     Route::post('/orders/{code}/cancel', [OnlineOrderController::class, 'cancel'])->middleware('throttle:order-action'); // Gói SEC2: chống brute-force mã đơn — F17: limiter theo mã đơn
-    // Gói 60: báo giá giao hàng live cho checkout Mini App
-    Route::post('/delivery/quote', [DeliveryController::class, 'quote'])->middleware('throttle:30,1');
     Route::get('/delivery/config', [DeliveryController::class, 'config'])->middleware('throttle:online-read');
 });
 

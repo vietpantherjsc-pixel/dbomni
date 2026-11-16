@@ -33,6 +33,7 @@ class CustomerPasswordController extends Controller
             'has_password' => !empty($customer->password_hash),
             'email' => $customer->email,
             'has_consented' => !empty($customer->consent_agreed_at),
+            'oa_followed' => !empty($customer->oa_followed_at), // Spec Quan tâm OA 2026-11-12: client đối chiếu để đồng bộ khi mở app
         ];
     }
 

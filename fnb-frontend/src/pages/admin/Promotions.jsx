@@ -140,7 +140,7 @@ export default function Promotions() {
 
     const emptyForm = () => ({
         name: '', code: '', type: 'percent', value: '', scope: 'order', scope_ids: [],
-        min_order_amount: 0, min_order_enabled: false, max_discount_amount: '', gift_product_id: '', gift_quantity: 1,
+        min_order_amount: 0, min_order_enabled: false, max_discount_amount: '', per_customer_limit: '', gift_product_id: '', gift_quantity: 1,
         target: 'all', tier_ids: [], starts_at: '', expires_at: '', has_expires: false,
         days_of_week: [], use_days: false, time_from: '', time_to: '', use_time: false,
         channels: [], is_active: true, banner_url: '', // Spec kênh bán hàng: [] = mọi kênh (mặc định nhóm store khi tạo mới)
@@ -320,6 +320,7 @@ export default function Promotions() {
                     auto_max_per_month: _mpm ?? '',
                     auto_extra: Object.keys(_extra).length ? JSON.stringify(_extra, null, 2) : '{}',
                     min_order_amount: p.min_order_amount ?? 0, min_order_enabled: Number(p.min_order_amount) > 0, max_discount_amount: p.max_discount_amount ?? '',
+                    per_customer_limit: p.per_customer_limit ?? '',
                     gift_product_id: p.gift_product_id || '', gift_quantity: p.gift_quantity || 1,
                     target: p.target, tier_ids: p.tier_ids || [],
                     starts_at: p.starts_at ? p.starts_at.slice(0, 16) : '', expires_at: p.expires_at ? p.expires_at.slice(0, 16) : '',
@@ -380,6 +381,7 @@ export default function Promotions() {
                 scope_ids: form.scope === 'order' ? null : form.scope_ids,
                 min_order_amount: form.min_order_enabled ? Number(form.min_order_amount) || 0 : 0,
                 max_discount_amount: form.max_discount_amount ? Number(form.max_discount_amount) : null,
+                per_customer_limit: form.per_customer_limit ? Number(form.per_customer_limit) : null, // RT-03 (2026-11-13): trống = không giới hạn
                 gift_product_id: form.type === 'gift' ? Number(form.gift_product_id) : null,
                 gift_quantity: Number(form.gift_quantity) || 1,
                 target: form.target, tier_ids: form.target === 'tier' ? form.tier_ids : null,
@@ -704,6 +706,13 @@ export default function Promotions() {
                                         {renderMinOrderField()}
                                     </div>
                                 )}
+                                {/* RT-03 (2026-11-13): giới hạn lượt dùng theo khách — chỉ bổ sung trường mới, giữ nguyên cấu trúc cũ */}
+                                <div className="mt-3 w-1/2 pr-2">
+                                    <label className="m-label">Giới hạn lượt dùng / khách (kênh online)</label>
+                                    <input type="number" min="1" value={form.per_customer_limit} onChange={(e) => setForm({ ...form, per_customer_limit: e.target.value })}
+                                        placeholder="Không giới hạn" className="m-input w-full" />
+                                    <div className="text-[12px] mt-1" style={{ color: 'var(--m-ink-faint)' }}>Để trống = không giới hạn. Đếm theo đơn online đã đặt của khách — đơn đã hủy không tính.</div>
+                                </div>
                             </div>
 
                             <div className="m-card p-4">

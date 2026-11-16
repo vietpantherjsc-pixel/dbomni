@@ -21,7 +21,7 @@ class StockTransferController extends Controller
     {
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $allowed = $actor->allBranchIds();
+            $allowed = $this->effectiveBranchScope($actor);
             if (!in_array((int) $fromBranchId, $allowed, true) && !in_array((int) $toBranchId, $allowed, true)) {
                 return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
             }
@@ -34,7 +34,7 @@ class StockTransferController extends Controller
             ->orderByDesc('id');
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $allowed = $actor->allBranchIds();
+            $allowed = $this->effectiveBranchScope($actor);
             $q->where(fn($w) => $w->whereIn('from_branch_id', $allowed)->orWhereIn('to_branch_id', $allowed));
         }
         if ($request->filled('from_branch_id')) $q->where('from_branch_id', $request->input('from_branch_id'));
@@ -222,7 +222,7 @@ class StockTransferController extends Controller
             'material_id' => 'required|exists:materials,id',
         ]);
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $v['branch_id'], $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $v['branch_id'], $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
         }
         $qty = Batch::where('branch_id', $v['branch_id'])

@@ -16,6 +16,7 @@ class Customer extends Model
         'referral_code', // SPEC-02
         'zalo_id', 'avatar', // Spec P4-P5: định danh Zalo
         'consent_agreed_at', 'consent_source', // Spec đăng ký Zalo B: mốc đồng ý NĐ 13
+        'oa_followed_at', 'zalo_oa_uid', // Spec Quan tâm OA trong app 2026-11-12: bản sao trạng thái follow OA + idByOA
         'tier_warning_at', 'tier_projected_id', 'tier_manual_until', // Loyalty 2.0
         // Spec đăng nhập SĐT + mật khẩu: email tự nguyện (không unique).
         // password_hash KHÔNG nằm ở đây — chỉ gán tường minh trong các
@@ -36,6 +37,7 @@ class Customer extends Model
         'tier_warning_at' => 'datetime',
         'tier_manual_until' => 'datetime',
         'consent_agreed_at' => 'datetime',
+        'oa_followed_at' => 'datetime', // Spec Quan tâm OA 2026-11-12
         'email_added_at' => 'datetime',
         'password_set_at' => 'datetime',
         'password_locked_until' => 'datetime',

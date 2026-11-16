@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
 // Từ chối ở bước nào cũng dừng + thông báo.
 class ShiftSwapController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // NV A: xem ca của đồng nghiệp trong 1 ngày để chọn đổi
     public function colleagues(Request $request): JsonResponse
     {
@@ -23,7 +24,7 @@ class ShiftSwapController extends Controller
         $emp = $request->user();
         $v = $request->validate(['date' => 'required|date|after_or_equal:today']);
         // Audit 2026-10-23 A1-14: chỉ liệt kê ca của NV cùng CN với mình
-        $myBranches = $emp->allBranchIds();
+        $myBranches = $this->effectiveBranchScope($emp);
         $scheds = WorkSchedule::with(['employee:id,full_name', 'workShift:id,name,start_time,end_time'])
             ->where('date', $v['date'])
             ->where('employee_id', '!=', $emp->id)
@@ -118,7 +119,7 @@ class ShiftSwapController extends Controller
             $req->update(['status' => 'target_confirmed', 'target_confirmed_at' => now()]);
             $msg = 'Bạn đã xác nhận đổi ca. Chờ quản lý duyệt.';
         } else {
-            $req->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'NV từ chối']);
+            $req->update(['status' => 'rejected', 'reject_reason' => ($v['reason'] ?? null) ?: 'NV từ chối']);
             $msg = 'Đã từ chối yêu cầu đổi ca.';
         }
         return response()->json(['success' => true, 'message' => $msg]);
@@ -185,7 +186,7 @@ class ShiftSwapController extends Controller
         $req = ShiftSwapRequest::where('id', $id)->whereIn('status', ['pending', 'target_confirmed'])->firstOrFail();
         // Audit 2026-10-23 A1-1: ghi vết người từ chối theo ApprovalActor
         [$decidedUserId, $decidedEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
-        $req->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'Quản lý từ chối', 'decided_by' => $decidedUserId, 'decided_by_employee_id' => $decidedEmployeeId]);
+        $req->update(['status' => 'rejected', 'reject_reason' => ($v['reason'] ?? null) ?: 'Quản lý từ chối', 'decided_by' => $decidedUserId, 'decided_by_employee_id' => $decidedEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu đổi ca.']);
     }
 }

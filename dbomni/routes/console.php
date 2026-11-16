@@ -20,6 +20,10 @@ Schedule::command('salary:auto-import')->dailyAt('23:30');
 // Gói 61b: dọn log giao hàng cũ hơn 30 ngày (mỗi ngày lúc 02:00)
 Schedule::command('delivery:prune-logs')->dailyAt('02:00');
 
+// Gói Checkout SDK (spec §2.6): đối soát đơn chờ thanh toán SDK quá 15
+// phút chưa có notify bằng getOrderStatus — chạy mỗi 15 phút.
+Schedule::command('payments:reconcile-sdk')->everyFifteenMinutes();
+
 // SPEC-02: cấp coupon theo lịch (CP-06, CP-07) — mỗi đêm lúc 01:00
 Schedule::command('coupons:issue-scheduled')->dailyAt('01:00');
 

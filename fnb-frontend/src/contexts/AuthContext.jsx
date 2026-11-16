@@ -51,21 +51,27 @@ export const AuthProvider = ({ children }) => {
         return perms.some((p) => p.endsWith('.*') && permission.startsWith(p.slice(0, -1)));
     };
 
-    // 7 lá lương duy nhất tầng Chủ Chi Nhánh được đi qua (CheckPermission
-    // ở server là cổng chốt — frontend chỉ ẩn UI).
+    // 7 lá lương duy nhất tầng Chủ Chi Nhánh được đi qua ở server
+    // (CheckPermission ở server là cổng chốt — frontend chỉ ẩn UI).
     const SALARY_LEAVES = ['staff.salary.summary.view', 'staff.salary.detail.view', 'staff.salary.edit', 'staff.salary.money', 'staff.salary.config', 'staff.salary.lock', 'staff.salary.export'];
+    // Gương của hằng server PermissionTree::BRANCH_OWNER_REPORT_LEAVES —
+    // đổi hằng phải đổi đây. Gồm đúng các lá hằng server cho qua ngoài
+    // 7 lá lương: 2 lá báo cáo khách + lá mục tiêu doanh thu (N-3,
+    // phương án (a) — mở đường đọc riêng cho Chủ Chi Nhánh).
+    const BRANCH_OWNER_LEAVES = [...SALARY_LEAVES, 'reports.customers.view', 'reports.marketing.view', 'finance.targets.edit'];
 
     // Gói 26 + cây phân quyền 3 tầng (2026-11-10): kiểm tra quyền cho 3 loại tài khoản.
     // - Tài khoản quản trị tầng Chủ Sở Hữu (type 'user', account_tier 'owner'
     //   hoặc chưa có tier — mặc định sau migration): full quyền.
     // - Tài khoản quản trị tầng Chủ Chi Nhánh (account_tier 'branch_owner'):
-    //   CHỈ 7 lá lương trong CN mình, mọi route khác -> 403 ở server.
+    //   CHỈ các lá trong BRANCH_OWNER_LEAVES (gương hằng server) trong CN
+    //   mình, mọi route khác -> 403 ở server.
     // - Nhân viên (type 'employee'): theo ma trận roles.permissions, hỗ trợ
     //   wildcard tiền tố đa tầng ('*', 'module.*', 'module.muccon.*').
     const can = (permission) => {
         if (!user) return false;
         if (user.type === 'user' || !user.type) {
-            if (user.account_tier === 'branch_owner') return SALARY_LEAVES.includes(permission);
+            if (user.account_tier === 'branch_owner') return BRANCH_OWNER_LEAVES.includes(permission);
             return true;
         }
         return matchesPerm(user.permissions || [], permission);

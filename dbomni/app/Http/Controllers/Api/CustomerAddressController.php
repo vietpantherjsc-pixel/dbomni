@@ -75,6 +75,7 @@ class CustomerAddressController extends Controller
                 'id' => $a->id, 'label' => $a->label,
                 'province' => $a->province, 'ward' => $a->ward, 'street' => $a->street,
                 'full_address' => $a->fullAddress(), 'is_default' => $a->is_default,
+                'lat' => $a->lat, 'lng' => $a->lng, // Vá §GA (TESTER, 2026-11-12): index() phải trả tọa độ để địa chỉ lưu có ghim qua cổng ngay
             ]);
         return response()->json(['success' => true, 'data' => $items]);
     }
@@ -90,6 +91,10 @@ class CustomerAddressController extends Controller
             'ward' => 'nullable|string|max:100',
             'street' => 'required|string|max:200',
             'is_default' => 'nullable|boolean',
+            // Địa chỉ mới tạo trong luồng checkout lưu kèm điểm đã dùng
+            // (tra từ địa chỉ chữ — spec bỏ ghim 2026-11-12).
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
         ]);
         if (!$this->verifyCustomerPhone((int) $v['customer_id'], $v['phone'] ?? null, $v['member_code'] ?? null)) {
             return response()->json(['success' => false, 'message' => 'SĐT/mã thành viên không khớp với khách hàng.'], 403);
@@ -118,11 +123,39 @@ class CustomerAddressController extends Controller
             'ward' => 'nullable|string|max:100',
             'street' => 'required|string|max:200',
             'is_default' => 'nullable|boolean',
+            // Tọa độ của địa chỉ (migration 000111): client gửi kèm khi lưu
+            // điểm đã dùng cho địa chỉ (luồng checkout sau khi đặt đơn).
+            // Request KHÔNG gửi 2 khóa này thì tọa độ xử lý theo luật chống
+            // trôi ngay dưới.
+            'lat' => 'nullable|numeric|between:-90,90',
+            'lng' => 'nullable|numeric|between:-180,180',
         ]);
+        $explicitCoord = $request->has('lat') || $request->has('lng');
+        if (!$request->has('lat')) {
+            unset($v['lat']);
+        }
+        if (!$request->has('lng')) {
+            unset($v['lng']);
+        }
         if (!$this->verifyCustomerPhone((int) $v['customer_id'], $v['phone'] ?? null, $v['member_code'] ?? null)) {
             return response()->json(['success' => false, 'message' => 'SĐT/mã thành viên không khớp với khách hàng.'], 403);
         }
         $a = CustomerAddress::where('id', $id)->where('customer_id', $v['customer_id'])->firstOrFail();
+        // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (2026-11-12, mục 3):
+        // nội dung CHỮ của địa chỉ bị sửa (số nhà/đường · phường · tỉnh có
+        // gửi và khác bản ghi) mà request không mang tọa độ mới → tọa độ
+        // đã lưu bị XÓA theo (điểm cũ thuộc về dòng chữ cũ, giữ lại là
+        // trôi). Đổi nhãn/đặt mặc định không đụng tọa độ. Luật này THAY
+        // luật "sửa chữ giữ nguyên tọa độ ghim" của gói ghim cùng ngày.
+        if (!$explicitCoord && ($a->lat !== null || $a->lng !== null)) {
+            foreach (['street', 'ward', 'province'] as $field) {
+                if ($request->has($field) && trim((string) $request->input($field)) !== trim((string) $a->{$field})) {
+                    $v['lat'] = null;
+                    $v['lng'] = null;
+                    break;
+                }
+            }
+        }
         return DB::transaction(function () use ($a, $v) {
             if (!empty($v['is_default'])) {
                 CustomerAddress::where('customer_id', $v['customer_id'])->where('id', '!=', $a->id)->update(['is_default' => false]);

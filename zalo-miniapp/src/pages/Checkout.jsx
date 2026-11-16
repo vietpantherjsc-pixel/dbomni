@@ -3,13 +3,14 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { api, fmt, getProfile, setProfile, getRef, setRef } from '../api';
 import { storage } from '../utils/storage';
 import SearchSelect from '../components/SearchSelect';
-import SearchInput from '../components/SearchInput';
-import ZmIcon from '../components/ZmIcon';
-import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
+import ZmIcon, { CouponIcon } from '../components/ZmIcon';
+import { geocodeLadder, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
 import { findPlaceByName } from '../utils/placeName'; // Sổ #69: khớp tên tỉnh/phường có chuẩn hóa
 import { DateField, TimeField, toApiDate, validTime, formatPhone, validPhone } from '../utils/checkoutFields.jsx';
 import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4: ô đồng ý dùng chung với mặt tiền đăng ký
+import PromoPanel, { EMPTY_PROMO_RES } from '../components/PromoPanel'; // Spec panel Ưu đãi (2026-11-14): panel chọn ưu đãi dùng chung với đơn nhóm
+import { openCheckout } from '../utils/checkoutSdk'; // Gói Checkout SDK (2026-11-10): điểm mở trang thanh toán Zalo duy nhất
 import { useShop } from '../store';
 
 // Gói 50d: luồng 2 bước — (1) nhập thông tin, (2) tóm tắt đơn hàng rồi mới đặt.
@@ -24,9 +25,8 @@ export default function Checkout() {
   const nav = useNavigate();
   const location = useLocation();
   const [step, setStep] = useState(1); // 1: nhập thông tin, 2: tóm tắt đơn
-  // Gói Ưu đãi hợp nhất (2026-10-31): coupon chọn sẵn từ Ví (Coupons.jsx "Dùng
-  // ngay") truyền qua navigation state — xử lý 1 lần khi danh sách hợp nhất về.
-  const preselectCouponId = useRef(location.state?.couponId || null);
+  // Coupon chọn sẵn từ Ví (Coupons.jsx "Dùng ngay") truyền qua navigation
+  // state — PromoPanel tự xử lý 1 lần khi danh sách hợp nhất về.
   const [type, setType] = useState('delivery');
   const [deliveryMode, setDeliveryMode] = useState('now'); // Gói 55 p10: 'now' = giao ngay, 'scheduled' = hẹn giờ giao
   const [name, setName] = useState('');
@@ -41,6 +41,10 @@ export default function Checkout() {
   const [province, setProvince] = useState('');
   const [wards, setWards] = useState([]);
   const [ward, setWard] = useState('');
+  // Vá F-2 (2026-11-12): cờ "lần đổi tỉnh này đến từ điền địa chỉ lưu" —
+  // effect theo tỉnh không được xóa ward của chính lần điền đó (bug đua
+  // ghi đè làm ward trống dù khớp được).
+  const fillingFromBookRef = useRef(false);
   const [street, setStreet] = useState('');
   const [km, setKm] = useState(null);
   const [geoLoading, setGeoLoading] = useState(false);
@@ -87,18 +91,14 @@ export default function Checkout() {
   useEffect(() => {
     if (type === 'delivery' && payment === 'pay_at_store') setPayment('transfer');
   }, [type, payment]);
-  // Gói Ưu đãi hợp nhất (2026-10-31): danh sách hợp nhất từ server (chế độ
-  // unified) + lựa chọn phía A của khách (KM chung HOẶC coupon ví — radio).
+  // Gói Ưu đãi hợp nhất (2026-10-31) → Spec panel Ưu đãi (2026-11-14):
+  // danh sách hợp nhất từ server (chế độ unified) vẫn nạp tại đây; toàn bộ
+  // trạng thái chọn + panel do component dùng chung PromoPanel giữ — trang
+  // chỉ nhận kết quả phân xử qua promoRes (payload + tổng + dòng giảm).
   // Khách không chọn = không giảm: bỏ hẳn tự áp ở bề mặt Mini App.
   const [offers, setOffers] = useState(null); // {items, stack_cap_amount}
-  const [selA, setSelA] = useState(null); // {kind: 'promotion'|'wallet_coupon', id}
-  const [offerWarn, setOfferWarn] = useState(''); // cảnh báo trong khối Ưu đãi (mất điều kiện / coupon ví không dùng được)
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [offerSearch, setOfferSearch] = useState('');
-  const [voucher, setVoucher] = useState('');
-  // Audit 2026-10-21 🟠8: kết quả validate voucher từ SERVER (số giảm thật để vào tổng hiển thị)
-  const [voucherInfo, setVoucherInfo] = useState(null); // {code, name, discount, stack_with_promotion}
-  const [voucherMsg, setVoucherMsg] = useState(''); // Gói Ưu đãi hợp nhất: thông báo chặn cặp thiếu cờ (gọi tên mã đang chặn)
+  const [promoRes, setPromoRes] = useState(EMPTY_PROMO_RES);
+  const promoRef = useRef(null); // ensureVoucher() trước khi sang tóm tắt
   const [points, setPoints] = useState(0);
   // Loyalty 2.0: không còn đổi điểm trực tiếp tại checkout — điểm chỉ đổi
   // coupon ở Cửa hàng điểm (trang Tài khoản).
@@ -107,7 +107,7 @@ export default function Checkout() {
   const [placing, setPlacing] = useState(false);
   // UX 2026-10-26 (🟠3): lỗi validate hiện tại trang thay alert() — banner ở bước hiện tại + lỗi riêng dưới ô mã
   const [formErr, setFormErr] = useState('');
-  const [voucherErr, setVoucherErr] = useState('');
+  // (voucherErr cũ đã chuyển vào PromoPanel cùng ô nhập voucher.)
   const [customerId, setCustomerId] = useState(null);
   // Spec mật khẩu §5.4/§7.3: email tự nguyện + ô đồng ý NĐ 13 ở đơn đầu.
   const [email, setEmail] = useState('');
@@ -125,20 +125,44 @@ export default function Checkout() {
   // chọn (addrTouched) để không giật lại lựa chọn "nhập địa chỉ mới".
   const addrTouched = useRef(false);
   const fillFromAddress = (a) => {
+    // Mỗi lần điền từ sổ là một "dòng chữ" mới: tăng phiên bản để điểm
+    // của lần điền này mang đúng phiên bản đó (xem khối dropoff bên dưới).
+    const ver = bumpAddrVer();
     // Sổ #69 (2026-11-04): khớp tên tỉnh/phường qua findPlaceByName (có chuẩn
     // hóa viết tắt/dấu) — khớp chính xác cũ trượt khi sổ lưu "TP. Hồ Chí Minh"
     // mà danh mục là "Thành phố Hồ Chí Minh", kéo theo phường không nạp.
     const pc = findPlaceByName(provinces, a.province)?.code;
     if (pc) {
+      // Vá F-2: đánh dấu lần đổi tỉnh này là do ĐIỀN TỪ SỔ để effect
+      // theo tỉnh không xóa ward mà chính lần điền này sắp đặt (bug đua).
+      if (String(pc) !== String(province)) fillingFromBookRef.current = true;
       setProvince(String(pc));
       loadWards(pc).then((ws) => {
         setWards(ws || []);
         const wc = findPlaceByName(ws || [], a.ward)?.code;
+        // Spec bỏ ghim (2026-11-12, mục 3): cơ chế tự chữa phường của vá
+        // F-2 (healSavedWard/savedWardName) ĐÃ GỠ — tên phường không khớp
+        // danh mục thì ô phường để trống, khách chọn lại theo danh mục
+        // hiện hành (chọn lại = sửa chữ → điểm tra lại bằng bậc thang,
+        // bậc 2 dùng tên phường mới).
         setWard(wc ? String(wc) : '');
       });
     }
     setStreet(a.street || '');
-    setPickedCoord(null);
+    // Spec bỏ ghim (2026-11-12, mục 3): địa chỉ lưu ĐÃ có tọa độ và khách
+    // không sửa chữ → dùng luôn điểm đó tính phí, KHÔNG tra lại; chưa có
+    // tọa độ → điểm trống, bậc thang tra tại checkout từ dòng chữ.
+    if (a.lat != null && a.lng != null && Number(a.lat) !== 0 && Number(a.lng) !== 0) {
+      const pt = { lat: Number(a.lat), lng: Number(a.lng) };
+      setDropoff({ ...pt, step: null, source: 'saved', ver });
+      if (branch?.latitude && branch?.longitude) {
+        const d = haversineKm(Number(branch.latitude), Number(branch.longitude), pt.lat, pt.lng);
+        setKm(Math.round(d * 10) / 10);
+        setGeoError(false);
+      }
+    } else {
+      setDropoff(null);
+    }
   };
   useEffect(() => {
     if (addrTouched.current || addrId || !addrBook.length) return;
@@ -148,13 +172,21 @@ export default function Checkout() {
   }, [addrBook]);
   const [saveAddr, setSaveAddr] = useState(false);
   const [addrLabel, setAddrLabel] = useState('Nhà');
-  // Gói 55 p3: popup thông tin nhận hàng + vị trí hiện tại
+  // Gói 55 p3: popup thông tin nhận hàng
   const [showAddrPop, setShowAddrPop] = useState(false);
-  const [locLoading, setLocLoading] = useState(false);
   // Gói 50f: gợi ý địa chỉ khi gõ
   const [suggests, setSuggests] = useState([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
-  const [pickedCoord, setPickedCoord] = useState(null); // {lat, lng} khi user chọn gợi ý
+  // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (2026-11-12): điểm giao của
+  // đơn = điểm tra bậc thang từ DÒNG CHỮ CUỐI CÙNG trong form, hoặc điểm
+  // đã lưu của địa chỉ trong sổ (source 'saved'). dropoff mang phiên bản
+  // dòng chữ (ver) mà nó thuộc về: khách sửa BẤT KỲ trường địa chỉ nào
+  // sau khi đã có điểm → addrVerRef tăng → điểm cũ tự hủy hiệu lực, phải
+  // tra lại; không bao giờ chốt đơn bằng điểm của dòng chữ cũ.
+  const [dropoff, setDropoff] = useState(null); // {lat, lng, step, source, ver}
+  const addrVerRef = useRef(0);
+  const bumpAddrVer = () => { addrVerRef.current += 1; return addrVerRef.current; };
+  const pointValid = !!dropoff && dropoff.ver === addrVerRef.current;
   // Spec phí giao một nguồn mục 5.2/5.3 (2026-11-06): đơn GIAO HÀNG ở giai
   // đoạn đầu chỉ nhận chuyển khoản — lựa chọn thu hộ được ẨN HẲN khỏi
   // checkout khi công tắc delivery_cod_enabled tắt (không hiện mờ/khóa như
@@ -179,6 +211,16 @@ export default function Checkout() {
   const isClosed = st && !st.open;
   const geoTimer = useRef(null);
   const suggestTimer = useRef(null);
+  // Gói geocode lai NDAMaps (spec 2026-11-13 mục 2.3): 1 token cho mỗi
+  // phiên chọn địa chỉ — đổi token mới sau mỗi lần place thành công và
+  // khi đổi chi nhánh. Cả phiên autocomplete + place chốt tính 1 lần tại
+  // bước place (dữ kiện tài liệu nhà cung cấp, needs_validation NV-4).
+  const newSuggestSession = () => (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const suggestSessionRef = useRef(null);
+  if (suggestSessionRef.current === null) suggestSessionRef.current = newSuggestSession();
+  useEffect(() => { suggestSessionRef.current = newSuggestSession(); }, [branch?.id]);
   useEffect(() => {
     if (isClosed) {
       // Đóng cửa: ép sang chế độ hẹn giờ
@@ -201,129 +243,120 @@ export default function Checkout() {
 
   useEffect(() => {
     if (!province) { setWards([]); setWard(''); return; }
+    // Vá F-2: lần đổi tỉnh do điền từ sổ/GPS thì lần nạp này KHÔNG xóa
+    // ward (chính lần điền đó đặt ward qua loadWards riêng của nó) —
+    // trước đây effect resolve sau và setWard('') đè mất (ward trống dù
+    // khớp được, ca Bến Thành 2026-11-12).
+    const fromBook = fillingFromBookRef.current;
+    fillingFromBookRef.current = false;
     loadWards(province)
-      .then((ws) => { setWards(ws || []); setWard(''); });
+      .then((ws) => { setWards(ws || []); if (!fromBook) setWard(''); });
   }, [province]);
 
   const fullAddress = () => [street.trim(), wardName(), provName()].filter(Boolean).join(', ');
+
   const wardName = () => (wards.find((w) => String(w.code) === String(ward)) || {}).name || '';
   const provName = () => (provinces.find((p) => String(p.code) === String(province)) || {}).name || '';
 
-  const calcKm = async () => {
-    if (!branch.latitude || !branch.longitude) return;
-    // Gói 50f: nếu user đã chọn gợi ý có tọa độ thì dùng luôn
-    if (pickedCoord) {
-      const d = haversineKm(Number(branch.latitude), Number(branch.longitude), pickedCoord.lat, pickedCoord.lng);
+  // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (2026-11-12, mục 2): điểm
+  // chốt của đơn = kết quả tra BẬC THANG (backend geocode) từ dòng chữ
+  // CUỐI CÙNG trong form. Điểm đã lưu của địa chỉ trong sổ (source
+  // 'saved', khách không sửa chữ) dùng luôn, không tra lại. Cả thang
+  // rỗng → geoError (khối lỗi đúng câu spec + nút Tính lại phí ở form),
+  // km về null — không để phí 0đ lọt qua.
+  const resolveDropoff = async () => {
+    if (!branch?.latitude || !branch?.longitude) return;
+    if (dropoff && dropoff.ver === addrVerRef.current) {
+      const d = haversineKm(Number(branch.latitude), Number(branch.longitude), dropoff.lat, dropoff.lng);
       setKm(Math.round(d * 10) / 10);
       setGeoError(false);
       return;
     }
     if (!street.trim() || !ward || !province) { setKm(null); setGeoError(false); return; }
+    const ver = addrVerRef.current;
     setGeoLoading(true); setGeoError(false);
     try {
-      const g = await geocodeAddress(fullAddress() + ', Việt Nam');
+      const g = await geocodeLadder({
+        q: fullAddress() + ', Việt Nam',
+        street: street.trim(), ward: wardName(), province: provName(), branch,
+      });
+      // Chữ đã đổi giữa lúc tra → kết quả thuộc về dòng chữ cũ, bỏ đi
+      // (lượt tra của dòng chữ mới tự chạy theo hiệu ứng dưới đây).
+      if (addrVerRef.current !== ver) return;
+      // Gói geocode lai NDAMaps (mục 3.2): source do backend trả —
+      // 'ladder' khi trúng thang, 'ndamaps_forward' khi trúng cứu cánh
+      // (vá §HP: từ vựng của cột dropoff_source, không phải tên nhà cung cấp).
+      setDropoff({ lat: g.lat, lng: g.lng, step: g.ladder_step, source: g.source || 'ladder', ver });
       const d = haversineKm(Number(branch.latitude), Number(branch.longitude), g.lat, g.lng);
       setKm(Math.round(d * 10) / 10);
-      // Delta phí giao (TESTER §AS, 2026-11-06): GHIM luôn tọa độ vừa geocode
-      // được vào pickedCoord — trước đây tọa độ này chỉ dùng để HIỂN THỊ km,
-      // payload không gửi kèm nên server rơi về nấc thiếu-tọa-độ (phí 0 +
-      // ghi chú quán xác nhận) dù khách đã thấy phí. Ghim ở đây thì số hiển
-      // thị ở modal/checkout và số server chốt trên đơn là MỘT (spec 3.1).
-      // Đổi địa chỉ thì các ô nhập đã tự xóa pickedCoord nên tính lại đúng;
-      // geocode thất bại vẫn giữ nấc thiếu-tọa-độ như cũ.
-      setPickedCoord({ lat: g.lat, lng: g.lng });
-    } catch (e) { setKm(null); setGeoError(true); }
-    finally { setGeoLoading(false); }
+    } catch (e) {
+      if (addrVerRef.current !== ver) return;
+      setKm(null); setGeoError(true);
+    } finally { setGeoLoading(false); }
   };
 
-  // Gói 55 p3: BỎ gợi ý tự động khi gõ tay — chỉ hiện gợi ý sau khi bấm "Vị trí hiện tại"
-  // (fillFromCoord tự gọi khi GPS thiếu số nhà). Nhập tay → calcKm tự geocode khi Lưu.
+  // Gợi ý khi gõ (spec mục 1: giữ làm TRỢ GÕ — chọn hay gõ thẳng đều
+  // được): thiên vị quanh chi nhánh đang chọn thay cho GPS (đường GPS đã
+  // gỡ khỏi Checkout theo spec mục 2).
+  const onStreetChange = (v) => {
+    setStreet(v);
+    bumpAddrVer();
+    clearTimeout(suggestTimer.current);
+    const q = v.trim();
+    if (q.length < 5) { setSuggests([]); setSuggestLoading(false); return; }
+    setSuggestLoading(true);
+    suggestTimer.current = setTimeout(async () => {
+      try {
+        // Gói geocode lai NDAMaps (mục 2.4): đáp {source, items} — item
+        // NDAMaps mang place_id (chưa có tọa độ), item Nominatim mang
+        // lat/lng như trước; chấp nhận cả đáp mảng cũ để khỏi gãy khi
+        // backend chưa nạp gói lai.
+        const res = await api.geocodeSuggest(q, branch?.latitude, branch?.longitude, suggestSessionRef.current);
+        setSuggests(Array.isArray(res) ? res : (res?.items || []));
+      } catch { setSuggests([]); }
+      finally { setSuggestLoading(false); }
+    }, 500);
+  };
 
-  const pickSuggest = (s) => {
+  const pickSuggest = async (s) => {
     // Gói 55 p3: giữ số nhà user đã gõ tay (VD "90 Tô Hiệu" → chọn gợi ý vẫn giữ "90")
     const typedNo = street.match(/^\d[\d/\-\s]*/)?.[0]?.trim();
     let newStreet = s.short || s.label.split(',')[0];
     if (typedNo && !/^\d/.test(newStreet)) {
       newStreet = `${typedNo} ${newStreet}`;
     }
+    const ver = bumpAddrVer();
     setStreet(newStreet);
-    setPickedCoord({ lat: s.lat, lng: s.lng });
     setSuggests([]);
-  };
-
-  // Gói 55 p3: điền địa chỉ từ tọa độ (dùng chung cho GPS chính xác cao/thấp)
-  const fillFromCoord = async (latitude, longitude) => {
-    const r = await api.geocodeReverse(latitude, longitude);
-    // Điền số nhà + đường
-    const streetParts = [r.house_number, r.road].filter(Boolean).join(' ');
-    if (streetParts) setStreet(streetParts);
-    // Tìm tỉnh/thành khớp
-    const prov = provinces.find((p) =>
-      r.state?.includes(p.name) || p.name.includes(r.state || '###') ||
-      r.city?.includes(p.name) || p.name.includes(r.city || '###'));
-    if (prov) {
-      setProvince(String(prov.code));
-      // Tải xã/phường của tỉnh rồi tìm khớp
-      try {
-        const ws = await loadWards(prov.code);
-        setWards(ws);
-        const w = ws.find((x) =>
-          r.suburb && (x.name.includes(r.suburb) || r.suburb.includes(x.name)));
-        if (w) setWard(String(w.code));
-      } catch {}
-    }
-    // Gói 55 p3: GPS điền xong là xong — KHÔNG hiện gợi ý (tránh làm phiền user)
-    setSuggests([]);
-  };
-
-  // Gói 55 p3: lấy vị trí hiện tại (GPS) → reverse geocode → điền vào các trường
-  // Thử GPS chính xác cao trước (15s), thất bại thì dùng định vị nhanh (WiFi/cột sóng)
-  const useCurrentLocation = () => {
-    if (!navigator.geolocation) { alert('Thiết bị không hỗ trợ định vị.'); return; }
-    setLocLoading(true);
-    const onPos = async (pos, highAcc) => {
-      try {
-        const { latitude: lat, longitude: lon, accuracy } = pos.coords;
-        if (accuracy && accuracy > 500 && highAcc) throw new Error('low-accuracy');
-        setPickedCoord({ lat, lng: lon });
-        await fillFromCoord(lat, lon);
-        if (accuracy && accuracy > 100) {
-          alert(`Đã lấy vị trí (sai số ~${Math.round(accuracy)}m). Hãy kiểm tra lại địa chỉ.`);
+    // Gói geocode lai NDAMaps (mục 2.2): chọn gợi ý NDAMaps → chốt ngay
+    // tọa độ bản ghi làm điểm giao (source 'ndamaps_place', gắn cùng
+    // phiên bản dòng chữ như điểm thang). Điểm không dùng được (lệch
+    // tỉnh / quá xa / place lỗi) → chỉ điền chữ, điểm chốt do đường B
+    // quyết ở bước tính phí (hiệu ứng theo street tự chạy bậc thang).
+    // Chọn gợi ý Nominatim → giữ hành vi cũ: chỉ điền chữ, điểm chốt
+    // vẫn tra bậc thang từ dòng chữ cuối cùng.
+    if (!s.place_id) return;
+    try {
+      const p = await api.geocodePlace(s.place_id, suggestSessionRef.current, provName(), branch?.latitude, branch?.longitude);
+      if (p?.lat && p?.lng) {
+        if (addrVerRef.current !== ver) return;
+        setDropoff({ lat: p.lat, lng: p.lng, step: null, source: 'ndamaps_place', ver });
+        if (branch?.latitude && branch?.longitude) {
+          const d = haversineKm(Number(branch.latitude), Number(branch.longitude), p.lat, p.lng);
+          setKm(Math.round(d * 10) / 10);
+          setGeoError(false);
         }
-      } catch (e) {
-        if (e.message === 'low-accuracy') { tryLowAccuracy(); return; }
-        alert(e.message || 'Không lấy được địa chỉ từ vị trí.');
-      } finally {
-        setLocLoading(false);
+        // Phiên chọn đã chốt bằng place → đổi token mới cho phiên sau.
+        suggestSessionRef.current = newSuggestSession();
       }
-    };
-    const tryLowAccuracy = () => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => onPos(pos, false),
-        (err) => {
-          setLocLoading(false);
-          const msgs = {
-            1: 'Bạn đã từ chối quyền định vị. Hãy bật lại trong cài đặt trình duyệt.',
-            2: 'Không xác định được vị trí. Hãy nhập địa chỉ tay.',
-            3: 'Hết thời gian chờ định vị. Hãy thử lại hoặc nhập địa chỉ tay.',
-          };
-          alert(msgs[err.code] || 'Không lấy được vị trí. Hãy nhập địa chỉ tay.');
-        },
-        { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
-      );
-    };
-    navigator.geolocation.getCurrentPosition(
-      (pos) => onPos(pos, true),
-      () => tryLowAccuracy(),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
-    );
+    } catch { /* chỉ điền chữ, không lỗi cho khách */ }
   };
 
   useEffect(() => {
     if (type !== 'delivery') return;
     if (!street.trim() || !ward || !province) { setKm(null); setGeoError(false); return; }
     clearTimeout(geoTimer.current);
-    geoTimer.current = setTimeout(calcKm, 800);
+    geoTimer.current = setTimeout(resolveDropoff, 800);
     return () => clearTimeout(geoTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [street, ward, province, type]);
@@ -361,43 +394,11 @@ export default function Checkout() {
     return () => clearTimeout(t);
   }, [phone, subtotal, km, shipCfg, type]);
 
-  // Gói Ưu đãi hợp nhất (2026-10-31): mỗi lần danh sách hợp nhất nạp lại (đổi
-  // giỏ/SĐT/loại đơn) — xử lý coupon chọn sẵn từ Ví (1 lần) và tự nhả lựa chọn
-  // phía A đã mất điều kiện kèm cảnh báo, đúng spec mục 2.8.
-  const itemOfSel = (list, sel) => (list || []).find((i) => sel
-    && i.kind === sel.kind
-    && (sel.kind === 'promotion' ? i.promotion_id : i.customer_coupon_id) === sel.id) || null;
-  useEffect(() => {
-    if (!offers) return;
-    if (preselectCouponId.current) {
-      const cid = Number(preselectCouponId.current);
-      preselectCouponId.current = null;
-      const it = offers.items.find((i) => i.kind === 'wallet_coupon' && i.customer_coupon_id === cid);
-      if (it?.eligible) {
-        setSelA({ kind: 'wallet_coupon', id: cid });
-        setOfferWarn('');
-      } else if (it) {
-        setOfferWarn(`Coupon ${it.code} chưa dùng được cho đơn này: ${it.reason_text || 'chưa đủ điều kiện.'}`);
-      } else {
-        setOfferWarn('Coupon bạn chọn từ Ví không còn dùng được cho đơn này.');
-      }
-      return;
-    }
-    if (selA) {
-      const it = itemOfSel(offers.items, selA);
-      if (!it) {
-        setSelA(null);
-        setOfferWarn('Ưu đãi đã chọn không còn áp dụng được cho đơn này — đã bỏ chọn.');
-      } else if (!it.eligible) {
-        setSelA(null);
-        setOfferWarn(`Ưu đãi đã chọn không còn đủ điều kiện: ${it.reason_text || ''} — đã bỏ chọn.`);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offers]);
+  // Xử lý coupon chọn sẵn từ Ví + tự nhả lựa chọn mất điều kiện khi danh
+  // sách hợp nhất nạp lại: đã chuyển vào PromoPanel (component giữ lựa chọn).
 
   // Spec phí giao MỘT NGUỒN (2026-11-06): phí hiển thị = đúng công thức nội
-  // bộ server sẽ chốt (haversine tọa độ ghim + bảng phí), trừ phần quán hỗ
+  // bộ server sẽ chốt (haversine tọa độ điểm giao + bảng phí), trừ phần quán hỗ
   // trợ theo cấu hình — modal địa chỉ, tổng checkout và đơn đã tạo khớp nhau
   // theo cấu trúc. Không còn số nào từ báo giá hãng ở đường khách.
   const shipFeeGross = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
@@ -405,134 +406,40 @@ export default function Checkout() {
     ? Math.min(Number(shipCfg.support_amount) || 0, shipFeeGross) : 0;
   const shipFee = Math.max(0, shipFeeGross - shipShopSupport);
 
-  // ===== Gói Ưu đãi hợp nhất (2026-10-31): PHÂN XỬ HIỂN THỊ §5d =====
-  // Bất biến sống còn: TỔNG HIỂN THỊ = SỐ SERVER THU. Mọi số đầu vào do server
-  // trả (số giảm từng mã, cờ cộng dồn, trần stack_cap_amount); client chỉ chạy
-  // đúng phép phân xử của store() (OnlineOrderController bước 5d) trên các số
-  // đó — thay cho cụm cộng thẳng promoDisc + couponDisc gây lỗi 41.500/76.500đ.
-  const selItem = itemOfSel(offers?.items, selA);
-  const stackCap = offers ? Number(offers.stack_cap_amount) || 0 : subtotal;
-  const aMoneyItem = selItem && !selItem.is_shipping && selItem.type !== 'gift' ? selItem : null;
-  const shipDisc = selItem?.is_shipping ? Math.min(Number(selItem.discount) || 0, shipFee) : 0;
-  const shipDiscTotal = shipDisc;
-  const aDisc = aMoneyItem ? Number(aMoneyItem.discount) || 0 : 0;
-  const bDisc = voucherInfo ? Number(voucherInfo.discount) || 0 : 0;
-  const pairAllowed = aDisc > 0 && bDisc > 0 && !!aMoneyItem?.stack_with_coupon && !!voucherInfo?.stack_with_promotion;
-  const promoSingle = aDisc > 0 ? Math.min(aDisc, stackCap) : 0;
-  const voucherSingle = bDisc > 0 ? Math.min(bDisc, stackCap) : 0;
-  const pairTotal = pairAllowed ? Math.min(aDisc + bDisc, stackCap) : 0;
-  let moneyDiscTotal = 0;
-  let aApplied = 0; // số giảm tiền hàng của phía A đang được áp
-  let vApplied = 0; // số giảm tiền hàng của voucher đang được áp
-  let voucherState = null; // 'stacked' | 'single' | 'not_applied' (đã nhận nhưng chạm trần)
-  let pairCapped = false;
-  if (pairAllowed && pairTotal > promoSingle && pairTotal > voucherSingle) {
-    moneyDiscTotal = pairTotal;
-    aApplied = aDisc;
-    vApplied = pairTotal - aDisc;
-    voucherState = 'stacked';
-    pairCapped = aDisc + bDisc > stackCap;
-  } else if (bDisc > aDisc) {
-    // Voucher thắng hẳn (kể cả khi phía A là KM ship/tặng món — mặt tiền hàng trống)
-    moneyDiscTotal = voucherSingle;
-    vApplied = voucherSingle;
-    voucherState = 'single';
-  } else if (aDisc > 0) {
-    moneyDiscTotal = promoSingle;
-    aApplied = promoSingle;
-    if (bDisc > 0) voucherState = 'not_applied';
-  } else if (bDisc > 0) {
-    moneyDiscTotal = voucherSingle;
-    vApplied = voucherSingle;
-    voucherState = 'single';
-  }
-  const totalDiscTotal = shipDiscTotal + moneyDiscTotal;
+  // Gói mở COD giao hàng (2026-11-11): phí thu hộ COD cộng SAU hỗ trợ +
+  // KM phí ship (không bị nuốt) — gương đúng thứ tự server chốt ở store().
+  // Kênh hiệu dụng cho phí: cùng luật tự hiệu chỉnh của place() (BANK mất
+  // khả dụng → COD và ngược lại; đơn giao + thu hộ tắt → BANK). Đơn chưa
+  // tra được điểm (km null, phí khoảng cách 0) vẫn cộng như server.
+  const feeChannel = (() => {
+    if (!zaloCfg) return payChannel;
+    let ch = payChannel;
+    if (ch === 'BANK' && !zaloCfg.bank_available && zaloCfg.cod_enabled) ch = 'COD';
+    if (ch === 'COD' && !zaloCfg.cod_enabled && zaloCfg.bank_available) ch = 'BANK';
+    if (ch === 'COD' && type === 'delivery' && !codDeliveryOn) ch = 'BANK';
+    return ch;
+  })();
+  const shipCodFee = type === 'delivery' && feeChannel === 'COD' && codDeliveryOn && shipCfg
+    ? (Number(shipCfg.ship_cod_fee) || 0) : 0;
+
+  // ===== Phân xử hiển thị §5d: PromoPanel chạy (gương store()) và trả
+  // kết quả qua promoRes — bất biến sống còn: TỔNG HIỂN THỊ = SỐ SERVER THU.
+  const shipDiscTotal = promoRes.shipDiscTotal;
+  const moneyDiscTotal = promoRes.moneyDiscTotal;
+  const totalDiscTotal = promoRes.totalDiscTotal;
   // Loyalty 2.0: bỏ pointDisc — tổng không còn dòng trừ điểm
-  const total = Math.max(0, subtotal + shipFee - shipDiscTotal - moneyDiscTotal);
+  const total = Math.max(0, subtotal + shipFee - shipDiscTotal - moneyDiscTotal + shipCodFee);
 
-  // Mã phía A bị voucher đang có chặn (thiếu 1 trong 2 cờ cộng dồn) — chỉ xét
-  // quan hệ cùng mặt tiền hàng; KM ship/tặng món không tranh mặt này (§5d).
-  const blockedByVoucher = (item) => !!voucherInfo && !item.is_shipping && item.type !== 'gift'
-    && !(item.stack_with_coupon && voucherInfo.stack_with_promotion);
+  // Spec bỏ ghim (2026-11-12): cổng hiển thị của đơn giao — chưa có điểm
+  // tra còn hiệu lực cho dòng chữ hiện tại → phí "Chưa tính được", tổng
+  // "—", nút đặt khóa.
+  const pointMissing = type === 'delivery' && !pointValid;
 
-  const chooseA = (item) => {
-    if (!item?.eligible || blockedByVoucher(item)) return;
-    const key = { kind: item.kind, id: item.kind === 'promotion' ? item.promotion_id : item.customer_coupon_id };
-    // Chạm lại mã đang chọn = bỏ chọn
-    setSelA((cur) => (cur && cur.kind === key.kind && cur.id === key.id ? null : key));
-    setOfferWarn('');
-  };
-
-  // Audit 2026-10-21 🟠8: validate voucher gõ tay bằng endpoint server.
-  // Gói Ưu đãi hợp nhất (2026-10-31): thêm kiểm soát tương thích chiều B→A —
-  // voucher thiếu cờ với phía A đang chọn thì BỊ CHẶN ngay tại lúc nhập (không
-  // thành lựa chọn, thông báo gọi đúng tên mã A đang chặn, ô nhập giữ nguyên).
-  const checkVoucher = async (code) => {
-    const c = String(code || '').trim().toUpperCase();
-    setVoucherErr('');
-    setVoucherMsg('');
-    if (!c) { setVoucherInfo(null); return true; }
-    // Ca biên 5: mã gõ vào trùng coupon ví của chính khách → chọn luôn ở phía A
-    const walletHit = (offers?.items || []).find((i) => i.kind === 'wallet_coupon' && String(i.code || '').toUpperCase() === c);
-    if (walletHit) {
-      if (walletHit.eligible) {
-        setSelA({ kind: 'wallet_coupon', id: walletHit.customer_coupon_id });
-        setOfferWarn('');
-        setVoucher('');
-        setVoucherInfo(null);
-        setVoucherMsg('Mã này là coupon trong ví của bạn — đã chọn ở danh sách ưu đãi bên dưới.');
-        return true;
-      }
-      setVoucherErr(`Coupon ${walletHit.code} trong ví của bạn chưa dùng được: ${walletHit.reason_text || 'chưa đủ điều kiện.'}`);
-      return false;
-    }
-    try {
-      const prof = getProfile() || {};
-      const res = await api.validateVoucher({
-        code: c,
-        subtotal,
-        phone: formatPhone(phone || '') || prof.phone || '',
-        member_code: prof.member_code || '',
-      });
-      const info = {
-        code: res.code, name: res.name,
-        discount: Math.round(Number(res.discount) || 0),
-        stack_with_promotion: !!res.stack_with_promotion,
-      };
-      if (aMoneyItem && !(aMoneyItem.stack_with_coupon && info.stack_with_promotion)) {
-        // Tên mã đang chặn: coupon ví gọi cả mã coupon, KM chung gọi tên chương trình
-        const aLabel = aMoneyItem.kind === 'wallet_coupon' && aMoneyItem.code
-          ? `${aMoneyItem.name} (${aMoneyItem.code})` : aMoneyItem.name;
-        setVoucherInfo(null);
-        setVoucherMsg(`Mã ${info.code} không áp dụng cùng ${aLabel} — bỏ chọn ${aLabel} để dùng mã này, hoặc giữ ${aLabel} và bỏ qua mã này.`);
-        return false;
-      }
-      setVoucherInfo(info);
-      return true;
-    } catch (err) {
-      setVoucherInfo(null);
-      setVoucherErr(err.message || 'Mã voucher không hợp lệ.');
-      return false;
-    }
-  };
-  // Giỏ đổi (subtotal đổi) mà đã áp voucher → tính lại số giảm lặng lẽ; hết hiệu lực thì gỡ.
-  const voucherSubtotalRef = useRef(null);
-  useEffect(() => {
-    if (!voucherInfo) { voucherSubtotalRef.current = null; return; }
-    if (voucherSubtotalRef.current === subtotal) return;
-    voucherSubtotalRef.current = subtotal;
-    checkVoucher(voucherInfo.code).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subtotal, voucherInfo]);
-
-  // Đổi loại đơn: reset toàn bộ lựa chọn ưu đãi (không áp dụng sang loại mới)
+  // Chọn mã / validate voucher / tự nhả lựa chọn mất điều kiện: đã chuyển
+  // vào PromoPanel. Đổi loại đơn → PromoPanel remount theo key={type} nên
+  // lựa chọn ưu đãi tự reset (không áp dụng sang loại mới).
   const switchType = (t) => {
     setType(t);
-    setSelA(null);
-    setVoucher('');
-    setVoucherInfo(null);
-    setVoucherMsg('');
-    setOfferWarn('');
   };
 
   // Validate bước 1 rồi sang tóm tắt
@@ -541,13 +448,10 @@ export default function Checkout() {
     if (!name.trim() || !phone.trim()) { setFormErr('Nhập tên và số điện thoại ở phần thông tin nhận hàng phía trên.'); return; }
     // Luật SĐT 2026-11-07: bắt đầu bằng 0 thì phải đủ đúng 10 số.
     if (!validPhone(phone)) { setFormErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
-    // 🟠8: có mã voucher chưa validate (hoặc khác mã đã validate) → validate trước khi
+    // 🟠8: có mã voucher chưa validate → PromoPanel validate trước khi
     // sang bước 2 để tổng hiển thị ở bước 2 đã gồm số giảm/không gồm mã sai.
-    const vcode = voucher.trim().toUpperCase();
-    if (vcode && vcode !== (voucherInfo?.code || '')) {
-      const ok = await checkVoucher(vcode);
-      if (!ok) return;
-    }
+    const okVoucher = await promoRef.current?.ensureVoucher();
+    if (okVoucher === false) return;
     if (type === 'delivery') {
       if (!province || !ward || !street.trim()) { setFormErr('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường ở phần địa chỉ giao hàng.'); return; }
       // Gói 55 p10: hẹn giờ giao — kiểm tra trong giờ mở cửa
@@ -573,10 +477,19 @@ export default function Checkout() {
 
   const place = async () => {
     if (placing) return;
+    // Spec bỏ ghim (2026-11-12): cổng client của luật cứng phía server
+    // (422 dropoff_geocode_failed) — đơn giao chưa có điểm tra còn hiệu
+    // lực cho dòng chữ hiện tại thì chặn ngay tại đây (nút đặt cũng khóa
+    // sẵn; đây là lớp chặn cho đường gọi place() vòng qua nút).
+    if (type === 'delivery' && !pointValid) {
+      setFormErr('Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.');
+      setShowAddrPop(true);
+      return;
+    }
     setPlacing(true);
     try {
       // Spec phí giao MỘT NGUỒN: không còn bước chờ/báo giá hãng ở đường
-      // khách — địa chỉ thiếu tọa độ vẫn đặt được (phí để quán xác nhận).
+      // khách — phí chốt từ tọa độ điểm giao (một nguồn) ở server.
       let scheduledAt = null;
       if (type === 'scheduled') {
         const d = toApiDate(schedDate);
@@ -587,7 +500,9 @@ export default function Checkout() {
         const d = toApiDate(schedDate);
         scheduledAt = `${d}T${schedTime}`;
       }
-      // SPEC-01: dùng checkout-orders + Checkout SDK khi có cấu hình Zalo
+      // SPEC-01 + Gói Checkout SDK (Đ3, 2026-11-10): MỌI đơn đều đi qua
+      // checkout-orders + Checkout SDK — zaloCfg chỉ còn để hiệu chỉnh
+      // kênh theo cấu hình thật; không còn nhánh tạo đơn ngoài SDK.
       const useZaloPay = !!zaloCfg;
       // Audit 2026-10-21 🟠15: KHÔNG rơi vào "đường mù STK" — tải cấu hình thanh toán
       // lỗi mà khách chọn Chuyển khoản qua đường thường thì đơn sẽ không có nơi hiện
@@ -618,6 +533,12 @@ export default function Checkout() {
         // Đơn giao khi thu hộ đang tắt: COD bị ẩn — kênh đang chọn rơi về BANK
         if (effChannel === 'COD' && type === 'delivery' && !codDeliveryOn) effChannel = 'BANK';
         if (effChannel !== payChannel) setPayChannel(effChannel);
+      } else {
+        // Gói Checkout SDK (Đ3): chưa tải được cấu hình kênh thì suy kênh
+        // SDK từ chính lựa chọn PTTT của khách (transfer → BANK ·
+        // pay_at_store → COD) — giữ nguyên luật ẩn COD cho đơn giao ở
+        // hiệu ứng phía trên (đơn giao luôn ép về transfer).
+        effChannel = payment === 'transfer' ? 'BANK' : 'COD';
       }
       const orderPayload = {
         // Audit UX 2026-10-21 (hạng 3): client_key cố định theo phiên giỏ (xem clientKeyRef)
@@ -631,6 +552,11 @@ export default function Checkout() {
         // Spec mật khẩu §7.3/§5.4: email tự nguyện + cờ đồng ý NĐ 13 ở đơn đầu.
         email: email.trim() || null,
         consent_agreed: !!consentChecked,
+        // Spec bỏ ghim (2026-11-12, mục 4): địa chỉ giao trên đơn = địa
+        // chỉ chữ ghép từ 3 trường form (số nhà + đường, phường, tỉnh) —
+        // đúng dòng điền sẵn của ô chi tiết cũ. KDS + chi tiết đơn Admin
+        // đọc trường này để quán tự đặt ship. Ghi chú cho shipper đi ở
+        // delivery_note như cũ.
         delivery_address: type === 'delivery' ? fullAddress() : null,
         province: type === 'delivery' ? provName() : null,
         ward: type === 'delivery' ? wardName() : null,
@@ -641,20 +567,28 @@ export default function Checkout() {
         delivery_package: null,
         delivery_quoted_fee: null,
         delivery_provider: null,
-        // Gói 61b + spec phí giao một nguồn: tọa độ điểm giao GHIM tại đây —
-        // server tính phí từ đúng cặp tọa độ này và điều phối hãng cũng dùng nó
-        delivery_dropoff_lat: type === 'delivery' ? pickedCoord?.lat || null : null,
-        delivery_dropoff_lng: type === 'delivery' ? pickedCoord?.lng || null : null,
+        // Gói 61b + spec phí giao một nguồn: tọa độ điểm giao tại đây —
+        // server tính phí từ đúng cặp tọa độ này. Nguồn điểm (spec bỏ
+        // ghim 2026-11-12): tra bậc thang từ địa chỉ chữ, hoặc điểm đã
+        // lưu của địa chỉ trong sổ.
+        delivery_dropoff_lat: type === 'delivery' ? dropoff?.lat || null : null,
+        delivery_dropoff_lng: type === 'delivery' ? dropoff?.lng || null : null,
+        // Gói geocode lai NDAMaps (2026-11-13 mục 3.3): nguồn điểm giao
+        // của đơn — server chỉ validate thuộc tập 4 giá trị rồi lưu.
+        dropoff_source: type === 'delivery' ? dropoff?.source || null : null,
         scheduled_at: scheduledAt,
-        payment_method: useZaloPay ? (effChannel === 'BANK' ? 'transfer' : 'pay_at_store') : payment,
-        // SPEC-01: kênh thanh toán Zalo
-        ...(useZaloPay ? { pay_channel: effChannel } : {}),
-        // Gói Ưu đãi hợp nhất (2026-10-31): chỉ gửi ĐÚNG những gì khách đã chọn
-        // và đã được nhận — voucher bị chặn khi nhập không gửi (tránh server áp
-        // thay lựa chọn của khách); không chọn gì → cả 3 trường rỗng, đơn không giảm.
-        voucher_code: voucherInfo?.code || null,
-        promotion_id: selA?.kind === 'promotion' ? selA.id : null,
-        customer_coupon_id: selA?.kind === 'wallet_coupon' ? selA.id : null,
+        payment_method: effChannel === 'BANK' ? 'transfer' : 'pay_at_store',
+        // SPEC-01 + Gói Checkout SDK (Đ3): luôn gửi kênh SDK đã hiệu
+        // chỉnh/suy ra ở trên — mọi đơn đều qua checkout-orders.
+        pay_channel: effChannel,
+        // Spec panel Ưu đãi (2026-11-14): chỉ gửi ĐÚNG những gì khách đã
+        // chọn trong PromoPanel — voucher đã nhận nhưng chưa áp thì không
+        // gửi (tránh server áp thay lựa chọn của khách); không chọn gì →
+        // cả 3 trường rỗng, đơn không giảm. Cặp KM + coupon ví gửi cả
+        // promotion_id + customer_coupon_id (§5d phía server đã mở).
+        voucher_code: promoRes.voucher_code,
+        promotion_id: promoRes.promotion_id,
+        customer_coupon_id: promoRes.customer_coupon_id,
         // Loyalty 2.0: không gửi points_redeem nữa (điểm chỉ đổi coupon ở Cửa hàng điểm)
         // Gói 64: không gửi yêu cầu VAT cho đơn online nữa (giữ null)
         note: note.trim() || null,
@@ -671,22 +605,19 @@ export default function Checkout() {
       let order;
       let sdkParams = null;
       let bankTransfer = null;
-      if (useZaloPay) {
-        // SPEC-01: tạo đơn qua checkout-orders → nhận SDK params
-        const res = await api.checkoutOrder(orderPayload);
-        order = res.order;
-        sdkParams = res.sdk_params;
-        // Spec QR 2026-10-21: giữ thông tin CK để hiện màn "Chờ thanh toán"
-        if (effChannel === 'BANK' && res.bank_info) {
-          bankTransfer = {
-            bank_info: res.bank_info,
-            transfer_content: res.transfer_content,
-            vietqr_payload: res.vietqr_payload || null,
-            amount: Math.round(Number(order.total_amount) || 0),
-          };
-        }
-      } else {
-        order = await api.createOrder(orderPayload);
+      // Gói Checkout SDK (Đ3): tạo đơn QUA checkout-orders trong MỌI
+      // trường hợp → nhận SDK params. Đã bỏ hẳn đường api.createOrder
+      // song song ngoài SDK cho luồng đặt đơn này.
+      const res = await api.checkoutOrder(orderPayload);
+      order = res.order;
+      sdkParams = res.sdk_params;
+      // Spec QR 2026-10-21: giữ thông tin CK để hiện màn "Chờ thanh toán"
+      if (effChannel === 'BANK' && res.bank_info) {
+        bankTransfer = {
+          bank_info: res.bank_info,
+          transfer_content: res.transfer_content,
+          amount: Math.round(Number(order.total_amount) || 0),
+        };
       }
 
       // Audit UX 2026-10-21 (hạng 2): lưu customer_id + member_code vào profile sau đơn đầu
@@ -703,40 +634,77 @@ export default function Checkout() {
           customer_id: customerId, phone: formatPhone(phone), member_code: getProfile()?.member_code || '',
           label: addrLabel,
           province: provName(), ward: wardName(), street: street.trim(),
+          // Spec bỏ ghim (2026-11-12, mục 3): địa chỉ mới lưu kèm điểm
+          // đã dùng để lần sau khỏi tra lại.
+          lat: dropoff?.lat ?? null, lng: dropoff?.lng ?? null,
         }).catch(() => {});
       }
-      clearCart();
+      // Spec bỏ ghim (2026-11-12, mục 3): đơn đặt thành công bằng địa chỉ
+      // ĐÃ CHỌN trong sổ → lưu điểm đã dùng (kèm dòng chữ đã dùng) vào
+      // chính bản ghi đó để lần sau khỏi tra — chỉ PATCH khi điểm hoặc
+      // chữ thật sự khác bản ghi. PATCH mang lat/lng tường minh nên luật
+      // chống trôi phía server không xóa điểm này.
+      if (type === 'delivery' && customerId && addrId && dropoff) {
+        const a = addrBook.find((x) => String(x.id) === String(addrId));
+        if (a && (Number(a.lat) !== dropoff.lat || Number(a.lng) !== dropoff.lng
+          || String(a.street || '') !== street.trim()
+          || String(a.ward || '') !== wardName()
+          || String(a.province || '') !== provName())) {
+          api.updateAddress(a.id, {
+            customer_id: customerId, phone: formatPhone(phone), member_code: getProfile()?.member_code || '',
+            label: a.label, province: provName(), ward: wardName(), street: street.trim(),
+            lat: dropoff.lat, lng: dropoff.lng,
+          }).then(() => {
+            setAddrBook((prev) => prev.map((x) => (String(x.id) === String(a.id)
+              ? { ...x, lat: dropoff.lat, lng: dropoff.lng, street: street.trim(), ward: wardName(), province: provName() }
+              : x)));
+          }).catch(() => {});
+        }
+      }
+      // Gói vá sau vòng S — Mục 1 (2026-11-12): clearCart() KHÔNG còn xóa
+      // tại đây (trước khi mở SDK) — SDK lỗi thì khách còn nhìn tóm tắt
+      // 0 món · 0đ trong lúc chờ chuyển màn. Giỏ chỉ xóa ở các nhánh sắp
+      // rời trang bên dưới, sau khi lượt mở SDK đã ngã ngũ.
 
-      // SPEC-01: mở Checkout SDK nếu có (trong Zalo client)
-      if (sdkParams && typeof window !== 'undefined') {
+      // Gói Checkout SDK: mở trang thanh toán Zalo qua CheckoutSDK
+      // (utils/checkoutSdk — import từ 'zmp-sdk/apis'). Mở được và có
+      // orderId phía SDK thì gắn về server để notify đối chiếu đơn
+      // (lỗi gắn chỉ cảnh báo, không chặn khách). Trạng thái đơn thật do
+      // server quyết qua notify/đối soát — kết quả client chỉ để hiển thị.
+      let sdkFailed = false;
+      let sdkErrDetail = ''; // Mục 2 gói vá sau vòng S: chi tiết lỗi gốc (chặng/name/message) nối vào banner
+      if (sdkParams) {
         try {
-          // Thử dùng zmp-sdk nếu có, fallback sang ZaloJSBridge
-          let Payment = null;
-          try {
-            const zmp = await import('zmp-sdk');
-            Payment = zmp.Payment;
-          } catch {
-            // zmp-sdk chưa load được, thử ZaloJSBridge
+          const sdkRes = await openCheckout(sdkParams);
+          if (sdkRes?.orderId) {
+            api.linkSdkOrder(order.code, sdkRes.orderId).catch((e) => console.warn('Gắn mã đơn SDK lỗi:', e));
           }
-          if (Payment && Payment.createOrder) {
-            await Payment.createOrder(sdkParams);
-          } else if (window.ZaloJSBridge && window.ZaloJSBridge.call) {
-            // Fallback: gọi trực tiếp qua bridge
-            window.ZaloJSBridge.call('Payment.createOrder', sdkParams);
-          }
-          // Sau khi SDK đóng, chuyển sang trang kết quả (trạng thái đơn cập nhật qua notify)
         } catch (sdkErr) {
           console.warn('Không mở được Checkout SDK:', sdkErr);
-          // Spec QR 2026-10-21: SDK thất bại → rơi về màn hình hướng dẫn CK tay
-          // (khối dưới điều hướng BANK sang /pay-wait), không còn Success im lặng.
+          sdkFailed = true;
+          sdkErrDetail = sdkErr?.message || '';
         }
       }
 
-      // Spec QR 2026-10-21: đơn BANK (phương án A) luôn kết thúc ở màn "Chờ thanh toán"
-      // — khách cần STK/QR + nút báo CK; NV xác nhận tay sau khi đối chiếu sao kê.
-      if (bankTransfer) {
+      if (sdkFailed) {
+        // Đ3 + spec §3 (thay hành vi cũ "rơi về CK tay"): SDK không mở
+        // được → báo rõ tại trang, đơn GIỮ pending_payment chờ "Thanh
+        // toán tiếp" trong mục Đơn hàng; dừng ít giây cho khách đọc rồi
+        // BANK → màn trạng thái /pay-wait, COD → trang theo dõi đơn.
+        setFormErr('Không mở được trang thanh toán của Zalo. Đơn của bạn đã được lưu — bạn có thể thanh toán tiếp trong mục Đơn hàng.' + (sdkErrDetail ? ` [${sdkErrDetail}]` : ''));
+        setTimeout(() => {
+          clearCart(); // Mục 1: rời trang mới xóa giỏ (sau khi khách đã đọc banner)
+          if (bankTransfer) nav(`/pay-wait/${order.code}`, { state: { transfer: bankTransfer } });
+          else nav(`/track?code=${order.code}`);
+        }, 2600);
+      } else if (bankTransfer) {
+        // Spec QR 2026-10-21: đơn BANK (phương án A) luôn kết thúc ở màn "Chờ thanh toán";
+        // gói vá sau vòng S (Mục 4): màn chờ chỉ còn trạng thái + Thanh toán
+        // tiếp + Đã chuyển khoản — NV xác nhận tay sau khi đối chiếu sao kê.
+        clearCart(); // Mục 1: rời trang mới xóa giỏ
         nav(`/pay-wait/${order.code}`, { state: { transfer: bankTransfer } });
       } else {
+        clearCart(); // Mục 1: rời trang mới xóa giỏ
         nav(`/success/${order.code}`);
       }
     } catch (e) {
@@ -755,6 +723,19 @@ export default function Checkout() {
   const typeLabel = type === 'delivery'
     ? (deliveryMode === 'scheduled' ? 'Hẹn giờ giao' : 'Giao hàng')
     : type === 'takeaway' ? 'Mang đi' : 'Hẹn giờ lấy';
+
+  // Kênh hiệu dụng ở màn tóm tắt — gương đúng luật tự hiệu chỉnh của
+  // place() (BANK mất khả dụng → COD và ngược lại; đơn giao + thu hộ tắt
+  // → BANK; chưa có cấu hình Zalo thì suy từ lựa chọn PTTT của khách).
+  // Khối hướng dẫn chuyển khoản ở bước 2 bám theo kênh này.
+  const summaryChannel = (() => {
+    if (!zaloCfg) return payment === 'transfer' ? 'BANK' : 'COD';
+    let ch = payChannel;
+    if (ch === 'BANK' && !zaloCfg.bank_available && zaloCfg.cod_enabled) ch = 'COD';
+    if (ch === 'COD' && !zaloCfg.cod_enabled && zaloCfg.bank_available) ch = 'BANK';
+    if (ch === 'COD' && type === 'delivery' && !codDeliveryOn) ch = 'BANK';
+    return ch;
+  })();
 
   return (
     <div className="zm-page">
@@ -793,6 +774,137 @@ export default function Checkout() {
                 <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
               )}
             </div>
+            {type === 'delivery' && (
+              <>
+                {/* Gói 55 p3: card gọn thông tin nhận hàng — bấm mở popup */}
+                <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
+                  <div className="zm-deliv-top">
+                    <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
+                    <div className="zm-deliv-t">Thông tin nhận hàng</div>
+                    <div className="zm-deliv-chg">Thay đổi</div>
+                  </div>
+                  <div className="zm-deliv-mid">
+                    <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
+                    <div style={{ flex: 1 }}>
+                      <div className="zm-deliv-nm">
+                        {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
+                      </div>
+                      <div className="zm-deliv-ad">
+                        {[street, wardName(), provName()].filter(Boolean).join(', ') || 'Nhập địa chỉ'}
+                      </div>
+                      {pointValid && km != null && (
+                        <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>✓ Đã tính phí giao theo địa chỉ — cách quán ~{km}km</div>
+                      )}
+                    </div>
+                    <div className="zm-deliv-arr">›</div>
+                  </div>
+                </div>
+
+                {/* Gói 55 p3: popup sửa thông tin nhận hàng */}
+                {showAddrPop && (
+                  <div className="zm-pop-overlay" onClick={() => setShowAddrPop(false)}>
+                    <div className="zm-pop-sheet" onClick={(e) => e.stopPropagation()}>
+                      <h3>Thông tin nhận hàng</h3>
+  {addrBook.length > 0 && (
+    <div className="zm-field">
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
+      <select value={addrId} onChange={(e) => {
+        addrTouched.current = true;
+        const id = e.target.value;
+        setAddrId(id);
+        if (!id) { bumpAddrVer(); setDropoff(null); return; }
+        const a = addrBook.find((x) => String(x.id) === id);
+        if (!a) return;
+        fillFromAddress(a);
+      }}>
+        <option value="">— Nhập địa chỉ mới —</option>
+        {addrBook.map((a) => (
+          <option key={a.id} value={a.id}>{a.is_default ? '★ ' : ''}{a.label}: {a.full_address}</option>
+        ))}
+      </select>
+    </div>
+  )}
+  {/* Spec bỏ ghim (2026-11-12, mục 1): Tỉnh/TP + Phường/Xã MỘT HÀNG HAI CỘT */}
+  <div style={{ display: 'flex', gap: 8 }}>
+    <div className="zm-field" style={{ flex: 1, minWidth: 0 }}>
+      <label>Tỉnh / Thành phố *</label>
+      <SearchSelect
+        value={province} placeholder="— Chọn tỉnh/thành —"
+        options={provinces.map((p) => ({ code: p.code, name: p.name }))}
+        onChange={(c) => { fillingFromBookRef.current = false; bumpAddrVer(); setProvince(c); setAddrId(''); }}
+      />
+    </div>
+    <div className="zm-field" style={{ flex: 1, minWidth: 0 }}>
+      <label>Phường / Xã *</label>
+      <SearchSelect
+        value={ward} placeholder="— Chọn phường/xã —" disabled={!province}
+        options={wards.map((w) => ({ code: w.code, name: w.name }))}
+        onChange={(c) => { bumpAddrVer(); setWard(c); }}
+      />
+    </div>
+  </div>
+  <div className="zm-field" style={{ position: 'relative' }}>
+    <label>Số nhà, tên đường *</label>
+    <input
+      value={street}
+      onChange={(e) => onStreetChange(e.target.value)}
+      placeholder="VD: 123 Nguyễn Huệ"
+      autoComplete="off"
+    />
+    {(suggestLoading || suggests.length > 0) && (
+      <div style={{
+        position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 50,
+        background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10,
+        boxShadow: '0 8px 24px rgba(0,0,0,.12)', maxHeight: 220, overflowY: 'auto',
+      }}>
+        {suggestLoading && <div style={{ padding: 12, fontSize: 13, color: '#999' }}>Đang tìm địa chỉ...</div>}
+        {suggests.map((s, i) => (
+          <div
+            key={i}
+            onClick={() => pickSuggest(s)}
+            style={{ padding: '10px 12px', fontSize: 13, borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}
+          >
+            <div style={{ fontWeight: 600 }}>{s.short}</div>
+            <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+  {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
+  {km != null && shipCfg && (
+    <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
+  )}
+  {/* Spec bỏ ghim (2026-11-12, mục 2): tra rỗng cả bậc thang → khối lỗi
+      ĐÚNG CÂU SPEC ngay trong form + nút Tính lại phí tra lại tại chỗ;
+      nút đặt đơn khóa tới khi có điểm. */}
+  {geoError && (
+    <div className="zm-alert" style={{ background: '#fef2f2', borderColor: '#fecaca', color: '#991b1b' }}>
+      Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.
+      <button type="button" onClick={resolveDropoff} style={{ display: 'block', marginTop: 8, fontWeight: 700, color: '#b91c1c', textDecoration: 'underline' }}>Tính lại phí</button>
+    </div>
+  )}
+  <div className="zm-field">
+    <label>Ghi chú cho shipper</label>
+    <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
+  </div>
+  {customerId && !addrId && (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 14 }}>
+      <input type="checkbox" checked={saveAddr} onChange={(e) => setSaveAddr(e.target.checked)} style={{ width: 18, height: 18 }} />
+      Lưu địa chỉ này vào sổ địa chỉ
+      {saveAddr && (
+        <select value={addrLabel} onChange={(e) => setAddrLabel(e.target.value)} style={{ marginLeft: 4, padding: '4px 8px', borderRadius: 8, border: '1px solid #e0e0e0' }}>
+          <option>Nhà</option><option>Công ty</option><option>Khác</option>
+        </select>
+      )}
+    </label>
+  )}
+                      <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
             {/* Mục thu gọn (phán Đại Vương 2026-11-07): Email + Mã người giới
                 thiệu dồn vào một mục riêng mặc định đóng cho gọn form. Giá trị
                 đã nhập vẫn gửi đi y nguyên kể cả khi mục đang đóng. */}
@@ -895,129 +1007,6 @@ export default function Checkout() {
                     <div style={{ fontSize: 11, color: '#666', marginTop: 6 }}>Chỉ chọn trong giờ mở cửa của quán</div>
                   </div>
                 )}
-                {/* Gói 55 p3: card gọn thông tin nhận hàng — bấm mở popup */}
-                <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
-                  <div className="zm-deliv-top">
-                    <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
-                    <div className="zm-deliv-t">Thông tin nhận hàng</div>
-                    <div className="zm-deliv-chg">Thay đổi</div>
-                  </div>
-                  <div className="zm-deliv-mid">
-                    <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
-                    <div style={{ flex: 1 }}>
-                      <div className="zm-deliv-nm">
-                        {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
-                      </div>
-                      <div className="zm-deliv-ad">
-                        {[street, wards.find((w) => String(w.code) === ward)?.name, provinces.find((pr) => String(pr.code) === province)?.name].filter(Boolean).join(', ') || 'Nhập địa chỉ'}
-                      </div>
-                    </div>
-                    <div className="zm-deliv-arr">›</div>
-                  </div>
-                </div>
-
-                {/* Gói 55 p3: popup sửa thông tin nhận hàng */}
-                {showAddrPop && (
-                  <div className="zm-pop-overlay" onClick={() => setShowAddrPop(false)}>
-                    <div className="zm-pop-sheet" onClick={(e) => e.stopPropagation()}>
-                      <h3>Thông tin nhận hàng</h3>
-  {addrBook.length > 0 && (
-    <div className="zm-field">
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
-      <select value={addrId} onChange={(e) => {
-        addrTouched.current = true;
-        const id = e.target.value;
-        setAddrId(id);
-        if (!id) return;
-        const a = addrBook.find((x) => String(x.id) === id);
-        if (!a) return;
-        fillFromAddress(a);
-      }}>
-        <option value="">— Nhập địa chỉ mới —</option>
-        {addrBook.map((a) => (
-          <option key={a.id} value={a.id}>{a.is_default ? '★ ' : ''}{a.label}: {a.full_address}</option>
-        ))}
-      </select>
-    </div>
-  )}
-  <div className="zm-field">
-    <label>Tỉnh / Thành phố *</label>
-    <SearchSelect
-      value={province} placeholder="— Chọn tỉnh/thành —"
-      options={provinces.map((p) => ({ code: p.code, name: p.name }))}
-      onChange={(c) => { setProvince(c); setAddrId(''); setPickedCoord(null); }}
-    />
-  </div>
-  <div className="zm-field">
-    <label>Phường / Xã *</label>
-    <SearchSelect
-      value={ward} placeholder="— Chọn phường/xã —" disabled={!province}
-      options={wards.map((w) => ({ code: w.code, name: w.name }))}
-      onChange={(c) => { setWard(c); setPickedCoord(null); }}
-    />
-  </div>
-  <div className="zm-field" style={{ position: 'relative' }}>
-    <label>Số nhà, tên đường *</label>
-    <input
-      value={street}
-      onChange={(e) => { setStreet(e.target.value); setPickedCoord(null); }}
-      placeholder="VD: 123 Nguyễn Huệ"
-      autoComplete="off"
-    />
-    {(suggestLoading || suggests.length > 0) && (
-      <div style={{
-        position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 50,
-        background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10,
-        boxShadow: '0 8px 24px rgba(0,0,0,.12)', maxHeight: 220, overflowY: 'auto',
-      }}>
-        {suggestLoading && <div style={{ padding: 12, fontSize: 13, color: '#999' }}>Đang tìm địa chỉ...</div>}
-        {suggests.map((s, i) => (
-          <div
-            key={i}
-            onClick={() => pickSuggest(s)}
-            style={{ padding: '10px 12px', fontSize: 13, borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}
-          >
-            <div style={{ fontWeight: 600 }}>{s.short}</div>
-            <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{s.label}</div>
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
-  {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
-  {km != null && shipCfg && (
-    <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
-  )}
-  {geoError && (
-    <div className="zm-alert" style={{ background: '#fef3c7', borderColor: '#fcd34d' }}>
-      ⚠️ Không tự tính được khoảng cách. Quán sẽ xác nhận phí ship qua điện thoại.
-      <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
-    </div>
-  )}
-  <div className="zm-field">
-    <label>Ghi chú giao hàng</label>
-    <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
-  </div>
-  {customerId && !addrId && (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 14 }}>
-      <input type="checkbox" checked={saveAddr} onChange={(e) => setSaveAddr(e.target.checked)} style={{ width: 18, height: 18 }} />
-      Lưu địa chỉ này vào sổ địa chỉ
-      {saveAddr && (
-        <select value={addrLabel} onChange={(e) => setAddrLabel(e.target.value)} style={{ marginLeft: 4, padding: '4px 8px', borderRadius: 8, border: '1px solid #e0e0e0' }}>
-          <option>Nhà</option><option>Công ty</option><option>Khác</option>
-        </select>
-      )}
-    </label>
-  )}
-                      {/* Gói 55 p3: nút vị trí hiện tại */}
-                      <button type="button" className="zm-loc-btn" onClick={useCurrentLocation} disabled={locLoading}>
-                        {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
-                      </button>
-                      <p className="zm-loc-hint">Bấm "Vị trí hiện tại" để tự điền địa chỉ và tính phí ship chính xác, hoặc nhập tay rồi bấm Lưu.</p>
-                      <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
-                    </div>
-                  </div>
-                )}
               </>
             )}
 
@@ -1055,7 +1044,11 @@ export default function Checkout() {
                   >
                     <div className="dot" /><div><b>{type === 'delivery' ? 'Thanh toán khi nhận hàng' : 'Trả tại quán'}</b><div style={{ fontSize: 12, color: '#888' }}>
                       {type === 'delivery' ? 'Trả tiền mặt cho shipper khi nhận món' : 'Trả tiền khi nhận món'}
-                    </div></div>
+                    </div>
+                    {type === 'delivery' && shipCfg && Number(shipCfg.ship_cod_fee) > 0 && (
+                      <div style={{ fontSize: 12, color: '#888' }}>Cộng phí thu hộ COD {fmt(Number(shipCfg.ship_cod_fee))}đ vào phí giao hàng</div>
+                    )}
+                    </div>
                   </div>
                 )}
               </>
@@ -1079,214 +1072,20 @@ export default function Checkout() {
 
             {/* Gói 64: bỏ tick xuất VAT trên Mini App (hóa đơn đã kèm mã QR cho khách quét nhập thông tin) */}
 
-            {/* ===== Gói Ưu đãi hợp nhất (2026-10-31): khối Ưu đãi + panel chọn ===== */}
-            <div
-              onClick={() => setPanelOpen(true)}
-              style={{ background: '#fff', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14, cursor: 'pointer' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 28 }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>🎁 Ưu đãi</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {totalDiscTotal > 0 && <b style={{ color: '#16a34a', fontSize: 13.5 }}>−{fmt(totalDiscTotal)}đ</b>}
-                  <span style={{ color: '#999', fontSize: 18 }}>›</span>
-                </span>
-              </div>
-              {selItem?.is_shipping && shipDisc > 0 && (
-                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>🚚 {selItem.name}: giảm ship {fmt(shipDisc)}đ</div>
-              )}
-              {selItem?.type === 'gift' && (
-                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>🎁 {selItem.name}: tặng {selItem.gift_product_name}</div>
-              )}
-              {aApplied > 0 && aMoneyItem && (
-                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>
-                  {aMoneyItem.kind === 'wallet_coupon' ? '🎫' : '🎉'} {aMoneyItem.name}: −{fmt(aApplied)}đ{voucherState === 'stacked' ? ' (cộng dồn)' : ''}
-                </div>
-              )}
-              {vApplied > 0 && voucherInfo && (
-                <div style={{ fontSize: 12.5, color: '#16a34a', fontWeight: 600, marginTop: 4 }}>
-                  🎟️ Voucher {voucherInfo.code}: −{fmt(vApplied)}đ{voucherState === 'stacked' ? ' (cộng dồn)' : ''}{pairCapped ? ' — đã chạm trần giảm tối đa' : ''}
-                </div>
-              )}
-              {voucherState === 'not_applied' && voucherInfo && (
-                <div style={{ fontSize: 12.5, color: '#92400e', fontWeight: 600, marginTop: 4 }}>
-                  🎟️ Voucher {voucherInfo.code} chưa áp dụng cho đơn này — đi cùng {aMoneyItem?.name} đã chạm trần giảm tối đa; mã giữ nguyên, chưa bị trừ lượt.
-                </div>
-              )}
-              {offerWarn && (
-                <div style={{ fontSize: 12.5, color: '#b91c1c', fontWeight: 600, marginTop: 4 }}>⚠ {offerWarn}</div>
-              )}
-              {voucherMsg && (
-                <div style={{ fontSize: 12.5, color: '#92400e', fontWeight: 600, marginTop: 4 }}>{voucherMsg}</div>
-              )}
-              {!selItem && !voucherInfo && !offerWarn && (
-                <div style={{ fontSize: 12.5, color: '#888', marginTop: 4 }}>
-                  {(() => {
-                    const best = Math.max(0, ...(offers?.items || []).filter((i) => i.eligible).map((i) => Number(i.discount) || 0));
-                    return best > 0 ? `Có ưu đãi giảm đến ${fmt(best)}đ — chạm để chọn` : 'Nhập mã giảm giá nếu có';
-                  })()}
-                </div>
-              )}
-            </div>
-
-            {/* L0 (2026-10-31): overlay căn giữa + sheet chốt maxWidth 480 theo khung #root của app — hết tràn ngang ở viewport rộng */}
-            {panelOpen && (
-              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-                onClick={() => setPanelOpen(false)}>
-                <div style={{ background: '#fff', width: '100%', maxWidth: 480, maxHeight: '92vh', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column' }}
-                  onClick={(e) => e.stopPropagation()}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px 8px' }}>
-                    <b style={{ fontSize: 16 }}>🎁 Ưu đãi</b>
-                    <button type="button" onClick={() => setPanelOpen(false)}
-                      style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 20, color: '#666', cursor: 'pointer' }}><ZmIcon name="x" size={16} /></button>
-                  </div>
-                  <div style={{ overflowY: 'auto', padding: '0 16px 8px' }}>
-                    {/* Phía B: ô nhập voucher gõ tay */}
-                    <div style={{ fontWeight: 700, fontSize: 13.5, margin: '4px 0 6px' }}>🎟️ Mã voucher</div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <input value={voucher}
-                        onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); setVoucherErr(''); setVoucherMsg(''); }}
-                        placeholder="NHẬP MÃ NẾU CÓ"
-                        style={{ flex: 1, minWidth: 0, minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', textTransform: 'uppercase', fontSize: 14 }} />
-                      <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }}
-                        onClick={() => checkVoucher(voucher)}>
-                        Áp dụng
-                      </button>
-                    </div>
-                    {voucherErr && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6, fontWeight: 600 }}>⚠ {voucherErr}</div>}
-                    {voucherMsg && <div style={{ fontSize: 12.5, color: '#92400e', marginTop: 6, fontWeight: 600 }}>{voucherMsg}</div>}
-                    {voucherInfo && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '8px 10px', marginTop: 8 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: '#15803d' }}>
-                          🎟️ {voucherInfo.code} — giảm {fmt(voucherInfo.discount)}đ
-                          {voucherState === 'stacked' ? ` · Đang cộng dồn với ${aMoneyItem?.name}` : voucherState === 'not_applied' ? ' · Chưa áp dụng (chạm trần)' : ''}
-                        </span>
-                        <button type="button" aria-label="Gỡ voucher"
-                          onClick={() => { setVoucherInfo(null); setVoucher(''); setVoucherMsg(''); }}
-                          style={{ width: 44, height: 44, border: 'none', background: 'transparent', fontSize: 16, color: '#999', cursor: 'pointer' }}><ZmIcon name="x" size={16} /></button>
-                      </div>
-                    )}
-                    {/* L4-B (2026-10-31): dòng gợi ý tương thích voucher KHÔNG còn nằm dưới ô nhập
-                        (đọc như lỗi của ô nhập) — đã chuyển vào dòng của mã đang chọn trong danh sách dưới đây.
-                        Dưới ô nhập chỉ còn thông báo khi khách thật sự nhập mã bị chặn (voucherMsg ở trên). */}
-                    {/* Ô tìm kiếm: CHỈ lọc danh sách, không áp mã (phát triển sau) */}
-                    <SearchInput value={offerSearch} onChange={(e) => setOfferSearch(e.target.value)} onSearch={(v) => setOfferSearch(v)}
-                      placeholder="Tìm ưu đãi theo tên hoặc mã…"
-                      style={{ marginTop: 14 }} inputStyle={{ minHeight: 44, border: '1px solid #ddd', borderRadius: 8, padding: '0 12px', fontSize: 14 }} />
-                    {/* Phía A: danh sách hợp nhất, chọn 1 */}
-                    <div style={{ fontWeight: 700, fontSize: 13.5, margin: '14px 0 4px' }}>Ưu đãi chính — chọn 1 trong các mã này</div>
-                    {/* L1a (2026-10-31): khi KHÔNG mã tiền hàng nào cộng dồn được với voucher, huy hiệu
-                        "Chỉ dùng riêng" lặp trên mọi dòng mất tác dụng phân biệt → thay bằng 1 chú thích chung */}
-                    {(() => {
-                      const items = offers?.items || [];
-                      const anyStack = items.some((i) => i.stack_with_coupon && !i.is_shipping && i.type !== 'gift');
-                      return !anyStack && items.length > 0 ? (
-                        <div style={{ fontSize: 12.5, color: '#666', margin: '0 0 6px' }}>Các ưu đãi hiện tại không cộng dồn với voucher.</div>
-                      ) : null;
-                    })()}
-                    <div
-                      onClick={() => { setSelA(null); setOfferWarn(''); }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 48, padding: '6px 2px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }}>
-                      <span style={{ width: 22, height: 22, borderRadius: '50%', border: `2px solid ${!selA ? '#F5A623' : '#ccc'}`, background: !selA ? '#F5A623' : 'transparent', flexShrink: 0, boxSizing: 'border-box' }} />
-                      <span style={{ fontSize: 14 }}>Không dùng ưu đãi</span>
-                    </div>
-                    {(() => {
-                      const q = offerSearch.trim().toLowerCase();
-                      const list = (offers?.items || []).filter((i) => !q
-                        || String(i.name || '').toLowerCase().includes(q)
-                        || String(i.code || '').toLowerCase().includes(q));
-                      if (list.length === 0) {
-                        return <div style={{ fontSize: 13, color: '#888', padding: '14px 2px' }}>
-                          {q ? `Không có ưu đãi nào khớp '${offerSearch.trim()}' — mã giảm giá gõ tay nhập ở ô Mã voucher phía trên.` : 'Chưa có ưu đãi nào cho đơn này.'}
-                        </div>;
-                      }
-                      const allItems = offers?.items || [];
-                      const anyStack = allItems.some((i) => i.stack_with_coupon && !i.is_shipping && i.type !== 'gift');
-                      const couponNames = new Set(allItems.filter((i) => i.kind === 'wallet_coupon').map((i) => i.name));
-                      return list.map((item) => {
-                        const idOf = item.kind === 'promotion' ? item.promotion_id : item.customer_coupon_id;
-                        const isSel = !!selA && selA.kind === item.kind && selA.id === idOf;
-                        const blocked = item.eligible && blockedByVoucher(item);
-                        const dim = !item.eligible || blocked;
-                        // L1a/L1b (2026-10-31): mã tặng món đứng ngoài §5d → không huy hiệu nội tại,
-                        // có voucher thì hiện "Dùng cùng voucher được"; khi không mã nào cộng dồn
-                        // được (anyStack = false) → ẩn huy hiệu "Chỉ dùng riêng" lặp (đã có chú thích chung)
-                        const badge = !item.eligible ? null
-                          : blocked ? { text: `✕ Không áp dụng cùng ${voucherInfo.code}`, color: '#b91c1c', bg: '#fef2f2' }
-                          : item.type === 'gift'
-                            ? (voucherInfo ? { text: '✓ Dùng cùng voucher được', color: '#15803d', bg: '#f0fdf4' } : null)
-                          : voucherInfo && !item.is_shipping ? { text: `✓ Cộng dồn được với ${voucherInfo.code}`, color: '#15803d', bg: '#f0fdf4' }
-                          : !anyStack ? null
-                          : item.stack_with_coupon ? { text: '✓ Cộng dồn được với voucher', color: '#15803d', bg: '#f0fdf4' }
-                          : { text: 'Chỉ dùng riêng', color: '#666', bg: '#f3f4f6' };
-                        const rightText = item.is_shipping
-                          ? (item.eligible ? `Giảm ship ${fmt(item.discount)}đ` : 'Giảm ship')
-                          : item.type === 'gift'
-                            ? `Tặng ${item.gift_product_name || 'món'}`
-                            : item.eligible
-                              ? `−${fmt(item.discount)}đ`
-                              : (Number(item.would_discount) > 0 ? `−${fmt(item.would_discount)}đ` : '');
-                        return (
-                          <div key={`${item.kind}-${idOf}`}
-                            onClick={() => chooseA(item)}
-                            style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minHeight: 56, padding: '8px 2px', borderBottom: '1px solid #f3f4f6',
-                              cursor: dim ? 'not-allowed' : 'pointer', opacity: dim ? 0.55 : 1,
-                              background: isSel ? '#fff7e6' : 'transparent', borderRadius: isSel ? 10 : 0 }}>
-                            <span style={{ width: 22, height: 22, borderRadius: '50%', marginTop: 2, flexShrink: 0, boxSizing: 'border-box',
-                              border: `2px solid ${isSel ? '#F5A623' : '#ccc'}`, background: isSel ? '#F5A623' : 'transparent' }} />
-                            <span style={{ flex: 1, minWidth: 0 }}>
-                              <span style={{ display: 'block', fontSize: 14, fontWeight: 600, lineHeight: 1.35 }}>
-                                {item.kind === 'wallet_coupon' ? '🎫 ' : ''}{item.name}
-                                {/* L2 (2026-10-31): KM chung trùng tên với coupon ví → nhãn "Khuyến mãi" để phân biệt */}
-                                {item.kind === 'promotion' && couponNames.has(item.name) && (
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, color: '#24305E', background: '#EDF0F8', borderRadius: 999, padding: '1px 7px', marginLeft: 6 }}>Khuyến mãi</span>
-                                )}
-                              </span>
-                              {/* L2 (2026-10-31): dòng phụ coupon ví — mã + hạn dùng là dữ kiện phân biệt; sắp hết hạn (≤7 ngày) tô cam */}
-                              {item.kind === 'wallet_coupon' && item.code && (
-                                <span style={{ display: 'block', fontSize: 12, color: '#888', marginTop: 2 }}>
-                                  Mã {item.code}
-                                  {item.expires_at ? (() => {
-                                    const [y, m, d] = String(item.expires_at).split('-');
-                                    const daysLeft = Math.ceil((new Date(`${item.expires_at}T23:59:59`) - new Date()) / 86400000);
-                                    return <> · Hạn dùng <span style={daysLeft <= 7 ? { color: '#D97706', fontWeight: 700 } : undefined}>{d}/{m}/{y}</span></>;
-                                  })() : null}
-                                </span>
-                              )}
-                              {!item.eligible && (
-                                <span style={{ display: 'block', fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}>
-                                  {item.reason_code === 'MIN_ORDER' && item.missing_amount
-                                    ? `Đặt thêm ${fmt(item.missing_amount)}đ để được hưởng`
-                                    : (item.reason_text || 'Chưa đủ điều kiện cho đơn này')}
-                                </span>
-                              )}
-                              {blocked && (
-                                <span style={{ display: 'block', fontSize: 12.5, color: '#b91c1c', marginTop: 2 }}>Không áp dụng cùng {voucherInfo.code} — gỡ voucher để dùng mã này</span>
-                              )}
-                              {badge && (
-                                <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, marginTop: 4, padding: '2px 8px', borderRadius: 999, color: badge.color, background: badge.bg }}>{badge.text}</span>
-                              )}
-                              {/* L4-B (2026-10-31): dòng tương thích voucher gắn vào chính dòng mã ĐANG CHỌN */}
-                              {isSel && !voucherInfo && !item.is_shipping && item.type !== 'gift' && (
-                                <span style={{ display: 'block', fontSize: 12.5, color: '#666', marginTop: 3 }}>
-                                  {item.stack_with_coupon
-                                    ? 'Cộng dồn được với voucher — nhập thêm mã ở ô Mã voucher phía trên để giảm thêm.'
-                                    : 'Chỉ dùng riêng — voucher sẽ không áp dụng cùng mã này.'}
-                                </span>
-                              )}
-                            </span>
-                            {rightText && <b style={{ fontSize: 14, color: dim ? '#999' : '#16a34a', whiteSpace: 'nowrap' }}>{rightText}</b>}
-                          </div>
-                        );
-                      });
-                    })()}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px 16px', borderTop: '1px solid #eee' }}>
-                    <span style={{ fontSize: 14 }}>Tổng giảm: <b style={{ color: '#16a34a' }}>−{fmt(totalDiscTotal)}đ</b></span>
-                    <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }} onClick={() => setPanelOpen(false)}>Xong</button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* ===== Spec panel Ưu đãi (2026-11-14): khối Ưu đãi + panel
+                chọn do component dùng chung PromoPanel đảm nhiệm (dùng
+                chung với Checkout đơn nhóm). key theo loại đơn: đổi loại
+                → remount, lựa chọn ưu đãi reset như hành vi cũ. ===== */}
+            <PromoPanel
+              key={type}
+              ref={promoRef}
+              offers={offers}
+              subtotal={subtotal}
+              shipFee={shipFee}
+              phone={phone}
+              preselectCouponId={location.state?.couponId || null}
+              onResolve={setPromoRes}
+            />
             {points > 0 && (
               <div style={{ background: '#fff7e6', border: '1px solid #ffe1a8', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
                 ⭐ Bạn có <b>{fmt(points)} điểm</b> — đổi coupon tại mục <b>Tài khoản › Cửa hàng điểm</b>{' '}
@@ -1358,35 +1157,58 @@ export default function Checkout() {
             </div>
           </div>
 
+          {/* Khối hướng dẫn thanh toán (Đại Vương chốt 2026-11-13 ~00:01):
+              khách chọn Chuyển khoản (BANK) thì đọc TRƯỚC khi tờ QR của
+              Zalo mở — biết trước chuyển xong thì đóng màn QR để về theo
+              dõi đơn. Chỉ BANK, COD không hiện. Câu chữ nguyên văn ngài
+              duyệt; v1 chưa nhắc nút "Đã chuyển khoản" (chờ hướng vá A2). */}
+          {summaryChannel === 'BANK' && (
+            <div style={{ background: '#f0f4ff', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#24305E', marginBottom: 4 }}>Thanh toán bằng chuyển khoản</div>
+              <div style={{ fontSize: 13, color: '#444', lineHeight: 1.55 }}>
+                Zalo sẽ hiện mã QR để bạn quét bằng app ngân hàng. Chuyển khoản xong, bạn có thể đóng màn hình QR để tiếp tục theo dõi đơn hàng tại đây.
+              </div>
+            </div>
+          )}
+
           {/* Phí & tổng */}
           <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 12, padding: 12, marginBottom: 12 }}>
             <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết thanh toán</div>
             {type === 'delivery' && (
               <div className="zm-total-row">
                 <span>Phí vận chuyển{km != null ? ` (~${km}km)` : ''}</span>
-                <span>{km != null ? `${fmt(shipFeeGross)}đ` : 'Quán xác nhận'}</span>
+                <span>{pointMissing ? 'Chưa tính được' : (km != null ? `${fmt(shipFeeGross + shipCodFee)}đ` : (shipCodFee > 0 ? `${fmt(shipCodFee)}đ` : 'Quán xác nhận'))}</span>
+              </div>
+            )}
+            {type === 'delivery' && !pointMissing && shipCodFee > 0 && (
+              <div style={{ fontSize: 12, color: '#888', margin: '-2px 0 6px' }}>
+                {shipShopSupport > 0 ? 'Phí giao hàng đã được hỗ trợ · ' : ''}Đã gồm phí thu hộ COD {fmt(shipCodFee)}đ{km == null ? ' · Phí khoảng cách quán xác nhận sau' : ''}
               </div>
             )}
             {type === 'delivery' && shipShopSupport > 0 && (
               <div className="zm-total-row disc"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="store" size={14} />Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>
             )}
-            {/* Gói Ưu đãi hợp nhất (2026-10-31): các dòng giảm do hàm phân xử §5d
-                sinh ra — chỉ ưu đãi ĐANG ÁP mới có dòng ở khối tổng */}
-            {shipDisc > 0 && selItem && <div className="zm-total-row disc"><span>{selItem.kind === 'wallet_coupon' ? '🎫' : '🚚'} {selItem.name} (phí ship)</span><span>−{fmt(shipDisc)}đ</span></div>}
-            {selItem?.type === 'gift' && <div className="zm-total-row disc"><span>🎁 {selItem.name}</span><span>Tặng {selItem.gift_product_name}</span></div>}
-            {aApplied > 0 && aMoneyItem && (
+            {/* Spec panel Ưu đãi (2026-11-14): các dòng giảm do phân xử §5d
+                của PromoPanel sinh ra — chỉ ưu đãi ĐANG ÁP mới có dòng */}
+            {promoRes.shipApplied.filter((s) => s.amount > 0).map((s) => (
+              <div key={`${s.kind}-${s.id}`} className="zm-total-row disc"><span>{s.kind === 'wallet_coupon' ? <CouponIcon size={14} /> : '🚚'} {s.name} (phí ship)</span><span>−{fmt(s.amount)}đ</span></div>
+            ))}
+            {promoRes.giftApplied.map((g) => (
+              <div key={`${g.kind}-${g.id}`} className="zm-total-row disc"><span>🎁 {g.name}</span><span>Tặng {g.gift_product_name}</span></div>
+            ))}
+            {promoRes.promoApplied && (
               <div className="zm-total-row disc">
-                <span>{aMoneyItem.kind === 'wallet_coupon' ? `🎫 Coupon ${aMoneyItem.code || ''}` : `🎉 ${aMoneyItem.name}`}</span>
-                <span>−{fmt(aApplied)}đ</span>
+                <span>🎉 {promoRes.promoApplied.name}</span>
+                <span>−{fmt(promoRes.promoApplied.amount)}đ</span>
               </div>
             )}
-            {vApplied > 0 && voucherInfo && (
+            {promoRes.couponApplied && (
               <div className="zm-total-row disc">
-                <span>🎟️ Voucher {voucherInfo.code}{voucherState === 'stacked' ? ' (cộng dồn)' : ''}</span>
-                <span>−{fmt(vApplied)}đ</span>
+                <span><CouponIcon size={14} /> {promoRes.couponApplied.source === 'voucher' ? 'Voucher' : 'Coupon'} {promoRes.couponApplied.code}{promoRes.couponApplied.state === 'stacked' ? ' (cộng dồn)' : ''}</span>
+                <span>−{fmt(promoRes.couponApplied.amount)}đ</span>
               </div>
             )}
-            <div className="zm-total-row grand"><span>Tổng cộng</span><span>{fmt(total)}đ</span></div>
+            <div className="zm-total-row grand"><span>Tổng cộng</span><span>{pointMissing ? '—' : `${fmt(total)}đ`}</span></div>
           </div>
 
           {/* UX 2026-10-26 (MA-🟠3-bis): hộp xác nhận cổng chuyển khoản */}
@@ -1407,10 +1229,16 @@ export default function Checkout() {
             {formErr && (
               <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>⚠ {formErr}</div>
             )}
-            <button className="zm-btn-primary" style={{ flex: 2 }} disabled={placing} onClick={place}>
-              {placing ? 'Đang đặt...' : `Đặt hàng · ${fmt(total)}đ`}
+            <button className="zm-btn-primary" style={{ flex: 2 }} disabled={placing || pointMissing} onClick={place}>
+              {placing ? 'Đang đặt...' : (pointMissing ? 'Đặt đơn' : `Đặt hàng · ${fmt(total)}đ`)}
             </button>
           </div>
+          {pointMissing && (
+            <div onClick={() => { setStep(1); setShowAddrPop(true); }}
+              style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#92400e', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginBottom: 12, cursor: 'pointer' }}>
+              Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại. (Chạm vào đây để mở lại mục địa chỉ)
+            </div>
+          )}
         </div>
       )}
     </div>

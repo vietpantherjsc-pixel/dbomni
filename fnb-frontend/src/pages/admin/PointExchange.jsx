@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { API } from '../../utils/api';
+import TierIcon from '../../components/TierIcon'; // Bộ icon hạng V2 (2026-11-14)
 
 // Loyalty 2.0 (2026-10-21): Cửa hàng đổi điểm — Admin tự cài đặt danh sách
 // món đổi theo mùa (spec mục 6.3). Mỗi món gắn 1 mẫu coupon (promotion);
@@ -140,7 +141,7 @@ export default function PointExchange() {
                                     <td className="px-4 py-3"><span className="mr-1">{it.icon || '🎁'}</span> <span className="font-medium">{it.name}</span></td>
                                     <td className="px-3 py-3">{it.promotion ? `${it.promotion.code} · ${it.promotion.name}` : '—'}</td>
                                     <td className="px-3 py-3 text-right">{Number(it.points_cost).toLocaleString('vi-VN')} điểm</td>
-                                    <td className="px-3 py-3">{it.min_tier?.name || 'Mọi hạng'}</td>
+                                    <td className="px-3 py-3">{it.min_tier?.name ? (<span className="inline-flex items-center gap-1.5"><TierIcon tier={it.min_tier.code || it.min_tier.name} size={15} />{it.min_tier.name}</span>) : 'Mọi hạng'}</td>
                                     <td className="px-3 py-3 text-right">{it.daily_limit ?? '∞'} / {it.per_customer_limit ?? '∞'}</td>
                                     <td className="px-3 py-3">{it.is_active
                                         ? <span className="px-2 py-0.5 rounded-full text-[11px] bg-green-50 text-green-700">Đang bật</span>
@@ -152,7 +153,7 @@ export default function PointExchange() {
                                 </tr>
                             ))}
                             {items.length === 0 && (
-                                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách món đổi.<button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có món đổi nào. Bấm "+ Món đổi mới" để cài đặt theo mùa.'}</td></tr>
+                                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">{loadErr ? (<>⚠ Không tải được danh sách món đổi.<button onClick={fetchData} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></>) : 'Chưa có món đổi nào. Bấm "+ Món đổi mới" để cài đặt theo mùa.'}</td></tr>
                             )}
                         </tbody>
                     </table>

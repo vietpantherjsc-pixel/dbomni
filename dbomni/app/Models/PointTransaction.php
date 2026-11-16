@@ -12,6 +12,7 @@ class PointTransaction extends Model
     protected $fillable = [
         'customer_id', 'order_id', 'coupon_id', 'point_lot_id',
         'point_exchange_item_id', 'type', 'change', 'note',
+        'manual_source', // N-4: nguồn điểm ghi tay
     ];
 
     public function customer(): BelongsTo

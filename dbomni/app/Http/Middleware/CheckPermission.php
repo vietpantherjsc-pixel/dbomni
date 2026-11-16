@@ -37,6 +37,12 @@ class CheckPermission
                 if (in_array($permission, PermissionTree::SALARY_LEAVES, true)) {
                     return $next($request);
                 }
+                // Chỉ số 360 §0.8 (phán Q4 2026-11-15): Chủ CN được cấp mặc
+                // định 2 lá báo cáo khách — cho qua đúng 2 lá này; phạm vi
+                // dữ kiện ép về CN của họ tại controller.
+                if (in_array($permission, PermissionTree::BRANCH_OWNER_REPORT_LEAVES, true)) {
+                    return $next($request);
+                }
                 return response()->json(['success' => false, 'message' => 'Tài khoản Chủ Chi Nhánh chỉ được thao tác lương của chi nhánh mình.'], 403);
             }
             return $next($request);

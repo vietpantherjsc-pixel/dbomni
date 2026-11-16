@@ -16,6 +16,8 @@ import { fmtDate } from '../../utils/format';
 import DateInput from '../../components/DateInput';
 import MonthInput, { validMonth } from '../../components/MonthInput';
 import { API } from '../../utils/api';
+import { REPORT_TABS, REPORT_TAB_PERMS, EstTag, CONFIG_FIELD_LABELS, fmtConfigValue } from './reportShared';
+import { RevenueTargetForm } from './ReportsPnl'; // N-3 vòng nhỏ (a): tab Mục tiêu tái dùng form ở trang PNL
 import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2: gác tab báo cáo theo lá view
 
 // =====================================================================
@@ -161,7 +163,8 @@ const CSS = `
 }
 @media(min-width:960px){
 .rpt .kpis{grid-template-columns:repeat(4,1fr)}
-.rpt .two{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.rpt .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
+.rpt .two>*{min-width:0}
 }
 `;
 
@@ -243,7 +246,7 @@ const kpi = (lb, val, badgeHtml, hero, alert) => (
 // ---------- Chú thích thuật ngữ (từ demo v4 — yêu cầu lâu dài của Đại Vương) ----------
 const GLOSSARY = {
     gross: ['Gross Sales (Doanh thu gộp)', 'Tổng tiền hàng nguyên giá trước mọi giảm giá, gồm VAT nếu có.'],
-    net: ['Net Revenue (Doanh thu thuần)', 'Gross − Giảm giá − Phí sàn. Mốc 100% để tính mọi tỷ trọng chi phí.'],
+    net: ['Net Revenue (Doanh thu thuần)', 'Gross − VAT. Mốc 100% để tính mọi tỷ trọng chi phí. Thu khác (phiếu thu tay) để riêng — vẫn tính vào Lợi nhuận nhưng KHÔNG nằm trong Doanh thu thuần. Giảm giá và phí sàn KHÔNG trừ vào chỉ số này (phí sàn nằm ở phía chi phí của P&L). Cùng cơ số với Doanh thu thuần ở báo cáo P&L.'],
     aov: ['AOV (Average Order Value)', 'Giá trị đơn trung bình = Net Revenue / số đơn thành công.'],
     // Riêng tab Doanh thu (2026-11-04): thẻ "Trung bình / đơn" ở tab này tính
     // theo doanh thu ĐANG HIỂN THỊ (công tắc thuế) sau lát 2h — chú thích phải
@@ -286,7 +289,10 @@ export default function Reports() {
         compare: 'previous', compare_from: '', compare_to: '', tax_included: '1',
     });
     // Gói 58: 8 tab theo demo v4 (7 + Vận hành)
-    const [tab, setTab] = useState('overview');
+    // Phương án B (2026-11-15): dải tab dùng chung trên trang chi tiết dẫn về
+    // đây qua ?tab=<danh mục> — mở đúng tab được chọn; tab không có quyền
+    // hoặc sai mã được vòng kiểm visibleTabs phía dưới tự đưa về tab đầu.
+    const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'overview');
     const [pFilter, setPFilter] = useState('top');
     const [page, setPage] = useState(1);
     const [cashShown, setCashShown] = useState(30); // UX 2026-10-26: sổ dòng tiền hiện tăng dần (trước slice cứng 30 không ghi chú)
@@ -305,6 +311,10 @@ export default function Reports() {
     const [cashData, setCashData] = useState(null);
     const [cashLoading, setCashLoading] = useState(false);
     const [exporting, setExporting] = useState(false);
+    // Chỉ số 360 đợt 1: tab Khách hàng (TC-2 nằm trong CashSummary tự nạp)
+    const [custData, setCustData] = useState(null);
+    const [custLoading, setCustLoading] = useState(false);
+    const [sp1Group, setSp1Group] = useState('platform');
 
     useEffect(() => {
         axios.get(API + '/branches')
@@ -344,7 +354,13 @@ export default function Reports() {
         setLoading(false);
     }, [f, pFilter, branchId]);
 
-    useEffect(() => { setPage(1); load(1, false); }, [load]);
+    // Vòng nhỏ N-3 §KP: chỉ tải overview khi tab đang mở cần nó — Tổng quan,
+    // Doanh thu, Thu-chi, P&L, Kho dùng chung payload overview; Menu, Đơn hủy,
+    // Vận hành, Nhân sự, Khách hàng, Mục tiêu tự nạp dữ kiện riêng. Trước đây
+    // tải overview lúc mở trang bất kể tab nào nên Chủ CN (không có lá
+    // overview) 403 và toàn bộ nội dung tab bị thẻ lỗi che.
+    const NEEDS_OVERVIEW = ['overview', 'rev', 'cash', 'pnl', 'waste'];
+    useEffect(() => { if (NEEDS_OVERVIEW.includes(tab)) { setPage(1); load(1, false); } }, [load, tab]);
 
     const loadCancelled = useCallback(async () => {
         setCancelLoading(true);
@@ -411,10 +427,25 @@ export default function Reports() {
         setCashLoading(false);
     }, [branchId]);
 
+    // Chỉ số 360 đợt 1: tab Khách hàng (KH-1→KH-5 + Marketing)
+    const loadCustomers = useCallback(async () => {
+        setCustLoading(true);
+        try {
+            const res = await axios.get(API + '/reports/customers', {
+                params: { branch_id: branchId, period: f.period === 'day' ? 'month' : f.period, date: f.date },
+            });
+            if (res.data?.success) setCustData(res.data.data);
+        } catch (e) {
+            console.error('Lỗi tải báo cáo khách hàng:', e);
+        }
+        setCustLoading(false);
+    }, [f, branchId]);
+
     useEffect(() => { if (tab === 'cancelled' || tab === 'overview') loadCancelled(); }, [tab, loadCancelled]);
     useEffect(() => { if (tab === 'ops') loadOps(); }, [tab, loadOps]);
     useEffect(() => { if (tab === 'menu') loadMenu(); }, [tab, loadMenu]);
     useEffect(() => { if (tab === 'cash') loadCash(); }, [tab, loadCash]);
+    useEffect(() => { if (tab === 'customers') loadCustomers(); }, [tab, loadCustomers]);
 
     // Gói 58: Xuất Excel doanh thu
     const exportExcel = async () => {
@@ -466,28 +497,12 @@ export default function Reports() {
             : fmtD(meta.compare_from) + ' – ' + fmtD(meta.compare_to)) + ')'
         : '';
 
-    const TABS = [
-        ['overview', 'Tổng quan'],
-        ['rev', 'Doanh thu'],
-        ['cash', 'Thu-chi & Giao ca'],
-        ['pnl', 'P&L'],
-        ['waste', 'Kho & Hao hụt'],
-        ['menu', 'Menu Engineering'],
-        ['cancelled', 'Đơn hủy'],
-        ['ops', 'Vận hành'],
-        ['hr', 'Nhân sự'],
-    ];
-    // Cây phân quyền §2: mỗi tab báo cáo gác 1 lá view; tab Nhân sự là mặt
-    // xem tổng lương thứ hai (staff.salary.summary.view — không mở chi tiết
-    // từng người, đúng phân biệt §3.3: P&L/tổng lương = số gộp).
+    // Danh mục + cổng quyền từng tab: nguồn duy nhất ở reportShared
+    // (REPORT_TABS / REPORT_TAB_PERMS) — dùng chung với dải tab điều hướng
+    // trên 2 trang chi tiết PNL · Kho (Phương án B, 2026-11-15).
+    const TABS = REPORT_TABS;
     const { can } = useAuth();
-    const TAB_PERMS = {
-        overview: 'reports.overview.view', rev: 'reports.revenue.view',
-        cash: 'reports.cash.view', pnl: 'reports.pnl.view',
-        waste: 'reports.inventory.view', menu: 'reports.menu.view',
-        cancelled: 'reports.cancelled.view', ops: 'reports.operations.view',
-        hr: 'staff.salary.summary.view',
-    };
+    const TAB_PERMS = REPORT_TAB_PERMS;
     const visibleTabs = TABS.filter(([k]) => can(TAB_PERMS[k]));
     useEffect(() => {
         if (visibleTabs.length && !visibleTabs.some(([k]) => k === tab)) setTab(visibleTabs[0][0]);
@@ -562,16 +577,19 @@ export default function Reports() {
                 </nav>
 
                 <main className="wrap">
-                    {loading && !data && <div className="card">Đang tải số liệu…</div>}
-                    {!loading && errMsg && !data && (
+                    {loading && !data && NEEDS_OVERVIEW.includes(tab) && <div className="card">Đang tải số liệu…</div>}
+                    {!loading && errMsg && !data && NEEDS_OVERVIEW.includes(tab) && (
                         <div className="card" style={{ border: '1px solid #f5c2c7', background: '#fff5f5' }}>
                             <div style={{ color: '#b42318', fontWeight: 600, marginBottom: 6 }}>{errMsg}</div>
                             <button onClick={() => load(1, false)} className="m-btn m-btn-primary" style={{ marginTop: 4 }}>Thử tải lại</button>
                         </div>
                     )}
-                    {data && (<>
+                    {/* Vòng nhỏ N-3 §KP: nội dung từng tab render độc lập khỏi dữ kiện
+                        overview — 5 tab dùng overview tự gác bằng `data` ở đầu
+                        từng khối; các tab tự nạp dữ kiện riêng hiện dù data null. */}
+                    {<>
                     {/* TAB 1: TỔNG QUAN (mới — theo demo v4) */}
-                    {tab === 'overview' && (
+                    {tab === 'overview' && data && (
                     <section>
                         <div className="card">
                             <h3>KPI kỳ {PERIOD_NAMES[meta.period]}: {rangeTxt}</h3>
@@ -594,12 +612,30 @@ export default function Reports() {
                                     <div className="lb">EBITDA (lợi nhuận vận hành)</div>
                                     <div className="v">{fmtVND(p.profit)}</div>
                                     <span dangerouslySetInnerHTML={{ __html: deltaBadge(p.delta_profit) }} />
+                                    {/* Điểm 6 (2026-11-15): Biên EBITDA = EBITDA / Doanh thu thuần
+                                        (đúng cơ số C1: Gross − VAT, không gồm thu khác) — dòng
+                                        riêng có nhãn "Biên" để không nhầm với % biến động so kỳ */}
+                                    <div style={{ fontSize: 12, color: '#AEB8D4', marginTop: 4 }}>Biên <b style={{ color: '#fff' }}>{trimN(netVal > 0 ? p.profit / netVal * 100 : 0)}%</b></div>
                                 </div>
                                 {/* #70 (2026-11-04): đang tải mà chưa có dữ liệu thì hiện "—" —
                                     trước đây ?? 0 làm thẻ hiện "0 đơn" giả trong lúc nạp
                                     (cùng họ bịt cửa sổ số giả như các vá trạng thái tải). */}
                                 {kpi('Đơn hủy', (cancelLoading && !cancelData) ? '—' : fmtInt(cancelData?.summary?.total_cancelled ?? 0) + ' đơn', cancelData ? fmtVND(cancelData.summary.total_amount) : '<span class="delta flat">—</span>')}
                             </div>
+                            {/* TC-1 (chỉ số 360 đợt 1): đơn hòa vốn hôm nay cạnh đơn thực tế — chỉ ở kỳ Ngày */}
+                            {f.period === 'day' && data?.breakeven && (
+                                <div className="sub" style={{ marginTop: 10 }}>
+                                    {data.breakeven.status === 'unconfigured'
+                                        ? <>🎯 Hòa vốn tháng {data.breakeven.month}: <b>chưa đủ cấu hình</b> — còn danh mục chi chưa phân loại Cố định/Biến đổi ({(data.breakeven.unconfigured || []).map((u) => u.name).join(' · ')}).</>
+                                        : <>🎯 Đơn hòa vốn hôm nay: <b>{data.breakeven.daily_breakeven_orders !== null ? trimN(data.breakeven.daily_breakeven_orders) + ' đơn' : '—'}</b> (doanh thu hòa vốn ngày {data.breakeven.daily_breakeven_revenue !== null ? fmtVND(data.breakeven.daily_breakeven_revenue) : '—'}) · Thực tế hôm nay: <b>{fmtInt(r.orders)} đơn</b>.</>}
+                                </div>
+                            )}
+                            {/* TC-3 (360 đợt 2, N-3): dự báo doanh thu cuối tháng + lệch mục tiêu — chỉ kỳ Tháng */}
+                            {f.period === 'month' && data?.forecast && (
+                                <div className="sub" style={{ marginTop: 10 }}>
+                                    🎯 Dự báo tháng {data.forecast.month}: <b>{fmtVND(data.forecast.forecast_mid)}</b> (khoảng {fmtVND(data.forecast.forecast_low)} – {fmtVND(data.forecast.forecast_high)}) · Lũy kế tới nay: <b>{fmtVND(data.forecast.mtd_net)}</b> · Còn {data.forecast.remaining_days} ngày. {data.forecast.has_target ? (<>Mục tiêu: <b>{fmtVND(data.forecast.target)}</b> · Lệch dự báo: <b>{(data.forecast.deviation_pct ?? 0) >= 0 ? '+' : ''}{trimN(data.forecast.deviation_pct ?? 0)}%</b>.</>) : 'Chưa đặt mục tiêu tháng — đặt tại trang PNL.'} <EstTag note="Ước tính theo doanh thu trung bình cùng thứ trong 8 tuần gần nhất — hệ số lịch sử có thể sai khi tháng có yếu tố bất thường." />
+                                </div>
+                            )}
                             <div className="explain"><b>Cách đọc:</b> mọi tỷ trọng % trên P&amp;L đều lấy <b>Doanh thu thuần (Net Revenue)</b> làm mốc 100%. Prime Cost = Giá vốn + Chi phí nhân sự — "chỉ số sống còn" của quán.</div>
                         </div>
                         <div className="card">
@@ -611,7 +647,7 @@ export default function Reports() {
                     )}
 
                     {/* TAB 2: DOANH THU */}
-                    {tab === 'rev' && (
+                    {tab === 'rev' && data && (
                     <section>
                         <div className="card">
                             <h3>Hiển thị số liệu
@@ -638,7 +674,7 @@ export default function Reports() {
                         </div>
                         <div className="card">
                             <h3>Doanh thu theo kênh</h3>
-                            <div className="sub">Net = Gross − Giảm giá (quán chịu) − Phí sàn. Phí sàn snapshot tại lúc tạo đơn.</div>
+                            <div className="sub">Net = Gross − VAT. Giảm giá (quán chịu) và phí sàn không trừ vào doanh thu kênh — phí sàn nằm ở phía chi phí của P&L. Phí sàn snapshot tại lúc tạo đơn.</div>
                             {r.channels.map((c) => (
                                 <div className="ch-row" key={c.key}>
                                     <div className="nm">{c.name}</div>
@@ -674,7 +710,78 @@ export default function Reports() {
                             {data?.marketing && (data.marketing.partial_months || []).length > 0 && (
                                 <div className="sub" style={{ marginTop: 8 }}>Phí marketing sàn tính theo tháng trọn — kỳ đang xem cắt ngang tháng {(data.marketing.partial_months).map((m) => `${String(m).slice(5)}/${String(m).slice(0, 4)}`).join(', ')} nên chưa gồm phí marketing của tháng bị cắt.</div>
                             )}
+                            {/* N-5 (360 đợt 2): mốc đổi cấu hình chiết khấu/phí marketing trong kỳ */}
+                            {(r.channels || []).some((c) => (c.config_markers || []).length > 0) && (
+                                <div className="sub" style={{ marginTop: 8 }}>
+                                    {(r.channels || []).flatMap((c) => (c.config_markers || []).map((m, i) => (
+                                        <div key={c.key + '-' + i}>📅 Cấu hình đổi {m.changed_at}: <b>{m.label}</b> — {CONFIG_FIELD_LABELS[m.field] || m.field}: {fmtConfigValue(m.field, m.old_value)} → {fmtConfigValue(m.field, m.new_value)}{m.changed_by_name ? ' (' + m.changed_by_name + ')' : ''}.</div>
+                                    )))}
+                                </div>
+                            )}
                         </div>
+
+                        {/* BH-1 (chỉ số 360 đợt 1): gánh nặng kênh + biên đóng góp */}
+                        <div className="card">
+                            <h3>Gánh nặng kênh & biên đóng góp (BH-1)</h3>
+                            <div className="sub">Gánh nặng % = (Chiết khấu + Phí marketing sàn + Giảm giá quán chịu) ÷ Doanh thu kênh · Biên đóng góp = Doanh thu − Giá vốn − toàn bộ chi phí kênh trực tiếp. Chi phí chung (lương, mặt bằng) KHÔNG phân bổ xuống kênh.{(data?.marketing?.missing_months || []).length > 0 ? ' Kỳ này chưa gồm phí marketing sàn (chưa đối soát trọn tháng) — kênh chưa có số marketing hiện "—", không tính thiếu như đã đủ.' : ''}</div>
+                            <div className="tbl-wrap"><table className="tbl">
+                                <tbody>
+                                <tr><th>Kênh</th><th className="num">Doanh thu</th><th className="num">Giảm giá quán chịu</th><th className="num">Gánh nặng kênh</th><th className="num">Biên đóng góp</th><th className="num">Biên %</th></tr>
+                                {r.channels.map((c) => (
+                                    <tr key={c.key}>
+                                        <td className="prod">{c.name}</td>
+                                        <td className="num">{fmtVND(c.value)}</td>
+                                        <td className="num">{fmtVND(c.discount || 0)}</td>
+                                        <td className="num">{c.burden_incomplete ? '—' : trimN(c.burden_pct) + '%'}</td>
+                                        <td className="num" style={{ fontWeight: 700, color: c.contribution === null || c.contribution === undefined ? undefined : (Number(c.contribution) >= 0 ? 'var(--green)' : 'var(--red)') }}>{c.burden_incomplete ? '—' : fmtVND(c.contribution)}</td>
+                                        <td className="num">{c.burden_incomplete ? '—' : trimN(c.contribution_pct) + '%'}</td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table></div>
+                        </div>
+
+                        {/* BH-2 + BH-3 (chỉ số 360 đợt 1) */}
+                        <div className="two">
+                            <div className="card">
+                                <h3>Cơ cấu đơn (BH-2)</h3>
+                                {r.ipo ? (
+                                <div className="kpis">
+                                    <div className="kpi"><div className="lb">Số món / đơn (IPO)</div><div className="v">{trimN(r.ipo.ipo)}</div><span className="delta flat">{fmtInt(r.ipo.orders)} đơn trong mẫu</span></div>
+                                    <div className="kpi"><div className="lb">Đơn có món kèm</div><div className="v">{trimN(r.ipo.attach_rate)}%</div><span className="delta flat">{fmtInt(r.ipo.attach_orders)} đơn</span></div>
+                                </div>
+                                ) : <div className="sub">Chưa có dữ kiện.</div>}
+                                <div className="sub">Mẫu loại đơn nhóm và dòng quà tặng (giá 0). "Món kèm" = dòng có chọn tùy chọn (theo dữ kiện tùy chọn của dòng — gồm size, topping, món phụ).{r.ipo?.ipo_group !== null && r.ipo?.ipo_group !== undefined ? ' IPO đơn nhóm (tách riêng): ' + trimN(r.ipo.ipo_group) + ' món/đơn trên ' + fmtInt(r.ipo.group_orders) + ' đơn nhóm.' : ''}</div>
+                            </div>
+                            <div className="card">
+                                <h3>Khung giờ cao điểm (BH-3)</h3>
+                                <div className="sub">Ma trận doanh thu Thứ × Giờ — ô đậm nhất là khung cao điểm của kỳ. Xem bảng đầy đủ bên dưới.</div>
+                                {r.daypart?.peak ? (
+                                    <div style={{ fontSize: 15 }}>Cao điểm: <b>{['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'][r.daypart.peak.weekday]} · {r.daypart.peak.hour}h</b> — {fmtVND(r.daypart.peak.value)}</div>
+                                ) : <div className="sub">Chưa có đơn trong kỳ.</div>}
+                            </div>
+                        </div>
+                        {r.daypart && (
+                        <div className="card">
+                            <h3>Ma trận doanh thu Thứ × Giờ (BH-3)</h3>
+                            <div className="tbl-wrap"><table className="tbl" style={{ minWidth: 900 }}>
+                                <tbody>
+                                <tr><th>Thứ</th>{Array.from({ length: 17 }, (_, i) => 6 + i).map((h) => <th key={h} className="num">{h}h</th>)}</tr>
+                                {r.daypart.rows.map((row) => (
+                                    <tr key={row.weekday}>
+                                        <td className="prod">{row.label}</td>
+                                        {row.cells.map((c) => (
+                                            <td key={c.hour} className="num" style={c.is_peak ? { background: '#FFF3D1', fontWeight: 800 } : (c.value > 0 ? { background: 'rgba(245,166,35,.10)' } : undefined)} title={fmtInt(c.orders) + ' đơn'}>
+                                                {c.value > 0 ? fmtInt(c.value) : '·'}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table></div>
+                            <div className="sub">Số trong ô là doanh thu (đ), di chuột để xem số đơn. Ô vàng đậm = khung cao điểm nhất của kỳ.</div>
+                        </div>
+                        )}
                         <div className="two">
                             <div className="card">
                                 <h3>Top 5 món bán chạy</h3>
@@ -703,7 +810,13 @@ export default function Reports() {
                                 — trước đây dữ liệu prodList đã tải về nhưng không JSX nào render (code chết) */}
                             <div className="card">
                                 <h3>Danh sách mặt hàng ({fmtInt(prodMeta.total)} món)</h3>
-                                <div className="sub">Toàn bộ mặt hàng có phát sinh trong kỳ, xếp theo doanh thu. Mỗi trang {10} món — bấm Xem thêm để tải tiếp.</div>
+                                <div className="sub">Toàn bộ mặt hàng có phát sinh trong kỳ, {pFilter === 'slow' ? 'xếp theo doanh thu tăng dần — món bán chậm nhất lên đầu' : 'xếp theo doanh thu giảm dần — món bán chạy nhất lên đầu'}. Mỗi trang {10} món — bấm Xem thêm để tải tiếp.</div>
+                                {/* A1 (rà soát chỉ số 2026-11-15): nút chuyển lọc bán chạy ↔ bán chậm —
+                                    backend đã có bộ lọc 'slow', trước đây không nút nào gọi changePFilter */}
+                                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                                    <button className={'m-btn m-btn-sm ' + (pFilter === 'slow' ? 'm-btn-ghost' : 'm-btn-primary')} onClick={() => changePFilter('top')}>Bán chạy nhất</button>
+                                    <button className={'m-btn m-btn-sm ' + (pFilter === 'slow' ? 'm-btn-primary' : 'm-btn-ghost')} onClick={() => changePFilter('slow')}>Bán chậm nhất</button>
+                                </div>
                                 <div className="tbl-wrap"><table className="tbl">
                                     <tbody>
                                     <tr><th className="num">#</th><th>Món</th><th className="num">SL bán</th><th className="num">Doanh thu</th></tr>
@@ -779,7 +892,7 @@ export default function Reports() {
                     </section>
                     )}
                     {/* TAB 3: THU-CHI & GIAO CA (theo demo v4) */}
-                    {tab === 'cash' && (
+                    {tab === 'cash' && data && (
                     <section>
                         <div className="card">
                             <h3>Phần A — Đối soát thu chi</h3>
@@ -806,13 +919,13 @@ export default function Reports() {
                                 ) : null;
                             })()}
                             <div className="donut-wrap">
-                                <div dangerouslySetInnerHTML={{ __html: donut(p.costs, p.cost_total) }} />
+                                <div dangerouslySetInnerHTML={{ __html: donut(p.costs, p.cost_total, r?.net) }} />
                                 <ul className="cost-legend">
                                     {p.costs.map((c, i) => (
                                         <li key={i}>
                                             <span className="dot" style={{ background: c.color }} />
                                             <span className="nm">{c.name}{c.note ? <span style={{ color: '#999', fontSize: 11 }}> ({c.note})</span> : null}</span>
-                                            <span className="pc">{trimN(p.cost_total > 0 ? c.value / p.cost_total * 100 : 0)}%</span>
+                                            <span className="pc">{trimN(c.pct || 0)}%</span>
                                             <span className="am">{fmtVND(c.value)}</span>
                                         </li>
                                     ))}
@@ -860,7 +973,7 @@ export default function Reports() {
                     )}
 
                     {/* TAB 4: P&L — tóm tắt + link trang chi tiết */}
-                    {tab === 'pnl' && (
+                    {tab === 'pnl' && data && (
                     <section>
                         <div className="card">
                             <h3>Kết quả kinh doanh <span className="pill b">Net Revenue làm mốc 100%</span></h3>
@@ -887,7 +1000,7 @@ export default function Reports() {
                     )}
 
                     {/* TAB 5: KHO & HAO HỤT (giữ nguyên) */}
-                    {tab === 'waste' && (
+                    {tab === 'waste' && data && (
                     <section>
                         <div className="card">
                             <h3>Hao hụt nguyên liệu</h3>
@@ -968,6 +1081,36 @@ export default function Reports() {
                             </div>
                             <div className="axis-note"><span>Lãi thấp</span><span><b>Lãi gộp / ly</b></span><span>Lãi cao</span></div>
                         </div>
+                        {/* SP-1 (chỉ số 360 đợt 1): biên đóng góp theo món SAU chiết khấu kênh */}
+                        {menuData.by_channel_group && (
+                        <div className="card">
+                            <h3>Biên đóng góp theo món sau chiết khấu kênh (SP-1) <EstTag note="Chiết khấu kênh phân bổ theo doanh thu món trong kênh — số phân bổ ước tính. Phí marketing không phân bổ xuống món." /></h3>
+                            <div style={{ marginBottom: 10 }}>
+                                <span className="seg">
+                                    <button className={sp1Group === 'platform' ? 'on' : ''} onClick={() => setSp1Group('platform')}>Kênh sàn (gộp)</button>
+                                    <button className={sp1Group === 'direct' ? 'on' : ''} onClick={() => setSp1Group('direct')}>Kênh trực tiếp (quầy + Zalo)</button>
+                                </span>
+                            </div>
+                            <div className="sub">Tỷ lệ chiết khấu phân bổ của nhóm kênh: <b>{trimN(menuData.by_channel_group[sp1Group].commission_rate)}%</b> · Biên đóng góp TB nhóm: <b>{trimN(menuData.by_channel_group[sp1Group].avg_cm_pct)}%</b>. CM/ly = Giá bán kênh − Giá vốn định lượng − Chiết khấu phân bổ/ly.</div>
+                            <div className="tbl-wrap"><table className="tbl">
+                                <tbody>
+                                <tr><th>Món</th><th>Ô</th><th className="num">SL</th><th className="num">Giá bán</th><th className="num">Giá vốn</th><th className="num">CK phân bổ</th><th className="num">CM / ly</th><th className="num">CM %</th></tr>
+                                {(menuData.by_channel_group[sp1Group].items || []).map((it) => (
+                                    <tr key={it.product_id}>
+                                        <td className="prod">{it.product_name}</td>
+                                        <td>{{ star: '⭐ Sao', puzzle: '❓ Dấu hỏi', plowhorse: '🐴 Ngựa thồ', dog: '🐶 Cắt giảm' }[it.quadrant] || it.quadrant}</td>
+                                        <td className="num">{fmtInt(it.qty)}</td>
+                                        <td className="num">{fmtVND(it.price)}</td>
+                                        <td className="num">{fmtVND(it.cogs_per_unit)}</td>
+                                        <td className="num">{fmtVND(it.commission_alloc_per_unit)}</td>
+                                        <td className="num" style={{ fontWeight: 700, color: Number(it.cm_per_unit) >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmtVND(it.cm_per_unit)}</td>
+                                        <td className="num">{trimN(it.cm_pct)}%</td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table></div>
+                        </div>
+                        )}
                         <div className="card">
                             <h3>Chi tiết từng món <span className="pill b">giá vốn FIFO snapshot lúc bán</span></h3>
                             <div className="tbl-wrap"><table className="tbl">
@@ -1039,6 +1182,10 @@ export default function Reports() {
                                     </table></div>
                                 </>
                                 )}
+                                {/* N-2 (360 đợt 2): đơn nguồn bị gộp không tính là hủy — đếm riêng để tổng đối chiếu được. */}
+                                {typeof cancelData.merged_count === 'number' && cancelData.merged_count > 0 && (
+                                    <div className="sub">Đã gộp đơn (không tính là hủy): <b>{fmtInt(cancelData.merged_count)} đơn</b>.</div>
+                                )}
                                 {cancelData.groups.length === 0 ? (
                                     <div className="sub">Không có đơn hủy trong kỳ. Tốt!</div>
                                 ) : (
@@ -1062,6 +1209,50 @@ export default function Reports() {
                                     </table></div>
                                 </>
                                 )}
+                                {/* VH-2 (chỉ số 360 đợt 1): hủy theo phía + đã thu tiền rồi hủy */}
+                                {cancelData.vh2 && (
+                                <>
+                                    <h4 style={{ margin: '16px 0 10px', color: 'var(--navy)' }}>Hủy theo phía & đơn đã thu tiền rồi hủy (VH-2)</h4>
+                                    <div className="kpis">
+                                        <div className="kpi"><div className="lb">Tỷ lệ hủy kỳ này</div><div className="v">{trimN(cancelData.vh2.cancel_rate)}%</div><span className="delta flat">kỳ trước {trimN(cancelData.vh2.prev.cancel_rate)}%</span></div>
+                                        <div className="kpi"><div className="lb">Đã thu tiền rồi hủy</div><div className="v">{fmtInt(cancelData.vh2.paid_cancelled)} đơn</div><span className="delta flat">{trimN(cancelData.vh2.paid_cancelled_pct)}% tổng đơn · kỳ trước {fmtInt(cancelData.vh2.prev.paid_cancelled)} đơn</span></div>
+                                    </div>
+                                    <div className="tbl-wrap"><table className="tbl">
+                                        <tbody>
+                                        <tr><th>Phía hủy</th><th className="num">Số đơn</th><th className="num">Tổng tiền</th><th className="num">% tổng hủy</th></tr>
+                                        {cancelData.vh2.by_side.map((s) => (
+                                            <tr key={s.side}>
+                                                <td className="prod">{s.label}</td>
+                                                <td className="num">{fmtInt(s.count)}</td>
+                                                <td className="num">{fmtVND(s.total_amount)}</td>
+                                                <td className="num">{trimN(s.pct_of_cancelled)}%</td>
+                                            </tr>
+                                        ))}
+                                        </tbody>
+                                    </table></div>
+                                </>
+                                )}
+                                {/* CL-2 (chỉ số 360 đợt 1): hoàn tác xác nhận thanh toán */}
+                                {cancelData.payment_undo && (
+                                <>
+                                    <h4 style={{ margin: '16px 0 10px', color: 'var(--navy)' }}>Hoàn tác xác nhận thanh toán (CL-2)</h4>
+                                    <div className="sub">Trong kỳ: <b>{fmtInt(cancelData.payment_undo.count)} lượt</b> · tổng tiền đơn hoàn tác <b>{fmtVND(cancelData.payment_undo.amount)}</b>. Theo phía (danh mục nguyên nhân chuẩn N-2 — dữ kiện cũ chưa có mã vào nhóm chưa rõ phía): lỗi quán <b>{fmtInt(cancelData.payment_undo.by_cause.shop.count)} lượt · {fmtVND(cancelData.payment_undo.by_cause.shop.amount)}</b> · phía khách <b>{fmtInt(cancelData.payment_undo.by_cause.customer.count)} lượt · {fmtVND(cancelData.payment_undo.by_cause.customer.amount)}</b> · chưa rõ <b>{fmtInt(cancelData.payment_undo.by_cause.unknown.count)} lượt</b>.</div>
+                                    {cancelData.payment_undo.by_reason.length > 0 && (
+                                    <div className="tbl-wrap"><table className="tbl">
+                                        <tbody>
+                                        <tr><th>Lý do hoàn tác</th><th className="num">Số lượt</th><th className="num">Tổng tiền</th></tr>
+                                        {cancelData.payment_undo.by_reason.map((g, i) => (
+                                            <tr key={i}>
+                                                <td className="prod">{g.reason}</td>
+                                                <td className="num">{fmtInt(g.count)}</td>
+                                                <td className="num">{fmtVND(g.amount)}</td>
+                                            </tr>
+                                        ))}
+                                        </tbody>
+                                    </table></div>
+                                    )}
+                                </>
+                                )}
                                 {cancelData.detail.length > 0 && (
                                 <>
                                     <h4 style={{ marginTop: 16, color: 'var(--navy)' }}>Chi tiết từng đơn hủy</h4>
@@ -1075,7 +1266,7 @@ export default function Reports() {
                                                 <td className="prod">{d.cancelled_by}</td>
                                                 <td className="num">{fmtVND(d.total_amount)}</td>
                                                 <td>{d.payment_status === 'paid' || d.payment_status === 'refunded' ? <span className="pill r">Đã thu tiền</span> : d.payment_status}</td>
-                                                <td>{d.cancel_reason || '—'}</td>
+                                                <td>{d.is_merged ? 'Gộp đơn' : (d.cancel_reason_code ? d.cancel_reason_label : (d.cancel_reason || '—'))}</td>
                                             </tr>
                                         ))}
                                         </tbody>
@@ -1130,6 +1321,18 @@ export default function Reports() {
                             </div>
                             )}
                         </div>
+                        {opsData?.prep && (
+                        <div className="card">
+                            <h3>Phân vị thời gian pha chế (VH-1)</h3>
+                            <div className="kpis">
+                                <div className="kpi"><div className="lb">p50 (trung vị)</div><div className="v">{opsData.prep.p50_minutes !== null ? trimN(opsData.prep.p50_minutes) + ' phút' : '—'}</div><span className="delta flat">nửa số đơn xong trước mốc này</span></div>
+                                <div className="kpi"><div className="lb">p90</div><div className="v">{opsData.prep.p90_minutes !== null ? trimN(opsData.prep.p90_minutes) + ' phút' : '—'}</div><span className="delta flat">90% đơn xong trước mốc này</span></div>
+                                <div className="kpi"><div className="lb">Đơn vượt chuẩn {trimN(opsData.prep.standard_minutes)} phút</div><div className="v">{opsData.prep.over_standard_pct !== null ? trimN(opsData.prep.over_standard_pct) + '%' : '—'}</div><span className="delta flat">{fmtInt(opsData.prep.over_count)} đơn</span></div>
+                                <div className="kpi"><div className="lb">Tỷ lệ phủ mốc</div><div className="v">{opsData.prep.coverage_pct !== null ? trimN(opsData.prep.coverage_pct) + '%' : '—'}</div><span className="delta flat">mẫu {fmtInt(opsData.prep.sample)}/{fmtInt(opsData.prep.completed)} đơn hoàn thành</span></div>
+                            </div>
+                            <div className="sub">Mẫu chỉ gồm đơn hoàn thành CÓ mốc bếp bấm sẵn sàng; {fmtInt(opsData.prep.missing_marks)} đơn thiếu mốc bị loại khỏi mẫu (không tính là 0 phút). Ngưỡng chuẩn cấu hình ở Thiết lập (prep_standard_minutes).</div>
+                        </div>
+                        )}
                         {opsData && (opsData.hourly || []).length > 0 && (
                         <div className="card">
                             <h3>Đơn và nhân sự theo giờ</h3>
@@ -1171,21 +1374,42 @@ export default function Reports() {
                     )}
 
                     {/* Spec P4-C6: BÁO CÁO NHÂN SỰ */}
-                    {tab === 'hr' && <HrTab branchId={branchId} />}
+                    {tab === 'hr' && (<><HrTab branchId={branchId} /><HrMetricsBlock branchId={branchId} /></>)}
+
+                    {/* Chỉ số 360 đợt 1: TAB KHÁCH HÀNG (gác lá reports.customers.view) */}
+                    {tab === 'customers' && (
+                    <section>
+                        <CustomersTab data={custData} loading={custLoading} />
+                    </section>
+                    )}
+
+                    {/* Chỉ số 360 đợt 2 — vòng nhỏ N-3 phương án (a): TAB MỤC TIÊU DOANH THU
+                        (gác lá finance.targets.edit) — Chủ CN đọc/ghi mục tiêu khi không mở
+                        được trang PNL; tái dùng nguyên RevenueTargetForm ở ReportsPnl.jsx. */}
+                    {tab === 'targets' && (
+                    <section className="card">
+                        <h3>Mục tiêu doanh thu tháng</h3>
+                        <p className="sub">Mục tiêu theo từng chi nhánh — dùng cho dự báo cuối tháng (TC-3) ở tab Tổng quan. Chủ Chi Nhánh chỉ thấy và ghi được mục tiêu của chi nhánh mình.</p>
+                        {/* Vòng nhỏ N-3 §KP: tab Mục tiêu không gọi tải overview
+                            (Chủ CN không có lá overview) — form đã hiện số vừa
+                            lưu; TC-3 tải lại khi mở tab Tổng quan. */}
+                        <RevenueTargetForm month={f.date.slice(0, 7)} branchId={branchId} branches={branches} canEdit={can('finance.targets.edit')} onSaved={() => {}} />
+                    </section>
+                    )}
 
                     {/* Ghi chú chung */}
                     <div className="foot">
                         <h4>Ghi chú về số liệu</h4>
                         <ul>
                             <li>Chỉ tính đơn đã thanh toán (<b>payment_status = paid</b>, chưa hủy) — khớp tab "Đã thanh toán" ở trang Hóa đơn.</li>
-                            <li>VAT tính theo từng dòng món (thuế suất riêng của món, mặc định {meta.vat_rate}% từ Thiết lập).</li>
+                            <li>VAT tính theo từng dòng món (thuế suất riêng của món, mặc định {meta?.vat_rate ?? '—'}% từ Thiết lập).</li>
                             <li>Vốn nguyên liệu ước tính từ định mức BOM × giá vốn bình quân các lô đang còn.</li>
                             <li>Chi phí ca lấy từ phiếu chi trong ca (shift_expenses); lý do chứa "lương" được xếp vào Lương.</li>
                             <li>Hao hụt = (Tồn đầu kỳ + Nhập trong kỳ − Tồn thực tế kiểm kê) − Tiêu thụ BOM. Dòng "⚠ ước tính" là chưa có phiếu kiểm kê.</li>
                         </ul>
                     </div>
 
-                    </>)}
+                    </>}
                 </main>
             </div>
         </AdminLayout>
@@ -1254,6 +1478,42 @@ export function CashSummary({ branchId }) {
                     </div>
                 ))}
             </div>
+            {/* TC-2 (chỉ số 360 đợt 1): dòng tiền theo ngày HIỆU LỰC TIỀN */}
+            {data.tc2 && (
+            <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+                <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Dòng tiền vận hành (TC-2) — cơ số ngày hiệu lực tiền</div>
+                <div className="kpis" style={{ marginBottom: 8 }}>
+                    <div className="kpi"><div className="lb">Tiền vào thực nhận</div><div className="v" style={{ color: 'var(--green)', fontSize: 19 }}>{fmtVND(data.tc2.cash_in)}</div></div>
+                    <div className="kpi"><div className="lb">Tiền ra thực chi</div><div className="v" style={{ color: 'var(--red)', fontSize: 19 }}>{fmtVND(data.tc2.cash_out)}</div></div>
+                    <div className="kpi"><div className="lb">Dòng tiền thuần</div><div className="v" style={{ fontSize: 19 }}>{fmtVND(data.tc2.net)}</div></div>
+                </div>
+                <div className="sub">Khác cơ số của sổ ở trên (ngày phát sinh): khối này tính theo ngày tiền thực sự vào/ra (paid_at) — phiếu công nợ chỉ vào sổ khi đã ghi thanh toán.</div>
+                {data.tc2.platform_receivable && (
+                <div style={{ marginTop: 10 }}>
+                    <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Tiền thực thu sàn theo kênh <EstTag note="Thực thu sàn tính theo mô hình %: doanh thu kênh trừ chiết khấu % cấu hình, giảm giá quán chịu và phí marketing nhập tay (cùng thành phần BH-1). Chưa phải số sàn trả thật — khi có file sàn (N-7) số thật sẽ thay thế." /></div>
+                    <div className="tbl-wrap"><table className="tbl"><tbody>
+                        <tr><th>Kênh sàn</th><th className="num">Doanh thu</th><th className="num">Chiết khấu</th><th className="num">Giảm giá quán chịu</th><th className="num">Phí marketing</th><th className="num">Thực thu</th></tr>
+                        {(data.tc2.platform_receivable.channels || []).map((c) => (
+                            <tr key={c.key}>
+                                <td className="prod">{c.name}</td>
+                                <td className="num">{fmtVND(c.revenue)}</td>
+                                <td className="num">{fmtVND(c.commission)}</td>
+                                <td className="num">{fmtVND(c.discount)}</td>
+                                <td className="num">{c.incomplete ? '—' : fmtVND(c.marketing_fee)}</td>
+                                <td className="num"><b>{c.incomplete ? '—' : fmtVND(c.estimated_received)}</b></td>
+                            </tr>
+                        ))}
+                        <tr>
+                            <td className="prod"><b>Tổng thực thu</b></td>
+                            <td className="num" colSpan={4}></td>
+                            <td className="num"><b>{fmtVND(data.tc2.platform_receivable.estimated_received)}</b></td>
+                        </tr>
+                    </tbody></table></div>
+                    <div className="sub">{data.tc2.platform_receivable.note}{data.tc2.platform_receivable.has_incomplete ? ' Một số kênh chưa có phí marketing của kỳ (chưa đối soát trọn tháng) nên chưa tính được thực thu — hiện "—".' : ''}</div>
+                </div>
+                )}
+            </div>
+            )}
         </div>
     );
 }
@@ -1291,9 +1551,15 @@ function HrTab({ branchId }) {
                 )}
                 <div className="sub" style={{ fontWeight: 700, marginBottom: 6 }}>Top 5 NV giờ cao nhất</div>
                 {(data.top_hours || []).map((r, i) => (
-                    <div className="ch-row" key={r.employee_id}>
-                        <div className="nm">#{i + 1} {r.full_name} <span style={{ color: 'var(--muted)' }}>({r.branch_name})</span></div>
-                        <div className="ch-val"><b>{r.hours}h</b><div style={{ fontSize: 11, color: 'var(--muted)' }}>{r.workdays} ngày công{r.net != null && ' · ' + fmtVND(r.net)}</div></div>
+                    <div key={r.employee_id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: i < (data.top_hours || []).length - 1 ? '1px solid var(--line)' : '0' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>#{i + 1} {r.full_name}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.branch_name}</div>
+                        </div>
+                        <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                            <b style={{ color: 'var(--navy)', fontSize: 13 }}>{r.hours}h</b>
+                            <div style={{ fontSize: 11, color: 'var(--muted)' }}>{r.workdays} ngày công{r.net != null && ' · ' + fmtVND(r.net)}</div>
+                        </div>
                     </div>
                 ))}
             </div>
@@ -1315,4 +1581,209 @@ function HrTab({ branchId }) {
             </div>
         </section>
     );
+}
+
+// Chỉ số 360 đợt 1 — NS-1/NS-2: năng suất tuần + tuân thủ ca (endpoint riêng
+// /reports/hr-metrics, tự quản kỳ tuần/tháng của chính nó).
+function HrMetricsBlock({ branchId }) {
+    const [data, setData] = useState(null);
+    const [period, setPeriod] = useState('week');
+    const [err, setErr] = useState(false);
+    const load = useCallback(() => {
+        axios.get(API + '/reports/hr-metrics', { params: { period, branch_id: branchId } })
+            .then((r) => { setData(r.data?.data); setErr(false); })
+            .catch((e) => { noteExpired(e); setErr(true); });
+    }, [period, branchId]);
+    useEffect(() => { load(); }, [load]);
+    return (
+        <div className="card" style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h3>Năng suất theo tuần & tuân thủ ca (NS-1 · NS-2)</h3>
+                <span className="seg">
+                    <button className={period === 'week' ? 'on' : ''} onClick={() => setPeriod('week')}>4 tuần gần nhất</button>
+                    <button className={period === 'month' ? 'on' : ''} onClick={() => setPeriod('month')}>Tháng hiện tại</button>
+                </span>
+            </div>
+            {err && <div className="sub" style={{ color: 'var(--m-danger)' }}>⚠ Không tải được số liệu năng suất. <button onClick={load} className="m-btn m-btn-ghost m-btn-sm" style={{ marginLeft: 8 }}>Thử lại</button></div>}
+            {!data && !err && <div className="sub">Đang tải…</div>}
+            {data && (<>
+                <div className="tbl-wrap"><table className="tbl"><tbody>
+                    <tr><th>Tuần</th><th className="num">Doanh thu thuần</th><th className="num">Giờ công</th><th className="num">SPLH (doanh thu/giờ)</th><th className="num">Chi phí lương</th><th className="num">Labor %</th><th className="num">Quên chấm ra</th></tr>
+                    {data.weeks.map((w) => (
+                        <tr key={w.week_start}>
+                            <td className="prod">{fmtD(w.week_start)} – {fmtD(w.week_end)} {w.is_estimate && <EstTag note="Chi phí lương tuần là ƯỚC TÍNH: giờ chấm công × đơn giá giờ. Chỉ tuần trùng trọn một tháng đã chốt lương mới dùng số đã chốt." />}</td>
+                            <td className="num">{fmtVND(w.net)}</td>
+                            <td className="num">{trimN(w.hours)}h</td>
+                            <td className="num"><b>{w.splh !== null ? fmtVND(w.splh) : '—'}</b></td>
+                            <td className="num">{fmtVND(w.labor_cost)}</td>
+                            <td className="num">{w.labor_pct !== null ? trimN(w.labor_pct) + '%' : '—'}</td>
+                            <td className="num">{fmtInt(w.missing_checkout)}</td>
+                        </tr>
+                    ))}
+                </tbody></table></div>
+                <div className="sub" style={{ fontWeight: 700, margin: '12px 0 6px' }}>Tuân thủ ca trong kỳ (NS-2)</div>
+                <div className="kpis">
+                    <div className="kpi"><div className="lb">Đi trễ &gt; 5 phút</div><div className="v">{fmtInt(data.compliance.late)}</div><span className="delta flat">trên {fmtInt(data.compliance.scheduled_shifts)} ca có lịch</span></div>
+                    <div className="kpi"><div className="lb">Về sớm</div><div className="v">{fmtInt(data.compliance.early_leave)}</div><span className="delta flat">chấm ra trước giờ kết thúc</span></div>
+                    <div className="kpi"><div className="lb">Vắng không phép</div><div className="v" style={data.compliance.no_show > 0 ? { color: 'var(--red)' } : undefined}>{fmtInt(data.compliance.no_show)}</div><span className="delta flat">có lịch nhưng không chấm công</span></div>
+                    <div className="kpi"><div className="lb">Giờ tăng ca <EstTag note="Giờ tăng ca = phần giờ thực làm vượt lịch ca, định giá theo đơn giá giờ — số ước tính tới khi có quy chế hệ số tăng ca riêng." /></div><div className="v">{trimN(data.compliance.overtime_hours)}h</div><span className="delta flat">≈ {fmtVND(data.compliance.overtime_cost)}</span></div>
+                </div>
+                <div className="sub">Mốc lịch ca sửa gần nhất: {data.compliance.schedule_last_modified ? fmtD(data.compliance.schedule_last_modified) : '—'}. Sửa lịch SAU ngày công thì giờ công của ngày đó có thể đã khác lịch hiện tại.</div>
+            </>)}
+        </div>
+    );
+}
+
+// Chỉ số 360 đợt 1 — tab Khách hàng (KH-1→KH-5 + Marketing MK-1→MK-3 + CL-1).
+// Khối Marketing CHỈ có mặt khi backend trả marketing !== null (gác lá ở server).
+function CustomersTab({ data, loading }) {
+    if (loading && !data) return <div className="card">Đang tải số liệu khách hàng…</div>;
+    if (!data) return <div className="card"><h3>Khách hàng</h3><div className="sub">Chưa tải được dữ liệu. Kiểm tra kết nối rồi bấm "Thử lại" ở đầu trang báo cáo.</div></div>;
+    const cov = data.coverage || {};
+    const kh1 = data.kh1 || {};
+    const kh2 = data.kh2 || { matrix: [], frequency: [] };
+    const kh3 = data.kh3 || {};
+    const kh4 = data.kh4 || { top_clv: [], churn_risk: [] };
+    const kh5 = data.kh5 || { cohorts: [] };
+    const tierName = (id) => (kh2.tiers || []).find((t) => t.id === id)?.name || ('#' + id);
+    const matrixMap = {};
+    (kh2.matrix || []).forEach((c) => { matrixMap[c.from_tier_id + '>' + c.to_tier_id] = c; });
+    const tierIds = (kh2.tiers || []).map((t) => t.id);
+    return (<>
+        <div className="card">
+            <h3>Phương pháp & phạm vi</h3>
+            <div className="sub">Mọi chỉ số khách chỉ tính trên <b>tập khách định danh</b> (đơn có gắn khách hàng). Kỳ này: <b>{fmtInt(cov.identified_orders)}/{fmtInt(cov.total_orders)} đơn định danh — tỷ lệ phủ {trimN(cov.pct)}%</b>. Đơn không định danh KHÔNG được suy đoán là khách vãng lai. Chỉ số chuyển hạng (KH-2) và nợ điểm (KH-3) là số <b>toàn hệ</b> — điểm và hạng không thuộc một chi nhánh nên không chia theo chi nhánh.{data.meta?.scope_note ? ' ' + data.meta.scope_note : ''}</div>
+        </div>
+
+        <div className="card">
+            <h3>Mua lại & khách mới (KH-1)</h3>
+            <div className="kpis">
+                <div className="kpi"><div className="lb">Tỷ lệ mua lại 90 ngày</div><div className="v">{trimN(kh1.repeat_90?.rate)}%</div><span className="delta flat">{fmtInt(kh1.repeat_90?.repeat_customers)}/{fmtInt(kh1.repeat_90?.customers)} khách có ≥2 đơn</span></div>
+                <div className="kpi"><div className="lb">Tỷ lệ mua lại 365 ngày</div><div className="v">{trimN(kh1.repeat_365?.rate)}%</div><span className="delta flat">{fmtInt(kh1.repeat_365?.repeat_customers)}/{fmtInt(kh1.repeat_365?.customers)} khách có ≥2 đơn</span></div>
+                <div className="kpi"><div className="lb">Khách mới trong kỳ</div><div className="v">{fmtInt(kh1.new_customers)}</div><span className="delta flat">đơn hiệu lực đầu tiên rơi vào kỳ</span></div>
+                <div className="kpi"><div className="lb">Khách quay lại trong kỳ</div><div className="v">{fmtInt(kh1.returning_customers)}</div><span className="delta flat">tổng khách hoạt động {fmtInt(kh1.active_customers)}</span></div>
+            </div>
+        </div>
+
+        <div className="card">
+            <h3>Chuyển hạng trong kỳ (KH-2) — số toàn hệ</h3>
+            <div className="sub">Ô = số khách có hạng đầu kỳ → hạng cuối kỳ (hạng suy từ nhật ký chuyển hạng; khách chưa từng có log thì hạng hiện tại ở cả hai đầu). Lên/xuống tự nhiên theo điểm: <b>{fmtInt(kh2.natural_moves)} lượt</b> · gán tay: <b>{fmtInt(kh2.manual_moves)} lượt</b>. Cột doanh thu kỳ của nhóm khách trong ô nằm ở bảng chi tiết dưới ma trận.</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Đầu kỳ ↓ / Cuối kỳ →</th>{tierIds.map((id) => <th key={id} className="num">{tierName(id)}</th>)}<th className="num">Tổng</th></tr>
+                {tierIds.map((from) => (
+                    <tr key={from}>
+                        <td className="prod">{tierName(from)}</td>
+                        {tierIds.map((to) => { const c = matrixMap[from + '>' + to]; return <td key={to} className="num" style={from === to ? { fontWeight: 700 } : undefined}>{c ? fmtInt(c.customers) : '·'}</td>; })}
+                        <td className="num"><b>{fmtInt(tierIds.reduce((s, to) => s + (matrixMap[from + '>' + to]?.customers || 0), 0))}</b></td>
+                    </tr>
+                ))}
+            </tbody></table></div>
+            {(kh2.matrix || []).length > 0 && (
+            <div className="tbl-wrap" style={{ marginTop: 10 }}><table className="tbl"><tbody>
+                <tr><th>Chuyển hạng</th><th className="num">Số khách</th><th className="num">Doanh thu kỳ của nhóm</th></tr>
+                {kh2.matrix.map((c, i) => (<tr key={i}><td className="prod">{c.from_tier} → {c.to_tier}</td><td className="num">{fmtInt(c.customers)}</td><td className="num">{fmtVND(c.revenue)}</td></tr>))}
+            </tbody></table></div>
+            )}
+            <div className="sub" style={{ fontWeight: 700, margin: '12px 0 6px' }}>Tần suất mua trong kỳ (toàn hệ — thuộc KH-2)</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Nhóm tần suất</th><th className="num">Số khách</th></tr>
+                {(kh2.frequency || []).map((b) => (<tr key={b.bucket}><td className="prod">{b.bucket} đơn</td><td className="num">{fmtInt(b.customers)}</td></tr>))}
+            </tbody></table></div>
+            {/* N-5 (360 đợt 2): mốc đổi ngưỡng hạng trong kỳ — KH-2 đọc theo ngưỡng mới */}
+            {(data.config_markers?.membership_tier || []).length > 0 && (
+                <div className="sub" style={{ marginTop: 8 }}>
+                    {(data.config_markers.membership_tier || []).map((m, i) => (
+                        <div key={i}>📅 Cấu hình đổi {m.changed_at}: <b>{m.label}</b> — {CONFIG_FIELD_LABELS[m.field] || m.field}: {fmtConfigValue(m.field, m.old_value)} → {fmtConfigValue(m.field, m.new_value)}{m.changed_by_name ? ' (' + m.changed_by_name + ')' : ''}.</div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+        <div className="card">
+            <h3>Nợ điểm & vòng đời điểm (KH-3) — số toàn hệ</h3>
+            <div className="kpis">
+                <div className="kpi"><div className="lb">Điểm đang nợ khách</div><div className="v">{fmtInt(kh3.liability_points)}</div><span className="delta flat">tại cuối kỳ</span></div>
+                <div className="kpi"><div className="lb">Giá trị quy đổi</div><div className="v">{fmtVND(kh3.liability_value)}</div><span className="delta flat">{fmtVND(kh3.value_per_point)}/điểm</span></div>
+                <div className="kpi"><div className="lb">Điểm phát hành trong kỳ</div><div className="v">{fmtInt(kh3.issued)}</div><span className="delta flat">mọi nguồn</span></div>
+                <div className="kpi"><div className="lb">Điểm đã dùng trong kỳ</div><div className="v">{fmtInt(kh3.redeemed)}</div><span className="delta flat">giá trị {fmtVND(kh3.redeemed_value)}</span></div>
+            </div>
+            <div className="sub">Điểm hết hạn trong kỳ: <b>{fmtInt(kh3.expired)}</b> · Tỷ lệ dùng điểm lũy kế (đã dùng ÷ đã phát hành toàn thời gian): <b>{kh3.redeem_rate_cumulative !== null && kh3.redeem_rate_cumulative !== undefined ? trimN(kh3.redeem_rate_cumulative) + '%' : '—'}</b>. Tồn điểm cuối kỳ lấy theo tồn lô hiện tại (chưa có ảnh chụp tồn theo ngày lịch sử).</div>
+            {/* N-5 (360 đợt 2): mốc đổi giá trị quy đổi điểm trong kỳ — KH-3 đọc theo giá mới */}
+            {(data.config_markers?.point_value || []).length > 0 && (
+                <div className="sub" style={{ marginTop: 8 }}>
+                    {(data.config_markers.point_value || []).map((m, i) => (
+                        <div key={i}>📅 Cấu hình đổi {m.changed_at}: <b>{m.label}</b> — {CONFIG_FIELD_LABELS[m.field] || m.field}: {fmtConfigValue(m.field, m.old_value)} → {fmtConfigValue(m.field, m.new_value)}{m.changed_by_name ? ' (' + m.changed_by_name + ')' : ''}.</div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+        <div className="two">
+            <div className="card">
+                <h3>Giá trị trọn đời — Top khách (KH-4)</h3>
+                <div className="tbl-wrap"><table className="tbl"><tbody>
+                    <tr><th>Khách</th><th className="num">Số đơn</th><th className="num">CLV (doanh thu lũy kế)</th></tr>
+                    {(kh4.top_clv || []).map((c) => (<tr key={c.customer_id}><td className="prod">{c.name || c.code || ('#' + c.customer_id)}</td><td className="num">{fmtInt(c.orders)}</td><td className="num"><b>{fmtVND(c.lifetime_revenue)}</b></td></tr>))}
+                </tbody></table></div>
+            </div>
+            <div className="card">
+                <h3>Nguy cơ rời bỏ (KH-4)</h3>
+                <div className="sub">Khách có ≥3 đơn nhưng đã quá 2× khoảng cách mua trung bình của chính họ mà chưa quay lại.</div>
+                <div className="tbl-wrap"><table className="tbl"><tbody>
+                    <tr><th>Khách</th><th className="num">Đơn</th><th className="num">CLV</th><th className="num">Ngày im lặng</th></tr>
+                    {(kh4.churn_risk || []).map((c) => (<tr key={c.customer_id}><td className="prod">{c.name || c.code || ('#' + c.customer_id)}</td><td className="num">{fmtInt(c.orders)}</td><td className="num">{fmtVND(c.lifetime_revenue)}</td><td className="num" style={{ color: 'var(--red)', fontWeight: 700 }}>{fmtInt(c.days_since_last)} ngày</td></tr>))}
+                </tbody></table></div>
+            </div>
+        </div>
+
+        <div className="card">
+            <h3>Cohort theo quý đăng ký (KH-5)</h3>
+            <div className="sub">% khách của quý còn mua lại ở tháng +1/+2/+3 sau tháng đăng ký. Ô "—" = tháng đó chưa tới.</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Quý đăng ký</th><th className="num">Số khách</th><th className="num">Giữ chân M+1</th><th className="num">M+2</th><th className="num">M+3</th></tr>
+                {(kh5.cohorts || []).map((c) => (<tr key={c.quarter}><td className="prod">{c.quarter}</td><td className="num">{fmtInt(c.customers)}</td><td className="num">{c.m1 === null ? '—' : trimN(c.m1) + '%'}</td><td className="num">{c.m2 === null ? '—' : trimN(c.m2) + '%'}</td><td className="num">{c.m3 === null ? '—' : trimN(c.m3) + '%'}</td></tr>))}
+            </tbody></table></div>
+        </div>
+
+        {data.marketing && (
+        <div className="card">
+            <h3>Marketing — hiệu quả khuyến mãi (MK-1)</h3>
+            <div className="explain">Đây là <b>hiệu quả quan sát</b> — doanh thu của đơn CÓ khuyến mãi, <b>không phải</b> toàn bộ là doanh thu tăng thêm do khuyến mãi tạo ra.</div>
+            <div className="kpis">
+                <div className="kpi"><div className="lb">AOV đơn có KM</div><div className="v">{data.marketing.mk1_summary?.aov_with !== null && data.marketing.mk1_summary?.aov_with !== undefined ? fmtVND(data.marketing.mk1_summary.aov_with) : '—'}</div><span className="delta flat">{fmtInt(data.marketing.mk1_summary?.orders_with)} đơn</span></div>
+                <div className="kpi"><div className="lb">AOV đơn không KM</div><div className="v">{data.marketing.mk1_summary?.aov_without !== null && data.marketing.mk1_summary?.aov_without !== undefined ? fmtVND(data.marketing.mk1_summary.aov_without) : '—'}</div><span className="delta flat">{fmtInt(data.marketing.mk1_summary?.orders_without)} đơn</span></div>
+            </div>
+            <div className="sub" style={{ fontWeight: 700, margin: '10px 0 6px' }}>Theo chương trình khuyến mãi</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Chương trình</th><th className="num">Đơn dùng</th><th className="num">Tổng giảm</th><th className="num">Doanh thu đơn dùng</th><th className="num">AOV</th></tr>
+                {(data.marketing.mk1?.promotion || []).map((p) => (<tr key={p.promotion_id}><td className="prod">{p.name}</td><td className="num">{fmtInt(p.used)}</td><td className="num">{fmtVND(p.discount)}</td><td className="num">{fmtVND(p.revenue)}</td><td className="num">{fmtVND(p.aov)}</td></tr>))}
+            </tbody></table></div>
+            <div className="sub" style={{ fontWeight: 700, margin: '12px 0 6px' }}>Theo coupon (ví khách)</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Chương trình nguồn</th><th className="num">Đã phát hành</th><th className="num">Đã dùng trong kỳ</th><th className="num">Tổng giảm</th><th className="num">Doanh thu đơn dùng</th><th className="num">AOV</th></tr>
+                {(data.marketing.mk1?.coupon || []).map((p) => (<tr key={p.promotion_id}><td className="prod">{p.name}</td><td className="num">{fmtInt(p.issued)}</td><td className="num">{fmtInt(p.used)}</td><td className="num">{fmtVND(p.discount)}</td><td className="num">{fmtVND(p.revenue)}</td><td className="num">{fmtVND(p.aov)}</td></tr>))}
+            </tbody></table></div>
+            <div className="sub">Tổng giảm của coupon = phần giảm của đơn trừ phần giảm chương trình KM chính — đơn dùng đồng thời voucher gõ tay chưa tách được phần voucher. Tỷ lệ dùng coupon = đã dùng ÷ đã phát hành.</div>
+
+            <div className="sub" style={{ fontWeight: 700, margin: '14px 0 6px' }}>Điểm theo nguồn phát hành (MK-2)</div>
+            <div className="tbl-wrap"><table className="tbl"><tbody>
+                <tr><th>Nguồn</th><th className="num">Điểm phát hành</th><th className="num">Giá trị quy đổi</th></tr>
+                {(data.marketing.mk2 || []).map((s) => (<tr key={s.source}><td className="prod">{s.label}</td><td className="num">{fmtInt(s.points)}</td><td className="num">{fmtVND(s.value)}</td></tr>))}
+            </tbody></table></div>
+
+            <div className="sub" style={{ fontWeight: 700, margin: '14px 0 6px' }}>Giới thiệu bạn bè (MK-3)</div>
+            <div className="kpis">
+                <div className="kpi"><div className="lb">Người giới thiệu</div><div className="v">{fmtInt(data.marketing.mk3?.referrers)}</div><span className="delta flat">có khách đăng ký trong kỳ</span></div>
+                <div className="kpi"><div className="lb">Khách được giới thiệu</div><div className="v">{fmtInt(data.marketing.mk3?.referrals)}</div><span className="delta flat">đăng ký trong kỳ</span></div>
+                <div className="kpi"><div className="lb">Đã hoàn tất đơn đầu</div><div className="v">{fmtInt(data.marketing.mk3?.completed)}</div><span className="delta flat">tỷ lệ {trimN(data.marketing.mk3?.completion_rate)}%</span></div>
+                <div className="kpi"><div className="lb">Doanh thu trọn đời nhóm này</div><div className="v">{fmtVND(data.marketing.mk3?.referred_lifetime_revenue)}</div><span className="delta flat">toàn thời gian</span></div>
+            </div>
+        </div>
+        )}
+
+        <div className="card">
+            <h3>Đánh giá khách hàng (CL-1)</h3>
+            <div className="sub">Hệ thống <b>chưa thu thập</b> đánh giá sao từ khách — chỉ số này sẽ có khi tính năng chấm sao trên Mini App (đợt 2) đi vào hoạt động. Không hiện số 0 giả.</div>
+        </div>
+    </>);
 }

@@ -27,6 +27,11 @@ class ZaloAuthController extends Controller
             'avatar' => 'nullable|string|max:500',
             // Spec đăng ký Zalo B §3.3: mã mời từ ?ref= đã lưu ở thiết bị — chỉ gắn khi tạo mới.
             'referred_by' => 'nullable|string|max:20',
+            // Vá kiểm chứng đồng ý NĐ13 phía server (2026-11-12): cờ đồng ý
+            // client gửi từ ô tick ConsentCheck — cùng tên trường
+            // consent_agreed như đường đặt đơn. Chỉ bắt buộc khi TẠO MỚI
+            // (cổng ở dưới); khách cũ đăng nhập lại không cần.
+            'consent_agreed' => 'nullable|boolean',
         ]);
 
         // Spec đăng nhập SĐT + mật khẩu §4: đổi token + lấy SĐT đã xác thực
@@ -48,6 +53,21 @@ class ZaloAuthController extends Controller
                 // người đang giữ SĐT đã xác thực (kể cả trường hợp thuê bao đổi chủ).
                 $customer->update(['zalo_id' => $zaloId]);
             }
+        }
+        // Vá kiểm chứng đồng ý NĐ13 phía server (Đại Vương chốt 2026-11-12):
+        // sắp TẠO TÀI KHOẢN MỚI thì payload bắt buộc mang cờ consent_agreed
+        // hợp lệ — trước đây server tự đóng dấu consent_agreed_at mà không
+        // kiểm chứng, ô tick phía client là cổng duy nhất (gọi thẳng API
+        // vẫn tạo được tài khoản kèm mốc đồng ý giả). Nhất quán với đường
+        // đặt đơn (422 consent_required). Khách cũ đã khớp ở trên: không
+        // kiểm lại, không chặn, không ghi đè mốc đồng ý đã có.
+        // Thứ tự kiểm: đồng ý TRƯỚC quyền SĐT — chưa đồng ý thì không đi tiếp.
+        if (!$customer && empty($v['consent_agreed'])) {
+            return response()->json([
+                'success' => false,
+                'code' => 'consent_required',
+                'message' => 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân theo Nghị định 13/2023 để tạo tài khoản.',
+            ], 422);
         }
         // Spec đăng ký Zalo B §2.2 (B3): từ chối quyền SĐT → KHÔNG tạo tài khoản.
         // (Trước đây nhánh tạo chạy cả khi chưa xác thực SĐT và còn sập ở member_code — F2.)

@@ -307,6 +307,8 @@ export default function DatHang({ embed } = {}) {
 function PoFormHub({ token, branchId, branchName, suppliers, materials, editingPo, onCancel, onDone, onExpired, toast }) {
     const [partnerId, setPartnerId] = useState(editingPo?.partner_id ? String(editingPo.partner_id) : '');
     const [orderDate, setOrderDate] = useState(editingPo?.order_date || isoToday());
+    // N-1 (360 đợt 2): ngày hẹn giao NCC — phục vụ KHO-4b đúng hẹn.
+    const [expectedDate, setExpectedDate] = useState(editingPo?.expected_date || '');
     const [note, setNote] = useState(editingPo?.note || '');
     const [lines, setLines] = useState(() => (editingPo?.items || []).map((it) => ({
         key: 'po' + it.id, materialId: it.material_id, name: it.material_name, baseUnit: it.base_unit,
@@ -373,6 +375,7 @@ function PoFormHub({ token, branchId, branchName, suppliers, materials, editingP
                 branch_id: branchId,
                 partner_id: Number(partnerId),
                 order_date: orderDate,
+                expected_date: expectedDate || null,
                 note: note.trim() || null,
                 as_status: asStatus,
                 items: items.map((l) => ({ material_id: l.materialId, quantity: qtyNum(l.qty), unit_name: l.unitName, note: l.note.trim() || null })),
@@ -397,6 +400,8 @@ function PoFormHub({ token, branchId, branchName, suppliers, materials, editingP
                 </select>
                 <label className="dh-label">Ngày đặt</label>
                 <DateInput value={orderDate} onChange={setOrderDate} className="dh-field" />
+                <label className="dh-label">Ngày hẹn giao (NCC)</label>
+                <DateInput value={expectedDate} onChange={setExpectedDate} className="dh-field" />
                 <label className="dh-label">Ghi chú chung</label>
                 <input className="dh-field" value={note} onChange={(e) => setNote(e.target.value)} placeholder="VD: Giao trước 9h sáng mai" />
             </div>

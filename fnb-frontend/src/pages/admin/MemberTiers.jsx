@@ -4,6 +4,7 @@ import AdminLayout from '../../components/layout/AdminLayout';
 import TimeInput, { valid24 } from '../../components/TimeInput'; // Fix L1: ô giờ 24h tự chế (quy ước nhà)
 import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
+import TierIcon from '../../components/TierIcon'; // Bộ icon hạng V2 (2026-11-14)
 
 
 // =====================================================================
@@ -447,7 +448,7 @@ export default function MemberTiers() {
                             {tiers.map((t) => (
                                 <tr key={t.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                     <td className="px-4 py-3">
-                                        <span className="text-[#24305E] font-medium">{t.name}</span>
+                                        <span className="inline-flex items-center gap-2"><TierIcon tier={t.code || t.name} size={24} /><span className="text-[#24305E] font-medium">{t.name}</span></span>
                                         {t.is_default && <span className="ml-2 px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-600">Mặc định</span>}
                                         {t.code && <div className="text-[11px] text-gray-400">{t.code}</div>}
                                     </td>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import SearchInput from './SearchInput';
+import TierIcon from './TierIcon'; // Bộ icon hạng V2 (2026-11-14)
 import {
   DollarSign,
   CreditCard,
@@ -28,6 +29,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { printBill, printLabels } from '../utils/print';
 import { fmtTime, fmtDate } from '../utils/format';
 import { useSharedCategories } from '../utils/sharedCategories'; // Spec danh mục dùng chung
+import { CANCEL_REASON_OPTIONS, cancelReasonLabel } from '../utils/cancelReasons'; // N-2 (360 đợt 2): 6 mã nguyên nhân hủy
 
 // =====================================================================
 // Gói 3d (2026-10-04): Redesign POS theo giao diện Sapo (theme tối).
@@ -1077,35 +1079,30 @@ export default function PosScreen({ onBackToApp }) {
 
   const cancelResuming = () => { setResumingHeldId(null); setResumingHeldCode(''); setResumingHeldSnapshot(null); };
 
-  // Spec danh mục dùng chung: lý do hủy đơn lưu — dropdown + nhập tay khi chọn "Khác"
-  const cancelReasons = useSharedCategories('cancel_reasons', [
-    { code: 'customer_cancel', name: 'Khách hủy' },
-    { code: 'out_of_stock', name: 'Hết nguyên liệu' },
-    { code: 'wrong_entry', name: 'Nhập nhầm' },
-    { code: 'other', name: 'Khác' },
-  ]);
+  // N-2 (360 đợt 2): lý do hủy đơn lưu theo danh mục chuẩn 6 mã (bắt buộc
+  // chọn mã; nhóm shared-category 'cancel_reasons' cũ giữ nguyên, không xóa).
   const [cancelHeldTarget, setCancelHeldTarget] = useState(null);
-  const [cancelHeldReason, setCancelHeldReason] = useState('customer_cancel');
+  const [cancelHeldReason, setCancelHeldReason] = useState('');
   const [cancelHeldOther, setCancelHeldOther] = useState('');
 
   const cancelHeldOrder = (o, e) => {
     e.stopPropagation();
     setCancelHeldTarget(o);
-    setCancelHeldReason('customer_cancel');
+    setCancelHeldReason('');
     setCancelHeldOther('');
   };
 
   const confirmCancelHeld = async () => {
     const o = cancelHeldTarget;
     if (!o) return;
-    const reason = cancelHeldReason === 'other'
-      ? (cancelHeldOther.trim() || 'Hủy đơn lưu')
-      : (cancelReasons.find((r) => r.code === cancelHeldReason)?.name || 'Hủy đơn lưu');
+    if (!cancelHeldReason) return alert('Chọn lý do hủy.');
+    if (cancelHeldReason === 'other' && !cancelHeldOther.trim()) return alert('Nhập lý do hủy cụ thể.');
+    const reason = cancelHeldReason === 'other' ? cancelHeldOther.trim() : cancelReasonLabel(cancelHeldReason);
     setCancelHeldTarget(null);
     try {
       const res = await fetch(`${API_BASE}/orders/${o.id}/cancel`, {
         method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({ reason, restock: false }),
+        body: JSON.stringify({ reason, reason_code: cancelHeldReason, restock: false }),
       });
       const data = await res.json();
       if (data.success) {
@@ -1484,7 +1481,7 @@ export default function PosScreen({ onBackToApp }) {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-bold text-emerald-400">{memberCustomer.name}</span>
-                    {memberCustomer.tier?.name && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300">{memberCustomer.tier.name}</span>}
+                    {memberCustomer.tier?.name && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 inline-flex items-center gap-1"><TierIcon tier={memberCustomer.tier.code || memberCustomer.tier.name} navy size={12} />{memberCustomer.tier.name}</span>}
                   </div>
                   <button onClick={clearCustomer} className="text-slate-500 hover:text-red-400"><X size={14} /></button>
                 </div>
@@ -1517,7 +1514,7 @@ export default function PosScreen({ onBackToApp }) {
 
           {/* Audit 2026-10-21 🟠4: nhập voucher tại quầy */}
           <div className="px-3 py-2 border-t border-white/10 bg-[#161f30]">
-            <div className="text-[11px] text-slate-400 font-bold mb-1.5">🎟️ Voucher</div>
+            <div className="text-[11px] text-slate-400 font-bold mb-1.5 flex items-center gap-1.5"><svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path d="M6 14a4 4 0 0 1 4-4h28a4 4 0 0 1 4 4v6a5 5 0 0 0 0 10v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4v-6a5 5 0 0 0 0-10v-6z" fill="#F5A623" /><path d="M29 12v24" stroke="#fff" strokeWidth="2.4" strokeDasharray="3.5 3.5" /><text x="17.5" y="31" fontSize="17" fontWeight="800" fill="#fff" textAnchor="middle">%</text></svg>Voucher</div>
             {appliedVoucher ? (
               <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg border border-emerald-400 bg-emerald-500/10 text-[11px]">
                 <span className="font-mono font-bold text-emerald-300">{appliedVoucher.code}</span>
@@ -1722,7 +1719,8 @@ export default function PosScreen({ onBackToApp }) {
             <label className="text-xs text-slate-400">Lý do hủy</label>
             <select value={cancelHeldReason} onChange={(e) => setCancelHeldReason(e.target.value)}
               className="mt-1 w-full bg-white/10 border border-white/10 rounded-lg px-3 py-2 text-sm">
-              {cancelReasons.map((r) => <option key={r.code} value={r.code} className="text-slate-900">{r.name}</option>)}
+              <option value="" className="text-slate-900">— Chọn lý do —</option>
+              {CANCEL_REASON_OPTIONS.map((o) => <option key={o.code} value={o.code} className="text-slate-900">{o.label}</option>)}
             </select>
             {cancelHeldReason === 'other' && (
               <input value={cancelHeldOther} onChange={(e) => setCancelHeldOther(e.target.value)}
@@ -2040,7 +2038,7 @@ export default function PosScreen({ onBackToApp }) {
             {qrClaim.member ? (
               <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-xl p-3">
                 <p className="text-emerald-400 font-bold text-sm">✅ {qrClaim.member.name}</p>
-                <p className="text-xs text-slate-300">{qrClaim.member.member_code}{qrClaim.member.tier ? ` · Hạng ${qrClaim.member.tier}` : ''}</p>
+                <p className="text-xs text-slate-300 flex items-center gap-1 flex-wrap"><span>{qrClaim.member.member_code}</span>{qrClaim.member.tier ? (<><span>·</span><TierIcon tier={qrClaim.member.tier} navy size={14} /><span>Hạng {qrClaim.member.tier}</span></>) : null}</p>
               </div>
             ) : (
               <p className="text-xs text-amber-400 animate-pulse">Đang chờ khách quét...</p>

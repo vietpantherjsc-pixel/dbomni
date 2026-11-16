@@ -14,6 +14,7 @@ use Illuminate\Http\Request;
 // Gói 40: Lỗi 3 Chuyên — ghi nhận vi phạm (quản lý ghi / NV tự báo), danh mục loại lỗi.
 class ViolationController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     private function serialize(Violation $v): array
     {
         $v->loadMissing(['employee:id,full_name', 'type:id,category,name']);
@@ -51,7 +52,7 @@ class ViolationController extends Controller
     {
         $actor = $request->user();
         if (!$actor instanceof Employee) return $q;
-        $mine = $actor->allBranchIds();
+        $mine = $this->effectiveBranchScope($actor);
         $empIds = Employee::where(fn ($w) => $w->whereIn('branch_id', $mine)
             ->orWhereHas('branches', fn ($b) => $b->whereIn('branches.id', $mine)))->pluck('id');
         return $q->where(fn ($w) => $w->whereIn('branch_id', $mine)->orWhereIn('employee_id', $empIds));
@@ -62,7 +63,7 @@ class ViolationController extends Controller
         $actor = $request->user();
         if (!$actor instanceof Employee) return null;
         $emp = $item->employee ?? Employee::find($item->employee_id);
-        if (!$emp || empty(array_intersect($actor->allBranchIds(), $emp->allBranchIds()))) {
+        if (!$emp || empty(array_intersect($this->effectiveBranchScope($actor), $emp->allBranchIds()))) {
             return response()->json(['success' => false, 'message' => 'Vi phạm không thuộc phạm vi chi nhánh của bạn.'], 404);
         }
         return null;
@@ -95,7 +96,7 @@ class ViolationController extends Controller
         $type = ViolationType::findOrFail($v['violation_type_id']);
         $emp = Employee::findOrFail($v['employee_id']);
         $actor = $request->user();
-        if ($actor instanceof Employee && empty(array_intersect($actor->allBranchIds(), $emp->allBranchIds()))) {
+        if ($actor instanceof Employee && empty(array_intersect($this->effectiveBranchScope($actor), $emp->allBranchIds()))) {
             return response()->json(['success' => false, 'message' => 'Nhân viên không thuộc phạm vi chi nhánh của bạn.'], 404);
         }
         $item = Violation::create([

@@ -28,7 +28,7 @@ class PrepaidExpenseController extends Controller
                 ? response()->json(['success' => false, 'message' => 'Không tìm thấy khoản chi phí trả trước.'], 404)
                 : null;
         }
-        if (!in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if (!in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Không tìm thấy khoản chi phí trả trước.'], 404);
         }
         return null;
@@ -46,7 +46,7 @@ class PrepaidExpenseController extends Controller
         // khoản toàn hệ (branch_id NULL) theo thiết kế phân bổ P&L sẵn có.
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $ids = $actor->allBranchIds();
+            $ids = $this->effectiveBranchScope($actor);
             $q->where(function ($w) use ($ids) {
                 $w->whereIn('branch_id', $ids)->orWhereNull('branch_id');
             });

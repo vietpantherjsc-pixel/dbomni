@@ -32,7 +32,7 @@ import { confirmInApp } from '../../utils/confirmInApp'; // Sổ #23: xác nhậ
 import DateInput from '../../components/DateInput';
 import TimeInput from '../../components/TimeInput';
 
-const STOCKTAKE_TYPES = { daily: 'Ngày', weekly: 'Tuần', monthly: 'Tháng', spontaneous: 'Đột xuất' };
+const STOCKTAKE_TYPES = { daily: 'Ngày', weekly: 'Tuần', monthly: 'Tháng', spontaneous: 'Đột xuất', quick_weekly: 'Nhanh tuần' };
 
 // Gói 55 p11ab: đảo tỷ lệ lưu kho (1 mua = 1/X cơ sở) sang chiều tự nhiên (1 cơ sở = X mua) để hiển thị
 // Trả về null nếu rate không hợp lệ

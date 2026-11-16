@@ -13,11 +13,13 @@ import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
 import { useAuth } from '../../contexts/AuthContext'; // Cây phân quyền §2: cổng reports.pnl.view
 import DateInput from '../../components/DateInput';
+import MonthInput from '../../components/MonthInput'; // N-3 (360 đợt 2): chọn tháng mục tiêu
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { API } from '../../utils/api';
 import {
     REPORT_CSS, kpi, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
-    groupChart, donut, PERIOD_NAMES, COMPARE_NAMES,
+    groupChart, donut, PERIOD_NAMES, COMPARE_NAMES, ReportNavTabs,
+    CONFIG_FIELD_LABELS, fmtConfigValue,
 } from './reportShared';
 
 // =====================================================================
@@ -25,6 +27,78 @@ import {
 // Dữ liệu: GET /api/reports/pnl (branch_id, period, date, compare, tax_included).
 // Chi phí gồm: vốn NL + Lương + Chi khác + Chiết khấu kênh bán.
 // =====================================================================
+
+// N-3 (360 đợt 2): form nhập mục tiêu doanh thu tháng theo từng CN.
+// Chỉ hiện ô nhập + nút Lưu khi có lá finance.targets.edit; không có lá
+// thì chỉ hiện số mục tiêu đã đặt ở thẻ (đọc từ payload pnl).
+// Vòng nhỏ phương án (a): export để tab "Mục tiêu doanh thu" trong
+// Reports.jsx tái dùng nguyên form (Chủ CN không mở được trang PNL).
+export function RevenueTargetForm({ month, branchId, branches, canEdit, onSaved }) {
+    const [tMonth, setTMonth] = useState(month);
+    const [tBranch, setTBranch] = useState(branchId !== '0' && branchId ? String(branchId) : '');
+    const [amount, setAmount] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [msg, setMsg] = useState('');
+    // Vòng nhỏ N-3 §KQ: Chủ CN chỉ được ghi mục tiêu của CN mình (server đã
+    // chặn CN khác, nhưng ô chọn vẫn liệt kê cả 2 CN khiến lỗi 403 báo sai
+    // nguyên nhân) — khóa ô chọn về đúng CN của Chủ CN; Chủ Sở Hữu giữ nguyên.
+    const { isBranchOwner, user } = useAuth();
+    const lockedBranchId = isBranchOwner && user?.owner_branch_id != null ? String(user.owner_branch_id) : null;
+
+    useEffect(() => { setTMonth(month); }, [month]);
+    useEffect(() => {
+        if (lockedBranchId) { setTBranch(lockedBranchId); return; }
+        if (!tBranch && branches.length > 0) setTBranch(String(branches[0].id));
+    }, [branches, lockedBranchId]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        if (!tMonth || !tBranch) return;
+        axios.get(API + '/reports/revenue-targets', { params: { month: tMonth, branch_id: 0 } })
+            .then((r) => {
+                const rows = r.data?.data?.targets || [];
+                const row = rows.find((x) => String(x.branch_id) === String(tBranch));
+                setAmount(row ? String(row.target_amount) : '');
+            })
+            .catch((e) => noteExpired(e));
+    }, [tMonth, tBranch]);
+
+    if (!canEdit) return (<div className="sub" style={{ marginTop: 8 }}>Bạn không có quyền ghi mục tiêu (cần lá finance.targets.edit).</div>);
+
+    const save = async () => {
+        if (!tBranch) return setMsg('Chọn chi nhánh.');
+        const v = Number(amount);
+        if (!Number.isFinite(v) || v < 0) return setMsg('Nhập mục tiêu là số tiền ≥ 0.');
+        setSaving(true); setMsg('');
+        try {
+            await axios.post(API + '/reports/revenue-targets', { branch_id: Number(tBranch), month: tMonth, target_amount: v });
+            setMsg('Đã lưu mục tiêu tháng ' + tMonth + '.');
+            onSaved();
+        } catch (e) {
+            setMsg(e?.response?.status === 403 ? 'Không có quyền ghi mục tiêu (cần lá finance.targets.edit).' : (e?.response?.data?.message || 'Lưu thất bại.'));
+        }
+        setSaving(false);
+    };
+
+    return (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 10 }}>
+            <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Tháng</label>
+                <MonthInput value={tMonth} onChange={setTMonth} />
+            </div>
+            <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Chi nhánh</label>
+                <select value={tBranch} onChange={(e) => setTBranch(e.target.value)} disabled={!!lockedBranchId} style={{ height: 38, border: '1px solid #d9d9d9', borderRadius: 8, padding: '0 8px' }}>
+                    {branches.filter((b) => !lockedBranchId || String(b.id) === lockedBranchId).map((b) => (<option key={b.id} value={b.id}>{b.name}</option>))}
+                </select>
+            </div>
+            <div>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>Mục tiêu doanh thu (đ)</label>
+                <input type="number" min="0" step="1000" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="VD: 150000000" style={{ height: 38, width: 180, border: '1px solid #d9d9d9', borderRadius: 8, padding: '0 8px' }} />
+            </div>
+            <button type="button" onClick={save} disabled={saving} className="m-btn m-btn-primary" style={{ height: 38, padding: '0 16px' }}>{saving ? 'Đang lưu…' : 'Lưu mục tiêu'}</button>
+            {msg && <span style={{ fontSize: 13, color: msg.startsWith('Đã lưu') ? 'var(--green)' : 'var(--red)' }}>{msg}</span>}
+        </div>
+    );
+}
 
 
 export default function ReportsPnl() {
@@ -90,6 +164,10 @@ export default function ReportsPnl() {
             ? fmtD(meta.compare_from)
             : fmtD(meta.compare_from) + ' – ' + fmtD(meta.compare_to)) + ')'
         : '';
+    // PNL theo kênh (2026-11-15): cột phí marketing chỉ hiện khi payload có
+    // ít nhất 1 kênh mang marketing_fee (kỳ có tháng trọn + đã đối soát sàn)
+    // — cùng cách xử lý với thẻ kênh ở trang Báo cáo chính.
+    const hasMkt = (data?.income_channels || []).some((c) => c.marketing_fee !== undefined && c.marketing_fee !== null);
 
     // Cây phân quyền §2: cổng trang reports.pnl.view.
     if (!can('reports.pnl.view')) return (<AdminLayout><div className="p-8 text-center text-gray-500">Không có quyền xem báo cáo P&L.</div></AdminLayout>);
@@ -159,6 +237,9 @@ export default function ReportsPnl() {
                     </div>
                 )}
 
+                {/* Dải tab điều hướng danh mục dùng chung (Phương án B, 2026-11-15) */}
+                <ReportNavTabs active="pnl" can={can} />
+
                 <main className="wrap" style={{ paddingTop: 12 }}>
                     {loading && !data && <div className="card">Đang tải số liệu…</div>}
                     {!loading && errMsg && !data && (
@@ -187,7 +268,7 @@ export default function ReportsPnl() {
                             </div>
                             {kpi('Biên lợi nhuận', trimN(data.margin) + '%', '<span class="delta flat">—</span>')}
                         </div>
-                        <div className="sub">Thuế GTGT {meta.vat_rate}% · {fmtInt(rev.orders)} đơn trong kỳ.{Number(rev.other_income) > 0 && <> Trong đó thu khác (phiếu thu tay): <b>{fmtVND(rev.other_income)}</b>.</>}</div>
+                        <div className="sub">Thuế GTGT {meta.vat_rate}% · Tổng thuế GTGT: <b>{fmtVND(rev.vat)}</b> · {fmtInt(rev.orders)} đơn trong kỳ.{Number(rev.other_income) > 0 && <> Trong đó thu khác (phiếu thu tay): <b>{fmtVND(rev.other_income)}</b>.</>}</div>
                     </div>
 
                     <div className="two">
@@ -206,13 +287,13 @@ export default function ReportsPnl() {
                         <div className="card">
                             <h3>Báo cáo chi — cơ cấu chi phí</h3>
                             <div className="donut-wrap">
-                                <div dangerouslySetInnerHTML={{ __html: donut(data.costs, data.cost_total) }} />
+                                <div dangerouslySetInnerHTML={{ __html: donut(data.costs, data.cost_total, data.revenue?.net) }} />
                                 <ul className="cost-legend">
                                     {data.costs.map((c, i) => (
                                         <li key={i}>
                                             <span className="dot" style={{ background: c.color }} />
                                             <span className="nm">{c.name}{c.note ? <span style={{ color: '#999', fontSize: 11 }}> ({c.note})</span> : null}</span>
-                                            <span className="pc">{trimN(data.cost_total > 0 ? c.value / data.cost_total * 100 : 0)}%</span>
+                                            <span className="pc">{trimN(c.pct || 0)}%</span>
                                             <span className="am">{fmtVND(c.value)}</span>
                                         </li>
                                     ))}
@@ -220,6 +301,78 @@ export default function ReportsPnl() {
                             </div>
                         </div>
                     </div>
+
+                    {/* PNL THEO KÊNH (2026-11-15): lãi gộp từng kênh — dùng nguyên
+                        trường income_channels backend đã trả, trình bày cùng mẫu
+                        thẻ kênh ở trang Báo cáo chính để số không lệch nhau. */}
+                    <div className="card">
+                        <h3>PNL theo kênh — lãi gộp</h3>
+                        <div className="sub">Lãi gộp theo kênh = Doanh thu − Giá vốn − Chiết khấu{hasMkt ? ' − Phí marketing' : ''}. Lương, mặt bằng và chi phí chung KHÔNG phân bổ xuống kênh — các khoản đó chỉ tính ở PNL toàn chuỗi.{hasMkt ? ' Kỳ này có tháng trọn đã nhập đối soát sàn: cột Phí marketing hiện và Lãi gộp là số sau phí marketing.' : ''}</div>
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Kênh</th><th className="num">Doanh thu</th><th className="num">Giá vốn</th><th className="num">Chiết khấu</th>{hasMkt && <th className="num">Phí marketing</th>}<th className="num">Lãi gộp</th><th className="num">Biên %</th><th className="num">Giảm giá quán chịu</th><th className="num">Gánh nặng kênh</th><th className="num">Biên đóng góp</th></tr>
+                            {(data.income_channels || []).map((c) => {
+                                const after = c.gross_profit_after_marketing !== undefined && c.gross_profit_after_marketing !== null;
+                                const gp = after ? c.gross_profit_after_marketing : c.gross_profit;
+                                const mg = after ? c.margin_after_pct : c.margin_pct;
+                                return (
+                                    <tr key={c.key}>
+                                        <td className="prod">{c.name}</td>
+                                        <td className="num">{fmtVND(c.value)}</td>
+                                        <td className="num">{fmtVND(c.cogs)}</td>
+                                        <td className="num">{fmtVND(c.commission)}</td>
+                                        {hasMkt && <td className="num">{c.marketing_fee !== undefined && c.marketing_fee !== null ? fmtVND(c.marketing_fee) : '—'}</td>}
+                                        <td className="num" style={{ color: Number(gp) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{fmtVND(gp)}</td>
+                                        <td className="num">{trimN(mg)}%</td>
+                                        <td className="num">{fmtVND(c.discount || 0)}</td>
+                                        <td className="num">{c.burden_incomplete ? <span title="Chưa gồm phí marketing sàn — kỳ chưa đối soát trọn tháng">—</span> : trimN(c.burden_pct) + '%'}</td>
+                                        <td className="num" style={{ fontWeight: 700, color: c.contribution === null || c.contribution === undefined ? undefined : (Number(c.contribution) >= 0 ? 'var(--green)' : 'var(--red)') }}>{c.burden_incomplete ? '—' : fmtVND(c.contribution)}</td>
+                                    </tr>
+                                );
+                            })}
+                            </tbody>
+                        </table></div>
+                        <div className="sub" style={{ marginTop: 8 }}>BH-1: Gánh nặng kênh = (Chiết khấu + Phí marketing + Giảm giá quán chịu) ÷ Doanh thu kênh · Biên đóng góp = Doanh thu − Giá vốn − toàn bộ chi phí kênh trực tiếp. Kênh chưa có phí marketing (kỳ chưa đối soát) hiện "—" ở 2 cột cuối, không tính thiếu như đã đủ.</div>
+                        {/* N-5 (360 đợt 2): mốc đổi cấu hình chiết khấu/phí marketing trong kỳ */}
+                        {(data.income_channels || []).some((c) => (c.config_markers || []).length > 0) && (
+                            <div className="sub" style={{ marginTop: 8 }}>
+                                {(data.income_channels || []).flatMap((c) => (c.config_markers || []).map((m, i) => (
+                                    <div key={c.key + '-' + i}>📅 Cấu hình đổi {m.changed_at}: <b>{m.label}</b> — {CONFIG_FIELD_LABELS[m.field] || m.field}: {fmtConfigValue(m.field, m.old_value)} → {fmtConfigValue(m.field, m.new_value)}{m.changed_by_name ? ' (' + m.changed_by_name + ')' : ''}.</div>
+                                )))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* TC-1 (chỉ số 360 đợt 1): điểm hòa vốn tháng */}
+                    {data.breakeven && (
+                    <div className="card">
+                        <h3>Điểm hòa vốn — tháng {data.breakeven.month}</h3>
+                        {data.breakeven.status === 'unconfigured' ? (
+                            <div className="explain" style={{ marginBottom: 0 }}>
+                                <b>Chưa đủ cấu hình:</b> còn danh mục chi chưa phân loại Cố định/Biến đổi nên chưa tính được hòa vốn: {(data.breakeven.unconfigured || []).map((u) => u.name).join(' · ')}. Vào <b>Danh mục thu-chi</b> để phân loại — hệ thống không tự đoán.
+                            </div>
+                        ) : (
+                            <>
+                            <div className="kpis">
+                                {kpi('Doanh thu hòa vốn tháng', data.breakeven.breakeven_revenue !== null ? fmtVND(data.breakeven.breakeven_revenue) : '—', '<span class="delta flat">—</span>')}
+                                {kpi('Doanh thu hòa vốn / ngày', data.breakeven.daily_breakeven_revenue !== null ? fmtVND(data.breakeven.daily_breakeven_revenue) : '—', '<span class="delta flat">' + (data.breakeven.open_days || 0) + ' ngày mở cửa</span>')}
+                                {kpi('Đơn hòa vốn / ngày', data.breakeven.daily_breakeven_orders !== null ? trimN(data.breakeven.daily_breakeven_orders) + ' đơn' : '—', '<span class="delta flat">AOV ' + fmtVND(data.breakeven.aov || 0) + '</span>')}
+                                {kpi('Chi phí cố định tháng', fmtVND(data.breakeven.fixed_costs), '<span class="delta flat">biến đổi ' + trimN(data.breakeven.variable_ratio) + '% doanh thu</span>')}
+                            </div>
+                            <div className="sub">Cố định gồm: phiếu chi danh mục Cố định {fmtVND(data.breakeven.fixed_parts?.transactions || 0)} · lương cứng + BHXH {fmtVND(data.breakeven.fixed_parts?.salary_fixed || 0)}{data.breakeven.salary_is_estimate ? ' (ước tính — chưa chốt lương)' : ''} · chi phí phân bổ {fmtVND(data.breakeven.fixed_parts?.allocated || 0)}. Quy ước: lương cứng + BHXH vào Cố định, lương giờ theo ca vào Biến đổi (cùng giá vốn + chiết khấu kênh + phiếu chi Biến đổi).{data.breakeven.rd_fixed_reference !== null && data.breakeven.rd_fixed_reference !== undefined ? ' Đối chiếu: chi phí cố định khai ở R&D = ' + fmtVND(data.breakeven.rd_fixed_reference) + ' (chỉ tham chiếu — chuẩn tính là phân loại danh mục).' : ''} Chi phí chung toàn chuỗi chỉ tính ở góc toàn chuỗi.</div>
+                            </>
+                        )}
+                    </div>
+                    )}
+
+                    {/* N-3 (360 đợt 2): mục tiêu doanh thu tháng — phục vụ TC-3 */}
+                    {data.revenue_target && (
+                    <div className="card">
+                        <h3>Mục tiêu doanh thu — tháng {data.revenue_target.month}</h3>
+                        <div className="sub">Mục tiêu theo từng chi nhánh (không nhập cho "Tất cả" — góc toàn chuỗi cộng các mục tiêu CN). {data.revenue_target.has_target ? (<>Mục tiêu tháng: <b>{fmtVND(data.revenue_target.target)}</b>.</>) : 'Chưa đặt mục tiêu tháng này — dự báo TC-3 sẽ không có số lệch.'}</div>
+                        <RevenueTargetForm month={data.revenue_target.month} branchId={f.branch_id} branches={branches} canEdit={can('finance.targets.edit')} onSaved={load} />
+                    </div>
+                    )}
 
                     {/* CHI TIẾT CHIẾT KHẤU KÊNH */}
                     <div className="card">
@@ -308,6 +461,7 @@ export default function ReportsPnl() {
                             <span><span className="dot" style={{ background: '#D64545' }} />Chi</span>
                             <span><span className="dot" style={{ background: '#1E9E5A' }} />Lợi nhuận</span>
                         </div>
+                        <div className="sub" style={{ marginTop: 8 }}>Lưu ý: <b>chi phí lương được tính trọn theo kỳ lương tháng</b> và không phân bổ vào từng cột — khi xem theo tuần/ngày, cột Chi của từng cột <b>chưa gồm lương kỳ lương</b>. Muốn xem đủ chi phí lương, chọn kỳ <b>Tháng</b>.</div>
                     </div>
 
                     <div className="foot">
@@ -315,7 +469,7 @@ export default function ReportsPnl() {
                         <div className="tbl-wrap"><table className="tbl" style={{ minWidth: 0 }}>
                             <tbody>
                             <tr><th>Thuật ngữ</th><th>Ý nghĩa</th></tr>
-                            <tr><td><b>Net Revenue (Doanh thu thuần)</b></td><td>Gross − Giảm giá − Phí sàn. Mốc 100% để tính mọi tỷ trọng chi phí.</td></tr>
+                            <tr><td><b>Net Revenue (Doanh thu thuần)</b></td><td>Gross − VAT. Mốc 100% để tính mọi tỷ trọng chi phí. Thu khác (phiếu thu tay) để riêng — vẫn tính vào Lợi nhuận nhưng KHÔNG nằm trong Doanh thu thuần. Giảm giá và phí sàn KHÔNG trừ vào chỉ số này (phí sàn nằm ở phía chi phí). Cùng cơ số với thẻ Doanh thu thuần ở tab Tổng quan của trang Báo cáo.</td></tr>
                             <tr><td><b>COGS (Cost of Goods Sold)</b></td><td>Giá vốn hàng bán — tính theo FIFO từ snapshot lúc bán.</td></tr>
                             <tr><td><b>Prime Cost</b></td><td>COGS + Chi phí nhân sự. "Chỉ số sống còn" — phải dưới 55%.</td></tr>
                             <tr><td><b>EBITDA</b></td><td>Lợi nhuận vận hành = Lợi nhuận gộp − Nhân sự − Chi phí vận hành (chưa trừ khấu hao, thuế).</td></tr>
@@ -328,7 +482,7 @@ export default function ReportsPnl() {
                         <h4>Ghi chú về số liệu</h4>
                         <ul>
                             <li><b>Thu</b> = doanh thu đơn đã thanh toán (payment_status = paid, chưa hủy) + <b>thu khác</b> (phiếu thu tay trong Sổ thu-chi).</li>
-                            <li><b>Chi</b> = vốn nguyên liệu (BOM × giá vốn BQ lô) + lương &amp; chi khác (phiếu chi trong ca) + <b>chiết khấu kênh</b> (doanh thu kênh × % cấu hình).</li>
+                            <li><b>Chi</b> = vốn nguyên liệu (BOM × giá vốn BQ lô) + lương &amp; chi khác (phiếu chi trong ca) + <b>chiết khấu kênh</b> (doanh thu kênh × % cấu hình). Riêng <b>lương kỳ lương chỉ hiện đủ khi kỳ xem là trọn tháng</b> — kỳ tuần/ngày không gồm khoản này (xem lưu ý dưới biểu đồ Thu – Chi theo kỳ).</li>
                             <li>Chiết khấu tính trên <b>doanh thu gồm VAT</b> của kênh; nếu cấu hình “chưa gồm thuế” thì cộng thêm thuế suất đã nhập.</li>
                             <li>Map kênh → bảng giá: Tại quầy → <b>nha_hang</b>; Zalo Mini App → <b>online</b> (hoặc zalo); GrabFood → <b>grabfood</b>.</li>
                         </ul>

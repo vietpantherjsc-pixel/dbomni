@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Models\Customer;
 use App\Models\Order;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -62,6 +61,13 @@ class OnlinePaymentConfirmer
             }
 
             $order->payment_status = 'paid';
+            // Vá paid_at (Đại Vương chốt 2026-11-12): đóng dấu mốc giờ trả
+            // tiền THẬT ngay tại điểm xác nhận chung này — trước đây cột
+            // paid_at mồ côi (chỉ đơn nhập Sapo mới có), LoyaltyService::
+            // windowSpent phải dùng updated_at dự phòng (mốc trôi theo các
+            // lần cập nhật đơn sau đó). confirm() bị chặn chạy lần 2 ở cổng
+            // stock_deducted phía trên nên dấu này chỉ đóng đúng 1 lần.
+            $order->paid_at = now();
             // Gói 11: xác nhận xong vào thẳng "Đang Pha Chế" (KDS đã thu tiền).
             // Vá delta KDS book ship (§BJ): điểm xác nhận chung này còn chạy ở
             // bước tay delivering (C1) và webhook CIA picked_up — khi đó đơn
@@ -72,36 +78,15 @@ class OnlinePaymentConfirmer
             $order->stock_deducted = true;
             $order->save();
 
-            // Tích điểm
-            if ($order->customer_id) {
-                $customer = Customer::find($order->customer_id);
-                if ($customer) {
-                    $order->points_earned = $this->loyaltyService->earnForOrder($customer, $order, (float) $order->total_amount);
-                    $order->save();
-                }
-            }
-
-            // SPEC-02: trigger coupon tự động sau khi xác nhận thanh toán
-            if ($order->customer_id) {
-                try {
-                    $couponService = app(AutoIssueCouponService::class);
-                    $customer = $order->customer;
-                    if ($customer) {
-                        // CP-01: đơn đầu tiên (truyền đơn nguồn để ghi source_order_id)
-                        $couponService->onFirstOrder($customer, $order);
-                        // CP-02: referral (cả 2 bên)
-                        $couponService->onReferralFirstOrder($order);
-                        // CP-03: tích tem
-                        $couponService->onOrderStamp($customer, $order);
-                        // CP-10: coupon đơn tiếp theo (chỉ Mini App)
-                        $couponService->onNextOrderCoupon($customer, $order);
-                    }
-                } catch (\Throwable $e) {
-                    \Illuminate\Support\Facades\Log::warning('[Coupon] Auto-issue failed', [
-                        'order' => $order->code, 'msg' => $e->getMessage(),
-                    ]);
-                }
-            }
+            // Spec dời mốc tích điểm (2026-11-13, điểm gọi N3): tích điểm
+            // + trigger coupon KHÔNG còn chạy tại xác nhận thanh toán —
+            // điểm chốt duy nhất LoyaltyService::earnWhenSettled chỉ cộng
+            // khi đơn đã paid + completed. Đơn đã completed TRƯỚC khi xác
+            // nhận (COD tại quầy: khách trả lúc nhận món) → earn chạy
+            // ngay tại đây; đơn thường chưa completed → no-op êm, earn
+            // chờ funnel hoàn thành (N1/N2). Trừ kho · paid · paid_at ·
+            // trạng thái ở trên giữ nguyên từng dòng.
+            $this->loyaltyService->earnWhenSettled($order);
 
             return $order->load(['items.product', 'customer']);
         });

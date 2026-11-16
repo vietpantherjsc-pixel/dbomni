@@ -596,7 +596,7 @@ export default function Scheduling() {
                                 <span>Chi nhánh: <b className="text-white">{b.name}</b></span>
                                 <span>NGÀY BẮT ĐẦU: <b className="text-white">{fmtDate(days[0])} ({WD_UP[0]})</b></span>
                             </div>
-                            <div className="mt-2 text-[12px] text-[#ffe1a8]">⏰ Hạn đăng ký ca: <b>{dlWdName}, {dl.time}</b> · áp dụng cho tuần trước tuần được đăng ký · 🔒 Gửi xong được gửi lại 1 lần rồi khóa</div>
+                            <div className="mt-2 text-[12px] text-[#ffe1a8]">⏰ Hạn đăng ký ca: <b>{dlWdName}, {dl.time}</b> · áp dụng cho chính tuần được đăng ký · 🔒 Gửi xong được gửi lại 1 lần rồi khóa</div>
                         </div>
                         <div className="m-card overflow-x-auto">
                             <table className="w-full text-[13px] min-w-[1020px] border-collapse">
@@ -694,7 +694,7 @@ export default function Scheduling() {
                                 <span>Chi nhánh: <b className="text-white">{b.name}</b></span>
                                 <span>NGÀY BẮT ĐẦU: <b className="text-white">{fmtDate(days[0])} ({WD_UP[0]})</b></span>
                             </div>
-                            <div className="mt-2 text-[12px] text-[#ffe1a8]">⏰ Hạn đăng ký ca: <b>{dlWdName}, {dl.time}</b> · áp dụng cho tuần trước tuần được đăng ký · 🔒 Gửi xong được gửi lại 1 lần rồi khóa</div>
+                            <div className="mt-2 text-[12px] text-[#ffe1a8]">⏰ Hạn đăng ký ca: <b>{dlWdName}, {dl.time}</b> · áp dụng cho chính tuần được đăng ký · 🔒 Gửi xong được gửi lại 1 lần rồi khóa</div>
                         </div>
 
                         <div className="m-card overflow-x-auto">
@@ -933,7 +933,7 @@ export default function Scheduling() {
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center" onClick={() => setSetOpen(false)}>
                     <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-[380px] p-5" onClick={(e) => e.stopPropagation()}>
                         <h2 className="font-bold text-[16px] text-[#24305E]">⚙ Cài đặt đăng ký ca</h2>
-                        <p className="text-[12px] text-gray-500 mt-1 mb-3">Hạn chót áp dụng cho <b>tuần trước</b> tuần được đăng ký. Sau hạn chót, nhân viên không chỉnh sửa/gửi đăng ký ca được.</p>
+                        <p className="text-[12px] text-gray-500 mt-1 mb-3">Hạn chót áp dụng cho <b>chính tuần</b> được đăng ký — tuần kế tiếp luôn đăng ký sớm được. Sau hạn chót của một tuần, nhân viên không chỉnh sửa/gửi đăng ký ca của tuần đó được.</p>
                         <div className="grid grid-cols-2 gap-3">
                             <div>
                                 <label className="text-[12px] text-gray-500">Ngày chốt</label>

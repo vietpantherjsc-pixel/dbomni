@@ -21,6 +21,31 @@ export async function geocodeAddress(query) {
   }
 }
 
+// Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (2026-11-12): gọi backend
+// geocode BẬC THANG với 3 trường cấu trúc + tọa độ chi nhánh đang chọn.
+// Trả {lat, lng, label, ladder_step}; cả thang rỗng → ném lỗi mang
+// code 'dropoff_geocode_failed' từ server (KHÔNG rơi về fallback gọi
+// thẳng Nominatim như geocodeAddress — đường tra chốt của đơn giao phải
+// tôn trọng đúng hợp đồng bậc thang + mã lỗi duy nhất của spec).
+export async function geocodeLadder({ q, street, ward, province, branch }) {
+  const d = await api.geocode(q, {
+    street: street || '',
+    ward: ward || '',
+    province: province || '',
+    branch_lat: branch?.latitude || '',
+    branch_lng: branch?.longitude || '',
+  });
+  if (d && d.lat && d.lng) {
+    // Gói geocode lai NDAMaps (2026-11-13 mục 3.2): đáp kèm source —
+    // 'nominatim' khi trúng thang, 'ndamaps_forward' khi trúng cứu cánh
+    // (ladder_step khi đó là null).
+    return { lat: d.lat, lng: d.lng, label: d.label || '', ladder_step: d.ladder_step || null, source: d.source || 'ladder' };
+  }
+  const err = new Error('Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.');
+  err.code = 'dropoff_geocode_failed';
+  throw err;
+}
+
 export function haversineKm(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;

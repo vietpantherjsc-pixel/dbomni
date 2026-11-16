@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\MembershipTier;
 use App\Models\PointTransaction;
 use App\Support\ApprovalActor;
+use App\Support\ManualPointSources;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,15 +22,19 @@ class CustomerController extends Controller
      * TIỀN HÀNG với mọi thước đo khác (quy tắc Order::revenueAmount — đơn zalo
      * trừ phí ship thu hộ). Cột customers.total_spent tích lũy từ các lượt tích
      * điểm TRƯỚC vá phí ship còn lẫn cả ship (lệch sống: cửa sổ 60 ngày 135.000đ
-     * trong khi cột hiện 155.000đ) → tính lại từ đơn tại thời điểm đọc: chỉ đơn
-     * đã thanh toán và chưa hủy (đúng tập đơn đã qua tích điểm, chưa bị thu hồi).
+     * trong khi cột hiện 155.000đ) → tính lại từ đơn tại thời điểm đọc.
+     * Spec dời mốc tích điểm (2026-11-13 mục 7): tập đơn đổi sang paid +
+     * COMPLETED (cùng tập với cột total_spent và windowSpent — khép lớp
+     * lệch "đơn đang bay" của sổ #113; đơn paid chưa hoàn thành tạm thời
+     * chưa tính vào "Tổng đã mua" cho tới khi hoàn thành — thay đổi ngữ
+     * nghĩa có chủ đích của phán).
      */
     private function spentByGoods(array $customerIds): array
     {
         if (!$customerIds) return [];
         return \App\Models\Order::whereIn('customer_id', $customerIds)
             ->where('payment_status', 'paid')
-            ->where('status', '<>', 'cancelled')
+            ->where('status', 'completed')
             ->groupBy('customer_id')
             ->selectRaw("customer_id, SUM(total_amount - CASE WHEN online_channel = 'zalo' THEN shipping_fee ELSE 0 END) as spent")
             ->pluck('spent', 'customer_id')
@@ -250,7 +255,9 @@ class CustomerController extends Controller
     {
         $validated = $request->validate([
             'change' => 'required|integer|not_in:0',
-            'note' => 'nullable|string|max:255',
+            // N-4: nguồn ghi tay bắt buộc; 'other' bắt buộc ghi chú.
+            'manual_source' => 'required|string|in:' . implode(',', ManualPointSources::CODES),
+            'note' => 'nullable|string|max:255|required_if:manual_source,other',
         ]);
 
         try {
@@ -258,17 +265,20 @@ class CustomerController extends Controller
                 $customer = Customer::lockForUpdate()->findOrFail($id);
                 $change = (int) $validated['change'];
                 $note = $validated['note'] ?? 'Điều chỉnh thủ công';
+                // N-4: nguồn ghi tay ghi vào lô (cộng) + giao dịch (cộng/trừ).
+                $manualSource = $validated['manual_source'];
                 $loyalty = app(\App\Services\LoyaltyService::class);
                 if ($change > 0) {
                     // Loyalty 2.0: cộng tay tạo lô source_type=adjust, HSD theo cấu hình
                     $customer->points += $change;
                     $customer->save();
-                    $lot = $loyalty->createLot($customer, $change, 'adjust');
+                    $lot = $loyalty->createLot($customer, $change, 'adjust', null, null, $manualSource);
                     PointTransaction::create([
                         'customer_id' => $customer->id,
                         'point_lot_id' => $lot->id,
                         'change' => $change,
                         'type' => 'adjust',
+                        'manual_source' => $manualSource,
                         'note' => $note,
                     ]);
                 } else {
@@ -276,7 +286,7 @@ class CustomerController extends Controller
                     if ($customer->points + $change < 0) {
                         throw new \Exception('Điểm không đủ để trừ.');
                     }
-                    $loyalty->spendFifo($customer, abs($change), 'adjust', $note);
+                    $loyalty->spendFifo($customer, abs($change), 'adjust', $note, null, null, $manualSource);
                 }
 
                 return $customer;

@@ -402,7 +402,7 @@ class EmployeeAuthController extends Controller
             ]);
         }
 
-        $resp = $this->issueEmployeeToken($emp, $name);
+        $resp = $this->issueEmployeeToken($emp, $name, $sessionBranchId);
         $data = $resp->getData(true);
         $data['employee']['has_password'] = true; // Gói #102 (Q7): Hub hiện/ẩn thẻ tự đặt mật khẩu
         $data['employee']['must_change_password'] = false;
@@ -452,7 +452,7 @@ class EmployeeAuthController extends Controller
         $this->clearPwFailures($emp);
         $surface = (string) ($data['surface'] ?? 'hub');
         $name = in_array($surface, self::PHONE_SURFACES, true) ? $surface : 'hub';
-        $resp = $this->issueEmployeeToken($emp, $name);
+        $resp = $this->issueEmployeeToken($emp, $name, $branchId);
         $out = $resp->getData(true);
         $out['employee']['has_password'] = true;
         $out['employee']['must_change_password'] = false;
@@ -518,12 +518,20 @@ class EmployeeAuthController extends Controller
         ]);
     }
 
-    // Cấp Sanctum token cho NV (trang public) — không đụng auth admin
-    private function issueEmployeeToken(Employee $emp, string $name): JsonResponse
+    // Cấp Sanctum token cho NV (trang public) — không đụng auth admin.
+    // Gói riêng A (2026-11-13): đường đăng nhập CÓ chọn CN truyền CN phiên
+    // vào — token mang thêm ability 'branch:{id}', server khóa CN hiệu lực
+    // về CN đó (xem trait ValidatesEmployeeBranch). Không truyền (chấm công
+    // QR · đường không chọn CN) -> token như cũ, không bị khóa phiên.
+    private function issueEmployeeToken(Employee $emp, string $name, ?int $sessionBranchId = null): JsonResponse
     {
         $emp->tokens()->where('name', $name)->delete();
         // Audit 2026-10-23 BM-10: token NV có hạn 7 ngày
-        $token = $emp->createToken($name, ['employee'], now()->addDays(7))->plainTextToken;
+        $abilities = ['employee'];
+        if ($sessionBranchId !== null && $sessionBranchId > 0) {
+            $abilities[] = 'branch:' . $sessionBranchId;
+        }
+        $token = $emp->createToken($name, $abilities, now()->addDays(7))->plainTextToken;
         return response()->json([
             'success' => true,
             'access_token' => $token,

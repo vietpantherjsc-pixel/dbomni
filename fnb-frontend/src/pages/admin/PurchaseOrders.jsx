@@ -211,6 +211,8 @@ function PoForm({ po, branches, materials, suppliers, defaultBranch, onClose, on
     const [branchId, setBranchId] = useState(po?.branch_id ? String(po.branch_id) : (defaultBranch ? String(defaultBranch) : ''));
     const [partnerId, setPartnerId] = useState(po?.partner_id ? String(po.partner_id) : '');
     const [orderDate, setOrderDate] = useState(po?.order_date || todayLocal());
+    // N-1 (360 đợt 2): ngày hẹn giao NCC — phục vụ KHO-4b đúng hẹn.
+    const [expectedDate, setExpectedDate] = useState(po?.expected_date || '');
     const [note, setNote] = useState(po?.note || '');
     const [lines, setLines] = useState(() => (po?.items || []).map((it) => ({
         material_id: it.material_id, name: it.material_name, base_unit: it.base_unit,
@@ -294,6 +296,7 @@ function PoForm({ po, branches, materials, suppliers, defaultBranch, onClose, on
                 branch_id: Number(branchId),
                 partner_id: Number(partnerId),
                 order_date: orderDate,
+                expected_date: expectedDate || null,
                 note: note || null,
                 as_status: asStatus,
                 items: items.map((l) => ({
@@ -340,6 +343,10 @@ function PoForm({ po, branches, materials, suppliers, defaultBranch, onClose, on
                         <label className="block">
                             <div className="text-[12px] text-gray-500 mb-1">Ngày đặt</div>
                             <DateInput value={orderDate} onChange={setOrderDate} className={inp + ' w-full'} />
+                        </label>
+                        <label className="block">
+                            <div className="text-[12px] text-gray-500 mb-1">Ngày hẹn giao (NCC)</div>
+                            <DateInput value={expectedDate} onChange={setExpectedDate} className={inp + ' w-full'} />
                         </label>
                         <label className="block">
                             <div className="text-[12px] text-gray-500 mb-1">Ghi chú chung</div>

@@ -28,7 +28,7 @@ class PurchaseOrderController extends Controller
     protected function denyPoBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu đặt hàng.'], 404);
         }
         return null;
@@ -41,7 +41,7 @@ class PurchaseOrderController extends Controller
         // Khuôn inbound index: NV tự thu danh sách về các CN được phân công
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $q->whereIn('branch_id', $actor->allBranchIds());
+            $q->whereIn('branch_id', $this->effectiveBranchScope($actor));
         }
         if ($request->filled('branch_id')) $q->where('branch_id', $request->input('branch_id'));
         if ($request->filled('status')) $q->where('status', $request->input('status'));

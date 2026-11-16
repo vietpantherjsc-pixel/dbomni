@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\PriceList;
 use App\Support\CatalogCache;
+use App\Support\ConfigChangeLogger; // N-5: log đổi chiết khấu bảng giá
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -40,6 +41,13 @@ class PriceListController extends Controller
         $validated['sort_order'] = (PriceList::max('sort_order') ?? -1) + 1;
 
         $pl = PriceList::create($validated);
+        // N-5: tạo mới có chiết khấu → ghi log (cũ = null; trường rỗng không ghi).
+        [$actorId, $actorType, $actorName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::logFields('channel_pricing', 'price_list', (int) $pl->id, $pl->name, [], [
+            'commission_rate' => $validated['commission_rate'] ?? null,
+            'commission_tax_included' => $validated['commission_tax_included'] ?? null,
+            'commission_tax_rate' => $validated['commission_tax_rate'] ?? null,
+        ], $actorId, $actorType, $actorName);
         CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($pl, 201);
     }
@@ -57,7 +65,13 @@ class PriceListController extends Controller
             'commission_tax_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
+        // N-5: chụp giá trị chiết khấu cũ trước khi sửa để ghi diff.
+        $old = $priceList->only(['commission_rate', 'commission_tax_included', 'commission_tax_rate']);
         $priceList->update($validated);
+        [$actorId, $actorType, $actorName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::logFields('channel_pricing', 'price_list', (int) $priceList->id, $priceList->name, $old,
+            array_intersect_key($validated, array_flip(['commission_rate', 'commission_tax_included', 'commission_tax_rate'])),
+            $actorId, $actorType, $actorName);
         CatalogCache::bump(); // Bộ nhớ đệm thực đơn: catalog đổi → đệm cũ vô hiệu.
         return response()->json($priceList);
     }

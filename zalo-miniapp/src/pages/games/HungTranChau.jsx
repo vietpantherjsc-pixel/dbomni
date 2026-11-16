@@ -264,7 +264,9 @@ export default function HungTranChau() {
     if (!gameAgree) return;
     setGameZaloBusy(true);
     try {
-      const json = await authWithZalo();
+      // Vá NĐ13 (2026-11-12): gửi kèm cờ từ ô tick của trang game — server
+      // kiểm chứng lại khi tạo tài khoản mới như luồng Tài khoản.
+      const json = await authWithZalo(gameAgree);
       if (json.code === 'not_zalo') { alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.'); return; }
       if (!json.success) {
         if (json.code === 'phone_permission_required') { setGameB3(true); return; }

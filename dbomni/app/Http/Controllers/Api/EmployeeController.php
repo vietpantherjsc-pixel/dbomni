@@ -13,6 +13,7 @@ use Illuminate\Validation\Rule;
 // Gói 26: CRUD nhân viên (10 trường + PIN 6 số + chức vụ + chi nhánh).
 class EmployeeController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     public function index(Request $request): JsonResponse
     {
         $q = Employee::with(['role:id,name', 'branch:id,name', 'branches:id,name'])
@@ -98,7 +99,7 @@ class EmployeeController extends Controller
     protected function actorBranchIds(Request $request): ?array
     {
         $actor = $request->user();
-        return $actor instanceof Employee ? $actor->allBranchIds() : null;
+        return $actor instanceof Employee ? $this->effectiveBranchScope($actor) : null;
     }
 
     protected function scopeToActorBranches($q, array $mine)

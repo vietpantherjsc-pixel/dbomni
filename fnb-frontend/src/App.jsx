@@ -376,8 +376,6 @@ const App = () => {
                             </PrivateRoute>
                         }
                     />
-                    {/* Route cũ Affiliate → redirect sang Mời bạn bè (đổi tên 2026-10-20) */}
-                    <Route path="/admin/online/affiliate" element={<Navigate to="/admin/online/invite-friends" replace />} />
                     {/* Cầu nối Sapo — Phần B: map món/tùy chọn + cấu hình */}
                     <Route
                         path="/admin/sapo"

@@ -27,7 +27,7 @@ class ProductionController extends Controller
     protected function denyProductionBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu chế biến.'], 404);
         }
         return null;
@@ -127,7 +127,7 @@ class ProductionController extends Controller
         $query = Production::with(['material', 'user', 'items.material'])->orderByDesc('id');
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $query->whereIn('branch_id', $actor->allBranchIds());
+            $query->whereIn('branch_id', $this->effectiveBranchScope($actor));
         }
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));

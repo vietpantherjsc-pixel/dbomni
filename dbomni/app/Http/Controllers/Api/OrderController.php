@@ -14,19 +14,22 @@ use App\Models\VoucherUsage;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
 use App\Services\PromotionService;
+use App\Support\CancelReasonCodes;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Audit 2026-10-23 B-5/B-6: NV chỉ được thao tác/xem đơn thuộc CN phân công.
     protected function denyOrderBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
         }
         return null;
@@ -63,7 +66,7 @@ class OrderController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Order::with(['user:id,name', 'branch:id,name', 'items.product:id,name', 'items.option:id,name'])
+        $query = Order::with(['user:id,name', 'branch:id,name', 'items.product:id,name', 'items.option:id,name', 'paymentUndoLogs'])
             ->orderBy('created_at', 'desc');
 
         $tab = $request->query('tab', 'all');
@@ -94,7 +97,7 @@ class OrderController extends Controller
         // Audit 2026-10-23 B-5/B-6: NV chỉ xem đơn thuộc CN phân công
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $query->whereIn('branch_id', $actor->allBranchIds());
+            $query->whereIn('branch_id', $this->effectiveBranchScope($actor));
         }
 
         // Gói 53: lọc theo status (hỗ trợ "pending,processing" cho badge KDS/chuông POS)
@@ -223,7 +226,7 @@ class OrderController extends Controller
             }
             // Gói 55 p11ad: NV chỉ được tạo đơn cho chi nhánh mình được phân công
             if ($actor instanceof \App\Models\Employee) {
-                $allowedBranches = $actor->allBranchIds();
+                $allowedBranches = $this->effectiveBranchScope($actor);
                 if (!in_array((int) $validated['branch_id'], $allowedBranches, true)) {
                     return response()->json(['success' => false, 'message' => 'Bạn không được phân công tại chi nhánh này.'], 403);
                 }
@@ -590,12 +593,11 @@ class OrderController extends Controller
                     $order->items()->create($itemData);
                 }
 
-                // 6b. Tích điểm khi thanh toán ngay (đơn held tích lúc finalize).
-                // Loyalty 2.0: không còn bước trừ điểm tại đơn (applyRedeem đã ngừng gọi).
-                if ($customer && !$isHold) {
-                    $order->points_earned = $loyaltyService->earnForOrder($customer, $order, (float) $finalAmount);
-                    $order->save();
-                }
+                // 6b. Spec dời mốc tích điểm (2026-11-13): GỠ tích điểm tại
+                // tạo đơn POS — điểm chỉ cộng tại điểm chốt duy nhất
+                // LoyaltyService::earnWhenSettled khi đơn paid + completed
+                // (điểm gọi N1 ở updateStatus). Đơn held cũng vậy (finalize
+                // không còn tích điểm).
 
                 return $order->load('items.product');
             });
@@ -687,7 +689,22 @@ class OrderController extends Controller
 
         // Gói 3c: đơn hoàn thành -> giải phóng bàn nếu không còn đơn hoạt động nào khác
         if ($request->status === 'completed') {
+            // Spec dời mốc tích điểm (2026-11-13, điểm gọi N1): trạng thái
+            // completed đã LƯU ở trên mới gọi điểm chốt duy nhất — điểm
+            // cộng tại đây cho đơn online mang về · POS · đơn nhóm (đơn
+            // nhóm là đơn thường, hoàn thành qua funnel này) khi đơn đã
+            // paid; chưa paid → no-op êm, earn chờ điểm gọi N3 khi NV xác
+            // nhận thanh toán.
+            app(LoyaltyService::class)->earnWhenSettled($order);
             $this->releaseTableIfFree($order);
+            // Gói Checkout SDK (spec §2.5): đơn COD online hoàn tất tại
+            // quầy/KDS (đường updateStatus chung) → báo 'completed' về
+            // Checkout SDK. Fail-soft trong service. (Đơn COD giao hàng
+            // hoàn tất qua DeliveryService::completeIfDelivered.)
+            if ($order->online_channel === 'zalo' && $order->pay_channel === 'COD'
+                && !empty($order->pay_sdk_order_id)) {
+                app(\App\Services\ZaloPaymentService::class)->updateOrderStatus($order, 'completed');
+            }
         }
 
         return response()->json([
@@ -702,13 +719,17 @@ class OrderController extends Controller
      */
     public function cancel(Request $request, int $id, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
     {
+        // N-2 (360 đợt 2): nguyên nhân hủy theo danh mục chuẩn 6 mã —
+        // cột text 'reason' chỉ còn là ghi chú tự do (bắt buộc khi mã other).
         $validated = $request->validate([
-            'reason' => 'required|string|max:255',
+            'reason' => 'nullable|string|max:255|required_if:reason_code,other',
+            'reason_code' => ['required', Rule::in(CancelReasonCodes::ALL)],
             'restock' => 'boolean', // true: có hoàn kho, false: hủy không hoàn
         ]);
 
         if ($deny = $this->denyOrderById($request, $id)) return $deny;
         $shouldRestock = $validated['restock'] ?? true;
+        $reason = $validated['reason'] ?? CancelReasonCodes::label($validated['reason_code']);
 
         // Gói 55 p11ag: xác định người hủy để truy vết (user=admin, employee=NV)
         $actor = $request->user();
@@ -718,9 +739,22 @@ class OrderController extends Controller
         $cancelledByType = $actor instanceof \App\Models\Employee ? 'employee' : 'user';
 
         try {
-            $order = DB::transaction(function () use ($id, $validated, $shouldRestock, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType) {
-                return $this->performCancel($id, $validated['reason'], $shouldRestock, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType);
+            $order = DB::transaction(function () use ($id, $reason, $validated, $shouldRestock, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType) {
+                return $this->performCancel($id, $reason, $shouldRestock, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType, $validated['reason_code']);
             });
+
+            // Gói Checkout SDK (spec §2.5): đây là đường hủy đơn PHÍA NV
+            // dùng chung (Admin/Hub) — hệ thống không có điểm "từ chối"
+            // riêng cho đơn online nên nối tại đây: đơn BANK bị hủy →
+            // 'failed'; đơn COD bị hủy → 'cancelled'. Chỉ áp cho đơn
+            // online có mã SDK; fail-soft trong service, không chặn hủy.
+            if ($order->online_channel === 'zalo' && !empty($order->pay_sdk_order_id)
+                && in_array($order->pay_channel, ['BANK', 'COD'], true)) {
+                app(\App\Services\ZaloPaymentService::class)->updateOrderStatus(
+                    $order,
+                    $order->pay_channel === 'COD' ? 'cancelled' : 'failed'
+                );
+            }
 
             return response()->json([
                 'success' => true,
@@ -740,7 +774,7 @@ class OrderController extends Controller
      * Gói 33: lõi HỦY đơn dùng chung cho cancel đơn lẻ và bulk cancel.
      * KHÔNG tự mở transaction — caller bọc ngoài.
      */
-    private function performCancel(int $id, string $reason, bool $shouldRestock, InventoryService $inventoryService, LoyaltyService $loyaltyService, ?string $cancelledBy = null, ?string $cancelledByType = null): Order
+    private function performCancel(int $id, string $reason, bool $shouldRestock, InventoryService $inventoryService, LoyaltyService $loyaltyService, ?string $cancelledBy = null, ?string $cancelledByType = null, ?string $reasonCode = null): Order
     {
         $order = Order::with('items')->lockForUpdate()->findOrFail($id);
 
@@ -795,6 +829,8 @@ class OrderController extends Controller
         $order->status = 'cancelled';
         $order->payment_status = 'refunded';
         $order->cancel_reason = $reason;
+        // N-2 (360 đợt 2): mã nguyên nhân chuẩn (NULL = dữ kiện cũ / gộp đơn).
+        $order->cancel_reason_code = $reasonCode;
         $order->cancelled_at = now();
         // Gói 55 p11ag: truy vết người hủy đơn (chống gian lận hủy đơn bỏ túi)
         $order->cancelled_by = $cancelledBy;
@@ -906,11 +942,15 @@ class OrderController extends Controller
             'ids' => 'required|array|min:1|max:200',
             'ids.*' => 'integer|exists:orders,id',
             'action' => 'required|in:cancel,delete',
-            'reason' => 'nullable|string|max:255',
+            // N-2 (360 đợt 2): hủy hàng loạt bắt buộc chọn mã như hủy lẻ;
+            // không còn mặc định text "Hủy hàng loạt" làm lý do.
+            'reason' => 'nullable|string|max:255|required_if:reason_code,other',
+            'reason_code' => ['nullable', Rule::in(CancelReasonCodes::ALL), 'required_if:action,cancel'],
         ]);
         $ids = array_values(array_unique($validated['ids']));
         $action = $validated['action'];
-        $reason = $validated['reason'] ?? 'Hủy hàng loạt';
+        $reasonCode = $validated['reason_code'] ?? null;
+        $reason = $validated['reason'] ?? ($reasonCode ? CancelReasonCodes::label($reasonCode) : 'Hủy hàng loạt');
 
         // Gói 55 p11ag: xác định người hủy để truy vết
         $actor = $request->user();
@@ -920,7 +960,7 @@ class OrderController extends Controller
         $cancelledByType = $actor instanceof \App\Models\Employee ? 'employee' : 'user';
 
         try {
-            $result = DB::transaction(function () use ($ids, $action, $reason, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType) {
+            $result = DB::transaction(function () use ($ids, $action, $reason, $reasonCode, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType) {
                 $done = 0;
                 $skipped = 0;
                 foreach ($ids as $id) {
@@ -928,7 +968,7 @@ class OrderController extends Controller
                     if (!$order) { $skipped++; continue; }
                     if ($action === 'cancel') {
                         if ($order->status === 'cancelled') { $skipped++; continue; }
-                        $this->performCancel($id, $reason, true, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType);
+                        $this->performCancel($id, $reason, true, $inventoryService, $loyaltyService, $cancelledBy, $cancelledByType, $reasonCode);
                         $done++;
                     } else {
                         // Gói 55 p11ac: chỉ xóa đơn nháp (held) hoặc chưa thanh toán — đơn đã paid phải dùng Hủy đơn
@@ -1345,14 +1385,9 @@ class OrderController extends Controller
                 $order->stock_deducted = true;
                 $order->save();
 
-                // Gói 5: tích điểm khi thanh toán đơn lưu (điểm đổi đã trừ lúc tạo đơn)
-                if ($order->customer_id) {
-                    $customer = Customer::find($order->customer_id);
-                    if ($customer) {
-                        $order->points_earned = $loyaltyService->earnForOrder($customer, $order, (float) $order->total_amount);
-                        $order->save();
-                    }
-                }
+                // Spec dời mốc tích điểm (2026-11-13): GỠ tích điểm tại
+                // finalize đơn lưu — điểm cộng tại điểm chốt duy nhất khi
+                // đơn paid + completed (điểm gọi N1 ở updateStatus).
 
                 // Gói 3c: KHÔNG giải phóng bàn ở đây — đơn dine_in sau thanh toán vẫn giữ bàn
                 // cho đến khi hoàn thành (completed) hoặc bị hủy.
@@ -1418,6 +1453,13 @@ class OrderController extends Controller
                 && !$o->stock_deducted;
             $o->setAttribute('needs_confirm', $awaiting);
             $o->setAttribute('pay_overdue', $awaiting && $o->created_at->diffInMinutes(now()) >= $alertMinutes);
+            // Nút hoàn tác xác nhận (spec 2026-11-12 mục 1): đúng điều
+            // kiện của endpoint undo-payment (paid + đã trừ kho + đơn
+            // chưa kết thúc) — tính ở server để thẻ KDS không tự suy.
+            $o->setAttribute('can_undo_payment', $o->online_channel === 'zalo'
+                && $o->payment_status === 'paid'
+                && (bool) $o->stock_deducted
+                && !in_array($o->status, ['completed', 'cancelled'], true));
         });
         // Spec KDS book ship mục 5.5 + 8 C2: lý do giao thất bại + dấu đính chính ghim cho thẻ KDS
         $this->attachDeliveryMeta($orders);
@@ -1436,8 +1478,13 @@ class OrderController extends Controller
     {
         $order = Order::findOrFail($id);
         if ($deny = $this->denyOrderBranch($request, $order->branch_id)) return $deny;
-        if (in_array($order->status, ['completed', 'cancelled'])) {
-            return response()->json(['success' => false, 'message' => 'Đơn đã hoàn thành/hủy, không tạo QR được.'], 400);
+        // PM phán từ phát hiện M-08a của TESTER (2026-11-13): nới cổng tạo
+        // mã CÙNG KHUÔN claim() của spec dời mốc tích điểm — đơn COMPLETED
+        // vẫn tạo QR được (đơn hoàn thành mà chưa gắn khách thì claim
+        // chính là đường cộng điểm N4 theo thiết kế đã khóa); chỉ đơn đã
+        // HỦY mới chặn, câu báo sửa cho khớp chỉ còn nhắc đơn hủy.
+        if ($order->status === 'cancelled') {
+            return response()->json(['success' => false, 'message' => 'Đơn đã hủy, không tạo QR được.'], 400);
         }
         $order->claim_token = Str::random(24);
         $order->claim_expires_at = now()->addMinutes(15);

@@ -8,6 +8,7 @@ import DateInput from '../../components/DateInput';
 import { API } from '../../utils/api';
 import { confirmInApp } from '../../utils/confirmInApp'; // Spec mật khẩu khách §5.3/§7.4
 import { useAuth } from '../../contexts/AuthContext'; // Form sửa thông tin khách (2026-11-07): cổng quyền customers.list.edit như các trang Admin khác
+import TierIcon from '../../components/TierIcon'; // Bộ icon hạng V2 (2026-11-14)
 
 
 // =====================================================================
@@ -23,7 +24,7 @@ export default function Customers() {
     const [showAdd, setShowAdd] = useState(false);
     const [form, setForm] = useState({ name: '', phone: '', birthday: '', note: '' });
     const [detail, setDetail] = useState(null);
-    const [adjust, setAdjust] = useState({ change: '', note: '' });
+    const [adjust, setAdjust] = useState({ change: '', note: '', manual_source: '' });
     // Spec mật khẩu khách §7.3/§5.3: email sửa trong modal + đếm ngược cửa sổ quầy.
     const [emailEdit, setEmailEdit] = useState('');
     // Form sửa thông tin khách (Đại Vương chốt 2026-11-07): PATCH /customers/{id}
@@ -183,10 +184,13 @@ export default function Customers() {
     const handleAdjust = async () => {
         const change = parseInt(adjust.change, 10);
         if (!change) return alert('Nhập số điểm (âm để trừ)');
+        // N-4: nguồn ghi tay bắt buộc; 'Khác' bắt buộc ghi chú.
+        if (!adjust.manual_source) return alert('Chọn nguồn điểm ghi tay');
+        if (adjust.manual_source === 'other' && !adjust.note.trim()) return alert('Nguồn "Khác" cần ghi rõ lý do');
         try {
-            const res = await axios.post(`${API}/customers/${detail.id}/adjust-points`, { change, note: adjust.note });
+            const res = await axios.post(`${API}/customers/${detail.id}/adjust-points`, { change, note: adjust.note, manual_source: adjust.manual_source });
             if (res.data?.success) {
-                setAdjust({ change: '', note: '' });
+                setAdjust({ change: '', note: '', manual_source: '' });
                 openDetail(detail.id);
                 fetchList(page, search);
             }
@@ -243,10 +247,10 @@ export default function Customers() {
                             {list.map((c) => (
                                 <tr key={c.id} className="border-b border-gray-50 hover:bg-blue-50/40">
                                     <td className="px-4 py-3 font-mono text-xs">{c.member_code}</td>
-                                    <td className="px-3 py-3 font-medium">{c.name}</td>
+                                    <td className="px-3 py-3 font-medium">{c.name}{c.oa_followed_at ? (<span className="ml-2 px-2 py-0.5 rounded-full text-[11px] bg-sky-50 text-sky-700 border border-sky-200" title={`Đã quan tâm OA Daybreak từ ${new Date(c.oa_followed_at).toLocaleDateString('vi-VN')}`}>OA ✓</span>) : null}</td>
                                     <td className="px-3 py-3">{c.phone}</td>
                                     <td className="px-3 py-3">{c.email || '—'}</td>
-                                    <td className="px-3 py-3"><span className="px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 border border-violet-200">{c.tier?.name || '—'}</span></td>
+                                    <td className="px-3 py-3"><span className="px-2 py-0.5 rounded-full text-[11px] bg-violet-50 text-violet-700 border border-violet-200 inline-flex items-center gap-1">{c.tier?.name ? <TierIcon tier={c.tier.code || c.tier.name} size={13} /> : null}{c.tier?.name || '—'}</span></td>
                                     <td className="px-3 py-3 text-right font-bold text-amber-600">{Number(c.points).toLocaleString('vi-VN')}</td>
                                     <td className="px-3 py-3 text-right">{Number(c.total_spent).toLocaleString('vi-VN')}đ</td>
                                     <td className="px-4 py-3 text-right">
@@ -309,7 +313,7 @@ export default function Customers() {
 
                             <div className="flex gap-6 mb-5">
                                 <div className="flex-1 grid grid-cols-2 gap-3 text-[13px]">
-                                    <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Hạng thành viên</div><div className="font-semibold text-violet-700">{detail.tier?.name || '—'}</div></div>
+                                    <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Hạng thành viên</div><div className="font-semibold text-violet-700 flex items-center gap-1.5">{detail.tier?.name ? <TierIcon tier={detail.tier.code || detail.tier.name} size={18} /> : null}{detail.tier?.name || '—'}</div></div>
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Điểm hiện tại</div><div className="font-bold text-amber-600 text-lg">{Number(detail.points).toLocaleString('vi-VN')}</div></div>
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Tổng đã mua</div><div className="font-semibold">{Number(detail.total_spent).toLocaleString('vi-VN')}đ</div></div>
                                     <div className="bg-gray-50 rounded p-3"><div className="text-gray-500 text-xs">Sinh nhật</div><div className="font-medium">{fmtDate(detail.birthday) || '—'}</div></div>
@@ -378,11 +382,20 @@ export default function Customers() {
 
                             <div className="border-t pt-4 mb-4">
                                 <h4 className="font-medium text-[14px] mb-2">Điều chỉnh điểm thủ công</h4>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 flex-wrap">
                                     <input type="number" value={adjust.change} onChange={(e) => setAdjust({ ...adjust, change: e.target.value })}
                                         placeholder="+/- điểm" className="w-32 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
+                                    {/* N-4: nguồn ghi tay (bắt buộc) — tách dòng MK-2 theo nguồn */}
+                                    <select value={adjust.manual_source} onChange={(e) => setAdjust({ ...adjust, manual_source: e.target.value })}
+                                        className="px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E] bg-white">
+                                        <option value="">— Chọn nguồn —</option>
+                                        <option value="compensation">Đền bù lỗi quán</option>
+                                        <option value="care_promo">Chăm sóc / khuyến mãi</option>
+                                        <option value="balance_correction">Sửa sai số dư</option>
+                                        <option value="other">Khác (cần ghi rõ lý do)</option>
+                                    </select>
                                     <input value={adjust.note} onChange={(e) => setAdjust({ ...adjust, note: e.target.value })}
-                                        placeholder="Lý do" className="flex-1 px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
+                                        placeholder="Lý do" className="flex-1 min-w-[140px] px-3 py-2 text-[13px] border rounded focus:outline-none focus:border-[#24305E]" />
                                     <button onClick={handleAdjust} className="px-4 py-2 bg-gray-800 text-white text-[13px] rounded hover:bg-gray-700">Áp dụng</button>
                                 </div>
                             </div>

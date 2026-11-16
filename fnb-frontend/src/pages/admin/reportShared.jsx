@@ -2,6 +2,7 @@
 // Gói 17: Dùng chung cho 3 trang báo cáo (Reports / ReportsInventory / ReportsPnl).
 // Tách từ Reports.jsx (Gói 15) để khỏi lặp code. Theme navy #24305E + cam #F5A623.
 // =====================================================================
+import React from 'react';
 import { fmtDate } from '../../utils/format';
 
 export const REPORT_CSS = `
@@ -32,6 +33,7 @@ export const REPORT_CSS = `
 .rpt .tabs{display:flex;gap:6px;padding:12px;overflow-x:auto;max-width:1080px;margin:0 auto}
 .rpt .tab-btn{flex:1;white-space:nowrap;border:1px solid var(--line);background:#fff;padding:10px 14px;border-radius:var(--r);font-weight:700;color:var(--muted);font-size:13px;cursor:pointer;font-family:inherit}
 .rpt .tab-btn.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.rpt a.tab-btn{text-decoration:none;display:flex;align-items:center;justify-content:center}
 /* Cards & KPI */
 .rpt .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
 .rpt .card h3{font-size:15px;color:var(--navy);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
@@ -104,6 +106,7 @@ export const REPORT_CSS = `
 .rpt .pill.g{background:var(--green-bg);color:var(--green)}
 .rpt .pill.o{background:#ffedd5;color:#ea580c}
 .rpt .pill.y{background:var(--yellow-bg);color:var(--yellow)}
+.rpt .pill.est{background:var(--yellow-bg);color:var(--yellow);text-transform:uppercase;letter-spacing:.3px;font-size:10.5px;cursor:help}
 .rpt .pill.r{background:var(--red-bg);color:var(--red)}
 .rpt .explain{background:#FFF8E8;border:1px solid #F3DFAC;border-radius:var(--r);padding:12px 14px;font-size:13px;color:#6B5A2E;margin-bottom:12px}
 .rpt .explain b{color:var(--navy)}
@@ -121,7 +124,8 @@ export const REPORT_CSS = `
 }
 @media(min-width:960px){
 .rpt .kpis{grid-template-columns:repeat(4,1fr)}
-.rpt .two{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.rpt .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
+.rpt .two>*{min-width:0}
 }
 `;
 
@@ -180,14 +184,20 @@ function groupChart(groups) {
     return h + '</div></div>';
 }
 
-function donut(costs, total) {
+function donut(costs, total, base) {
+    // C2 (rà soát chỉ số 2026-11-15): khi truyền base (Doanh thu thuần), các
+    // lát vẽ theo tỷ trọng trên Doanh thu thuần — khớp % API trả — và phần
+    // vòng tròn còn lại (doanh thu chưa dùng vào các chi phí này) tô xám
+    // nhạt. Không truyền base thì giữ nguyên hành vi cũ (cơ số = total).
+    const denom = base !== undefined && base !== null ? base : total;
     let acc = 0;
     const parts = costs.map((c) => {
-        const p = total > 0 ? (Number(c.value) || 0) / total * 100 : 0;
+        const p = denom > 0 ? (Number(c.value) || 0) / denom * 100 : 0;
         const s = c.color + ' ' + acc.toFixed(2) + '% ' + (acc + p).toFixed(2) + '%';
         acc += p;
         return s;
     });
+    if (denom > 0 && acc < 99.95) parts.push('#E9EDF4 ' + acc.toFixed(2) + '% 100%');
     return '<div class="donut" style="background:conic-gradient(' + parts.join(',') + ')">'
         + '<div class="hole"><div><div class="hole-lb">Tổng chi</div><div class="hole-v">' + fmtShort(total) + '</div></div></div></div>';
 }
@@ -203,4 +213,92 @@ const kpi = (lb, val, badgeHtml, hero) => (
 export const PERIOD_NAMES = { day: 'ngày', week: 'tuần', month: 'tháng', year: 'năm' };
 export const COMPARE_NAMES = { previous: 'Kỳ trước', lastyear: 'Cùng kỳ năm trước', custom: 'Tùy chọn' };
 
+// N-5 (360 đợt 2): nhãn tiếng Việt cho từng trường cấu hình có log;
+// giá trị hiển thị qua fmtConfigValue (bool → Có/Không, %/đ theo trường).
+export const CONFIG_FIELD_LABELS = {
+    commission_rate: 'Chiết khấu kênh',
+    commission_tax_included: 'Chiết khấu đã gồm thuế',
+    commission_tax_rate: 'Thuế suất chiết khấu',
+    marketing_fee: 'Phí marketing sàn',
+    min_total_spent: 'Ngưỡng chi tiêu tối thiểu',
+    min_spent_window: 'Cửa sổ tính chi tiêu tối thiểu',
+    keep_spent_window: 'Cửa sổ giữ hạng',
+    earn_per_amount: 'Tích điểm: số tiền',
+    earn_points: 'Tích điểm: số điểm',
+    earn_multiplier: 'Hệ số nhân điểm',
+    points_point_value: 'Giá trị 1 điểm',
+};
+export const fmtConfigValue = (field, v) => {
+    if (v === null || v === undefined || v === '') return '—';
+    if (field === 'commission_tax_included') return v === '1' || v === 1 || v === true ? 'Có' : 'Không';
+    const n = Number(v);
+    if (Number.isFinite(n)) {
+        if (field === 'commission_rate' || field === 'commission_tax_rate') return trimN(n) + '%';
+        if (field === 'marketing_fee' || field === 'points_point_value' || field === 'min_total_spent') return fmtVND(n);
+        return fmtInt(n);
+    }
+    return String(v);
+};
+
 export { fmtInt, fmtVND, trimN, fmtShort, pad, fmtD, todayStr, deltaBadge, barChart, groupChart, donut, kpi };
+
+// =====================================================================
+// Dải tab điều hướng danh mục báo cáo (Phương án B — Đại Vương phán
+// 2026-11-15): MỘT nguồn danh mục duy nhất cho trang Báo cáo chính
+// (Reports.jsx, tab nội bộ + nhận ?tab=) và 2 trang chi tiết (PNL · Kho)
+// qua ReportNavTabs. Mỗi tab gác đúng 1 lá view như cổng ở trang chính;
+// tab Nhân sự là mặt xem tổng lương gộp (staff.salary.summary.view).
+// =====================================================================
+export const REPORT_TABS = [
+    ['overview', 'Tổng quan'],
+    ['rev', 'Doanh thu'],
+    ['cash', 'Thu-chi & Giao ca'],
+    ['pnl', 'P&L'],
+    ['waste', 'Kho & Hao hụt'],
+    ['menu', 'Menu Engineering'],
+    ['cancelled', 'Đơn hủy'],
+    ['ops', 'Vận hành'],
+    ['hr', 'Nhân sự'],
+    // Chỉ số 360 §0.8 (2026-11-15): tab Khách hàng ở CUỐI danh sách —
+    // không xáo trộn thứ tự các tab hiện hữu.
+    ['customers', 'Khách hàng'],
+    // Chỉ số 360 đợt 2 — vòng nhỏ N-3 phương án (a): tab Mục tiêu doanh
+    // thu cho Chủ Chi Nhánh đọc/ghi mục tiêu khi không mở được trang PNL
+    // (gác bằng chính lá finance.targets.edit, tiền lệ tab Nhân sự).
+    ['targets', 'Mục tiêu doanh thu'],
+];
+export const REPORT_TAB_PERMS = {
+    overview: 'reports.overview.view', rev: 'reports.revenue.view',
+    cash: 'reports.cash.view', pnl: 'reports.pnl.view',
+    waste: 'reports.inventory.view', menu: 'reports.menu.view',
+    cancelled: 'reports.cancelled.view', ops: 'reports.operations.view',
+    hr: 'staff.salary.summary.view',
+    customers: 'reports.customers.view',
+    targets: 'finance.targets.edit',
+};
+
+// Chỉ số 360 §0.3: nhãn "ước tính" THỐNG NHẤT toàn hệ — một kiểu pill
+// duy nhất, chạm/hover hiện câu giải thích. Áp cho: labor %/SPLH tuần,
+// hao hụt/food cost tầng thực tế kỳ chưa kiểm kê, chiết khấu phân bổ
+// theo món (SP-1). Số ước tính không đứng cạnh số thật mà không nhãn.
+export function EstTag({ note }) {
+    return (
+        <span className="pill est" title={note || 'Số ước tính — sẽ chốt lại khi có dữ kiện thật (khóa lương / kiểm kê / đối soát).'}>
+            ước tính
+        </span>
+    );
+}
+
+// Dải tab trên trang chi tiết: tab của trang hiện tại sáng lên (không phải
+// link — đang ở đúng danh mục đó), các tab còn lại dẫn về trang Báo cáo
+// chính mở đúng danh mục qua ?tab=. Chỉ hiện các tab người dùng có quyền.
+export function ReportNavTabs({ active, can }) {
+    const visible = REPORT_TABS.filter(([k]) => can(REPORT_TAB_PERMS[k]));
+    return (
+        <nav className="tabs">
+            {visible.map(([k, lb]) => k === active
+                ? <span key={k} className="tab-btn on">{lb}</span>
+                : <a key={k} className="tab-btn" href={'/admin/reports?tab=' + k}>{lb}</a>)}
+        </nav>
+    );
+}

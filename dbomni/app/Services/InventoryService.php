@@ -378,26 +378,41 @@ class InventoryService
 
             // 1. Hoàn vào đúng lô đã trừ (nếu có nhật ký xuất kho của đơn)
             if ($orderId) {
-                // Chống hoàn 2 lần: nếu đã có log hoàn (số âm) cho đơn này thì bỏ qua
-                $alreadyDone = \App\Models\StockMovement::where('reference_type', 'order')
-                    ->where('reference_id', $orderId)
-                    ->where('quantity', '<', 0)
-                    ->exists();
-                if ($alreadyDone) {
-                    return;
-                }
+                // Chống hoàn 2 lần — THEO SỐ DƯ TỪNG LÔ (vá 2026-11-12 cho
+                // nút hoàn tác xác nhận thanh toán): bản cũ thấy BẤT KỲ log
+                // hoàn nào (số âm) là bỏ qua toàn bộ → đơn qua chu trình
+                // hoàn tác → xác nhận lại → hủy/hoàn tác tiếp sẽ KHÔNG bao
+                // giờ được hoàn kho nữa. Nay tính theo lô: đã xuất − đã
+                // hoàn = phần còn phải hoàn; chỉ hoàn đúng phần còn lại.
+                // Chu trình hủy 1 lần như cũ cho kết quả y hệt (đã hoàn = 0).
                 $movements = \App\Models\StockMovement::where('reference_type', 'order')
                     ->where('reference_id', $orderId)
-                    ->where('quantity', '>', 0) // chỉ dòng xuất
                     ->orderBy('id')
                     ->get();
-                $hasMovementHistory = $movements->isNotEmpty();
+                $deducted = []; // batch_id => ['material_id' =>, 'qty' => tổng đã xuất, 'unit_cost' => giá dòng xuất gần nhất]
+                $returned = []; // batch_id => tổng đã hoàn (giá trị dương)
                 foreach ($movements as $m) {
-                    $batch = Batch::where('id', $m->batch_id)->lockForUpdate()->first();
+                    if ($m->batch_id === null) {
+                        continue;
+                    }
+                    if ((float) $m->quantity > 0) {
+                        $deducted[$m->batch_id]['material_id'] = $m->material_id;
+                        $deducted[$m->batch_id]['qty'] = ($deducted[$m->batch_id]['qty'] ?? 0) + (float) $m->quantity;
+                        $deducted[$m->batch_id]['unit_cost'] = (float) $m->unit_cost;
+                    } elseif ((float) $m->quantity < 0) {
+                        $returned[$m->batch_id] = ($returned[$m->batch_id] ?? 0) + abs((float) $m->quantity);
+                    }
+                }
+                $hasMovementHistory = !empty($deducted);
+                foreach ($deducted as $batchId => $d) {
+                    $qty = $d['qty'] - ($returned[$batchId] ?? 0);
+                    if ($qty < 0.001) {
+                        continue; // lô này đã hoàn đủ
+                    }
+                    $batch = Batch::where('id', $batchId)->lockForUpdate()->first();
                     if (!$batch) {
                         continue;
                     }
-                    $qty = (float) $m->quantity;
                     $batch->current_quantity += $qty;
                     if ($batch->status === 'exhausted' && (float) $batch->current_quantity > 0) {
                         $batch->status = 'active';
@@ -406,15 +421,15 @@ class InventoryService
                     // Ghi log hoàn (số âm) để đối ứng với dòng xuất
                     \App\Models\StockMovement::create([
                         'branch_id' => $branchId,
-                        'material_id' => $m->material_id,
+                        'material_id' => $d['material_id'],
                         'batch_id' => $batch->id,
                         'quantity' => -$qty,
-                        'unit_cost' => (float) $m->unit_cost,
+                        'unit_cost' => $d['unit_cost'],
                         'reference_type' => 'order',
                         'reference_id' => $orderId,
                         'note' => 'Hoàn kho khi hủy/gộp đơn',
                     ]);
-                    $restocked[$m->material_id] = ($restocked[$m->material_id] ?? 0) + $qty;
+                    $restocked[$d['material_id']] = ($restocked[$d['material_id']] ?? 0) + $qty;
                 }
             }
 

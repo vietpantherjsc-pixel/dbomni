@@ -12,7 +12,7 @@ class Promotion extends Model
     // (gồm cả stack_with_promotion: cột còn trong DB dù không còn đọc/ghi)
     protected $fillable = [
         'name', 'code', 'type', 'coupon_type', 'value', 'scope', 'scope_ids',
-        'min_order_amount', 'max_discount_amount', 'gift_product_id', 'gift_quantity',
+        'min_order_amount', 'max_discount_amount', 'per_customer_limit', 'gift_product_id', 'gift_quantity',
         'target', 'tier_ids', 'starts_at', 'expires_at', 'days_of_week',
         'time_from', 'time_to', 'channels', 'is_active',
         'stack_with_coupon', 'stack_with_promotion', 'banner_url', 'auto_config',
@@ -22,6 +22,7 @@ class Promotion extends Model
         'value' => 'decimal:2',
         'min_order_amount' => 'decimal:2',
         'max_discount_amount' => 'decimal:2',
+        'per_customer_limit' => 'integer', // RT-03 (2026-11-13): trần lượt/khách, null = không giới hạn
         'scope_ids' => 'array',
         'tier_ids' => 'array',
         'days_of_week' => 'array',

@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api, fmt, getProfile } from '../api';
-import TransferGuide from '../components/TransferGuide';
-import ZmIcon from '../components/ZmIcon';
+import ZmIcon, { CouponIcon } from '../components/ZmIcon';
 import { storage } from '../utils/storage';
 import { validPhone } from '../utils/checkoutFields.jsx';
 import { fmtDateTime } from '../utils/format';
@@ -143,10 +142,32 @@ export default function TrackOrder() {
             </div>
           </div>
 
-          {/* Spec QR 2026-10-21: đơn BANK chưa xác nhận tiền → hiện lại khối CK
-              (backend chỉ trả transfer khi đang chờ tiền; NV xác nhận xong khối tự biến mất nhờ poll 5s) */}
-          {order.transfer && (
-            <TransferGuide code={order.code} transfer={order.transfer} notifiedAt={order.customer_notified_at} shopPhone={order.branch_phone} />
+          {/* Gói vá sau vòng S — Mục 3 + 4 (2026-11-12): GỠ khối TransferGuide
+              (VietQR + nút báo CK) khỏi màn theo dõi — một đường thanh toán
+              duy nhất qua Checkout SDK. Đơn còn pending_payment hiện nút
+              "Thanh toán lại" về màn chờ /pay-wait (trước đây khách rời màn
+              chờ là mất hẳn đường trả).
+              Vá A2 (Đại Vương chốt 2026-11-13 ~00:33): nút Thanh toán lại
+              hiện thêm cho transfer_notified (khách mới chọn phương thức,
+              có thể CHƯA chuyển tiền — đóng tờ Zalo là phải còn đường trả
+              lại); dòng trạng thái của nhánh này đổi câu trung tính — câu
+              cũ khẳng định quán đã nhận tiền là sai sự thật, notify ≠ đã trả. */}
+          {(order.payment_status === 'pending_payment' || order.payment_status === 'transfer_notified') && order.status !== 'cancelled' && (
+            <div style={{ padding: '4px 16px 8px' }}>
+              <button className="zm-btn-primary" onClick={() => nav(`/pay-wait/${order.code}`)}>Thanh toán lại</button>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 6, lineHeight: 1.5 }}>Đơn chưa được thanh toán — bấm để mở lại trang thanh toán của Zalo.</div>
+            </div>
+          )}
+          {order.payment_status === 'transfer_notified' && (
+            <div style={{ margin: '4px 16px 8px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12, padding: '10px 12px', fontSize: 13, color: '#1e40af', lineHeight: 1.55 }}>
+              Đang chờ quán xác nhận thanh toán.
+            </div>
+          )}
+          {/* Spec dời mốc tích điểm — hiển thị Phương án A (Đại Vương phán
+              2026-11-13): đơn ĐÃ TRẢ nhưng chưa hoàn thành hiện 1 dòng nhỏ
+              CHỈ CHỮ, không hứa số (số chốt tính tại thời điểm hoàn thành). */}
+          {order.payment_status === 'paid' && order.status !== 'completed' && order.status !== 'cancelled' && (
+            <div style={{ padding: '0 16px 8px', fontSize: 12, color: '#888' }}>Điểm sẽ được cộng khi đơn hoàn thành</div>
           )}
 
           {order.status !== 'cancelled' && (
@@ -251,8 +272,84 @@ export default function TrackOrder() {
                 </div>
               );
             })}
-            <div className="zm-total-row grand"><span>Tổng</span><span>{fmt(order.total_amount)}đ</span></div>
+            {/* Phân rã giá đầy đủ (Đại Vương lệnh 2026-11-14): trước đây chỉ
+                có 1 dòng Tổng — khách không đối chiếu được vì sao tổng thấp
+                hơn tổng món khi có giảm giá. Số lấy từ chính các cột đã lưu
+                trên đơn (API track() phơi ra): subtotal_amount gồm tiền hàng
+                + phí ship cuối; promotion_discount là phần KM/coupon ví;
+                phần voucher = discount_amount − promotion_discount (phân xử
+                §5d lúc tạo đơn). Phí ship trong shipping_fee đã là số NET
+                (đã trừ KM phí ship, đã gồm phí thu hộ COD). */}
+            {(() => {
+              // Đọc khối price từ API track() (bổ sung 2026-11-14); fallback
+              // trường phẳng cho đáp cũ chưa có price để màn không vỡ.
+              const p = order.price || {};
+              const shipFee = p.shipping?.fee != null ? Number(p.shipping.fee)
+                : (p.shipping_fee != null ? Number(p.shipping_fee) : (Number(order.shipping_fee) || 0));
+              const itemsTotal = order.items.reduce((s, it) => s + (Number(it.unit_price) || 0) * (Number(it.quantity) || 0), 0);
+              const goodsSubtotal = p.goods_subtotal != null ? Number(p.goods_subtotal)
+                : (order.subtotal_amount != null ? Number(order.subtotal_amount) : itemsTotal) - shipFee;
+              const promoDisc = p.promotion ? (Number(p.promotion.discount) || 0) : (Number(order.promotion_discount) || 0);
+              const discountTotal = p.discount_amount != null ? Number(p.discount_amount) : (Number(order.discount_amount) || 0);
+              const voucherObj = p.voucher || (order.voucher_code ? { code: order.voucher_code, discount: Math.max(0, discountTotal - promoDisc) } : null);
+              const voucherDisc = voucherObj ? (Number(voucherObj.discount) || 0) : 0;
+              // Coupon ví ở vai phía coupon của cặp thắng: dòng riêng
+              // (khối price.coupon, bổ sung 2026-11-15) — tách bạch với
+              // dòng KM và dòng voucher gõ tay.
+              const couponObj = p.coupon || null;
+              const couponDisc = couponObj ? (Number(couponObj.discount) || 0) : 0;
+              const restDisc = Math.max(0, discountTotal - promoDisc - couponDisc - voucherDisc);
+              const shipDisc = p.shipping?.discount != null ? Number(p.shipping.discount)
+                : (p.shipping_discount != null ? Number(p.shipping_discount) : (Number(order.shipping_discount) || 0));
+              const codFee = p.shipping?.cod_fee != null ? Number(p.shipping.cod_fee)
+                : (p.shipping_cod_fee != null ? Number(p.shipping_cod_fee) : (Number(order.shipping_cod_fee) || 0));
+              return (
+                <>
+                  <div className="zm-total-row"><span>Tạm tính</span><span>{fmt(goodsSubtotal)}đ</span></div>
+                  {order.order_type === 'delivery' && shipFee > 0 && (
+                    <div className="zm-total-row"><span>Phí giao hàng</span><span>{fmt(shipFee)}đ</span></div>
+                  )}
+                  {order.order_type === 'delivery' && (codFee > 0 || shipDisc > 0) && (
+                    <div style={{ fontSize: 12, color: '#888', margin: '-2px 0 6px' }}>
+                      {codFee > 0 && `Đã gồm phí thu hộ COD ${fmt(codFee)}đ`}
+                      {codFee > 0 && shipDisc > 0 && ' · '}
+                      {shipDisc > 0 && `Đã giảm ${fmt(shipDisc)}đ phí ship từ khuyến mãi${(p.shipping?.promotion_name || p.shipping_promotion_name) ? ` (${p.shipping?.promotion_name || p.shipping_promotion_name})` : ''}`}
+                    </div>
+                  )}
+                  {promoDisc > 0 && (
+                    <div className="zm-total-row disc">
+                      <span>{couponObj
+                        ? `🎉 ${p.promotion?.name || 'Khuyến mãi'}`
+                        : p.promotion?.coupon_code
+                          ? <><CouponIcon size={14} /> Coupon {p.promotion.coupon_code}</>
+                          : `🎉 ${p.promotion?.name || 'Khuyến mãi'}`}</span>
+                      <span>−{fmt(promoDisc)}đ</span>
+                    </div>
+                  )}
+                  {couponDisc > 0 && couponObj && (
+                    <div className="zm-total-row disc"><span><CouponIcon size={14} /> Coupon {couponObj.name && couponObj.name !== couponObj.code ? `${couponObj.name} (${couponObj.code})` : couponObj.code}</span><span>−{fmt(couponDisc)}đ</span></div>
+                  )}
+                  {voucherDisc > 0 && voucherObj && (
+                    <div className="zm-total-row disc"><span><CouponIcon size={14} /> Voucher {voucherObj.name && voucherObj.name !== voucherObj.code ? `${voucherObj.name} (${voucherObj.code})` : voucherObj.code}</span><span>−{fmt(voucherDisc)}đ</span></div>
+                  )}
+                  {restDisc > 0 && (
+                    <div className="zm-total-row disc"><span>Giảm giá</span><span>−{fmt(restDisc)}đ</span></div>
+                  )}
+                  <div className="zm-total-row grand"><span>Tổng</span><span>{fmt(order.total_amount)}đ</span></div>
+                </>
+              );
+            })()}
           </div>
+
+          {/* Gói mở COD giao hàng (2026-11-11): dải số tiền shipper thu khi
+              giao = TỔNG CUỐI của đơn (phí giao đã gồm phí thu hộ COD) —
+              khách chuẩn bị đúng số tiền mặt khi nhận hàng. */}
+          {order.order_type === 'delivery' && order.payment_method === 'pay_at_store' && order.payment_status !== 'paid' && order.status !== 'cancelled' && (
+            <div style={{ margin: '10px 16px 0', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 12, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#9a3412' }}>Số tiền shipper thu khi giao</span>
+              <span style={{ fontSize: 15, fontWeight: 800, color: '#9a3412' }}>{fmt(order.total_amount)}đ</span>
+            </div>
+          )}
 
           {/* Audit 2026-10-21 🟠12: hiện nút hủy cho cả đơn chờ CK (BANK) + COD chờ xử lý,
               khớp điều kiện backend cancel() — trước đây chỉ đơn 'pending/pending' mới thấy.

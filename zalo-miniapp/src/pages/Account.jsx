@@ -7,6 +7,7 @@ import { TabBar } from './Home';
 import { storage } from '../utils/storage'; // Spec P4-P5: qua module storage (zmp-sdk)
 import ConsentCheck from '../components/ConsentCheck'; // Spec đăng ký Zalo B: ô đồng ý dùng chung
 import ZmIcon from '../components/ZmIcon';
+import TierIcon from '../components/TierIcon'; // Bộ icon hạng V2 (2026-11-14): gắn vào các bề mặt hiển thị hạng
 import pearlCluster from '../assets/game-pearl-cluster.png'; // Decor thẻ Minigame phương án C: cụm trân châu GỐC của game (không vẽ lại)
 
 // Gói 55 p5: Mục thu gọn — mặc định đóng, bấm mới xổ xuống (tránh trang dài)
@@ -163,7 +164,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
     // Sổ #31: req() trong api.js đã bóc sẵn phong bì (trả data.data) — đọc r.data
     // lần nữa sẽ ra undefined và nuốt sạch dữ liệu (lịch sử điểm + kệ đổi điểm
     // luôn rỗng dù API có dữ liệu). Đọc thẳng r, giữ fallback phong bì như PromoCarousel.
-    api.pointsExchangeItems(identity()).then((r) => setItems(r?.data || r || [])).catch(() => {});
+    api.pointsExchangeItems(identity()).then((r) => { const a = r?.data || r; setItems(Array.isArray(a) ? a : []); }).catch(() => {}); // Vá trắng màn 2026-11-14: chỉ cài MẢNG vào state (cùng lý do ở PromoCarousel)
     api.pointsHistory(identity()).then((r) => setHistory(r?.data || r || null)).catch(() => {});
   };
   useEffect(() => { if (L) loadShop(); }, [customer.id]);
@@ -339,17 +340,28 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
           <div style={{ fontSize: 12, color: '#059669', marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="shield" size={14} />Bạn đã đủ điều kiện giữ hạng {L.tier_name}.</div>
         )}
         {nT > 1 && (
-          <div style={{ position: 'relative', display: 'flex', marginTop: 14 }}>
-            <div style={{ position: 'absolute', left: `${edgePct}%`, right: `${edgePct}%`, top: 8, height: 3, background: '#e3e8f2', borderRadius: 99 }} />
-            <div style={{ position: 'absolute', left: `${edgePct}%`, top: 8, height: 3, width: `${fillPct}%`, background: 'var(--zm-primary)', borderRadius: 99 }} />
+          <div style={{ position: 'relative', display: 'flex', marginTop: 30, marginBottom: 14 }}>
+            {/* Hàng mốc V3 (nghiệm thu 2026-11-15): BỎ hẳn khung tròn quanh
+                icon. Đường chân trời trong asset (thanh navy) nằm ở hàng
+                343–357/512, tâm 350/512 ≈ 0,6836 chiều cao ảnh — đo pixel cả
+                4 file, giống hệt nhau. Icon 48px đặt top 2 → tâm chân trời ở
+                2 + 0,6836×48 ≈ 34,8px; thanh chung top 33,3 (cao 3, tâm 34,8)
+                cho chân trời của 4 icon trùng đúng thanh chung một đường
+                thẳng. Mốc hiện tại không vòng: hào quang cam mềm sau icon +
+                nhãn cam đậm bên dưới. Mốc chưa tới mờ 45%. */}
+            <div style={{ position: 'absolute', left: `${edgePct}%`, right: `${edgePct}%`, top: 33.3, height: 3, background: '#e3e8f2', borderRadius: 99 }} />
+            <div style={{ position: 'absolute', left: `${edgePct}%`, top: 33.3, height: 3, width: `${fillPct}%`, background: 'var(--zm-primary)', borderRadius: 99 }} />
             {tiers.map((t, i) => (
               <div key={t.code || t.name} style={{ flex: 1, textAlign: 'center', position: 'relative' }}>
-                <div style={{
-                  width: 17, height: 17, borderRadius: '50%', margin: '0 auto', position: 'relative', zIndex: 1,
-                  border: `2.5px solid ${t.is_current ? '#F5A623' : 'var(--zm-primary)'}`,
-                  background: t.is_current ? '#F5A623' : i < curIdx ? 'var(--zm-primary)' : '#fff',
-                  boxShadow: t.is_current ? '0 0 0 4px #fff3d9' : 'none',
-                }} />
+                <div style={{ position: 'relative', height: 52 }}>
+                  {t.is_current && (
+                    <div style={{ position: 'absolute', left: '50%', top: 26, width: 66, height: 66, transform: 'translate(-50%, -50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(245,166,35,.42) 0%, rgba(245,166,35,0) 68%)', pointerEvents: 'none' }} />
+                  )}
+                  <TierIcon tier={t.code || t.name} size={48} style={{
+                    position: 'absolute', left: '50%', top: 2, transform: 'translateX(-50%)', zIndex: 1,
+                    opacity: i > curIdx ? 0.45 : 1,
+                  }} />
+                </div>
                 <div style={{ fontSize: 11, marginTop: 5, color: t.is_current ? '#8a5a00' : '#8a93a6', fontWeight: t.is_current ? 800 : 400 }}>
                   {t.name}{t.is_current ? ' · bạn' : ''}
                 </div>
@@ -359,7 +371,7 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
         )}
       </div>
 
-      {/* Cửa hàng điểm — quy tắc text mục 7.1: tên ≤2 dòng, phụ 1 dòng/1 tin, giá không vỡ dòng */}
+      {/* Cửa hàng điểm — bố cục 2026-11-15: tên + phụ full ngang không cắt chữ, nút ngang hàng icon, giá ngay dưới cột chữ */}
       <div ref={shopAnchorRef} style={{ scrollMarginTop: 12 }}>
         <Collapsible icon={<IcoGift />} title="Cửa hàng điểm" badge={`${fmt(L.points)} điểm`} defaultOpen>
           <div style={{ fontSize: 11.5, color: '#8a93a6', paddingTop: 10 }}>
@@ -371,30 +383,37 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
             const discounted = it.points_price < it.points_cost;
             const sub = itemSub(it);
             return (
-              <div key={it.id} style={{ display: 'flex', gap: 11, alignItems: 'center', padding: '11px 0', borderBottom: '1px solid #f1f4fa' }}>
-                <div style={{ width: 42, height: 42, borderRadius: 11, background: '#eef1f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{it.icon || '🎁'}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13.5, ...clamp2 }}>{it.name}</div>
-                  {sub && <div style={{ fontSize: 11.5, color: '#8a93a6', ...clamp1 }}>{sub}</div>}
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontWeight: 800, color: 'var(--zm-primary)', fontSize: 15, whiteSpace: 'nowrap' }}>{fmt(it.points_price)} điểm</div>
-                  {discounted && <div style={{ fontSize: 11, color: '#8a93a6', textDecoration: 'line-through', whiteSpace: 'nowrap' }}>{fmt(it.points_cost)} điểm</div>}
-                  {discounted && tierDiscount > 0 && (
-                    <span style={{ display: 'inline-block', background: '#F5A623', color: '#3a2a00', fontWeight: 800, fontSize: 10.5, borderRadius: 7, padding: '1px 7px', marginTop: 2 }}>−{tierDiscount}% hạng bạn</span>
+              <div key={it.id} style={{ padding: '11px 0', borderBottom: '1px solid #f1f4fa' }}>
+                {/* Bố cục (ngài chỉnh tiếp trên zdev-c1c58507, 2026-11-15):
+                    hàng trên = icon quà · cột chữ (tên + mẫu, full chữ không
+                    cắt) · nút trạng thái NGANG HÀNG với icon ở phía phải.
+                    Dòng giá + ưu đãi nằm ngay dưới cột chữ, thẳng cột với tên
+                    món (không tràn xuống dưới icon). */}
+                <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 11, background: '#eef1f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>{it.icon || '🎁'}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{it.name}</div>
+                    {sub && <div style={{ fontSize: 11.5, color: '#8a93a6', marginTop: 2 }}>{sub}</div>}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap', marginTop: 7 }}>
+                      <span style={{ fontWeight: 800, color: 'var(--zm-primary)', fontSize: 15, whiteSpace: 'nowrap' }}>{fmt(it.points_price)} điểm</span>
+                      {discounted && <span style={{ fontSize: 11.5, color: '#8a93a6', textDecoration: 'line-through', whiteSpace: 'nowrap' }}>{fmt(it.points_cost)} điểm</span>}
+                      {discounted && tierDiscount > 0 && (
+                        <span style={{ display: 'inline-block', background: '#F5A623', color: '#3a2a00', fontWeight: 800, fontSize: 10.5, borderRadius: 7, padding: '1px 7px' }}>−{tierDiscount}% hạng bạn</span>
+                      )}
+                    </div>
+                  </div>
+                  {it.locked_by_tier ? (
+                    <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><ZmIcon name="lock" size={13} />{it.min_tier_name || 'Theo hạng'}</button>
+                  ) : noTurns ? (
+                    <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6', flexShrink: 0 }}>Hết lượt</button>
+                  ) : !it.enough_points ? (
+                    <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6', flexShrink: 0 }}>Thiếu {fmt(it.points_price - (L.points || 0))}</button>
+                  ) : (
+                    <button className="zm-btn-primary" style={{ width: 'auto', padding: '10px 13px', fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', flexShrink: 0 }} disabled={exchanging === it.id} onClick={() => doExchange(it)}>
+                      {exchanging === it.id ? 'Đang đổi...' : 'Đổi ngay'}
+                    </button>
                   )}
                 </div>
-                {it.locked_by_tier ? (
-                  <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6', display: 'inline-flex', alignItems: 'center', gap: 6 }}><ZmIcon name="lock" size={13} />{it.min_tier_name || 'Theo hạng'}</button>
-                ) : noTurns ? (
-                  <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6' }}>Hết lượt</button>
-                ) : !it.enough_points ? (
-                  <button disabled style={{ border: 0, borderRadius: 10, padding: '10px 13px', fontWeight: 800, fontSize: 13, minHeight: 44, whiteSpace: 'nowrap', background: '#f1f4fa', color: '#8a93a6' }}>Thiếu {fmt(it.points_price - (L.points || 0))}</button>
-                ) : (
-                  <button className="zm-btn-primary" style={{ width: 'auto', padding: '10px 13px', fontSize: 13, minHeight: 44, whiteSpace: 'nowrap' }} disabled={exchanging === it.id} onClick={() => doExchange(it)}>
-                    {exchanging === it.id ? 'Đang đổi...' : 'Đổi ngay'}
-                  </button>
-                )}
               </div>
             );
           })}
@@ -442,7 +461,10 @@ function LoyaltyBlocks({ customer, onChanged, children }) {
               <tr>
                 <th style={{ position: 'sticky', left: 0, zIndex: 1, background: '#eef1f8', textAlign: 'left', minWidth: 106, padding: '7px 8px', color: 'var(--zm-primary)', fontWeight: 700, boxShadow: '2px 0 4px rgba(36,48,94,.06)' }}>Quyền lợi</th>
                 {tiers.map((t) => (
-                  <th key={t.code || t.name} style={{ padding: '7px 8px', textAlign: 'center', background: t.is_current ? '#fff8ec' : '#eef1f8', color: 'var(--zm-primary)', fontWeight: t.is_current ? 800 : 600 }}>{t.name}</th>
+                  <th key={t.code || t.name} style={{ padding: '7px 8px', textAlign: 'center', background: t.is_current ? '#fff8ec' : '#eef1f8', color: 'var(--zm-primary)', fontWeight: t.is_current ? 800 : 600 }}>
+                    <TierIcon tier={t.code || t.name} size={20} style={{ display: 'block', margin: '0 auto 2px' }} />
+                    {t.name}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -497,7 +519,10 @@ function PromoCarousel() {
   const timer = useRef(null);
 
   useEffect(() => {
-    api.promoBanners().then((r) => setBanners(r?.data || r || [])).catch(() => {});
+    // Vá trắng màn (2026-11-14): CHỈ nhận MẢNG — đáp không phải mảng
+    // (object/phong bì lạ) mà cài thẳng vào state thì render .map ném
+    // TypeError, app không có lưới đỡ lỗi nên trắng toàn màn.
+    api.promoBanners().then((r) => { const a = r?.data || r; setBanners(Array.isArray(a) ? a : []); }).catch(() => {});
     // Lấy thời gian trượt từ cài đặt (cùng API theme)
     fetch(`${API}/theme`, { headers: { Accept: 'application/json' } }) // Sổ #25 lớp 2: hằng API phải có trong import của file này (thiếu là trắng trang sau khi đăng nhập)
       .then((r) => r.json()).then((d) => {
@@ -534,6 +559,23 @@ function PromoCarousel() {
   );
 }
 
+// §JH vòng 2 (2026-11-15): customer của lần tải thành công gần nhất được
+// lưu ở khóa zm_customer — lần render ĐẦU TIÊN của trang lấy từ cache này
+// nên đã là giao diện thành viên ngay, thay vì khởi null rồi chớp giao diện
+// khách chưa đăng nhập trong lúc chờ API mỗi lần quay lại trang (video máy
+// thật của Đại Vương). Cache chỉ được tin khi khớp định danh với hồ sơ
+// hiện tại (SĐT + mã TV); hồ sơ trống (đã đăng xuất) → null như cũ. Dữ
+// liệu tươi vẫn về bằng loadMe ngay sau đó và ghi đè cache.
+function cachedCustomer() {
+  try {
+    const p = getProfile();
+    if (!p?.phone || !p?.member_code) return null;
+    const c = storage.getJSON('zm_customer', null);
+    if (c && c.phone === p.phone && c.member_code === p.member_code) return c;
+  } catch {}
+  return null;
+}
+
 export default function Account() {
   const nav = useNavigate();
   const [phone, setPhone] = useState(() => getProfile()?.phone || '');
@@ -541,6 +583,10 @@ export default function Account() {
   // (member_code không còn là chứng thực — chỉ hiển thị trên thẻ thành viên).
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
+  // Spec đăng nhập gọn (2026-11-13): thẻ "Đăng nhập bằng mật khẩu" THU GỌN
+  // mặc định — state nội bộ của trang, mặc định đóng, không lưu qua các
+  // lần mở app (mỗi lần vào màn đăng nhập đều đóng như spec khóa).
+  const [pwOpen, setPwOpen] = useState(false);
   // Sheet đặt/đổi mật khẩu: 'set' | 'change' | 'zalo-set' | 'counter-set'
   const [pwSheet, setPwSheet] = useState(null);
   const [pwCurrent, setPwCurrent] = useState('');
@@ -579,8 +625,17 @@ export default function Account() {
   // Gói Mini App 2026-10-30: mục Quét QR tích điểm chỉ hiện khi Admin bật công
   // tắc miniapp_qr_claim_entry (mặc định ẨN) — cờ đọc qua /shop-info công khai.
   const [qrClaimEntry, setQrClaimEntry] = useState(false);
+  // Luật bìa mặc định (Đại Vương 2026-11-13): khách chưa có bìa riêng thì
+  // banner hiện bìa trang chủ của quán — đọc trường cover_url từ CÙNG đáp
+  // shop-info đã gọi cho cờ claim ở dưới (không thêm lượt gọi mới, không
+  // hardcode đường dẫn). Ảnh quán tải lỗi → shopCoverBad → rơi về gradient.
+  const [shopCover, setShopCover] = useState('');
+  const [shopCoverBad, setShopCoverBad] = useState(false);
   useEffect(() => {
-    api.shopInfo().then((d) => setQrClaimEntry(!!d?.qr_claim_entry)).catch(() => {});
+    api.shopInfo().then((d) => {
+      setQrClaimEntry(!!d?.qr_claim_entry);
+      setShopCover(d?.cover_url || '');
+    }).catch(() => {});
   }, []);
   const coverInputRef = useRef(null);
   // Gói nén cover (2026-10-30): nén ảnh ngay trên máy trước khi lưu local —
@@ -637,7 +692,15 @@ export default function Account() {
     };
     reader.readAsDataURL(f);
   };
-  const [customer, setCustomer] = useState(null);
+  const [customer, setCustomer] = useState(() => cachedCustomer()); // §JH vòng 2: hydrate đồng bộ từ cache — hết chớp guest khi quay lại trang
+  // §JH vòng 2 (kết án TESTER): có phiên/hồ sơ đã lưu mà customer chưa về
+  // (đời app chưa có cache zm_customer, hoặc cache chưa khớp) → giữ KHUNG
+  // TRUNG TÍNH trong lúc loadMe chạy nền — tuyệt đối không dựng cây khách
+  // cho người có phiên. Chỉ khi boot kết luận phiên chết DỨT ĐIỂM (server
+  // bác token/cặp) mới hạ cờ này để rơi về cây khách như cũ.
+  const [sessionPending, setSessionPending] = useState(() => {
+    try { return !!(getSession()?.token || (getProfile()?.phone && getProfile()?.member_code)); } catch { return false; }
+  });
   // Spec P4-P5: checkbox đồng ý NĐ 13/2023 (riêng biệt, KHÔNG tick sẵn).
   // Spec đăng ký Zalo B §2.1: MỘT ô đồng ý duy nhất cho cả trang chưa đăng nhập
   // (nằm trong thẻ đăng ký mới, form mã dùng chung state này qua cổng lookup cũ).
@@ -652,9 +715,48 @@ export default function Account() {
   const [loading, setLoading] = useState(false);
   // Gói 49: sổ địa chỉ
   const [addrBook, setAddrBook] = useState([]);
+  // Sửa nút Sổ địa chỉ (Đại Vương chốt 2026-11-13): trạng thái thao tác cho
+  // 2 nút Đặt mặc định / Xóa — addrBusy khóa thao tác đang chạy
+  // ('default-<id>' / 'delete-<id>'), addrErr hiện lỗi ngay tại mục (không
+  // im lặng như trước), addrConfirmId = địa chỉ đang chờ xác nhận xóa
+  // trong app (thay confirm() hộp thoại gốc của máy).
+  const [addrBusy, setAddrBusy] = useState('');
+  const [addrErr, setAddrErr] = useState('');
+  const [addrConfirmId, setAddrConfirmId] = useState(null);
 
   const loadAddrs = (cid, phone, memberCode) => {
     api.addresses(cid, phone, memberCode).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: req() đã bóc phong bì, r chính là MẢNG THUẦN từ backend — đọc r?.data là luôn rỗng
+  };
+
+  // Payload đặt mặc định GIỮ NGUYÊN như trước (street nguyên văn của bản
+  // ghi + is_default, không gửi lat/lng): luật chống trôi ở
+  // CustomerAddressController::update chỉ xóa tọa độ khi trường chữ gửi
+  // lên KHÁC bản ghi — gửi bằng hệt nên tọa độ đã lưu an toàn (đã kiểm
+  // chứng theo dòng code, xem báo cáo gói sua-nut-so-dia-chi-20261113).
+  const setDefaultAddr = async (a) => {
+    if (addrBusy) return;
+    setAddrBusy(`default-${a.id}`);
+    setAddrErr('');
+    setAddrConfirmId(null);
+    try {
+      await api.updateAddress(a.id, { customer_id: customer.id, phone: customer.phone, member_code: customer.member_code, street: a.street, is_default: true });
+      loadAddrs(customer.id, customer.phone, customer.member_code);
+    } catch (e) {
+      setAddrErr(e.message || 'Không đặt được địa chỉ mặc định. Vui lòng thử lại.');
+    } finally { setAddrBusy(''); }
+  };
+
+  const deleteAddr = async (a) => {
+    if (addrBusy) return;
+    setAddrBusy(`delete-${a.id}`);
+    setAddrErr('');
+    try {
+      await api.deleteAddress(a.id, customer.id, customer.phone, customer.member_code);
+      setAddrConfirmId(null);
+      loadAddrs(customer.id, customer.phone, customer.member_code);
+    } catch (e) {
+      setAddrErr(e.message || 'Không xóa được địa chỉ. Vui lòng thử lại.');
+    } finally { setAddrBusy(''); }
   };
 
   // Spec đăng nhập SĐT + mật khẩu §3: nạp hồ sơ theo phiên token hiện tại.
@@ -668,6 +770,7 @@ export default function Account() {
       const c = await api.customerMe();
       setCustomer(c);
       if (c) {
+        storage.set('zm_customer', c); // §JH vòng 2: làm mới cache cho lần vào trang sau
         setProfile({ name: c.name, phone: c.phone, member_code: c.member_code, customer_id: c.id });
         setEmail(c.email || '');
         loadAddrs(c.id, c.phone, c.member_code);
@@ -770,7 +873,9 @@ export default function Account() {
     if (!agreeND13) return; // nút đã khóa khi chưa tích; chặn thêm cho chắc
     setZaloBusy(true);
     try {
-      const json = await authWithZalo();
+      // Vá NĐ13 (2026-11-12): gửi kèm cờ từ chính ô tick này — server kiểm
+      // chứng lại khi tạo tài khoản mới (422 consent_required nếu thiếu).
+      const json = await authWithZalo(agreeND13);
       if (json.code === 'not_zalo') {
         alert('Chức năng này chỉ hoạt động trên Zalo Mini App thật.\nHiện tại hãy đăng nhập bằng SĐT + mật khẩu ở trên.');
         return;
@@ -845,9 +950,17 @@ export default function Account() {
           }
           state.done = true;
           setProfile(null); // server trả lời dứt khoát: cặp hết hiệu lực
+          storage.remove('zm_customer'); // §JH vòng 2: dọn cache để render sau không hiện lại thành viên đã bị bác
+          setCustomer(null);
+          if (!cancelled) setSessionPending(false); // §JH vòng 2: phiên chết dứt điểm → mới rơi về cây khách
         } catch { retryLater(); } // lỗi mạng — giữ nguyên cặp, thử lại sau
       } else {
         state.done = true;
+        // §JH vòng 2: không thấy hồ sơ — chỉ hạ khung trung tính SAU khi
+        // storage đã nạp xong (lượt boot đầu lúc mở lạnh có thể đọc trượt
+        // cache rỗng); tới lúc đó mà customer đã về thì hạ cờ cũng vô hại
+        // vì cây khách chỉ dựng khi !customer.
+        storage.ready().then(() => { if (!cancelled) setSessionPending(false); });
       }
     };
     boot();
@@ -859,6 +972,8 @@ export default function Account() {
   const logout = async () => {
     try { await api.sessionLogout(); } catch { /* thu hồi best-effort */ }
     clearSession();
+    storage.remove('zm_customer'); // §JH vòng 2: đăng xuất là dọn cả cache customer
+    setSessionPending(false); // §JH §JS ca D: hạ cờ trung tính để về cây khách ngay — thiếu dòng này là kẹt vĩnh viễn ở khung "Đang tải…"
     setProfile(null);
     setCustomer(null);
     setPhone('');
@@ -874,7 +989,11 @@ export default function Account() {
     <div className="zm-page">
       {/* Gói 55 p10: cover trang Tài khoản — user tự custom. Ẩn header tiêu đề (tránh đè card). */}
       <div style={{ position: 'relative', height: 150, background: 'linear-gradient(135deg, var(--zm-primary), #3b4a7a)', overflow: 'hidden' }}>
-        {accountCover && <img src={accountCover} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+        {accountCover
+          ? <img src={accountCover} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          : (shopCover && !shopCoverBad) && (
+            <img src={shopCover} alt="cover" onError={() => setShopCoverBad(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          )}
         <input ref={coverInputRef} type="file" accept="image/*" onChange={handleCoverChange} style={{ display: 'none' }} />
         <button
           onClick={() => coverInputRef.current?.click()}
@@ -892,7 +1011,16 @@ export default function Account() {
           </div>
         )}
       </div>
-      {!customer && (
+      {!customer && sessionPending && (
+        /* §JH vòng 2: khung TRUNG TÍNH trong lúc chờ loadMe cho người CÓ
+           phiên — thay cho cây khách bị dựng nhầm ở các bản trước (chớp
+           "Bạn mới tới Daybreak?" trong video máy thật). */
+        <div style={{ margin: '-30px 16px 12px', position: 'relative', zIndex: 2, background: '#fff', border: '1px solid #e3e8f2', borderRadius: 16, padding: '26px 16px', boxShadow: '0 4px 16px rgba(0,0,0,.15)', textAlign: 'center' }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#24305E' }}>Đang tải thông tin thành viên…</div>
+          <div style={{ fontSize: 12.5, color: '#8a93a6', marginTop: 5, lineHeight: 1.5 }}>Chỉ một lát thôi — Daybreak đang lấy dữ liệu mới nhất của bạn.</div>
+        </div>
+      )}
+      {!customer && !sessionPending && (
         <>
           {/* Spec đăng ký Zalo B §2: thẻ đăng ký mới, trên cùng */}
           {!zaloB3 ? (
@@ -923,23 +1051,45 @@ export default function Account() {
             </div>
           )}
           <div style={{ textAlign: 'center', fontSize: 12.5, color: '#888', margin: '0 16px 12px' }}>— đã có thẻ thành viên —</div>
-          {/* Spec đăng nhập SĐT + mật khẩu §5.4: form phụ SĐT + mật khẩu. */}
-          <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
-            <input placeholder="Số điện thoại" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
-            {phone && !validPhone(phone) && (
-              <div style={{ fontSize: 12, color: '#b91c1c' }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
-            )}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-              <input placeholder="Mật khẩu" type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
-              <button type="button" onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 13, color: '#24305E' }}>{showPw ? 'Ẩn' : 'Hiện'}</button>
-            </div>
-            <button className="zm-btn-primary" onClick={lookup} disabled={loading}>
-              {loading ? '...' : 'Đăng nhập'}
+          {/* Spec đăng nhập gọn (2026-11-13): form SĐT + mật khẩu (§5.4) nay
+              nằm trong THẺ THU GỌN — mặc định đóng, chạm hàng tiêu đề mới xổ.
+              Thân thẻ giữ nguyên form + logic đăng nhập, chỉ đổi khung. */}
+          <div style={{ margin: '0 16px 12px', background: '#fff', border: '1px solid #e3e8f2', borderRadius: 16, overflow: 'hidden' }}>
+            <button type="button" onClick={() => setPwOpen(!pwOpen)} aria-expanded={pwOpen}
+              style={{ width: '100%', minHeight: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', background: '#fff', border: 0, cursor: 'pointer', textAlign: 'left' }}>
+              <span style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 10, background: '#EEF1F8', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#24305E' }}>
+                <ZmIcon name="lock" size={18} />
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 15, fontWeight: 800, color: '#24305E' }}>Đăng nhập bằng mật khẩu</span>
+                <span style={{ display: 'block', fontSize: 12, color: '#888', marginTop: 1 }}>Đường dự phòng khi không dùng Zalo</span>
+              </span>
+              <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, fontSize: 12.5, fontWeight: 700, color: '#24305E' }}>
+                {pwOpen ? 'Thu gọn' : 'Mở'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#24305E" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ transform: pwOpen ? 'rotate(180deg)' : 'none' }}><path d="m6 9 6 6 6-6" /></svg>
+              </span>
             </button>
-          </div>
-          <div className="zm-note" style={{ margin: '0 16px' }}>
-            Đăng nhập bằng SĐT + mật khẩu để xem điểm, hạng và lịch sử đơn hàng.
+            {pwOpen && (
+              <div style={{ padding: '2px 16px 16px' }}>
+                <div className="zm-search" style={{ flexDirection: 'column', gap: 8, alignItems: 'stretch', margin: 0 }}>
+                  <input placeholder="Số điện thoại" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
+                  {phone && !validPhone(phone) && (
+                    <div style={{ fontSize: 12, color: '#b91c1c' }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                    <input placeholder="Mật khẩu" type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+                    <button type="button" onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                      style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 13, color: '#24305E' }}>{showPw ? 'Ẩn' : 'Hiện'}</button>
+                  </div>
+                  <button className="zm-btn-primary" onClick={lookup} disabled={loading}>
+                    {loading ? '...' : 'Đăng nhập'}
+                  </button>
+                </div>
+                <div className="zm-note" style={{ margin: '8px 0 0' }}>
+                  Đăng nhập bằng SĐT + mật khẩu để xem điểm, hạng và lịch sử đơn hàng.
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: '8px 16px 0' }}>
             <button type="button" onClick={() => openPwSheet('zalo-set')} style={{ background: 'none', border: 0, color: '#0d6efd', fontSize: 13, textAlign: 'left', padding: '6px 0', cursor: 'pointer' }}>Đặt mật khẩu lần đầu bằng Zalo</button>
@@ -958,19 +1108,54 @@ export default function Account() {
           <div style={{ background: '#fff', border: '1px solid #e3e8f2', borderRadius: 16, padding: 20, boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: '#24305E' }}>Chào mừng bạn tới Daybreak! 🎉</div>
             <div style={{ fontSize: 13, color: '#555', marginTop: 6 }}>Tài khoản thành viên của bạn đã được tạo.</div>
+            {/* Spec chào mừng (2026-11-13): thẻ thành viên trình bày lại —
+                chip hạng cam + điểm tách cột phải, thông tin giữ nguyên. */}
             <div style={{ marginTop: 14, background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 12, padding: 16, color: '#fff' }}>
-              <div style={{ fontSize: 12, opacity: .85 }}>Thẻ thành viên</div>
-              <div style={{ fontSize: 18, fontWeight: 800, margin: '4px 0' }}>{welcome.name}</div>
-              <div style={{ fontSize: 13 }}>{welcome.phone ? welcome.phone.replace(/(\d{3})\d+(\d{2})$/, '$1****$2') : ''} · Hạng {welcome.loyalty?.tier_name || welcome.tier || 'Regular'} · 0 điểm</div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: 11, letterSpacing: 1.2, opacity: .8, fontWeight: 700 }}>THẺ THÀNH VIÊN</div>
+                <div style={{ background: 'rgba(245,166,35,.18)', color: '#FFC95E', border: '1px solid rgba(245,166,35,.45)', fontSize: 11.5, fontWeight: 700, borderRadius: 999, padding: '3px 10px', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <TierIcon tier={welcome.loyalty?.tier_name || welcome.tier} navy size={15} />
+                  Hạng {welcome.loyalty?.tier_name || welcome.tier || 'Regular'}
+                </div>
+              </div>
+              <div style={{ fontSize: 19, fontWeight: 800, marginTop: 8 }}>{welcome.name}</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 10 }}>
+                <div style={{ fontSize: 13, opacity: .9 }}>{welcome.phone ? welcome.phone.replace(/(\d{3})\d+(\d{2})$/, '$1****$2') : ''}</div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{fmt(welcome.loyalty?.points ?? 0)}</div>
+                  <div style={{ fontSize: 11, opacity: .8 }}>điểm</div>
+                </div>
+              </div>
             </div>
-            <div style={{ marginTop: 14, textAlign: 'center' }}>
-              <div style={{ fontSize: 12, color: '#888' }}>MÃ THÀNH VIÊN của bạn</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: '#24305E', letterSpacing: 1 }}>{welcome.member_code}</div>
-              <div style={{ fontSize: 12.5, color: '#555', marginTop: 4 }}>Đây là MÃ THÀNH VIÊN của bạn — dùng để định danh và tra cứu khi cần. Đăng nhập trên thiết bị khác bằng Zalo hoặc mật khẩu.</div>
+            {/* Khối mã thành viên: hộp nền nhạt + viền nét đứt (spec 2026-11-13) */}
+            <div style={{ marginTop: 14, textAlign: 'center', background: '#F7F8FB', border: '1px dashed #C6CEDE', borderRadius: 12, padding: '12px 12px 10px' }}>
+              <div style={{ fontSize: 11, letterSpacing: 1, color: '#888', fontWeight: 700 }}>MÃ THÀNH VIÊN CỦA BẠN</div>
+              <div style={{ fontSize: 25, fontWeight: 800, color: '#24305E', letterSpacing: 1.5, marginTop: 2 }}>{welcome.member_code}</div>
+              <div style={{ fontSize: 12, color: '#666', marginTop: 5, lineHeight: 1.5 }}>Dùng để định danh và tra cứu khi cần. Đăng nhập trên thiết bị khác bằng Zalo hoặc mật khẩu.</div>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="zm-btn-primary" onClick={() => nav('/game')} style={{ flex: 1, minHeight: 44 }}>Chơi Hứng Trân Châu</button>
-              <button className="zm-btn-outline" onClick={() => nav('/coupons')} style={{ flex: 1, minHeight: 44 }}>Xem ưu đãi của tôi</button>
+            {/* Phương án B (Đại Vương duyệt 2026-11-13): 2 nút DỌC full-width
+                có ô icon + mô tả + mũi tên — thay hẳn cặp nút ngang cũ. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+              <button onClick={() => nav('/game')} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 52, padding: '8px 14px', background: '#fff', border: '1px solid #e3e8f2', borderRadius: 12, cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(36,48,94,.06)' }}>
+                <span style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 10, background: '#FFF3DE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#D98A06" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><path d="M6 2v2M10 2v2M14 2v2"/></svg>
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 14.5, fontWeight: 700, color: '#24305E', whiteSpace: 'nowrap' }}>Chơi Hứng Trân Châu</span>
+                  <span style={{ display: 'block', fontSize: 12, color: '#888', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Minigame tích điểm mỗi ngày</span>
+                </span>
+                <span style={{ color: '#b6bdcc', fontSize: 20, flexShrink: 0 }}>›</span>
+              </button>
+              <button onClick={() => nav('/coupons')} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 52, padding: '8px 14px', background: '#fff', border: '1px solid #e3e8f2', borderRadius: 12, cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(36,48,94,.06)' }}>
+                <span style={{ width: 36, height: 36, flexShrink: 0, borderRadius: 10, background: '#ECEFF7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#24305E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2M13 17v2M13 11v2"/></svg>
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 14.5, fontWeight: 700, color: '#24305E', whiteSpace: 'nowrap' }}>Xem ưu đãi của tôi</span>
+                  <span style={{ display: 'block', fontSize: 12, color: '#888', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Coupon và quà tặng đang có</span>
+                </span>
+                <span style={{ color: '#b6bdcc', fontSize: 20, flexShrink: 0 }}>›</span>
+              </button>
             </div>
             <button onClick={() => setWelcome(null)} style={{ display: 'block', margin: '12px auto 0', background: 'none', border: 0, color: '#888', fontSize: 13 }}>Để sau</button>
           </div>
@@ -988,7 +1173,11 @@ export default function Account() {
           <div style={{ background: 'linear-gradient(135deg, var(--zm-primary), color-mix(in srgb, var(--zm-primary) 70%, #000))', borderRadius: 16, padding: 20, color: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,.15)' }}>
             <div style={{ fontSize: 13, opacity: .85 }}>Thẻ thành viên</div>
             <div style={{ fontSize: 20, fontWeight: 800, margin: '4px 0' }}>{customer.name}</div>
-            <div style={{ fontSize: 13 }}>{customer.member_code} · Hạng {customer.loyalty?.tier_name || customer.tier || 'Regular'}</div>
+            <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span>{customer.member_code} ·</span>
+              <TierIcon tier={customer.loyalty?.tier_name || customer.tier} navy size={17} />
+              <span>Hạng {customer.loyalty?.tier_name || customer.tier || 'Regular'}</span>
+            </div>
             {/* Điểm chia 2 cột (Đại Vương chốt 2026-11-09): trái = Điểm khả
                 dụng (tổng dùng được, gồm cả điểm sắp hết hạn); phải = Điểm
                 sắp hết hạn — TỔNG điểm sẽ hết hạn trong 30 ngày tới (server
@@ -1028,7 +1217,7 @@ export default function Account() {
               }}
             >
               {/* Icon chốt phương án 1 (Đại Vương 2026-11-09, theo demo BA):
-                  phiếu coupon răng cưa + dấu % — thay emoji vé 🎫. Chỉ thay
+                  phiếu coupon răng cưa + dấu % — thay emoji vé cũ. Chỉ thay
                   icon; khung thẻ/chữ/badge giữ nguyên. */}
               <svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true"><path d="M6 14a4 4 0 0 1 4-4h28a4 4 0 0 1 4 4v6a5 5 0 0 0 0 10v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4v-6a5 5 0 0 0 0-10v-6z" fill="#F5A623"/><path d="M29 12v24" stroke="#fff" strokeWidth="2.4" strokeDasharray="3.5 3.5"/><text x="17.5" y="31" fontSize="17" fontWeight="800" fill="#fff" textAnchor="middle">%</text></svg>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#9A3412' }}>Ưu đãi của tôi</span>
@@ -1053,24 +1242,42 @@ export default function Account() {
           {/* Gói 49: sổ địa chỉ — dạng thu gọn */}
           <Collapsible icon={<ZmIcon name="book" size={20} />} title="Sổ địa chỉ" badge={addrBook.length > 0 ? `${addrBook.length}` : null}>
           {addrBook.length === 0 && <div className="zm-empty" style={{ padding: 16 }}>Chưa có địa chỉ nào. Địa chỉ sẽ tự lưu khi đặt hàng.</div>}
+          {addrErr && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 10, padding: '8px 10px', fontSize: 12.5, fontWeight: 600, margin: '10px 0 2px' }}>⚠ {addrErr}</div>
+          )}
           {addrBook.map((a) => (
-            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 13 }}>{a.is_default ? '★ ' : ''}{a.label}</div>
-                <div style={{ fontSize: 12, color: '#666' }}>{a.full_address}</div>
+            <React.Fragment key={a.id}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{a.is_default ? '★ ' : ''}{a.label}</div>
+                  <div style={{ fontSize: 12, color: '#666' }}>{a.full_address}</div>
+                </div>
+                {!a.is_default && (
+                  <button
+                    style={{ flexShrink: 0, minHeight: 40, padding: '0 12px', borderRadius: 10, border: '1px solid #bfd6fe', background: '#eff6ff', color: '#0d6efd', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', opacity: addrBusy ? 0.6 : 1 }}
+                    disabled={!!addrBusy}
+                    onClick={() => setDefaultAddr(a)}
+                  >{addrBusy === `default-${a.id}` ? 'Đang đặt...' : 'Đặt mặc định'}</button>
+                )}
+                <button
+                  style={{ flexShrink: 0, minHeight: 40, padding: '0 12px', borderRadius: 10, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', opacity: addrBusy ? 0.6 : 1 }}
+                  disabled={!!addrBusy}
+                  onClick={() => { setAddrErr(''); setAddrConfirmId(addrConfirmId === a.id ? null : a.id); }}
+                >Xóa</button>
               </div>
-              {!a.is_default && (
-                <button style={{ fontSize: 12, color: '#0d6efd' }} onClick={async () => {
-                  await api.updateAddress(a.id, { customer_id: customer.id, phone: customer.phone, member_code: customer.member_code, street: a.street, is_default: true });
-                  loadAddrs(customer.id, customer.phone, customer.member_code);
-                }}>Đặt mặc định</button>
+              {addrConfirmId === a.id && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 12, margin: '2px 0 10px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#b91c1c', marginBottom: 4 }}>Chắc chắn xóa địa chỉ này?</div>
+                  <div style={{ fontSize: 12.5, color: '#666', marginBottom: 10 }}>{a.is_default ? '★ ' : ''}{a.label} — {a.full_address}</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="zm-btn-outline" style={{ flex: 1 }} disabled={!!addrBusy} onClick={() => setAddrConfirmId(null)}>Giữ lại</button>
+                    <button className="zm-btn-primary" style={{ flex: 1, background: '#c62828' }} disabled={!!addrBusy} onClick={() => deleteAddr(a)}>
+                      {addrBusy === `delete-${a.id}` ? 'Đang xóa...' : 'Xác nhận xóa'}
+                    </button>
+                  </div>
+                </div>
               )}
-              <button style={{ fontSize: 12, color: '#dc2626' }} onClick={async () => {
-                if (!confirm('Xóa địa chỉ này?')) return;
-                await api.deleteAddress(a.id, customer.id, customer.phone, customer.member_code);
-                loadAddrs(customer.id, customer.phone, customer.member_code);
-              }}>Xóa</button>
-            </div>
+            </React.Fragment>
           ))}
           </Collapsible>
 
@@ -1122,11 +1329,14 @@ export default function Account() {
           {customer.orders.length === 0 && <div className="zm-empty" style={{ padding: 20 }}>Chưa có đơn nào.</div>}
           {customer.orders.map((o) => (
             <div key={o.id} className="zm-total-row"
-              onClick={() => nav(`/track?code=${encodeURIComponent(o.code)}`)}
+              onClick={() => nav(o.payment_status === 'pending_payment' ? `/pay-wait/${encodeURIComponent(o.code)}` : `/track?code=${encodeURIComponent(o.code)}`)}
               style={{ padding: '10px 0', borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}>
               {/* Lát 3d (2026-11-04): trước đây in nguyên mã trạng thái tiếng Anh
                   (processing/pending…) — nay dịch sang nhãn tiếng Việt, ưu tiên
-                  trạng thái thanh toán khi đơn còn chờ tiền/đã báo CK. */}
+                  trạng thái thanh toán khi đơn còn chờ tiền/đã báo CK.
+                  Gói vá sau vòng S — Mục 3 (2026-11-12): đơn còn
+                  pending_payment chạm vào đi THẲNG màn chờ /pay-wait (đường
+                  trả tiếp), không vòng qua /track như các đơn khác. */}
               <span><b>{o.code}</b><br /><span style={{ fontSize: 12, color: '#888' }}>{fmtDate(o.created_at)} · {
                 o.status === 'cancelled' ? 'Đã hủy'
                 : o.payment_status === 'transfer_notified' ? 'Đã báo chuyển khoản — chờ quán xác nhận'

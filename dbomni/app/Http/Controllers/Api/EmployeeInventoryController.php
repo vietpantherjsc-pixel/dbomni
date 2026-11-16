@@ -60,6 +60,12 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $branchIds = array_unique($branchIds);
+        // Vá A2 (2026-11-13): token có CN phiên -> meta chỉ còn CN phiên.
+        $sessionBranchId = $this->sessionBranchId($emp);
+        if ($sessionBranchId !== null) {
+            $branchIds = [$sessionBranchId];
+            $currentBranchId = $sessionBranchId;
+        }
         $branches = \App\Models\Branch::whereIn('id', $branchIds)->orderBy('name')->get(['id', 'name']);
         // Kèm danh sách loại nguyên liệu để lọc
         $categories = \App\Models\MaterialCategory::orderBy('sort_order')->orderBy('name')->get(['id', 'name', 'sort_order']);
@@ -114,9 +120,8 @@ class EmployeeInventoryController extends Controller
     {
         $emp = $this->emp($request);
         // Gói 55: hiện phiếu của tất cả CN NV được phép (không chỉ CN mặc định)
-        $branchIds = $emp->branches()->pluck('branches.id')->toArray();
-        if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
-        $branchIds = array_unique($branchIds);
+        // Vá A2 (2026-11-13): phạm vi hiệu lực — token có CN phiên chỉ thấy CN phiên.
+        $branchIds = $this->effectiveBranchScope($emp);
         $list = Stocktake::whereIn('branch_id', $branchIds)
             ->with('branch:id,name')
             ->orderByDesc('id')->limit(20)->get()
@@ -145,7 +150,10 @@ class EmployeeInventoryController extends Controller
             'category_ids.*' => 'exists:material_categories,id',
         ]);
         // Chi nhánh kiểm kê: ưu tiên param, mặc định = chi nhánh NV
-        $branchId = $v['branch_id'] ?? $emp->branch_id;
+        // Vá A2 (2026-11-13): không param -> CN hiệu lực (CN phiên nếu có);
+        // có param lệch CN phiên -> 403 đúng câu phiên qua enforce.
+        $branchId = !empty($v['branch_id']) ? (int) $v['branch_id'] : $this->resolveEmployeeBranch($emp, null);
+        $this->enforceSessionBranch($emp, (int) $branchId);
         // Gói 55: validate quyền chi nhánh (NV chỉ được kiểm kê CN mình được phân công)
         $allowedBranchIds = $emp->branches()->pluck('branches.id')->map(fn ($i) => (int) $i)->toArray();
         if ($emp->branch_id) $allowedBranchIds[] = (int) $emp->branch_id;
@@ -228,6 +236,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = array_unique($branchIds);
         $st = Stocktake::with(['items.material' => fn ($q) => $q->withTrashed(), 'items.material.category:id,name,sort_order'])
             ->whereIn('branch_id', $branchIds)->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         return response()->json(['success' => true, 'data' => $st]);
     }
 
@@ -238,6 +247,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $st = Stocktake::whereIn('branch_id', array_unique($branchIds))->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         if ($st->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Phiếu đã chốt.'], 422);
         }
@@ -273,6 +283,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $st = Stocktake::with('items')->whereIn('branch_id', array_unique($branchIds))->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         if ($st->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Phiếu đã chốt.'], 422);
         }
@@ -319,6 +330,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $st = Stocktake::whereIn('branch_id', array_unique($branchIds))->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         if ($st->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Phiếu đã chốt, không thể thêm.'], 422);
         }
@@ -357,6 +369,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $st = Stocktake::whereIn('branch_id', array_unique($branchIds))->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         if ($st->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Phiếu đã chốt, không thể xóa.'], 422);
         }
@@ -374,6 +387,7 @@ class EmployeeInventoryController extends Controller
         $branchIds = $emp->branches()->pluck('branches.id')->toArray();
         if ($emp->branch_id) $branchIds[] = (int) $emp->branch_id;
         $st = Stocktake::whereIn('branch_id', array_unique($branchIds))->findOrFail($id);
+        $this->enforceSessionBranch($emp, (int) $st->branch_id); // Vá A2: phiếu lệch CN phiên -> 403
         if ($st->status !== 'draft') {
             return response()->json(['success' => false, 'message' => 'Chỉ được hủy phiếu nháp.'], 422);
         }
@@ -404,10 +418,11 @@ class EmployeeInventoryController extends Controller
         $emp = $this->emp($request);
         $v = $request->validate(['material_id' => 'required|exists:materials,id']);
         $material = Material::findOrFail($v['material_id']);
+        $branchId = $this->resolveEmployeeBranch($emp, null); // Vá A2: CN hiệu lực (CN phiên nếu có)
         $recipes = ProductionRecipe::with('rawMaterial:id,name,unit')
             ->where('material_id', $material->id)->get()
-            ->map(function ($r) use ($emp) {
-                $stock = (float) Batch::where('branch_id', $emp->branch_id)
+            ->map(function ($r) use ($branchId) {
+                $stock = (float) Batch::where('branch_id', $branchId)
                     ->where('material_id', $r->raw_material_id)
                     ->where('status', 'active')->sum('current_quantity');
                 return [
@@ -465,9 +480,10 @@ class EmployeeInventoryController extends Controller
         } else {
             return response()->json(['success' => false, 'message' => 'Thiếu số mẻ cần chế biến.'], 422);
         }
+        $branchId = $this->resolveEmployeeBranch($emp, null); // Vá A2: CN hiệu lực (CN phiên nếu có)
         try {
             $movementIds = []; // Gói 55 p11af: nhận id nhật ký xuất kho để gắn production_id sau
-            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv, &$movementIds, $quantity, $batchCount) {
+            $production = DB::transaction(function () use ($emp, $v, $material, $recipes, $inv, &$movementIds, $quantity, $batchCount, $branchId) {
                 $needs = [];
                 foreach ($recipes as $r) {
                     if ($batchCount !== null) {
@@ -481,7 +497,7 @@ class EmployeeInventoryController extends Controller
                     }
                 }
                 // Gói 55 p11af: ghi nhật ký xuất kho từng lô, gắn production_id sau
-                $deducted = $inv->deductMaterialsDetailed((int) $emp->branch_id, $needs, [
+                $deducted = $inv->deductMaterialsDetailed((int) $branchId, $needs, [
                     'type' => 'production',
                     'note' => 'Chế biến ' . $material->name,
                 ], $movementIds);
@@ -493,9 +509,9 @@ class EmployeeInventoryController extends Controller
                     }
                 }
                 $btpUnitCost = $quantity > 0 ? $inputCost / $quantity : 0;
-                $inv->addStock((int) $emp->branch_id, (int) $material->id, $quantity, null, null, $btpUnitCost);
+                $inv->addStock((int) $branchId, (int) $material->id, $quantity, null, null, $btpUnitCost);
                 $production = Production::create([
-                    'branch_id' => $emp->branch_id,
+                    'branch_id' => $branchId,
                     'material_id' => $material->id,
                     'quantity' => $quantity,
                     'batches' => $batchCount, // Gói chế biến theo mẻ (2026-11-11): NULL khi đi đường quantity cũ
@@ -526,7 +542,7 @@ class EmployeeInventoryController extends Controller
     {
         $emp = $this->emp($request);
         $list = Production::with(['material:id,name,unit', 'employee:id,full_name']) // UX 2026-10-26 (🟡 Hub): kèm đơn vị để Hub hiện số lượng có đơn vị
-            ->where('branch_id', $emp->branch_id)
+            ->where('branch_id', $this->resolveEmployeeBranch($emp, null))
             ->orderByDesc('id')->limit(30)->get()
             ->map(fn ($p) => [
                 'id' => $p->id,

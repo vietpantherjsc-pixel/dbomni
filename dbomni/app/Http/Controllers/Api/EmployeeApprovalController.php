@@ -14,6 +14,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Services\InventoryService;
 use App\Support\ApprovalActor;
+use App\Traits\ValidatesEmployeeBranch;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -24,6 +25,8 @@ use Illuminate\Support\Facades\Cache;
 // Ghi vết người xử lý là Employee thật qua ApprovalActor (cột *_employee_id).
 class EmployeeApprovalController extends Controller
 {
+    use ValidatesEmployeeBranch;
+
     // Cây phân quyền chi tiết §2 (2026-11-10): mỗi loại phiếu trỏ sang khóa
     // DUYỆT lá riêng của mục con đó — chặn tự duyệt giữ nguyên (ApprovalActor).
     public const TYPES = [
@@ -82,6 +85,8 @@ class EmployeeApprovalController extends Controller
     {
         $bid = (int) $request->input('branch_id', $request->query('branch_id', 0));
         abort_unless($bid > 0 && in_array($bid, $emp->allBranchIds(), true), 403, 'Chi nhánh không thuộc phạm vi của bạn.');
+        // Gói A (2026-11-13): token có CN phiên thì CN chọn phải đúng CN phiên.
+        $this->enforceSessionBranch($emp, $bid);
         return $bid;
     }
 

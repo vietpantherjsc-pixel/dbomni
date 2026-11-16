@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 // Gói 35: Chấm công QR — NV tự check-in/out; admin xem lưới tuần.
 class AttendanceController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Spec P4-B4: tìm ca của NV trong ngày (đã xếp; giờ custom ưu tiên hơn giờ ca mẫu)
     // Audit 2026-10-23 A1-8: ngày có thể có 2 ca — chọn ca có giờ bắt đầu GẦN
     // thời điểm đối chiếu nhất (mặc định: hiện tại), không lấy dòng đầu tiên nữa.
@@ -47,7 +48,7 @@ class AttendanceController extends Controller
     // Audit 2026-10-23 A3-1: NV chỉ chấm công tại CN được phân công
     private function denyUnassignedBranch(Employee $emp, int $branchId): ?JsonResponse
     {
-        if (!in_array($branchId, $emp->allBranchIds(), true)) {
+        if (!in_array($branchId, $this->effectiveBranchScope($emp), true)) {
             return response()->json(['success' => false, 'message' => 'Bạn không được phân công tại chi nhánh này.'], 403);
         }
         return null;
@@ -213,7 +214,7 @@ class AttendanceController extends Controller
         // §3.2: actor Employee chỉ thấy NV thuộc CN phân công của mình.
         $gridActor = $request->user();
         if ($gridActor instanceof Employee) {
-            $mine = $gridActor->allBranchIds();
+            $mine = $this->effectiveBranchScope($gridActor);
             if (!empty($v['branch_id']) && !in_array((int) $v['branch_id'], $mine, true)) {
                 $empQ->whereRaw('1 = 0');
             } else {

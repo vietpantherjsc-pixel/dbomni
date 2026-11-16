@@ -298,6 +298,26 @@ class DeliveryService
                 'status' => 'completed',
                 'completed_at' => $order->completed_at ?: now(),
             ]);
+            // Spec dời mốc tích điểm (2026-11-13, điểm gọi N2): trạng thái
+            // completed đã lưu ở trên mới gọi điểm chốt duy nhất — đơn
+            // giao hoàn thành tại funnel này (hãng + tay); COD thu hộ đã
+            // xác nhận ở picked_up cũng earn đúng tại đây, 1 lần.
+            app(\App\Services\LoyaltyService::class)->earnWhenSettled($order);
+            // Gói Checkout SDK (spec §2.5): funnel hoàn tất CHUNG của đơn
+            // giao hàng (webhook hãng + nút tay đều qua đây) — đơn COD
+            // online hoàn tất → báo 'completed' về Checkout SDK.
+            // Fail-soft: service tự nuốt lỗi, thêm try/catch tại chỗ cho
+            // chắc — không bao giờ chặn luồng giao hàng.
+            if ($order->online_channel === 'zalo' && $order->pay_channel === 'COD'
+                && !empty($order->pay_sdk_order_id)) {
+                try {
+                    app(\App\Services\ZaloPaymentService::class)->updateOrderStatus($order, 'completed');
+                } catch (\Throwable $e) {
+                    Log::warning('[Delivery] Báo completed về Checkout SDK thất bại', [
+                        'order' => $order->code, 'msg' => $e->getMessage(),
+                    ]);
+                }
+            }
         }
     }
 

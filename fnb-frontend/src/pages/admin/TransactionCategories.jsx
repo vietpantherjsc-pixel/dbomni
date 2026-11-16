@@ -12,7 +12,10 @@ import { API } from '../../utils/api';
 
 const TYPE_LABEL = { income: 'Thu', expense: 'Chi' };
 
-const emptyForm = () => ({ name: '', type: 'expense' });
+// Chỉ số 360 đợt 1 (TC-1 hòa vốn): phân loại cố định/biến đổi cho danh mục CHI.
+const COST_TYPE_LABEL = { fixed: 'Cố định', variable: 'Biến đổi' };
+
+const emptyForm = () => ({ name: '', type: 'expense', cost_type: '' });
 
 const TransactionCategories = () => {
     const [rows, setRows] = useState([]);
@@ -40,7 +43,7 @@ const TransactionCategories = () => {
     const openAdd = () => { setEditing(null); setForm(emptyForm()); setShowForm(true); };
     const openEdit = (row) => {
         setEditing(row);
-        setForm({ name: row.name, type: row.type });
+        setForm({ name: row.name, type: row.type, cost_type: row.cost_type || '' });
         setShowForm(true);
     };
 
@@ -48,14 +51,14 @@ const TransactionCategories = () => {
         if (!form.name.trim()) return alert('Nhập tên danh mục.');
         setSaving(true);
         try {
+            const payload = {
+                name: form.name.trim(), type: form.type,
+                cost_type: form.type === 'expense' ? (form.cost_type || null) : null,
+            };
             if (editing) {
-                await axios.put(`${API}/transaction-categories/${editing.id}`, {
-                    name: form.name.trim(), type: form.type,
-                });
+                await axios.put(`${API}/transaction-categories/${editing.id}`, payload);
             } else {
-                await axios.post(`${API}/transaction-categories`, {
-                    name: form.name.trim(), type: form.type,
-                });
+                await axios.post(`${API}/transaction-categories`, payload);
             }
             setShowForm(false);
             fetchData();
@@ -107,14 +110,15 @@ const TransactionCategories = () => {
                                 <tr className="text-left text-gray-500">
                                     <th className="px-4 py-3 font-medium">Tên danh mục</th>
                                     <th className="px-4 py-3 font-medium">Loại</th>
+                                    <th className="px-4 py-3 font-medium">Tính chất chi (hòa vốn)</th>
                                     <th className="px-4 py-3 font-medium text-right">Thao tác</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {loading ? (
-                                    <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
+                                    <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">Đang tải...</td></tr>
                                 ) : filtered.length === 0 ? (
-                                    <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400">Chưa có danh mục.</td></tr>
+                                    <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">Chưa có danh mục.</td></tr>
                                 ) : filtered.map((r) => (
                                     <tr key={r.id} className="border-t border-gray-100">
                                         <td className="px-4 py-3 font-medium">
@@ -129,6 +133,17 @@ const TransactionCategories = () => {
                                                     ? 'bg-green-50 text-green-700 border-green-200'
                                                     : 'bg-red-50 text-red-700 border-red-200'
                                             }`}>{TYPE_LABEL[r.type]}</span>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            {r.type !== 'expense' ? <span className="text-gray-400">—</span> : r.cost_type ? (
+                                                <span className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                                                    r.cost_type === 'fixed'
+                                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                                                }`}>{COST_TYPE_LABEL[r.cost_type]}</span>
+                                            ) : (
+                                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-300 font-semibold">Chưa phân loại</span>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3 text-right whitespace-nowrap">
                                             <button onClick={() => openEdit(r)}
@@ -164,6 +179,18 @@ const TransactionCategories = () => {
                                     <option value="income">Thu</option>
                                 </select>
                             </div>
+                            {form.type === 'expense' && (
+                                <div>
+                                    <label className="text-[12.5px] text-gray-500 block mb-1">Tính chất chi — phục vụ điểm hòa vốn (TC-1)</label>
+                                    <select value={form.cost_type} onChange={(e) => setForm({ ...form, cost_type: e.target.value })}
+                                        className="w-full text-[14px] border border-gray-300 rounded-lg px-3 py-2.5 min-h-[44px]">
+                                        <option value="">Chưa phân loại</option>
+                                        <option value="fixed">Cố định (mặt bằng, thuê cố định...)</option>
+                                        <option value="variable">Biến đổi (theo doanh thu/đơn...)</option>
+                                    </select>
+                                    <p className="text-[12px] text-gray-500 mt-1">Danh mục chi chưa phân loại thì báo cáo hòa vốn sẽ báo "chưa đủ cấu hình" thay vì tự đoán. Lương theo quy ước: lương cứng + BHXH = Cố định, lương theo giờ = Biến đổi (hệ tự xử lý, không cần phân loại ở đây).</p>
+                                </div>
+                            )}
                         </div>
                         <div className="flex gap-2 mt-5">
                             <button onClick={() => setShowForm(false)}

@@ -8,6 +8,7 @@ use App\Models\Setting;
 use App\Models\ShiftRegistration;
 use App\Models\ShiftRegWeek;
 use App\Models\WorkShift;
+use App\Traits\ValidatesEmployeeBranch;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,8 @@ use Illuminate\Support\Facades\DB;
 // Gói 35: Đăng ký ca — NV chỉ thấy/sửa của chính mình; admin xem theo tuần/chi nhánh.
 class ShiftRegistrationController extends Controller
 {
+    use ValidatesEmployeeBranch;
+
     // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thao tác đăng ký của NV
     // thuộc CN mình được phân công (User admin không bị giới hạn).
     private function denyRegBranch(Request $request, ShiftRegistration $reg): ?JsonResponse
@@ -23,15 +26,18 @@ class ShiftRegistrationController extends Controller
         $actor = $request->user();
         if ($actor instanceof Employee) {
             $empBranch = (int) (Employee::where('id', $reg->employee_id)->value('branch_id') ?? 0);
-            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+            if (!in_array($empBranch, $this->effectiveBranchScope($actor), true)) {
                 return response()->json(['success' => false, 'message' => 'Đăng ký này thuộc chi nhánh bạn không được phân công.'], 403);
             }
         }
         return null;
     }
 
-    // Gói 37: hạn chót đăng ký = thứ + giờ đã cài, tính trong TUẦN TRƯỚC tuần mục tiêu.
-    // VD: tuần mục tiêu 12/10 (T2), cài Thứ 7 20:00 → hạn = 10/10 20:00.
+    // Luật hạn đăng ký (Đại Vương phán 2026-11-15, thay cách tính của Gói 37):
+    // hạn chót = thứ + giờ đã cài, tính trong CHÍNH tuần mục tiêu — hạn chỉ
+    // khóa tuần hiện tại; tuần kế tiếp luôn đăng ký sớm được tới hạn của
+    // chính nó.
+    // VD: tuần mục tiêu 16/11 (T2), cài Thứ 7 20:00 → hạn = 21/11 20:00.
     public static function deadlineForWeek(Carbon $monday): Carbon
     {
         $wd = (int) Setting::get('shift_reg_deadline_weekday', '5');
@@ -44,14 +50,14 @@ class ShiftRegistrationController extends Controller
             $h = min(23, (int) $m[1]);
             $mi = min(59, (int) $m[2]);
         }
-        return $monday->copy()->subWeek()->addDays($wd)->setTime($h, $mi, 0);
+        return $monday->copy()->addDays($wd)->setTime($h, $mi, 0);
     }
     // NV lấy ca khả dụng trong khoảng ngày (theo chi nhánh của mình)
     public function availableShifts(Request $request): JsonResponse
     {
         /** @var Employee $emp */
         $emp = $request->user();
-        $branchIds = $emp->allBranchIds();
+        $branchIds = $this->effectiveBranchScope($emp);
         $shifts = WorkShift::where('is_active', true)
             ->where(function ($q) use ($branchIds) {
                 $q->whereNull('branch_id');
@@ -122,30 +128,10 @@ class ShiftRegistrationController extends Controller
         if (now()->gt($deadline)) {
             return response()->json(['success' => false, 'message' => 'Đã quá hạn đăng ký ca tuần này.'], 422);
         }
-        // Gói 37: gửi xong được gửi lại 1 lần (tối đa 2 lượt GỬI); draft không tính
-        // audit #13: check + increment submit_count trong transaction với lockForUpdate
-        // để 2 request gửi đồng thời không vượt quá 2 lượt
-        if ($v['status'] === 'submitted') {
-            $ok = DB::transaction(function () use ($emp, $days) {
-                $rw = ShiftRegWeek::where('employee_id', $emp->id)
-                    ->where('week_start', $days[0])
-                    ->lockForUpdate()
-                    ->first();
-                if (!$rw) {
-                    $rw = ShiftRegWeek::create([
-                        'employee_id' => $emp->id,
-                        'week_start' => $days[0],
-                        'submit_count' => 0,
-                    ]);
-                }
-                if ($rw->submit_count >= 2) return false;
-                $rw->increment('submit_count');
-                return true;
-            });
-            if (!$ok) {
-                return response()->json(['success' => false, 'message' => 'Đã hết lượt gửi lại đăng ký ca tuần này.'], 422);
-            }
-        }
+        // Gói 37: gửi xong được gửi lại 1 lần (tối đa 2 lượt GỬI); draft không tính.
+        // Luật nộp lại (Đại Vương phán 2026-11-15, ca §JT): việc trừ lượt dời
+        // vào CÙNG transaction với ghi selections ở dưới — kiểm tra ca/chồng
+        // giờ ở giữa trả 422 hoặc ghi lỗi thì lượt KHÔNG bị trừ oan.
 
         // Audit 2026-10-23 A1-6: ca đăng ký phải thuộc CN của NV (ca dùng chung
         // branch_id null thì được) và đang hoạt động.
@@ -159,7 +145,7 @@ class ShiftRegistrationController extends Controller
             if (!$shift || !$shift->is_active) {
                 return response()->json(['success' => false, 'message' => 'Ca đăng ký không còn hoạt động. Vui lòng tải lại danh sách ca.'], 422);
             }
-            if ($shift->branch_id !== null && !in_array((int) $shift->branch_id, $emp->allBranchIds(), true)) {
+            if ($shift->branch_id !== null && !in_array((int) $shift->branch_id, $this->effectiveBranchScope($emp), true)) {
                 return response()->json(['success' => false, 'message' => 'Ca "' . $shift->name . '" không thuộc chi nhánh của bạn.'], 422);
             }
             $start = Carbon::parse($s['date'] . ' ' . substr((string) $shift->start_time, 0, 5));
@@ -176,16 +162,45 @@ class ShiftRegistrationController extends Controller
             }
         }
 
-        DB::transaction(function () use ($emp, $days, $v) {
-            // CC-R2: chỉ xóa dòng chưa duyệt — giữ nguyên dòng đã approved
-            // (quyết định duyệt của quản lý không bị hủy âm thầm)
-            $approvedKeys = ShiftRegistration::where('employee_id', $emp->id)
+        // Luật nộp lại (Đại Vương phán 2026-11-15, ca §JT — thay CC-R2):
+        // NGÀY nào đã có đăng ký approved thì đóng băng cả ngày: giữ nguyên
+        // dòng đã duyệt, không ghi selection mới cho ngày đó (kể cả chọn ca
+        // khác hay bỏ trống ngày đó), và liệt kê các ngày giữ trong phản
+        // hồi. Cách khóa cũ của CC-R2 so theo (ca|ngày) bằng $r->date
+        // nguyên bản (Carbon kèm giờ) không bao giờ khớp khóa payload Y-m-d
+        // → insert trùng dòng đã duyệt → 500 uniq_reg_emp_shift_date.
+        // Toàn bộ (trừ lượt + xóa + ghi) nằm trong MỘT transaction: lỗi ở
+        // bất kỳ bước nào thì rollback cả lượt lẫn dữ liệu.
+        $result = DB::transaction(function () use ($emp, $days, $v) {
+            // audit #13: khóa dòng tuần + trừ lượt trong cùng transaction
+            // với ghi selections (2 request đồng thời không vượt 2 lượt).
+            if ($v['status'] === 'submitted') {
+                $rw = ShiftRegWeek::where('employee_id', $emp->id)
+                    ->where('week_start', $days[0])
+                    ->lockForUpdate()
+                    ->first();
+                if (!$rw) {
+                    $rw = ShiftRegWeek::create([
+                        'employee_id' => $emp->id,
+                        'week_start' => $days[0],
+                        'submit_count' => 0,
+                    ]);
+                }
+                if ($rw->submit_count >= 2) return ['limit' => true, 'kept' => []];
+                $rw->increment('submit_count');
+            }
+            // Các NGÀY đã duyệt trong tuần (chuẩn hóa Y-m-d trước khi so).
+            $keptDates = ShiftRegistration::where('employee_id', $emp->id)
                 ->whereIn('date', $days)
                 ->where('status', 'approved')
-                ->get(['work_shift_id', 'date'])
-                ->map(fn ($r) => $r->work_shift_id . '|' . $r->date)
-                ->flip()
+                ->pluck('date')
+                ->map(fn ($d) => Carbon::parse($d)->toDateString())
+                ->unique()
+                ->sort()
+                ->values()
                 ->toArray();
+            // Chỉ xóa dòng chưa duyệt — giữ nguyên dòng đã approved
+            // (quyết định duyệt của quản lý không bị hủy âm thầm)
             ShiftRegistration::where('employee_id', $emp->id)
                 ->whereIn('date', $days)
                 ->where('status', '!=', 'approved')
@@ -194,8 +209,8 @@ class ShiftRegistrationController extends Controller
             $now = now();
             foreach ($v['selections'] as $s) {
                 if (!in_array($s['date'], $days, true)) continue;
-                // Bỏ qua selection trùng dòng đã duyệt (không ghi đè)
-                if (isset($approvedKeys[$s['work_shift_id'] . '|' . $s['date']])) continue;
+                // Ngày đã duyệt: bỏ qua mọi selection của ngày đó
+                if (in_array($s['date'], $keptDates, true)) continue;
                 $rows[] = [
                     'employee_id' => $emp->id,
                     'work_shift_id' => $s['work_shift_id'],
@@ -214,10 +229,22 @@ class ShiftRegistrationController extends Controller
                 return true;
             }));
             if (!empty($rows)) ShiftRegistration::insert($rows);
+            return ['limit' => false, 'kept' => $keptDates];
         });
+        if ($result['limit']) {
+            return response()->json(['success' => false, 'message' => 'Đã hết lượt gửi lại đăng ký ca tuần này.'], 422);
+        }
 
         $msg = $v['status'] === 'submitted' ? 'Đã gửi đăng ký ca.' : 'Đã lưu nháp.';
-        return response()->json(['success' => true, 'message' => $msg]);
+        if (!empty($result['kept'])) {
+            $keptFmt = array_map(fn ($d) => Carbon::parse($d)->format('d/m'), $result['kept']);
+            $msg .= ' Ngày ' . implode(', ', $keptFmt) . ' đã được duyệt nên được giữ nguyên.';
+        }
+        return response()->json([
+            'success' => true,
+            'message' => $msg,
+            'kept_approved_dates' => $result['kept'],
+        ]);
     }
 
     // Admin: xem đăng ký theo tuần + chi nhánh (gộp theo NV)
@@ -237,7 +264,11 @@ class ShiftRegistrationController extends Controller
             ->whereIn('status', ['submitted', 'approved', 'rejected']);
         $actor = $request->user();
         if ($actor instanceof Employee) {
-            $scope = $actor->allBranchIds();
+            // Gói A (2026-11-13): token có CN phiên thì bộ lọc CN phải đúng CN phiên.
+            if (!empty($v['branch_id'])) {
+                $this->enforceSessionBranch($actor, (int) $v['branch_id']);
+            }
+            $scope = $this->effectiveBranchScope($actor);
             $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $scope));
         }
         if (!empty($v['branch_id'])) {

@@ -24,7 +24,7 @@ class InboundReceiptController extends Controller
     protected function denyReceiptBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
         }
         return null;
@@ -36,7 +36,7 @@ class InboundReceiptController extends Controller
             ->orderByDesc('id');
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $q->whereIn('branch_id', $actor->allBranchIds());
+            $q->whereIn('branch_id', $this->effectiveBranchScope($actor));
         }
         if ($request->filled('branch_id')) $q->where('branch_id', $request->input('branch_id'));
         if ($request->filled('partner_id')) $q->where('partner_id', $request->input('partner_id'));

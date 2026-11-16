@@ -781,6 +781,7 @@ class SalaryController extends Controller
 
     public function storeAllowanceType(Request $request): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $v = $request->validate([
             'code' => 'required|string|max:50|unique:allowance_types,code',
             'name' => 'required|string|max:150',
@@ -793,6 +794,7 @@ class SalaryController extends Controller
 
     public function updateAllowanceType(Request $request, int $id): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $t = \App\Models\AllowanceType::findOrFail($id);
         $v = $request->validate([
             'name' => 'sometimes|string|max:150',
@@ -1086,6 +1088,7 @@ class SalaryController extends Controller
 
     public function addHoliday(Request $request): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $validated = $request->validate([
             'date' => 'required|date|unique:holidays,date',
             'name' => 'required|string|max:150',
@@ -1103,6 +1106,7 @@ class SalaryController extends Controller
 
     public function deleteHoliday(Request $request, int $id): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $h = Holiday::findOrFail($id);
         \App\Models\PayrollLock::assertUnlocked($h->date->format('Y-m'));
         $h->delete();
@@ -1114,6 +1118,7 @@ class SalaryController extends Controller
     // PATCH /api/holidays/{id}
     public function updateHoliday(Request $request, int $id): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $h = Holiday::findOrFail($id);
         \App\Models\PayrollLock::assertUnlocked($h->date->format('Y-m'));
         $validated = $request->validate([
@@ -1152,6 +1157,7 @@ class SalaryController extends Controller
     // PUT /api/salary-policies
     public function savePolicies(Request $request): JsonResponse
     {
+        SalaryScope::assertGlobalConfigWrite($request); // 🟡#1 (phán 13/11): ghi cấu hình toàn hệ chỉ Chủ Sở Hữu
         $validated = $request->validate([
             'resp_base_per_hour' => 'required|numeric|min:0|max:1000000',
             'resp_deduction_per_violation' => 'required|numeric|min:0|max:1000000',

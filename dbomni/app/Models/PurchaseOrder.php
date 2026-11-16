@@ -16,6 +16,7 @@ class PurchaseOrder extends Model
 
     protected $casts = [
         'order_date' => 'date',
+        'expected_date' => 'date',
         'ordered_at' => 'datetime',
         'received_at' => 'datetime',
         'cancelled_at' => 'datetime',

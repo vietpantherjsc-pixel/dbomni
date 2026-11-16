@@ -61,6 +61,22 @@ class SalaryScope
     }
 
     /**
+     * Ghi cấu hình lương TOÀN HỆ (ngày lễ · loại phụ cấp · chính sách lương):
+     * các dữ kiện này không mang chi nhánh nên không gác theo CN được —
+     * chỉ Chủ Sở Hữu mới được ghi, Chủ Chi Nhánh bị chặn (Đại Vương phán
+     * 2026-11-13, mục 🟡#1 cụm treo cũ; mirror CheckPermission: User tầng
+     * owner mới qua, không dùng Spatie can()). Chiều đọc giữ nguyên.
+     */
+    public static function assertGlobalConfigWrite(Request $request): void
+    {
+        $actor = $request->user();
+        if ($actor instanceof User && $actor->isOwner()) {
+            return;
+        }
+        abort(403, 'Cấu hình lương toàn hệ thống chỉ dành cho Chủ Sở Hữu.');
+    }
+
+    /**
      * Ép branch_id yêu cầu về phạm vi của actor (Chủ Chi Nhánh: luôn CN mình,
      * tham số khác bị bỏ qua; Chủ Sở Hữu: giữ nguyên tham số).
      */

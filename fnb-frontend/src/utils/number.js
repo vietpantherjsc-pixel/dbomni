@@ -39,8 +39,6 @@ export function fmt(n, kind = 'price') {
 
 export const fmtPrice = (n) => fmt(n, 'price');
 export const fmtQty = (n) => fmt(n, 'quantity');
-export const fmtTax = (n) => fmt(n, 'tax');
-export const fmtDiscount = (n) => fmt(n, 'discount');
 
 // Nạp từ server (gọi lúc app khởi động, chung với loadTheme)
 export async function loadNumberSettings(api) {

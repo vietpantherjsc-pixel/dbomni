@@ -8,6 +8,7 @@ use App\Models\ChannelMonthlyAdjustment;
 use App\Models\Employee;
 use App\Models\PriceList;
 use App\Models\User;
+use App\Support\ConfigChangeLogger; // N-5: log đổi phí marketing đối soát
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -17,6 +18,7 @@ use Illuminate\Support\Carbon;
 // (mirror CheckPermission) như phiếu thu-chi. Chỉ 1 con số: marketing_fee.
 class ChannelAdjustmentController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     /** [actor_id, actor_type] của người đang thao tác (User admin hoặc Employee) */
     private function actor(Request $request): array
     {
@@ -31,7 +33,7 @@ class ChannelAdjustmentController extends Controller
     private function assertBranchScope(Request $request, int $branchId): void
     {
         $u = $request->user();
-        if ($u instanceof Employee && !in_array($branchId, $u->allBranchIds(), true)) {
+        if ($u instanceof Employee && !in_array($branchId, $this->effectiveBranchScope($u), true)) {
             abort(403, 'Chi nhánh này không thuộc phạm vi phụ trách của bạn.');
         }
     }
@@ -64,6 +66,15 @@ class ChannelAdjustmentController extends Controller
             'voided_at' => $row->voided_at?->format('d/m/Y H:i'),
             'updated_at' => $row->updated_at?->format('d/m/Y H:i'),
         ];
+    }
+
+    /** N-5: nhãn dòng đối soát cho nhật ký cấu hình: "Kênh · CN · tháng". */
+    private function adjustmentLabel(ChannelMonthlyAdjustment $row): string
+    {
+        $channel = PriceList::where('code', $row->channel_code)->value('name') ?? $row->channel_code;
+        $branch = $row->branch->name ?? ('CN#' . $row->branch_id);
+        $month = $row->month instanceof Carbon ? $row->month->format('Y-m') : (string) $row->month;
+        return $channel . ' · ' . $branch . ' · ' . $month;
     }
 
     /** Kênh được phép nhập = bảng giá thuộc nhóm đối tác (sàn) */
@@ -153,6 +164,7 @@ class ChannelAdjustmentController extends Controller
                     'data' => ['existing_id' => (int) $existing->id]], 422);
             }
             // Nhập lại sau hủy = mở lại chính dòng void và sửa số (không tạo dòng thứ hai)
+            $oldFee = $existing->marketing_fee;
             $existing->update([
                 'status' => 'active',
                 'marketing_fee' => $data['marketing_fee'],
@@ -160,6 +172,10 @@ class ChannelAdjustmentController extends Controller
                 'voided_by' => null, 'voided_by_type' => null, 'voided_at' => null, 'void_reason' => null,
                 'updated_by' => $actorId, 'updated_by_type' => $actorType,
             ]);
+            // N-5: phí marketing đổi → ghi log (chỉ khi số thật sự đổi).
+            [$aId, $aType, $aName] = ConfigChangeLogger::actor($request);
+            ConfigChangeLogger::log('channel_pricing', 'channel_monthly_adjustment', (int) $existing->id,
+                $this->adjustmentLabel($existing), 'marketing_fee', $oldFee, $data['marketing_fee'], $aId, $aType, $aName);
             return response()->json(['success' => true, 'message' => 'Đã mở lại dòng đối soát đã hủy và cập nhật số.',
                 'data' => $this->present($existing->fresh()->load('branch:id,name'))]);
         }
@@ -174,6 +190,10 @@ class ChannelAdjustmentController extends Controller
             'created_by' => $actorId, 'created_by_type' => $actorType,
             'updated_by' => $actorId, 'updated_by_type' => $actorType,
         ]);
+        // N-5: dòng đối soát mới → ghi log phí marketing (cũ = null).
+        [$aId, $aType, $aName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::log('channel_pricing', 'channel_monthly_adjustment', (int) $row->id,
+            $this->adjustmentLabel($row), 'marketing_fee', null, $data['marketing_fee'], $aId, $aType, $aName);
         return response()->json(['success' => true, 'message' => 'Đã lưu đối soát.',
             'data' => $this->present($row->load('branch:id,name'))]);
     }
@@ -187,11 +207,16 @@ class ChannelAdjustmentController extends Controller
         }
         $data = $this->validateWrite($request, false);
         [$actorId, $actorType] = $this->actor($request);
+        $oldFee = $row->marketing_fee;
         $row->update([
             'marketing_fee' => $data['marketing_fee'],
             'note' => $data['note'] ?? null,
             'updated_by' => $actorId, 'updated_by_type' => $actorType,
         ]);
+        // N-5: phí marketing đổi → ghi log (chỉ khi số thật sự đổi).
+        [$aId, $aType, $aName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::log('channel_pricing', 'channel_monthly_adjustment', (int) $row->id,
+            $this->adjustmentLabel($row), 'marketing_fee', $oldFee, $data['marketing_fee'], $aId, $aType, $aName);
         return response()->json(['success' => true, 'message' => 'Đã cập nhật.',
             'data' => $this->present($row->fresh()->load('branch:id,name'))]);
     }

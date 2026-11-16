@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\WorkSchedule;
 use App\Models\WorkShift;
 use App\Models\WorkShiftCapacity;
+use App\Traits\ValidatesEmployeeBranch;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,6 +18,8 @@ use Illuminate\Support\Facades\DB;
 // Gói 35: Xếp ca — quản lý gán ca + điều chỉnh giờ vào/ra riêng từng NV.
 class WorkScheduleController extends Controller
 {
+    use ValidatesEmployeeBranch;
+
     // Gói 35b: chuẩn hóa giờ về dạng 24h "H:i" trước khi validate
     private function normTime(?string $v): ?string
     {
@@ -46,7 +49,11 @@ class WorkScheduleController extends Controller
             ->whereIn('date', $days);
         $actor = $request->user();
         if ($actor instanceof Employee) {
-            $scope = $actor->allBranchIds();
+            // Gói A (2026-11-13): token có CN phiên thì bộ lọc CN phải đúng CN phiên.
+            if (!empty($v['branch_id'])) {
+                $this->enforceSessionBranch($actor, (int) $v['branch_id']);
+            }
+            $scope = $this->effectiveBranchScope($actor);
             if (!empty($v['branch_id']) && !in_array((int) $v['branch_id'], $scope, true)) {
                 return response()->json(['success' => false, 'message' => 'Chi nhánh ngoài phạm vi phân công của bạn.'], 403);
             }
@@ -118,7 +125,7 @@ class WorkScheduleController extends Controller
     private function scheduleInScope($actor, WorkSchedule $sched): bool
     {
         if (!$actor instanceof Employee) return true;
-        $scope = $actor->allBranchIds();
+        $scope = $this->effectiveBranchScope($actor);
         if ($sched->branch_id !== null) return in_array((int) $sched->branch_id, $scope, true);
         $empBranch = (int) (Employee::where('id', $sched->employee_id)->value('branch_id') ?? 0);
         return in_array($empBranch, $scope, true);
@@ -190,7 +197,7 @@ class WorkScheduleController extends Controller
         // payload, rồi CN của ca mẫu, rồi CN chính của NV.
         $branchId = $v['branch_id'] ?? $shift?->branch_id ?? $emp->branch_id;
         // Audit 2026-10-23 A1-7: CN xếp ca phải thuộc phân công của NV
-        if ($branchId !== null && !in_array((int) $branchId, $emp->allBranchIds(), true)) {
+        if ($branchId !== null && !in_array((int) $branchId, $this->effectiveBranchScope($emp), true)) {
             throw new \RuntimeException('NV ' . $emp->full_name . ' không được phân công tại chi nhánh này.');
         }
         // Audit 2026-10-23 A1-5: chặn ca CHỒNG GIỜ với ca khác của NV trong ngày

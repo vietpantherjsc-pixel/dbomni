@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\MembershipTier;
 use App\Models\Setting;
+use App\Support\ConfigChangeLogger; // N-5: log đổi ngưỡng hạng + giá trị điểm
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -87,6 +88,9 @@ class MembershipTierController extends Controller
     /** Lưu cấu hình Loyalty (trang Thẻ thành viên — khu Cấu hình Loyalty). */
     public function updateLoyaltyConfig(Request $request): JsonResponse
     {
+        // N-5: chụp giá trị điểm cũ — họ (c) chỉ gồm points_point_value
+        // (updateRedeemConfig ngoài phạm vi, không ghi log).
+        $oldPointValue = (int) Setting::get('points_point_value', 100);
         $validated = $request->validate([
             'tier_window_days' => 'required|integer|min:1|max:3650',
             'tier_downgrade_notice_days' => 'required|integer|min:0|max:365',
@@ -171,6 +175,10 @@ class MembershipTierController extends Controller
         if (array_key_exists('points_channel_default_factor', $validated) && $validated['points_channel_default_factor'] !== null) {
             Setting::set('points_channel_default_factor', $validated['points_channel_default_factor']);
         }
+        // N-5: giá trị quy đổi điểm đổi → ghi log (chỉ khi thật sự đổi).
+        [$actorId, $actorType, $actorName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::log('point_value', 'setting', null, 'Giá trị quy đổi điểm',
+            'points_point_value', $oldPointValue, (int) $validated['points_point_value'], $actorId, $actorType, $actorName);
         return response()->json(['success' => true, 'message' => 'Đã lưu cấu hình Loyalty', 'loyalty_config' => $this->loyaltyConfig()]);
     }
 
@@ -198,6 +206,16 @@ class MembershipTierController extends Controller
         }
 
         $tier = MembershipTier::create($validated);
+        // N-5: hạng mới → ghi log các ngưỡng (cũ = null; trường rỗng không ghi).
+        [$actorId, $actorType, $actorName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::logFields('membership_tier', 'membership_tier', (int) $tier->id, $tier->name, [], [
+            'min_total_spent' => $validated['min_total_spent'] ?? null,
+            'min_spent_window' => $validated['min_spent_window'] ?? null,
+            'keep_spent_window' => $validated['keep_spent_window'] ?? null,
+            'earn_per_amount' => $validated['earn_per_amount'] ?? null,
+            'earn_points' => $validated['earn_points'] ?? null,
+            'earn_multiplier' => $validated['earn_multiplier'] ?? null,
+        ], $actorId, $actorType, $actorName);
         return response()->json(['success' => true, 'data' => $tier], 201);
     }
 
@@ -223,7 +241,13 @@ class MembershipTierController extends Controller
             MembershipTier::where('is_default', true)->where('id', '!=', $id)->update(['is_default' => false]);
         }
 
+        // N-5: chụp ngưỡng cũ trước khi sửa để ghi diff.
+        $old = $tier->only(['min_total_spent', 'min_spent_window', 'keep_spent_window', 'earn_per_amount', 'earn_points', 'earn_multiplier']);
         $tier->update($validated);
+        [$actorId, $actorType, $actorName] = ConfigChangeLogger::actor($request);
+        ConfigChangeLogger::logFields('membership_tier', 'membership_tier', (int) $tier->id, $tier->name, $old,
+            array_intersect_key($validated, array_flip(['min_total_spent', 'min_spent_window', 'keep_spent_window', 'earn_per_amount', 'earn_points', 'earn_multiplier'])),
+            $actorId, $actorType, $actorName);
         return response()->json(['success' => true, 'data' => $tier]);
     }
 

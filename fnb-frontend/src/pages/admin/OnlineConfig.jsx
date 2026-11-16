@@ -23,7 +23,7 @@ const imgSrc = (u) => {
 export default function OnlineConfig() {
   const { can } = useAuth();
   const [loadErr, setLoadErr] = useState(false); // UX 2026-10-26 (🟠T1)
-    const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '8000' });
+    const [ship, setShip] = useState({ ship_base_fee: '20000', ship_base_km: '2', ship_per_km: '8000', ship_cod_fee: '0' });
   // Gói 9: cover trang chủ Mini App
   const [cover, setCover] = useState('');
   // Dời từ Thiết lập chung (2026-10-20): banner KM + card Quan tâm OA thuộc cấu hình Mini App
@@ -46,7 +46,7 @@ export default function OnlineConfig() {
   const load = async () => {
     try {
       const cfg = await axios.get(API + '/online/ship-config');
-      if (cfg.data?.success) setShip({ ship_base_fee: String(cfg.data.data.base_fee), ship_base_km: String(cfg.data.data.base_km), ship_per_km: String(cfg.data.data.per_km) });
+      if (cfg.data?.success) setShip({ ship_base_fee: String(cfg.data.data.base_fee), ship_base_km: String(cfg.data.data.base_km), ship_per_km: String(cfg.data.data.per_km), ship_cod_fee: String(cfg.data.data.ship_cod_fee ?? 0) });
     } catch (e) { setLoadErr(true); }
     try {
       setBranches(await api('/branches'));
@@ -70,6 +70,13 @@ export default function OnlineConfig() {
   useEffect(() => { load(); }, []);
 
   const saveShip = async () => {
+    // Gói mở COD giao hàng (2026-11-11): phí thu hộ COD phải là số nguyên
+    // 0–1.000.000đ (trần chống gõ nhầm) — sai thì báo tại chỗ, không lưu.
+    const codFeeVal = Number(ship.ship_cod_fee);
+    if (!Number.isInteger(codFeeVal) || codFeeVal < 0 || codFeeVal > 1000000) {
+      alert('Phí thu hộ COD phải là số nguyên từ 0 đến 1.000.000đ.');
+      return;
+    }
     setSaving(true);
     try {
       await api('/settings', { method: 'post', data: { settings: ship } });
@@ -186,6 +193,16 @@ export default function OnlineConfig() {
               className="w-full px-3 py-2 border rounded-lg text-sm" />
           </div>
         </div>
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Phí thu hộ COD (chỉ đơn giao hàng trả khi nhận) — đ/đơn</label>
+            <input type="number" min="0" max="1000000" step="1" value={ship.ship_cod_fee}
+              onChange={(e) => setShip({ ...ship, ship_cod_fee: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg text-sm" />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 mb-1">Cộng vào phí giao của đơn giao hàng thanh toán COD. Để 0 = không thu thêm. Khoản này là thu hộ — không tính doanh thu/điểm.</p>
+        <p className="text-xs text-gray-500 mb-3">Công tắc bật/tắt COD cho đơn giao nằm ở thẻ Thanh toán Zalo Mini App.</p>
         <button onClick={saveShip} disabled={saving} className="px-5 py-2 bg-[#24305E] text-white rounded-lg text-sm font-bold hover:bg-[#1B2547] disabled:opacity-50">
           {saving ? 'Đang lưu...' : 'Lưu phí ship'}
         </button>

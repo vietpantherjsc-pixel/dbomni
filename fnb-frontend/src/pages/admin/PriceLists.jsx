@@ -11,6 +11,7 @@ const noteExpired = (e) => {
 };
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import MonthInput from '../../components/MonthInput';
 
 // Gói 8a (2026-10-05): Quản lý kênh bán hàng (giá theo kênh) — thêm/bớt, bật/tắt, kéo-thả sắp xếp.
 const BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -97,7 +98,7 @@ function AdjustTab() {
         <div className="grid grid-cols-1 sm:grid-cols-[220px_220px_1fr] gap-3 items-end">
           <div>
             <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--m-ink-soft)' }}>Tháng đối soát</label>
-            <input type="month" className="m-input w-full" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <MonthInput className="m-input w-full" value={month} onChange={setMonth} />
           </div>
           <div>
             <label className="text-xs font-semibold block mb-1" style={{ color: 'var(--m-ink-soft)' }}>Chi nhánh</label>
@@ -128,7 +129,7 @@ function AdjustTab() {
                 return (
                   <tr key={key} style={isVoid ? { opacity: 0.55 } : undefined}>
                     <td>
-                      <b>{ch.name}</b> <span style={{ color: 'var(--m-ink-faint)', fontSize: 11 }}>({ch.code})</span>
+                      <span className="whitespace-nowrap"><b>{ch.name}</b> <span style={{ color: 'var(--m-ink-faint)', fontSize: 11 }}>({ch.code})</span></span>
                       {isVoid && <div style={{ fontSize: 11.5, color: 'var(--m-danger)' }}>Đã hủy: {row.void_reason} — {row.voided_by_name || ''} {row.voided_at || ''}</div>}
                     </td>
                     <td>
@@ -286,7 +287,9 @@ export default function PriceLists() {
 
   return (
     <AdminLayout>
-      <div className="p-6 max-w-[900px] mx-auto">
+      {/* Vá bố cục 2026-11-15: 900px bó bảng 8 cột → chữ gãy dòng khắp nơi;
+          dùng bề rộng chuẩn của các trang bảng rộng (Categories/Products/Promotions = 1200px) */}
+      <div className="p-6 max-w-[1200px] mx-auto">
         <h1 className="text-[22px] font-bold text-[var(--m-ink)] mb-1">Kênh bán hàng</h1>
         <p className="text-sm mb-6" style={{ color: 'var(--m-ink-soft)' }}>
           Thêm/bớt kênh, bật/tắt, kéo-thả hoặc bấm ↑/↓ để sắp xếp. Mỗi món có thể đặt giá riêng cho từng kênh tại form Mặt hàng.
@@ -326,7 +329,7 @@ export default function PriceLists() {
 
         <div className="m-card overflow-x-auto">
           <table className="m-table">
-            <thead><tr><th style={{width:36}}></th><th>Tên kênh</th><th>Mã</th><th>Phân loại</th><th>Chiết khấu kênh</th><th className="text-center">Món đang bán</th><th className="text-center">Trạng thái</th><th className="text-right">Thao tác</th></tr></thead>
+            <thead><tr><th style={{width:36}}></th><th className="whitespace-nowrap">Tên kênh</th><th className="whitespace-nowrap">Mã</th><th className="whitespace-nowrap">Phân loại</th><th className="whitespace-nowrap">Chiết khấu kênh</th><th className="text-center whitespace-nowrap">Món đang bán</th><th className="text-center whitespace-nowrap">Trạng thái</th><th className="text-right whitespace-nowrap">Thao tác</th></tr></thead>
             <tbody>
               {lists.map((pl, idx) => (
                 <React.Fragment key={pl.id}>
@@ -337,27 +340,27 @@ export default function PriceLists() {
                   onDrop={() => drop(pl.id)}
                 >
                   <td className="cursor-grab" style={{color:'var(--m-ink-faint)'}} title="Kéo để sắp xếp">⠿</td>
-                  <td className="font-medium">
+                  <td className="font-medium whitespace-nowrap">
                     {editing === pl.id ? (
                       <input className="m-input" defaultValue={pl.name} autoFocus
                         onBlur={(e) => { setEditName(e.target.value); }}
                         onKeyDown={(e) => { if (e.key === 'Enter') { setEditName(e.target.value); saveAll({ ...pl }); } if (e.key === 'Escape') setEditing(null); }} />
                     ) : pl.name}
                   </td>
-                  <td><code className="text-xs" style={{color:'var(--m-ink-faint)'}}>{pl.code}</code></td>
-                  <td>
+                  <td className="whitespace-nowrap"><code className="text-xs" style={{color:'var(--m-ink-faint)'}}>{pl.code}</code></td>
+                  <td className="whitespace-nowrap">
                     {editing === pl.id ? (
                       <select className="m-input" value={editCat} onChange={(e) => setEditCat(e.target.value)} style={{ fontSize: 12, padding: '4px 6px' }}>
                         {CATS.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
                       </select>
                     ) : (
-                      <span className="m-badge m-badge-gray">{catLabel(pl.category)}</span>
+                      <span className="m-badge m-badge-gray whitespace-nowrap">{catLabel(pl.category)}</span>
                     )}
                   </td>
-                  <td className="text-sm">{ckText(pl)}</td>
-                  <td className="text-center m-num">{pl.product_count ?? '—'}</td>
-                  <td className="text-center">
-                    <button onClick={() => toggleActive(pl)} className={`m-badge ${pl.is_active ? 'm-badge-green' : 'm-badge-gray'}`}>
+                  <td className="text-sm whitespace-nowrap">{ckText(pl)}</td>
+                  <td className="text-center m-num whitespace-nowrap">{pl.product_count ?? '—'}</td>
+                  <td className="text-center whitespace-nowrap">
+                    <button onClick={() => toggleActive(pl)} className={`m-badge whitespace-nowrap ${pl.is_active ? 'm-badge-green' : 'm-badge-gray'}`}>
                       {pl.is_active ? 'Đang dùng' : 'Đã tắt'}
                     </button>
                   </td>

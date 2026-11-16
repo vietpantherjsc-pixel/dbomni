@@ -1,5 +1,6 @@
 import React, { useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary'; // Lưới đỡ lỗi hiển thị (2026-11-14): lỗi render → thẻ khôi phục thay vì trắng màn
 import { ShopProvider } from './store';
 import BranchSelect from './pages/BranchSelect';
 import Home from './pages/Home';
@@ -37,14 +38,13 @@ const ZALO_BASENAME = (() => {
   } catch { return undefined; }
 })();
 
-export default function App() {
-  // Gói Đón Bình Minh (2026-10-28): bắt mã mời ngay khi app khởi động (cả 2
-  // nguồn: URL + tham số khởi động zmp-sdk) — không phụ thuộc trang đích.
-  useEffect(() => { loadTheme(); captureRef(); }, []);
+// Routes bọc trong ErrorBoundary theo pathname: lỗi render ở bất kỳ
+// trang nào cũng thành thẻ khôi phục, chuyển trang là lỗi tự xóa.
+function RoutedRoutes() {
+  const { pathname } = useLocation();
   return (
-    <ShopProvider>
-      <BrowserRouter basename={ZALO_BASENAME}>
-        <Routes>
+    <ErrorBoundary key={pathname}>
+      <Routes>
           <Route path="/branches" element={<BranchSelect />} />
           <Route path="/" element={<Home />} />
           <Route path="/cart" element={<Cart />} />
@@ -61,7 +61,19 @@ export default function App() {
           <Route path="/coupons" element={<Coupons />} />
           <Route path="/invite" element={<Invite />} />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      </Routes>
+    </ErrorBoundary>
+  );
+}
+
+export default function App() {
+  // Gói Đón Bình Minh (2026-10-28): bắt mã mời ngay khi app khởi động (cả 2
+  // nguồn: URL + tham số khởi động zmp-sdk) — không phụ thuộc trang đích.
+  useEffect(() => { loadTheme(); captureRef(); }, []);
+  return (
+    <ShopProvider>
+      <BrowserRouter basename={ZALO_BASENAME}>
+        <RoutedRoutes />
       </BrowserRouter>
     </ShopProvider>
   );

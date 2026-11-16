@@ -119,6 +119,9 @@ export default function DangKyCa() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  // Luật nộp lại (2026-11-15): các ngày server giữ nguyên vì đã duyệt —
+  // hiện rõ trong hộp thoại thành công, không im lặng bỏ qua.
+  const [keptDates, setKeptDates] = useState([]);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
   // Gói 37: hạn chót + lượt gửi
@@ -243,13 +246,17 @@ export default function DangKyCa() {
       }),
   });
 
+  // Ngày giữ nguyên vì đã duyệt → chữ dd/mm để hiện cho NV (cắt chuỗi, tránh lệch múi giờ)
+  const keptText = (dates) => (dates || []).map((d) => d.slice(8, 10) + '/' + d.slice(5, 7)).join(', ');
+
   const saveDraft = async () => {
     setSaving(true);
     try {
-      await axios.post(API + '/employee/shift-registrations/week', {
+      const r = await axios.post(API + '/employee/shift-registrations/week', {
         ...payload(), status: 'draft',
       }, auth(token));
-      toast('Đã lưu nháp ✓');
+      const kept = r.data?.kept_approved_dates || [];
+      toast(kept.length ? 'Đã lưu nháp ✓ — ngày ' + keptText(kept) + ' đã duyệt nên giữ nguyên.' : 'Đã lưu nháp ✓');
     } catch (e) {
       if (expired(e)) return;
       toastErr(errMsg(e, 'Lưu nháp thất bại.'));
@@ -265,9 +272,10 @@ export default function DangKyCa() {
     setAskSubmit(null);
     setSaving(true);
     try {
-      await axios.post(API + '/employee/shift-registrations/week', {
+      const r = await axios.post(API + '/employee/shift-registrations/week', {
         ...payload(), status: 'submitted',
       }, auth(token));
+      setKeptDates(r.data?.kept_approved_dates || []);
       setShowSuccess(true);
       loadWeek(token); // tải lại để cập nhật lượt gửi còn lại
     } catch (e) {
@@ -281,6 +289,7 @@ export default function DangKyCa() {
     if (n < 0 || n > MAX_WEEK_OFFSET) return;
     setWkOffset(n);
     setShowSuccess(false);
+    setKeptDates([]);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -433,6 +442,9 @@ export default function DangKyCa() {
             <div className="dk-oktitle">Đã gửi đăng ký!</div>
             <div className="dk-okweek">{wkLabel}</div>
             <div className="dk-okdesc">Quản lý sẽ xếp lịch và thông báo sau.<br />{submitsLeft > 0 ? 'Bạn còn ' + submitsLeft + ' lần gửi lại cho tuần này.' : 'Bạn đã hết lượt gửi lại cho tuần này.'}</div>
+            {keptDates.length > 0 && (
+              <div className="dk-okdesc" style={{ marginTop: -14, color: '#B45309', fontWeight: 600 }}>🔒 Ngày {keptText(keptDates)} đã được duyệt nên được giữ nguyên — phần còn lại đã cập nhật theo đăng ký mới.</div>
+            )}
             <button className="dk-done" onClick={() => setShowSuccess(false)}>Xong</button>
           </div>
         </div>

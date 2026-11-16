@@ -167,6 +167,42 @@ class GroupOrderController extends Controller
         if ($group->status === 'ordered' && $group->order_id && $request->filled('client_key')) {
             $existing = \App\Models\Order::with('items')->find($group->order_id);
             if ($existing && $existing->client_key === $request->input('client_key')) {
+                // Gói Checkout SDK — bổ sung Đ4 (lệnh PM 2026-11-11): ca trùng
+                // cũng mở được SDK ngay trên response như nhánh không-trùng —
+                // gắn sdk_params cho BANK/COD khi đơn còn chờ thanh toán. Kênh
+                // lấy theo pay_channel đã lưu trên đơn (fallback: payment_method
+                // của request, khớp khuôn $isBank/$isCod của nhánh chính); fail-fast
+                // cấu hình như nhánh chính (BANK: key + thông tin NH · COD: key).
+                $dupChannel = null;
+                if ($existing->pay_channel === \App\Services\ZaloPaymentService::CHANNEL_BANK
+                    || $existing->pay_channel === \App\Services\ZaloPaymentService::CHANNEL_COD) {
+                    $dupChannel = $existing->pay_channel;
+                } elseif ($request->input('payment_method') === 'transfer' && (bool) \App\Models\Setting::get('zalo_pay_bank_enabled', '1')) {
+                    $dupChannel = \App\Services\ZaloPaymentService::CHANNEL_BANK;
+                } elseif ($request->input('payment_method') === 'pay_at_store' && (bool) \App\Models\Setting::get('zalo_pay_cod_enabled', '1')) {
+                    $dupChannel = \App\Services\ZaloPaymentService::CHANNEL_COD;
+                }
+                if ($dupChannel && $existing->payment_status === 'pending_payment') {
+                    $payService = app(\App\Services\ZaloPaymentService::class);
+                    $ready = $dupChannel === \App\Services\ZaloPaymentService::CHANNEL_BANK
+                        ? ($payService->paymentKeyReady() && $payService->bankInfoComplete())
+                        : $payService->paymentKeyReady();
+                    if ($ready) {
+                        try {
+                            $params = $payService->createCheckoutParams($existing, $dupChannel);
+                            $orderData = $existing->fresh()->load(['items.product', 'customer'])->toArray();
+                            $orderData['sdk_params'] = $params['sdk_params'];
+                            $orderData['bank_info'] = $params['bank_info'];
+                            $orderData['transfer_content'] = $params['transfer_content'];
+                            $orderData['pay_channel'] = $dupChannel;
+                            return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $orderData, 'duplicate' => true]);
+                        } catch (\Exception $e) {
+                            // Không vì lỗi cấp lại params mà mất đơn đã chốt —
+                            // trưởng nhóm còn đường "Thanh toán tiếp" ở /pay-wait.
+                            \Illuminate\Support\Facades\Log::warning('[ThanhToanQR] Đơn nhóm trùng: cấp lại params thất bại cho đơn ' . $existing->code . ': ' . $e->getMessage());
+                        }
+                    }
+                }
                 return response()->json(['success' => true, 'message' => 'Đơn đã được tạo trước đó', 'data' => $existing, 'duplicate' => true]);
             }
         }
@@ -203,6 +239,14 @@ class GroupOrderController extends Controller
             'payment_method' => 'required|string|max:30',
             'voucher_code' => 'nullable|string|exists:vouchers,code',
             'promotion_id' => 'nullable|exists:promotions,id',
+            // Spec đồng bộ luồng nhóm (2026-11-13, L4 + L11): chuyển tiếp
+            // vào store() như đơn thường — coupon ví của trưởng nhóm và
+            // email tự nguyện; thiếu 2 dòng này thì validate ở đây nuốt
+            // mất payload trước khi store() nhận (store() đã có sẵn luật
+            // xử lý cả hai: coupon ví thay promotion_id, email chỉ điền
+            // khi hồ sơ trống).
+            'customer_coupon_id' => 'nullable|exists:customer_coupons,id',
+            'email' => 'nullable|email|max:150',
             // Spec mật khẩu §5.4: cờ đồng ý NĐ 13 để store() ghi mốc 'checkout'
             // (chốt đơn nhóm cũng qua store() nên cùng cổng cứng).
             'consent_agreed' => 'nullable|boolean',
@@ -215,15 +259,37 @@ class GroupOrderController extends Controller
             'delivery_provider' => 'nullable|in:ahamove,lalamove',
             'delivery_dropoff_lat' => 'nullable|numeric|between:-90,90',
             'delivery_dropoff_lng' => 'nullable|numeric|between:-180,180',
+            // Gói geocode lai NDAMaps (2026-11-13 mục 3.3 + 6): cờ nguồn
+            // điểm áp cho đơn nhóm như đơn thường — thiếu dòng này thì
+            // validate ở đây nuốt mất trường trước khi store() nhận.
+            'dropoff_source' => 'nullable|in:ladder,ndamaps_place,ndamaps_forward,saved',
         ]);
 
         // Spec QR 2026-10-21: đơn nhóm trả bằng CHUYỂN KHOẢN cũng đi qua kênh BANK —
         // FAIL-FAST cấu hình NH + private key TRƯỚC khi tạo đơn (chống đơn mồ côi).
-        $isBank = ($v['payment_method'] ?? '') === 'transfer' && (bool) \App\Models\Setting::get('zalo_pay_bank_enabled', '1');
+        // Vá §HL (2026-11-13, lỗi sống S-05): TÁCH nhận diện kênh khỏi cờ
+        // khả dụng. Trước đây $isBank gộp cờ zalo_pay_bank_enabled vào
+        // phép nhận diện kênh nên khi BANK tắt thì $isBank=false, khối
+        // fail-fast 422 KHÔNG BAO GIỜ chạy và đơn vẫn tạo 201 — đơn mồ
+        // côi không kênh, không sdk_params (mẫu sống: đơn 3573). Nay
+        // $isBank/$isCod CHỈ nhận diện kênh đã chọn; cờ khả dụng là điều
+        // kiện CHẶN riêng trong cùng khối 422 (câu lỗi giữ nguyên văn).
+        // Cùng mẫu lỗi ở $isCod nên vá đối xứng cả hai kênh.
+        $isBank = ($v['payment_method'] ?? '') === 'transfer';
+        $isCod = ($v['payment_method'] ?? '') === 'pay_at_store';
+        $bankEnabled = (bool) \App\Models\Setting::get('zalo_pay_bank_enabled', '1');
+        $codEnabled = (bool) \App\Models\Setting::get('zalo_pay_cod_enabled', '1');
         $payService = app(\App\Services\ZaloPaymentService::class);
-        if ($isBank && (!$payService->paymentKeyReady() || !$payService->bankInfoComplete())) {
+        if ($isBank && (!$bankEnabled || !$payService->paymentKeyReady() || !$payService->bankInfoComplete())) {
             \Illuminate\Support\Facades\Log::warning('[ThanhToanQR] Đơn nhóm BANK bị chặn do thiếu cấu hình thanh toán.');
             return response()->json(['success' => false, 'message' => 'Kênh chuyển khoản tạm chưa sẵn sàng. Vui lòng chọn trả tại quán.'], 422);
+        }
+        // Gói Checkout SDK — Đ4 (2026-11-10): đơn nhóm COD (trả tại quán)
+        // cũng đi qua Checkout SDK như đơn thường — mac bắt buộc cho mọi
+        // kênh nên fail-fast private key cho COD trước khi tạo đơn.
+        if ($isCod && (!$codEnabled || !$payService->paymentKeyReady())) {
+            \Illuminate\Support\Facades\Log::warning('[ThanhToanQR] Đơn nhóm COD bị chặn do thiếu private key ký mac Checkout SDK.');
+            return response()->json(['success' => false, 'message' => 'Kênh trả tại quán tạm chưa sẵn sàng. Vui lòng chọn chuyển khoản.'], 422);
         }
 
         // Dựng items cho đơn online: tên người đặt nối vào ghi chú từng dòng
@@ -258,15 +324,20 @@ class GroupOrderController extends Controller
 
             // Spec QR 2026-10-21: đơn nhóm BANK — gắn pay_channel + params CK vào response
             // để trưởng nhóm vào màn "Chờ thanh toán" như đơn thường.
-            if ($isBank && !empty($data['data']['id'])) {
+            // Gói Checkout SDK — Đ4 (2026-11-10): trả kèm sdk_params cho CẢ
+            // BANK lẫn COD để trưởng nhóm mở CheckoutSDK ngay sau khi chốt
+            // (cùng đường params với checkout-orders, không luồng riêng).
+            if (($isBank || $isCod) && !empty($data['data']['id'])) {
                 $order = \App\Models\Order::find($data['data']['id']);
                 try {
-                    $params = $payService->createCheckoutParams($order, \App\Services\ZaloPaymentService::CHANNEL_BANK);
+                    $params = $payService->createCheckoutParams($order, $isBank
+                        ? \App\Services\ZaloPaymentService::CHANNEL_BANK
+                        : \App\Services\ZaloPaymentService::CHANNEL_COD);
                     $orderData = $order->fresh()->load(['items.product', 'customer'])->toArray();
+                    $orderData['sdk_params'] = $params['sdk_params'];
                     $orderData['bank_info'] = $params['bank_info'];
                     $orderData['transfer_content'] = $params['transfer_content'];
-                    $orderData['vietqr_payload'] = $params['vietqr_payload'] ?? null;
-                    $orderData['pay_channel'] = 'BANK';
+                    $orderData['pay_channel'] = $isBank ? 'BANK' : 'COD';
                     return response()->json(['success' => true, 'message' => $data['message'] ?? 'Đặt món thành công!', 'data' => $orderData], 201);
                 } catch (\Exception $e) {
                     // Đã fail-fast ở trên — lỗi tới đây là bất thường: hủy đơn, không để mồ côi.

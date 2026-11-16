@@ -53,7 +53,17 @@ export const api = {
   menu: (branchId) => req(`/display-menus?unique=1${branchId ? `&branch_id=${branchId}` : ''}`), // Gói 7g: theo Thực đơn; unique=1: món trùng chỉ hiện 1 lần ở thực đơn trên cùng. Gói 25: lọc món/thực đơn bị ẩn ở CN
   shipConfig: () => req('/ship-config'),
   // Gói 50e: geocode qua backend (tránh Zalo chặn domain OSM)
-  geocode: (q) => req(`/geocode?q=${encodeURIComponent(q)}`),
+  // Spec bỏ ghim (2026-11-12): opts mang 3 trường cấu trúc + tọa độ chi
+  // nhánh để backend chạy truy vấn bậc thang (đáp kèm ladder_step).
+  geocode: (q, opts = {}) => {
+    let url = `/geocode?q=${encodeURIComponent(q)}`;
+    if (opts.street) url += `&street=${encodeURIComponent(opts.street)}`;
+    if (opts.ward) url += `&ward=${encodeURIComponent(opts.ward)}`;
+    if (opts.province) url += `&province=${encodeURIComponent(opts.province)}`;
+    if (opts.branch_lat) url += `&branch_lat=${opts.branch_lat}`;
+    if (opts.branch_lng) url += `&branch_lng=${opts.branch_lng}`;
+    return req(url);
+  },
   geocodeReverse: (lat, lon) => req(`/geocode/reverse?lat=${lat}&lon=${lon}`), // Gói 55 p3
   // Gói 55 p11ac: tỉnh/thành + xã/phường qua backend (Zalo WebView chặn domain lạ)
   provinces: () => req('/provinces'),
@@ -74,7 +84,15 @@ export const api = {
       .filter((m, i, arr) => arr.findIndex((x) => x.value === m.value) === i)
   ),
   // Gói 50f: gợi ý địa chỉ khi gõ
-  geocodeSuggest: (q, lat, lon) => req(`/geocode/suggest?q=${encodeURIComponent(q)}${lat ? `&lat=${lat}&lon=${lon}` : ''}`),
+  // Gói geocode lai NDAMaps (2026-11-13 mục 2.4): đáp đổi thành
+  // {source: 'ndamaps' | 'nominatim', items: [...]}; session là token
+  // phiên chọn địa chỉ của client (tùy chọn — thiếu thì server vẫn chạy
+  // được, chỉ mất tính quota 1 lần/phiên của NDAMaps).
+  geocodeSuggest: (q, lat, lon, session) => req(`/geocode/suggest?q=${encodeURIComponent(q)}${lat ? `&lat=${lat}&lon=${lon}` : ''}${session ? `&session=${encodeURIComponent(session)}` : ''}`),
+  // Gói geocode lai NDAMaps (2026-11-13 mục 2.2): tọa độ bản ghi khi
+  // khách chọn gợi ý NDAMaps — trả null khi điểm không dùng được (lệch
+  // tỉnh / quá xa / place lỗi); client khi đó chỉ điền chữ.
+  geocodePlace: (placeId, session, province, lat, lon) => req(`/geocode/place?place_id=${encodeURIComponent(placeId)}${session ? `&session=${encodeURIComponent(session)}` : ''}${province ? `&province=${encodeURIComponent(province)}` : ''}${lat ? `&lat=${lat}&lon=${lon}` : ''}`),
   // Gói 9: trang chủ kiểu GrabFood
   // Gói 10f: shopInfo theo chi nhánh -> cover riêng (chưa có thì cover chung)
   shopInfo: (branchId) => req(`/shop-info${branchId ? `?branch_id=${branchId}` : ''}`),
@@ -92,7 +110,6 @@ export const api = {
   groupCheckout: (code, payload) => req(`/group-orders/${encodeURIComponent(code)}/checkout`, { method: 'POST', body: JSON.stringify(payload) }),
   // Gói 11: nhận đơn POS vào tài khoản qua QR tích điểm
   claimOrder: (code, payload) => req(`/orders/${encodeURIComponent(code)}/claim`, { method: 'POST', body: JSON.stringify(payload) }),
-  shippingFee: (distance_km) => req('/shipping-fee', { method: 'POST', body: JSON.stringify({ distance_km }) }),
   eligiblePromotions: (payload) => req('/promotions/eligible', { method: 'POST', body: JSON.stringify(payload) }),
   // Audit 2026-10-21 🟠8: validate voucher gõ tay để hiện số giảm vào tổng trước khi đặt
   validateVoucher: (payload) => req('/voucher/validate', { method: 'POST', body: JSON.stringify(payload) }),
@@ -116,17 +133,30 @@ export const api = {
   codeLogin: (payload) => reqRaw('/customer/session/code-login', { method: 'POST', body: JSON.stringify(payload) }),
   sessionLogout: () => reqRaw('/customer/session/logout', { method: 'POST' }),
   updateProfileEmail: (payload) => reqRaw('/customer/profile/email', { method: 'PATCH', body: JSON.stringify(payload) }),
-  createOrder: (payload) => req('/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  // Spec Quan tâm OA trong app 2026-11-12: báo trạng thái follow OA thật
+  // (đọc từ Zalo followedOA) về server giữ bản sao cho Admin. Token phiên
+  // tự gắn ở req(); server lấy khách từ phiên, payload không mang mã khách.
+  reportOaFollow: (followed, idByOA) => req('/customer/oa-follow', { method: 'POST', body: JSON.stringify({ followed, id_by_oa: idByOA || null }) }),
+  // Gói Checkout SDK — Đ3 (2026-11-10): ĐÃ GỠ helper createOrder
+  // (POST /orders) khỏi Mini App — mọi đơn đặt qua checkoutOrder
+  // (checkout-orders + Checkout SDK), không còn đường tạo đơn song song.
   trackOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}?phone=${encodeURIComponent(phone || '')}`),
   cancelOrder: (code, phone) => req(`/orders/${encodeURIComponent(code)}/cancel`, { method: 'POST', body: JSON.stringify({ phone }) }),
-  // Spec QR 2026-10-21: khách báo đã chuyển khoản (phương án A — NV đối chiếu rồi xác nhận tay)
-  transferNotified: (code, phone) => req(`/orders/${encodeURIComponent(code)}/transfer-notified`, { method: 'POST', body: JSON.stringify({ phone }) }),
-  // Gói 60: báo giá giao hàng live từ AhaMove/Lalamove qua backend
-  deliveryQuote: (payload) => req('/delivery/quote', { method: 'POST', body: JSON.stringify(payload) }),
+  // Gói vá sau vòng S — Mục 4 (2026-11-12): nút "Đã chuyển khoản" ở màn chờ MỚI —
+  // CHỈ ghi mốc giờ khách bấm (customer_notified_at) cho NV ưu tiên đối chiếu,
+  // KHÔNG đổi trạng thái thanh toán (khác hẳn đường báo CK cũ đã gỡ ở gói dọn).
+  markTransfer: (code, phone) => req(`/orders/${encodeURIComponent(code)}/transfer-mark`, { method: 'POST', body: JSON.stringify({ phone }) }),
   deliveryConfig: () => req('/delivery/config'),
   // SPEC-01: thanh toán Zalo Mini App
   zaloPayConfig: () => req('/payment/zalo-config'),
   checkoutOrder: (payload) => req('/checkout-orders', { method: 'POST', body: JSON.stringify(payload) }),
+  // Gói Checkout SDK (2026-11-10): gắn mã đơn phía SDK (orderId từ
+  // createOrder) về server — notify đối chiếu đơn qua mã này. Kèm SĐT hồ
+  // sơ để server xác thực đơn thuộc chính khách (khuôn track/cancel).
+  linkSdkOrder: (code, sdkOrderId) => req(`/orders/${encodeURIComponent(code)}/payment/sdk-link`, { method: 'POST', body: JSON.stringify({ sdk_order_id: sdkOrderId, phone: getProfile()?.phone || '' }) }),
+  // Gói Checkout SDK (spec §3): server cấp lại tham số SDK cho đơn đang
+  // chờ thanh toán — nút "Thanh toán tiếp", không tạo đơn mới.
+  repayParams: (code) => req(`/orders/${encodeURIComponent(code)}/payment/repay-params`, { method: 'POST', body: JSON.stringify({ phone: getProfile()?.phone || '' }) }),
   // SPEC-02: ví coupon + referral + tích tem
   // Spec KM chống mã (2026-10-21) Phần B: định danh bằng SĐT + mã TV hoặc zalo_id
   // (server KHÔNG nhận customer_id trần nữa).
@@ -143,7 +173,6 @@ export const api = {
   minigameShareCard: (identity, image) => req('/minigame/share-card', { method: 'POST', body: JSON.stringify({ ...identity, image }) }),
   myStamps: (identity) => req(`/coupons/stamps?${identityQuery(identity)}`),
   myReferral: (identity) => req(`/coupons/referral?${identityQuery(identity)}`),
-  validateCoupon: (payload) => req('/coupons/validate', { method: 'POST', body: JSON.stringify(payload) }),
 };
 
 // Dựng query định danh khách từ profile/thông tin đã xác thực
@@ -235,7 +264,13 @@ export const getZaloTokens = async () => {
 // quyền Zalo → ném lỗi cho phía gọi xử lý im lặng như trước.
 // Spec mật khẩu §3.4: thành công kèm session_token → lưu phiên token
 // (member_code chỉ còn để hiển thị, không làm chứng thực nữa).
-export const authWithZalo = async () => {
+// Vá kiểm chứng đồng ý NĐ13 phía server (2026-11-12): các luồng ĐĂNG KÝ
+// (thẻ Tài khoản + Minigame) truyền trạng thái ô tick ConsentCheck của
+// chính chúng qua consentAgreed → payload consent_agreed; server chỉ bắt
+// buộc cờ khi TẠO TÀI KHOẢN MỚI (thiếu → 422 consent_required). Luồng
+// liên kết của khách cũ (Quản lý quyền) không truyền — server không kiểm
+// lại với khách cũ.
+export const authWithZalo = async (consentAgreed = false) => {
   const tk = await getZaloTokens();
   if (!tk.ok) return { success: false, code: 'not_zalo' };
   const res = await fetch(`${API}/zalo/auth`, {
@@ -247,6 +282,7 @@ export const authWithZalo = async () => {
       name: tk.userInfo?.name,
       avatar: tk.userInfo?.avatar,
       referred_by: getRef() || null,
+      consent_agreed: !!consentAgreed,
     }),
   });
   const json = await res.json();

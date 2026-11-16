@@ -38,6 +38,7 @@ class PromotionController extends Controller
             'scope_ids' => 'nullable|array',
             'min_order_amount' => 'nullable|numeric|min:0',
             'max_discount_amount' => 'nullable|numeric|min:0',
+            'per_customer_limit' => 'nullable|integer|min:1', // RT-03 (2026-11-13): trần lượt/khách; null = không giới hạn (cột nullable thật, giữ null như voucher)
             'gift_product_id' => 'nullable|exists:products,id',
             'gift_quantity' => 'nullable|integer|min:1',
             'target' => 'required|in:all,tier',

@@ -28,7 +28,7 @@ export default function ZaloPaymentSettings({ onDirty, onSaved } = {}) {
     useEffect(() => {
         axios.get(`${API}/settings`, { params: { keys: KEYS.join(',') } })
             .then((r) => {
-                const d = r.data?.data || {};
+                const d = r.data || {}; // Vá §IN (2026-11-13): GET /settings trả object trần — trước đây đọc r.data.data (bóc thừa 1 lớp) nên luôn rỗng
                 setVals({
                     zalo_pay_bank_enabled: d.zalo_pay_bank_enabled ?? '1',
                     zalo_pay_cod_enabled: d.zalo_pay_cod_enabled ?? '1',

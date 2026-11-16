@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { fmtDateTime } from './utils/format';
+import { CANCEL_REASON_OPTIONS } from './utils/cancelReasons';
 import { useBranch } from './contexts/BranchContext'; // C4: CN của KDS = trạng thái CN dùng chung (lưu theo tài khoản)
 import {
   ChefHat, Clock, CheckCircle2, RefreshCw,
-  Volume2, VolumeX, Check, Store, ShoppingCart, Eye, X, Printer, Receipt
+  Volume2, VolumeX, Check, Store, ShoppingCart, Eye, X, Printer, Receipt, Undo2
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -170,6 +171,8 @@ function OrderDetailPop({ ord, onClose, typeLabel }) {
             <p>📍 {ord.delivery_address}
               {ord.delivery_dropoff_lat && <> · Ghim: {Number(ord.delivery_dropoff_lat).toFixed(5)}, {Number(ord.delivery_dropoff_lng).toFixed(5)}</>}
               {ord.pin_corrected && <span className="text-amber-400 font-bold"> · Đã đính chính tại quán</span>}
+              {/* Gói geocode lai NDAMaps (2026-11-13 mục 3.3): huy hiệu chỉ hiện khi điểm giao từ đường cứu cánh. */}
+              {ord.dropoff_source === 'ndamaps_forward' && <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">⚠ Điểm từ đường dự phòng — kiểm lại phí</span>}
             </p>
           )}
           {ord.delivery_failure_reason && <p className="text-red-400 font-bold">✖ Lý do giao thất bại: {ord.delivery_failure_reason}</p>}
@@ -466,7 +469,7 @@ function BookShipPop({ ord, onClose, onRefresh }) {
                 ))}
                 {quote.is_cod && <p className="text-[11px] text-slate-400">Đơn thu hộ (COD) — chỉ giao qua AhaMove theo quy định.</p>}
                 <div className="border-t border-slate-700 pt-2 space-y-1 text-sm">
-                  <div className="flex justify-between"><span>Phí ship khách đã trả</span><span className="font-mono">{fmtMoney(quote.customer_fee)}</span></div>
+                  <div className="flex justify-between"><span>Phí ship khách đã trả{Number(ord.shipping_cod_fee || 0) > 0 ? ' (đã gồm phụ thu COD)' : ''}</span><span className="font-mono">{fmtMoney(quote.customer_fee)}</span></div>
                   <div className="flex justify-between"><span>Phí hãng {willLabel ? `(${willLabel})` : ''}</span><span className="font-mono">{quote.chosen_fee != null ? fmtMoney(quote.chosen_fee) : '—'}</span></div>
                   <div className="flex justify-between font-extrabold"><span>Phần quán chịu</span><span className="font-mono">{quote.shop_share != null ? fmtMoney(quote.shop_share) : '—'}</span></div>
                   <p className="text-[11px] text-slate-400">Trần quán chịu: {fmtMoney(quote.cap)}/đơn.</p>
@@ -792,14 +795,41 @@ export default function KdsScreen({ onBackToClient }) {
     }
   };
 
-  // Gói SEC: Từ chối → gọi API cancel (hoàn kho/điểm/giải phóng bàn) thay vì updateStatus
-  const handleReject = async (ord) => {
-    if (!confirm(`Từ chối đơn #${ord.code}? Kho và điểm sẽ được hoàn lại.`)) return;
+  // N-2 (360 đợt 2): Từ chối mở bộ chọn mã nguyên nhân + ghi chú (bắt
+  // buộc chọn mã; không còn chuỗi cứng 'KDS từ chối').
+  const [rejectFor, setRejectFor] = useState(null);
+  const [rejectReasonCode, setRejectReasonCode] = useState('');
+  const [rejectNote, setRejectNote] = useState('');
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const confirmReject = async (ord) => {
+    setRejectBusy(true);
     try {
-      const res = await axios.post(`${API_BASE}/orders/${ord.id}/cancel`, { reason: 'KDS từ chối' });
-      if (res.data?.success) { alert('Đã từ chối và hoàn kho.'); fetchKdsOrders(); }
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/cancel`, { reason: rejectNote.trim() || null, reason_code: rejectReasonCode });
+      if (res.data?.success) { alert('Đã từ chối và hoàn kho.'); setRejectFor(null); setRejectReasonCode(''); setRejectNote(''); fetchKdsOrders(); }
       else alert(res.data?.message || 'Lỗi');
     } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+    setRejectBusy(false);
+  };
+  const renderReject = (ord) => {
+    if (rejectFor !== ord.id) return null;
+    return (
+      <div className="w-full space-y-1.5 rounded-xl border border-red-500/40 bg-red-500/10 p-2.5">
+        <p className="text-[11px] font-semibold text-red-200">Từ chối đơn #{ord.code} — kho và điểm sẽ được hoàn lại.</p>
+        <select value={rejectReasonCode} onChange={(e) => setRejectReasonCode(e.target.value)}
+          className="w-full rounded-lg bg-slate-900 border border-slate-600 px-2.5 py-2 text-xs text-slate-100">
+          <option value="">— Chọn nguyên nhân —</option>
+          {CANCEL_REASON_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+        </select>
+        <input value={rejectNote} onChange={(e) => setRejectNote(e.target.value)}
+          placeholder={rejectReasonCode === 'other' ? 'Ghi chú cụ thể (bắt buộc)' : 'Ghi chú (tùy chọn)'}
+          className="w-full rounded-lg bg-slate-900 border border-slate-600 px-2.5 py-2 text-xs text-slate-100" />
+        <div className="flex gap-2">
+          <button onClick={() => confirmReject(ord)} disabled={!rejectReasonCode || (rejectReasonCode === 'other' && !rejectNote.trim()) || rejectBusy}
+            className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold disabled:opacity-50">{rejectBusy ? 'Đang từ chối...' : 'Xác nhận từ chối'}</button>
+          <button onClick={() => setRejectFor(null)} disabled={rejectBusy} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 text-xs font-bold">Đóng</button>
+        </div>
+      </div>
+    );
   };
 
   const handleConfirmPayment = async (orderId, orderCode) => {
@@ -809,6 +839,52 @@ export default function KdsScreen({ onBackToClient }) {
       if (res.data?.success) fetchKdsOrders();
       else alert(res.data?.message || 'Lỗi');
     } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+  };
+
+  // Hoàn tác xác nhận thanh toán (spec 2026-11-12): hộp ngay trên thẻ —
+  // cảnh báo hậu quả + ô lý do bắt buộc (rỗng thì khóa nút), không dùng
+  // hộp thoại gốc vì cần nhập lý do.
+  const [undoFor, setUndoFor] = useState(null);
+  const [undoReason, setUndoReason] = useState('');
+  const [undoReasonCode, setUndoReasonCode] = useState(''); // N-2 (360 đợt 2): mã nguyên nhân hoàn tác
+  const [undoBusy, setUndoBusy] = useState(false);
+  const handleUndoPayment = async (ord) => {
+    setUndoBusy(true);
+    try {
+      const res = await axios.post(`${API_BASE}/orders/${ord.id}/undo-payment`, { reason: undoReason.trim() || null, reason_code: undoReasonCode, surface: 'kds' });
+      if (res.data?.success) { setUndoFor(null); setUndoReason(''); setUndoReasonCode(''); fetchKdsOrders(); }
+      else alert(res.data?.message || 'Lỗi');
+    } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+    setUndoBusy(false);
+  };
+  const renderUndoPayment = (ord) => {
+    if (!ord.can_undo_payment) return null;
+    if (undoFor !== ord.id) {
+      return (
+        <button onClick={() => { setUndoFor(ord.id); setUndoReason(''); setUndoReasonCode(''); }} className={`${btnBase} bg-red-900/60 hover:bg-red-800 text-red-300`}>
+          <Undo2 className="w-3.5 h-3.5" /> Hoàn tác xác nhận
+        </button>
+      );
+    }
+    return (
+      <div className="w-full space-y-1.5 rounded-xl border border-red-500/40 bg-red-500/10 p-2.5">
+        <p className="text-[11px] font-semibold text-red-200">
+          {ord.pay_channel === 'BANK' && ord.pay_sdk_order_id
+            ? 'Hoàn tác sẽ báo HỦY giao dịch phía Zalo — khách KHÔNG thanh toán lại qua Zalo cho đơn này được nữa, chỉ chuyển khoản trực tiếp cho quán. Điểm sẽ bị thu hồi, kho hoàn lại, đơn về chờ thanh toán.'
+            : 'Điểm đã tích sẽ bị thu hồi, kho sẽ được hoàn lại, đơn trở về trạng thái chờ thanh toán.'}
+        </p>
+        <select value={undoReasonCode} onChange={(e) => setUndoReasonCode(e.target.value)}
+          className="w-full rounded-lg bg-slate-900 border border-slate-600 px-2.5 py-2 text-xs text-slate-100">
+          <option value="">— Chọn nguyên nhân —</option>
+          {CANCEL_REASON_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+        </select>
+        <input value={undoReason} onChange={(e) => setUndoReason(e.target.value)} placeholder={undoReasonCode === 'other' ? 'Ghi chú cụ thể (bắt buộc)' : 'Ghi chú (tùy chọn)'} className="w-full rounded-lg bg-slate-900 border border-slate-600 px-2.5 py-2 text-xs text-slate-100" />
+        <div className="flex gap-2">
+          <button onClick={() => handleUndoPayment(ord)} disabled={!undoReasonCode || (undoReasonCode === 'other' && !undoReason.trim()) || undoBusy} className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold disabled:opacity-50">{undoBusy ? 'Đang hoàn tác...' : 'Xác nhận hoàn tác'}</button>
+          <button onClick={() => setUndoFor(null)} disabled={undoBusy} className="px-3 py-2 rounded-lg bg-slate-700 text-slate-200 text-xs font-bold">Đóng</button>
+        </div>
+      </div>
+    );
   };
 
   // ---- Spec KDS book ship: thao tác giao hàng tại KDS ----
@@ -977,9 +1053,11 @@ export default function KdsScreen({ onBackToClient }) {
                     <Check className="w-3.5 h-3.5" /> Xác nhận đơn
                   </button>
                 )}
-                <button onClick={() => handleReject(ord)} className={`${btnBase} bg-red-900/60 hover:bg-red-800 text-red-300`}>
+                <button onClick={() => { setRejectFor(rejectFor === ord.id ? null : ord.id); setRejectReasonCode(''); setRejectNote(''); }} className={`${btnBase} bg-red-900/60 hover:bg-red-800 text-red-300`}>
                   <X className="w-3.5 h-3.5" /> Từ chối
                 </button>
+                {renderReject(ord)}
+                {renderUndoPayment(ord)}
               </KdsOrderRow>
             ))}
           </div>
@@ -1010,6 +1088,7 @@ export default function KdsScreen({ onBackToClient }) {
                 <button onClick={() => handleUpdateStatus(ord.code, 'ready')} className={`${btnBase} bg-blue-600 hover:bg-blue-500 text-white`}>
                   <Check className="w-3.5 h-3.5" /> Đã làm xong
                 </button>
+                {renderUndoPayment(ord)}
               </KdsOrderRow>
             ))}
           </div>
@@ -1043,6 +1122,7 @@ export default function KdsScreen({ onBackToClient }) {
                     <CheckCircle2 className="w-3.5 h-3.5" /> Khách đã nhận
                   </button>
                 )}
+                {renderUndoPayment(ord)}
               </KdsOrderRow>
             ))}
           </div>

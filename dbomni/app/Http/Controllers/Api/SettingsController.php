@@ -38,6 +38,22 @@ class SettingsController extends Controller
             // Gói chính sách Mini App vào Cài đặt Admin: nội dung chính sách
             // (đã giải mã; chưa từng sửa → bản mặc định + is_default = true).
             'miniapp_privacy_policy' => $this->privacyPolicyData(),
+            // Vá §IN (2026-11-13): nhóm khóa thanh toán Zalo Mini App — trước
+            // đây index() không trả nhóm này nên thẻ "Thanh toán Zalo Mini
+            // App" lưu xong tải lại về mặc định dù DB có đủ giá trị (update()
+            // ghi mọi khóa, ZaloPaymentService đọc thẳng Setting::get).
+            // Mặc định gương đúng frontend + ZaloPaymentService::config().
+            'zalo_pay_bank_enabled' => Setting::get('zalo_pay_bank_enabled', '1'),
+            'zalo_pay_cod_enabled' => Setting::get('zalo_pay_cod_enabled', '1'),
+            'zalo_pay_bank_account' => Setting::get('zalo_pay_bank_account', ''),
+            'zalo_pay_bank_name' => Setting::get('zalo_pay_bank_name', ''),
+            'zalo_pay_bank_bank' => Setting::get('zalo_pay_bank_bank', ''),
+            'zalo_pay_bank_bin' => Setting::get('zalo_pay_bank_bin', ''),
+            'zalo_pay_wait_alert_minutes' => Setting::get('zalo_pay_wait_alert_minutes', '15'),
+            'zalo_pay_transfer_template' => Setting::get('zalo_pay_transfer_template', 'DAYBREAK {order_code}'),
+            'zalo_pay_cod_takeaway_only' => Setting::get('zalo_pay_cod_takeaway_only', '1'),
+            // Spec mở COD giao hàng: công tắc thu hộ cho đơn giao (mặc định TẮT)
+            'delivery_cod_enabled' => Setting::get('delivery_cod_enabled', '0'),
             // Gói 26: phụ cấp ăn + tỷ lệ BHXH
             'meal_allowance_min_hours' => Setting::get('meal_allowance_min_hours', '8'),
             'meal_allowance_amount' => Setting::get('meal_allowance_amount', '25000'),

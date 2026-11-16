@@ -1,17 +1,19 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { api, fmt, priceOf, getMyGroups, saveMyGroup, getRef, getProfile, setProfile } from '../api';
+import { api, fmt, priceOf, getMyGroups, saveMyGroup, getRef, setRef, getProfile, setProfile } from '../api';
 import { storage } from '../utils/storage';
 import { findPlaceByName } from '../utils/placeName'; // Sổ #69: khớp tên tỉnh/phường có chuẩn hóa
 import { useShop } from '../store';
 import ProductSheet from '../components/ProductSheet';
 import SearchSelect from '../components/SearchSelect';
-import ZmIcon from '../components/ZmIcon';
+import ZmIcon, { CouponIcon } from '../components/ZmIcon';
 import { TabBar } from './Home';
-import { geocodeAddress, haversineKm, calcShipFee } from '../utils/geo';
+import { geocodeLadder, haversineKm, calcShipFee } from '../utils/geo';
 import { openStatus, nextOpenSlot, timeSlots, isWithinOpening } from '../utils/openingHours';
 import { DateField, TimeField, toApiDate, validTime, formatPhone, validPhone } from '../utils/checkoutFields.jsx';
 import ConsentCheck from '../components/ConsentCheck'; // Spec mật khẩu §5.4 (Q3): ô đồng ý dùng chung với Checkout đơn thường
+import PromoPanel, { EMPTY_PROMO_RES } from '../components/PromoPanel'; // Spec panel Ưu đãi (2026-11-14): panel chọn ưu đãi dùng chung với Checkout đơn thường
+import { openCheckout } from '../utils/checkoutSdk'; // Gói Checkout SDK — Đ4 (2026-11-10): trưởng nhóm thanh toán qua SDK như đơn thường
 
 // Gói 9 (2026-10-05): Đặt đơn nhóm.
 // - Trưởng nhóm tạo link -> share; mọi người vào link, nhập tên, chọn món.
@@ -287,7 +289,6 @@ export default function GroupRoom() {
               state: {
                 transfer: {
                   bank_info: order.bank_info, transfer_content: order.transfer_content,
-                  vietqr_payload: order.vietqr_payload || null,
                   amount: Math.round(Number(order.total_amount) || 0),
                 },
               },
@@ -315,10 +316,15 @@ export default function GroupRoom() {
 // Spec đơn nhóm đồng bộ (2026-10-21): GroupCheckout dùng CÙNG form/mẫu với Checkout
 // đơn thường (helper chung utils/checkoutFields + utils/openingHours):
 // - Đủ 3 hình thức: Giao hàng (ngay / hẹn giờ giao) · Mang đi · Hẹn tới lấy; quán đóng ép hẹn giờ.
-// - Địa chỉ: popup cấu trúc tỉnh/phường/số nhà + GPS + sổ địa chỉ của trưởng nhóm;
-//   geocode lỗi VẪN đặt được (quán xác nhận phí ship sau) — bỏ chặn "phải có km".
-// - PTTT tải động (api.payMethods), KM MỌI LOẠI (bỏ lọc chỉ-phí-ship), ô voucher,
-//   đổi điểm của trưởng nhóm, client_key chống trùng, lưu customer vào profile.
+// - Địa chỉ: popup cấu trúc tỉnh/phường/số nhà + sổ địa chỉ của trưởng nhóm —
+//   spec đồng bộ luồng nhóm (2026-11-13): tra tọa độ BẬC THANG qua backend
+//   như đơn thường (geocodeLadder), điểm khóa theo phiên bản dòng chữ; tra
+//   rỗng cả thang → khối lỗi đúng câu đơn thường + nút Tính lại phí, khóa
+//   nút chốt tới khi có điểm (không còn GPS/tra ngược/lời hứa cũ).
+// - PTTT tải động (api.payMethods) + kênh SDK theo cấu hình (zaloCfg như
+//   đơn thường), panel Ưu đãi hợp nhất + coupon ví của trưởng nhóm, ô
+//   voucher, điểm của trưởng nhóm, client_key chống trùng, lưu customer
+//   vào profile.
 const loadProvinces = () => api.provinces().catch(() => []);
 const loadWards = (code) => api.wards(code).catch(() => []);
 
@@ -348,12 +354,44 @@ function GroupCheckout({ group, onDone, onBack }) {
   const [schedTime, setSchedTime] = useState('');
   const [payMethods, setPayMethods] = useState([]);
   const [payment, setPayment] = useState('transfer');
-  const [promos, setPromos] = useState([]);
-  const [promoId, setPromoId] = useState('');
-  const [voucher, setVoucher] = useState('');
-  // Audit 2026-10-21 🟠8: voucher validate server để vào tổng hiển thị (như đơn thường)
-  const [voucherInfo, setVoucherInfo] = useState(null); // {code, name, discount}
-  const [voucherErr, setVoucherErr] = useState('');
+  // Spec đồng bộ luồng nhóm (2026-11-13, L6): cấu hình kênh SDK như đơn
+  // thường — tải zaloCfg để ẩn BANK khi chưa sẵn sàng và hiệu chỉnh kênh
+  // hiệu dụng trong place() đúng luật Checkout.
+  const [zaloCfg, setZaloCfg] = useState(null);
+  const [payChannel, setPayChannel] = useState('BANK'); // BANK | COD
+  useEffect(() => {
+    api.zaloPayConfig().then(setZaloCfg).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!zaloCfg) return;
+    setPayChannel((cur) => {
+      if (cur === 'BANK' && !zaloCfg.bank_available && zaloCfg.cod_enabled) return 'COD';
+      if (cur === 'COD' && !zaloCfg.cod_enabled && zaloCfg.bank_available) return 'BANK';
+      return cur;
+    });
+  }, [zaloCfg]);
+  // Nhánh dự phòng (chưa tải được zaloCfg): đơn giao nhóm đang chọn trả
+  // tại quán thì đưa về chuyển khoản — gương Checkout, giữ luật L5.
+  useEffect(() => {
+    if (type === 'delivery' && payment === 'pay_at_store') setPayment('transfer');
+  }, [type, payment]);
+  // Spec đồng bộ luồng nhóm (2026-11-13, L4) → Spec panel Ưu đãi
+  // (2026-11-14): danh sách hợp nhất từ server (chế độ unified) vẫn nạp
+  // tại đây; toàn bộ trạng thái chọn + panel do component dùng chung
+  // PromoPanel giữ — trang chỉ nhận kết quả phân xử qua promoRes.
+  const [offers, setOffers] = useState(null); // {items, stack_cap_amount}
+  const [promoRes, setPromoRes] = useState(EMPTY_PROMO_RES);
+  const promoRef = useRef(null); // ensureVoucher() trước khi chốt
+  // Spec đồng bộ luồng nhóm (2026-11-13, L7): lỗi validate + place() hiện
+  // trong trang (formErr) như Checkout — không alert() ở luồng chốt nhóm.
+  const [formErr, setFormErr] = useState('');
+  // Spec đồng bộ luồng nhóm (2026-11-13, L11): 2 mục thu gọn gương
+  // Checkout — email tự nguyện + mã người giới thiệu nhập tay.
+  const [email, setEmail] = useState('');
+  const [refCode, setRefCodeState] = useState(() => getRef());
+  const [refFromLink] = useState(() => !!getRef());
+  const updateRefCode = (v) => { setRefCodeState(v); setRef(v); };
+  const [moreInfoOpen, setMoreInfoOpen] = useState(() => !!getRef());
   const [points, setPoints] = useState(0);
   // Loyalty 2.0: gỡ đổi điểm trực tiếp ở checkout nhóm (như đơn thường)
   const [customerId, setCustomerId] = useState(null);
@@ -367,11 +405,18 @@ function GroupCheckout({ group, onDone, onBack }) {
   // Lát 3g (2026-11-04, #39): tự áp địa chỉ MẶC ĐỊNH khi sổ địa chỉ tải xong
   // (như Checkout) — chỉ khi khách chưa tự đụng vào ô chọn địa chỉ.
   const addrTouched = useRef(false);
+  // Vá F-2 (gương Checkout): cờ "lần đổi tỉnh này đến từ điền địa chỉ lưu" —
+  // effect theo tỉnh không được xóa ward của chính lần điền đó.
+  const fillingFromBookRef = useRef(false);
   const fillFromAddress = (a) => {
+    // Mỗi lần điền từ sổ là một "dòng chữ" mới: tăng phiên bản để điểm
+    // của lần điền này mang đúng phiên bản đó (xem khối dropoff bên dưới).
+    const ver = bumpAddrVer();
     // Sổ #69 (2026-11-04): như Checkout — khớp tên qua findPlaceByName có
     // chuẩn hóa, tránh trượt "TP. Hồ Chí Minh" vs "Thành phố Hồ Chí Minh".
     const pc = findPlaceByName(provinces, a.province)?.code;
     if (pc) {
+      if (String(pc) !== String(province)) fillingFromBookRef.current = true;
       setProvince(String(pc));
       loadWards(pc).then((ws) => {
         setWards(ws || []);
@@ -380,7 +425,20 @@ function GroupCheckout({ group, onDone, onBack }) {
       });
     }
     setStreet(a.street || '');
-    setPickedCoord(null);
+    // Spec đồng bộ luồng nhóm (2026-11-13, L3): địa chỉ lưu ĐÃ có tọa độ
+    // và khách không sửa chữ → dùng luôn điểm đó tính phí, KHÔNG tra lại;
+    // chưa có tọa độ → điểm trống, bậc thang tra từ dòng chữ.
+    if (a.lat != null && a.lng != null && Number(a.lat) !== 0 && Number(a.lng) !== 0) {
+      const pt = { lat: Number(a.lat), lng: Number(a.lng) };
+      setDropoff({ ...pt, step: null, source: 'saved', ver });
+      if (b.latitude && b.longitude) {
+        const d = haversineKm(Number(b.latitude), Number(b.longitude), pt.lat, pt.lng);
+        setKm(Math.round(d * 10) / 10);
+        setGeoError(false);
+      }
+    } else {
+      setDropoff(null);
+    }
   };
   useEffect(() => {
     if (addrTouched.current || addrId || !addrBook.length) return;
@@ -391,11 +449,36 @@ function GroupCheckout({ group, onDone, onBack }) {
   const [saveAddr, setSaveAddr] = useState(false);
   const [addrLabel, setAddrLabel] = useState('Nhà');
   const [showAddrPop, setShowAddrPop] = useState(false);
-  const [locLoading, setLocLoading] = useState(false);
-  const [pickedCoord, setPickedCoord] = useState(null);
+  // Gói 50f (gương Checkout): gợi ý địa chỉ khi gõ ở ô đường
+  const [suggests, setSuggests] = useState([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  // Spec đồng bộ luồng nhóm (2026-11-13, L1): điểm giao của đơn nhóm =
+  // điểm tra BẬC THANG từ DÒNG CHỮ CUỐI CÙNG trong form, hoặc điểm đã
+  // lưu của địa chỉ trong sổ (source 'saved') — gương cơ chế Checkout:
+  // dropoff mang phiên bản dòng chữ (ver); sửa BẤT KỲ trường địa chỉ nào
+  // → addrVerRef tăng → điểm cũ tự hủy hiệu lực, phải tra lại.
+  const [dropoff, setDropoff] = useState(null); // {lat, lng, step, source, ver}
+  const addrVerRef = useRef(0);
+  const bumpAddrVer = () => { addrVerRef.current += 1; return addrVerRef.current; };
+  const pointValid = !!dropoff && dropoff.ver === addrVerRef.current;
+  // Spec đồng bộ luồng nhóm (2026-11-13, mục 9 — L5 đóng): đơn GIAO nhóm
+  // KHÔNG có kênh COD ở mọi cấu hình (khác đơn thường, nơi COD giao bật
+  // theo cấu hình) — COD của nhóm chỉ có cho đơn mang về/hẹn lấy.
+  const codHiddenForGroupDelivery = type === 'delivery';
   const [note, setNote] = useState('');
   const [placing, setPlacing] = useState(false);
   const geoTimer = useRef(null);
+  const suggestTimer = useRef(null);
+  // Gói geocode lai NDAMaps (spec 2026-11-13 mục 2.3 + 6): nhóm dùng
+  // chung helper + endpoint gợi ý với Checkout — 1 token cho mỗi phiên
+  // chọn địa chỉ, đổi token mới sau mỗi lần place thành công và khi đổi
+  // chi nhánh của nhóm.
+  const newSuggestSession = () => (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  const suggestSessionRef = useRef(null);
+  if (suggestSessionRef.current === null) suggestSessionRef.current = newSuggestSession();
+  useEffect(() => { suggestSessionRef.current = newSuggestSession(); }, [b?.id]);
   // Chống trùng: client_key cố định theo phiên giỏ nhóm (đổi khi giỏ nhóm đổi)
   const newClientKey = () => (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
@@ -413,7 +496,6 @@ function GroupCheckout({ group, onDone, onBack }) {
     const p = getProfile();
     if (p) { if (!g) setName(p.name || ''); setPhone(p.phone || ''); }
     api.shipConfig().then(setShipCfg).catch(() => {});
-    api.deliveryConfig().then((c) => setDeliveryReady(!!c?.ready)).catch(() => {});
     loadProvinces().then(setProvinces);
     api.payMethods().then((list) => {
       if (list && list.length) {
@@ -436,84 +518,118 @@ function GroupCheckout({ group, onDone, onBack }) {
 
   useEffect(() => {
     if (!province) { setWards([]); setWard(''); return; }
-    loadWards(province).then((ws) => { setWards(ws || []); setWard(''); });
+    // Vá F-2 (gương Checkout): lần đổi tỉnh do điền từ sổ thì lần nạp này
+    // KHÔNG xóa ward (chính lần điền đó đặt ward qua loadWards riêng).
+    const fromBook = fillingFromBookRef.current;
+    fillingFromBookRef.current = false;
+    loadWards(province)
+      .then((ws) => { setWards(ws || []); if (!fromBook) setWard(''); });
   }, [province]);
 
   const wardName = () => (wards.find((w) => String(w.code) === String(ward)) || {}).name || '';
   const provName = () => (provinces.find((p) => String(p.code) === String(province)) || {}).name || '';
   const fullAddress = () => [street.trim(), wardName(), provName()].filter(Boolean).join(', ');
 
-  const calcKm = async () => {
+  // Spec đồng bộ luồng nhóm (2026-11-13, L1): điểm chốt của đơn nhóm =
+  // kết quả tra BẬC THANG (backend geocode) từ dòng chữ CUỐI CÙNG trong
+  // form — gương resolveDropoff của Checkout, với khung ưu tiên quanh
+  // CHI NHÁNH CỦA NHÓM. Điểm đã lưu trong sổ (source 'saved', khách
+  // không sửa chữ) dùng luôn, không tra lại. Cả thang rỗng → geoError
+  // (khối lỗi đúng câu đơn thường + nút Tính lại phí), km về null.
+  const resolveDropoff = async () => {
     if (!b.latitude || !b.longitude) return;
-    if (pickedCoord) {
-      const d = haversineKm(Number(b.latitude), Number(b.longitude), pickedCoord.lat, pickedCoord.lng);
+    if (dropoff && dropoff.ver === addrVerRef.current) {
+      const d = haversineKm(Number(b.latitude), Number(b.longitude), dropoff.lat, dropoff.lng);
       setKm(Math.round(d * 10) / 10);
       setGeoError(false);
       return;
     }
     if (!street.trim() || !ward || !province) { setKm(null); setGeoError(false); return; }
+    const ver = addrVerRef.current;
     setGeoLoading(true); setGeoError(false);
     try {
-      const g = await geocodeAddress(fullAddress() + ', Việt Nam');
+      const g = await geocodeLadder({
+        q: fullAddress() + ', Việt Nam',
+        street: street.trim(), ward: wardName(), province: provName(), branch: b,
+      });
+      // Chữ đã đổi giữa lúc tra → kết quả thuộc về dòng chữ cũ, bỏ đi.
+      if (addrVerRef.current !== ver) return;
+      // Gói geocode lai NDAMaps (mục 3.2): source do backend trả —
+      // 'ladder' khi trúng thang, 'ndamaps_forward' khi trúng cứu cánh
+      // (vá §HP: từ vựng của cột dropoff_source, không phải tên nhà cung cấp).
+      setDropoff({ lat: g.lat, lng: g.lng, step: g.ladder_step, source: g.source || 'ladder', ver });
       const d = haversineKm(Number(b.latitude), Number(b.longitude), g.lat, g.lng);
       setKm(Math.round(d * 10) / 10);
-      // Delta phí giao (TESTER §AS, 2026-11-06): GHIM luôn tọa độ vừa geocode
-      // được vào pickedCoord — như Checkout đơn thường: trước đây tọa độ chỉ
-      // dùng để hiển thị, payload không gửi kèm nên server chốt phí 0 dù
-      // khách đã thấy phí. Đổi địa chỉ tự xóa pickedCoord; geocode thất bại
-      // giữ nấc thiếu-tọa-độ như cũ.
-      setPickedCoord({ lat: g.lat, lng: g.lng });
-    } catch (e) { setKm(null); setGeoError(true); }
-    finally { setGeoLoading(false); }
+    } catch (e) {
+      if (addrVerRef.current !== ver) return;
+      setKm(null); setGeoError(true);
+    } finally { setGeoLoading(false); }
+  };
+
+  // Gợi ý khi gõ (gương Checkout): thiên vị quanh chi nhánh của nhóm —
+  // chọn gợi ý chỉ điền chữ, điểm chốt vẫn tra bậc thang từ dòng chữ
+  // cuối cùng (hiệu ứng theo street tự chạy).
+  const onStreetChange = (v) => {
+    setStreet(v);
+    bumpAddrVer();
+    clearTimeout(suggestTimer.current);
+    const q = v.trim();
+    if (q.length < 5) { setSuggests([]); setSuggestLoading(false); return; }
+    setSuggestLoading(true);
+    suggestTimer.current = setTimeout(async () => {
+      try {
+        // Gói geocode lai NDAMaps (mục 2.4): đáp {source, items} — dùng
+        // chung endpoint với Checkout (mục 6); chấp nhận cả đáp mảng cũ
+        // để khỏi gãy khi backend chưa nạp gói lai.
+        const res = await api.geocodeSuggest(q, b?.latitude, b?.longitude, suggestSessionRef.current);
+        setSuggests(Array.isArray(res) ? res : (res?.items || []));
+      } catch { setSuggests([]); }
+      finally { setSuggestLoading(false); }
+    }, 500);
+  };
+
+  const pickSuggest = async (s) => {
+    // Giữ số nhà khách đã gõ tay (VD "90 Tô Hiệu" → chọn gợi ý vẫn giữ "90")
+    const typedNo = street.match(/^\d[\d/\-\s]*/)?.[0]?.trim();
+    let newStreet = s.short || s.label.split(',')[0];
+    if (typedNo && !/^\d/.test(newStreet)) {
+      newStreet = `${typedNo} ${newStreet}`;
+    }
+    const ver = bumpAddrVer();
+    setStreet(newStreet);
+    setSuggests([]);
+    // Gói geocode lai NDAMaps (mục 2.2 + 6): chọn gợi ý NDAMaps → chốt
+    // ngay tọa độ bản ghi làm điểm giao (source 'ndamaps_place'); điểm
+    // không dùng được → chỉ điền chữ, điểm chốt do đường B quyết. Chọn
+    // gợi ý Nominatim → giữ hành vi cũ: chỉ điền chữ.
+    if (!s.place_id) return;
+    try {
+      const p = await api.geocodePlace(s.place_id, suggestSessionRef.current, provName(), b?.latitude, b?.longitude);
+      if (p?.lat && p?.lng) {
+        if (addrVerRef.current !== ver) return;
+        setDropoff({ lat: p.lat, lng: p.lng, step: null, source: 'ndamaps_place', ver });
+        if (b?.latitude && b?.longitude) {
+          const d = haversineKm(Number(b.latitude), Number(b.longitude), p.lat, p.lng);
+          setKm(Math.round(d * 10) / 10);
+          setGeoError(false);
+        }
+        // Phiên chọn đã chốt bằng place → đổi token mới cho phiên sau.
+        suggestSessionRef.current = newSuggestSession();
+      }
+    } catch { /* chỉ điền chữ, không lỗi cho khách */ }
   };
 
   useEffect(() => {
     if (type !== 'delivery') return;
     if (!street.trim() || !ward || !province) { setKm(null); setGeoError(false); return; }
     clearTimeout(geoTimer.current);
-    geoTimer.current = setTimeout(calcKm, 800);
+    geoTimer.current = setTimeout(resolveDropoff, 800);
     return () => clearTimeout(geoTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [street, ward, province, type]);
 
-  // GPS: điền địa chỉ từ tọa độ (như Checkout đơn thường)
-  const fillFromCoord = async (latitude, longitude) => {
-    const r = await api.geocodeReverse(latitude, longitude);
-    const streetParts = [r.house_number, r.road].filter(Boolean).join(' ');
-    if (streetParts) setStreet(streetParts);
-    const prov = provinces.find((p) =>
-      r.state?.includes(p.name) || p.name.includes(r.state || '###') ||
-      r.city?.includes(p.name) || p.name.includes(r.city || '###'));
-    if (prov) {
-      setProvince(String(prov.code));
-      try {
-        const ws = await loadWards(prov.code);
-        setWards(ws);
-        const w = ws.find((x) => r.suburb && (x.name.includes(r.suburb) || r.suburb.includes(x.name)));
-        if (w) setWard(String(w.code));
-      } catch { /* bỏ qua */ }
-    }
-  };
-  const useCurrentLocation = () => {
-    if (!navigator.geolocation) { alert('Thiết bị không hỗ trợ định vị.'); return; }
-    setLocLoading(true);
-    const onPos = async (pos) => {
-      try {
-        const { latitude: lat, longitude: lon } = pos.coords;
-        setPickedCoord({ lat, lng: lon });
-        await fillFromCoord(lat, lon);
-      } catch (e) { alert(e.message || 'Không lấy được địa chỉ từ vị trí.'); }
-      finally { setLocLoading(false); }
-    };
-    navigator.geolocation.getCurrentPosition(
-      onPos,
-      () => { setLocLoading(false); alert('Không lấy được vị trí. Hãy nhập địa chỉ tay.'); },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
-    );
-  };
-
   // Spec phí giao MỘT NGUỒN (2026-11-06): như đơn thường — phí hiển thị =
-  // công thức nội bộ theo tọa độ ghim trừ phần quán hỗ trợ; không báo giá hãng.
+  // công thức nội bộ theo tọa độ điểm giao trừ phần quán hỗ trợ; không báo giá hãng.
   const shipFeeGross = type === 'delivery' && km != null && shipCfg ? calcShipFee(km, shipCfg) : 0;
   const shipShopSupport = type === 'delivery' && shipCfg && group.subtotal >= (Number(shipCfg.support_threshold) || 0)
     ? Math.min(Number(shipCfg.support_amount) || 0, shipFeeGross) : 0;
@@ -535,6 +651,9 @@ function GroupCheckout({ group, onDone, onBack }) {
           unit_price: it.unit_price,
         })),
         shipping_fee: fee,
+        // Spec đồng bộ luồng nhóm (2026-11-13, L4): danh sách hợp nhất
+        // KM + coupon ví như đơn thường (chế độ unified).
+        unified: true,
       };
       // 🟠10 (phía FE): tra khách lỗi không được nuốt luôn KM — rơi về vãng lai.
       api.customerByPhone(phone, getProfile()?.member_code || '').catch(() => null).then((c) => {
@@ -545,101 +664,116 @@ function GroupCheckout({ group, onDone, onBack }) {
           // này như Checkout — chưa đồng ý thì hiện ô đồng ý ở đơn nhóm.
           setHasConsented(!!c.has_consented);
           if (c.has_consented === false) setConsentNeeded(true);
+          // Spec đồng bộ luồng nhóm (L11): email hồ sơ có sẵn thì điền sẵn ô email.
+          if (c.email) setEmail((prev) => prev || c.email);
           api.addresses(c.id, c.phone, c.member_code).then((r) => setAddrBook(Array.isArray(r) ? r : [])).catch(() => {}); // Sổ phụ #31: r là mảng thuần (req đã bóc phong bì)
           return api.eligiblePromotions({ ...payload, customer_id: c.id, phone: formatPhone(phone), member_code: getProfile()?.member_code || '' });
         }
         return api.eligiblePromotions({ ...payload, channel: 'online' });
-      }).then(setPromos).catch(() => {});
+      }).then(setOffers).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone, group.subtotal, km, shipCfg, type]);
 
-  useEffect(() => {
-    if (promoId && promos.length > 0 && !promos.some((p) => String(p.id) === String(promoId))) setPromoId('');
-  }, [promos]);
+  // Tự nhả lựa chọn đã mất điều kiện khi danh sách hợp nhất nạp lại:
+  // đã chuyển vào PromoPanel (component giữ lựa chọn).
 
-  const promo = promos.find((p) => String(p.id) === String(promoId));
-  const isShipPromo = !!(promo && (promo.is_shipping || promo.type === 'shipping') && type === 'delivery');
-  const shipDisc = isShipPromo ? Math.min(Number(promo.discount) || 0, shipFee) : 0;
-  const promoDisc = promo && !isShipPromo ? Number(promo.discount) : 0;
-  // 🟠8: voucher vào tổng theo luật phía thắng (hòa → KM thắng) như đơn thường
-  const voucherDisc = voucherInfo ? Number(voucherInfo.discount) || 0 : 0;
-  const voucherWins = voucherDisc > 0 && voucherDisc > promoDisc;
-  const moneyDiscTotal = voucherDisc > 0 ? Math.max(promoDisc, voucherDisc) : promoDisc;
+  // ===== Phân xử hiển thị tổng: PromoPanel chạy (gương store() §5d) và
+  // trả kết quả qua promoRes — TỔNG HIỂN THỊ = SỐ SERVER THU.
+  const shipDiscTotal = promoRes.shipDiscTotal;
+  const moneyDiscTotal = promoRes.moneyDiscTotal;
+  const totalDiscTotal = promoRes.totalDiscTotal;
   // Loyalty 2.0: bỏ pointDisc — tổng nhóm không còn dòng trừ điểm.
-  const grandTotal = Math.max(0, group.subtotal + shipFee - shipDisc - moneyDiscTotal);
+  // Đơn nhóm giao hàng KHÔNG có phí thu hộ COD (L5 đóng) nên tổng không
+  // cộng shipCodFee như đơn thường.
+  const grandTotal = Math.max(0, group.subtotal + shipFee - shipDiscTotal - moneyDiscTotal);
 
-  // 🟠8: validate voucher bằng endpoint server (số giảm thật); lỗi báo rõ như khi chốt đơn
-  const checkVoucher = async (code) => {
-    const c = String(code || '').trim().toUpperCase();
-    if (!c) { setVoucherInfo(null); setVoucherErr(''); return true; }
-    try {
-      const prof = getProfile() || {};
-      const res = await api.validateVoucher({
-        code: c,
-        subtotal: group.subtotal,
-        phone: formatPhone(phone || '') || prof.phone || '',
-        member_code: prof.member_code || '',
-      });
-      setVoucherInfo({ code: res.code, name: res.name, discount: Math.round(Number(res.discount) || 0) });
-      setVoucherErr('');
-      return true;
-    } catch (err) {
-      setVoucherInfo(null);
-      setVoucherErr(err.message || 'Mã voucher không hợp lệ.');
-      return false;
-    }
+  // Spec đồng bộ luồng nhóm (L1): cổng hiển thị của đơn giao nhóm — chưa
+  // có điểm tra còn hiệu lực cho dòng chữ hiện tại → nút chốt khóa.
+  const pointMissing = type === 'delivery' && !pointValid;
+
+  // Chọn mã / validate voucher / tự nhả lựa chọn mất điều kiện: đã chuyển
+  // vào PromoPanel. Đổi loại đơn → PromoPanel remount theo key={type} nên
+  // lựa chọn ưu đãi tự reset.
+  const switchType = (t) => {
+    setType(t);
   };
 
-  const switchType = (t) => { setType(t); setPromoId(''); setVoucher(''); setVoucherInfo(null); };
-
+  // Spec đồng bộ luồng nhóm (L7): lỗi hẹn giờ hiện formErr đúng trường —
+  // validateSchedule set lỗi riêng của nó, place() không ghi đè.
   const validateSchedule = (label) => {
     const d = toApiDate(schedDate);
-    if (!d) { alert(`Nhập ngày ${label} (dd/mm/yyyy).`); return false; }
-    if (!validTime(schedTime)) { alert(`Nhập giờ ${label} (HH:MM, 24h).`); return false; }
-    if (new Date(`${d}T${schedTime}`) <= new Date()) { alert('Giờ hẹn phải sau thời điểm hiện tại.'); return false; }
-    if (!isWithinOpening(b, schedDate, schedTime)) { alert('Giờ hẹn phải trong giờ mở cửa của quán.'); return false; }
+    if (!d) { setFormErr(`Nhập ngày ${label} (dd/mm/yyyy).`); return false; }
+    if (!validTime(schedTime)) { setFormErr(`Nhập giờ ${label} (HH:MM, 24h).`); return false; }
+    if (new Date(`${d}T${schedTime}`) <= new Date()) { setFormErr('Giờ hẹn phải sau thời điểm hiện tại.'); return false; }
+    if (!isWithinOpening(b, schedDate, schedTime)) { setFormErr('Giờ hẹn phải trong giờ mở cửa của quán.'); return false; }
     return true;
+  };
+
+  // Kênh hiệu dụng của đơn nhóm — gương place() của đơn thường, cộng
+  // luật riêng của nhóm (mục 9): đơn GIAO nhóm không bao giờ rơi về COD.
+  const effChannelFor = () => {
+    if (zaloCfg) {
+      let ch = payChannel;
+      if (ch === 'BANK' && !zaloCfg.bank_available && zaloCfg.cod_enabled) ch = 'COD';
+      if (ch === 'COD' && !zaloCfg.cod_enabled && zaloCfg.bank_available) ch = 'BANK';
+      if (ch === 'COD' && codHiddenForGroupDelivery) ch = 'BANK';
+      return ch;
+    }
+    return payment === 'transfer' ? 'BANK' : 'COD';
   };
 
   const place = async () => {
     if (placing) return;
-    if (!name.trim() || !phone.trim()) { alert('Nhập tên và số điện thoại.'); return; }
+    setFormErr('');
+    if (!name.trim() || !phone.trim()) { setFormErr('Nhập tên và số điện thoại.'); return; }
     // Luật SĐT 2026-11-07: bắt đầu bằng 0 thì phải đủ đúng 10 số.
-    if (!validPhone(phone)) { alert('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
+    if (!validPhone(phone)) { setFormErr('Số điện thoại chưa đúng — cần bắt đầu bằng 0 và đủ 10 số.'); return; }
     if (type === 'delivery') {
-      if (!province || !ward || !street.trim()) { alert('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường.'); return; }
+      if (!province || !ward || !street.trim()) { setFormErr('Chọn tỉnh/thành, phường/xã và nhập số nhà, tên đường.'); return; }
       if (deliveryMode === 'scheduled' && !validateSchedule('muốn giao')) return;
     }
     if (type === 'scheduled' && !validateSchedule('muốn tới lấy')) return;
-    // 🟠8: có mã voucher chưa validate → validate trước khi chốt (lỗi thì dừng, báo rõ)
-    const vcode = voucher.trim().toUpperCase();
-    if (vcode && vcode !== (voucherInfo?.code || '')) {
-      const ok = await checkVoucher(vcode);
-      if (!ok) return;
+    // Spec đồng bộ luồng nhóm (L1): cổng client của luật cứng phía server
+    // (422 dropoff_geocode_failed) — đơn giao chưa có điểm tra còn hiệu
+    // lực cho dòng chữ hiện tại thì chặn ngay (nút chốt cũng khóa sẵn).
+    if (type === 'delivery' && !pointValid) {
+      setFormErr('Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.');
+      setShowAddrPop(true);
+      return;
     }
+    // 🟠8: có mã voucher chưa validate → PromoPanel validate trước khi chốt (lỗi thì dừng, báo rõ)
+    const okVoucher = await promoRef.current?.ensureVoucher();
+    if (okVoucher === false) return;
     // Spec mật khẩu §5.4 (Q3): đơn nhóm đầu chưa tích ô đồng ý thì khóa nút
     // đặt đơn ngay ở client (cổng cứng thật vẫn ở server — 422 consent_required).
     if (consentNeeded && !consentChecked) {
-      alert('Bạn cần tích ô đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+      setFormErr('Bạn cần tích ô đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
       return;
     }
     setPlacing(true);
     try {
-      // Spec phí giao MỘT NGUỒN: không còn chờ/báo giá hãng — thiếu tọa độ
-      // vẫn đặt được, phí để quán xác nhận.
+      // Spec phí giao MỘT NGUỒN: không còn chờ/báo giá hãng — phí chốt từ
+      // tọa độ điểm giao (một nguồn) ở server.
       let scheduledAt = null;
       if (type === 'scheduled' || (type === 'delivery' && deliveryMode === 'scheduled')) {
         const d = toApiDate(schedDate);
         scheduledAt = `${d}T${schedTime}`;
       }
+      // Spec đồng bộ luồng nhóm (L6): kênh hiệu dụng theo cấu hình thật —
+      // payment_method gửi đi suy từ kênh SDK đã hiệu chỉnh như đơn thường.
+      const effChannel = effChannelFor();
+      if (zaloCfg && effChannel !== payChannel) setPayChannel(effChannel);
       const order = await api.groupCheckout(group.code, {
         client_key: clientKeyRef.current || newClientKey(),
         customer_name: name.trim(),
         customer_phone: formatPhone(phone),
         // Spec KM chống mã Phần B: mã TV của trưởng nhóm để xác thực quyền lợi trong store()
         member_code: getProfile()?.member_code || null,
+        // Spec đồng bộ luồng nhóm (L11): email tự nguyện của trưởng nhóm —
+        // server chỉ điền vào hồ sơ khi hồ sơ đang trống (như đơn thường).
+        email: email.trim() || null,
         // Spec mật khẩu §5.4 (Q3): cờ đồng ý NĐ 13 của trưởng nhóm ở đơn đầu.
         consent_agreed: !!consentChecked,
         order_type: type === 'delivery' ? 'delivery' : 'takeaway',
@@ -649,18 +783,52 @@ function GroupCheckout({ group, onDone, onBack }) {
         distance_km: type === 'delivery' ? km : null,
         delivery_note: type === 'delivery' && deliveryNote.trim() ? deliveryNote.trim() : null,
         scheduled_at: scheduledAt,
-        payment_method: payment,
-        promotion_id: promoId || null,
-        voucher_code: voucher.trim() || null,
+        payment_method: effChannel === 'BANK' ? 'transfer' : 'pay_at_store',
+        // Spec panel Ưu đãi (2026-11-14): chỉ gửi ĐÚNG những gì trưởng
+        // nhóm đã chọn trong PromoPanel như đơn thường — gồm cả cặp
+        // promotion_id + customer_coupon_id (server §5d đã mở cho cặp
+        // KM + coupon ví, đơn nhóm hưởng qua đường ủy quyền store()).
+        promotion_id: promoRes.promotion_id,
+        customer_coupon_id: promoRes.customer_coupon_id,
+        voucher_code: promoRes.voucher_code,
         // Loyalty 2.0: không gửi points_redeem nữa
         note: note.trim() || null,
-        referred_by: getRef() || null,
+        // Spec đồng bộ luồng nhóm (L11): mã giới thiệu nhập tay ở mục thu
+        // gọn (prefill từ link mời) — server chỉ gắn khi tạo khách mới.
+        referred_by: refCode.trim().toUpperCase() || null,
         delivery_package: null,
         delivery_quoted_fee: null,
         delivery_provider: null,
-        delivery_dropoff_lat: type === 'delivery' ? pickedCoord?.lat || null : null,
-        delivery_dropoff_lng: type === 'delivery' ? pickedCoord?.lng || null : null,
+        delivery_dropoff_lat: type === 'delivery' ? dropoff?.lat || null : null,
+        delivery_dropoff_lng: type === 'delivery' ? dropoff?.lng || null : null,
+        // Gói geocode lai NDAMaps (2026-11-13 mục 3.3 + 6): nguồn điểm
+        // giao của đơn nhóm — như đơn thường, qua store().
+        dropoff_source: type === 'delivery' ? dropoff?.source || null : null,
       });
+      // Gói Checkout SDK — Đ4: server chốt đơn nhóm đã tạo params đúng
+      // hợp đồng (GroupOrderController gắn sdk_params cho BANK + COD) —
+      // trưởng nhóm mở CheckoutSDK ngay tại đây như đơn thường; có
+      // orderId phía SDK thì gắn về server để notify đối chiếu. SDK
+      // không mở được → báo rõ theo §3, đơn giữ pending_payment chờ
+      // "Thanh toán lại" (không rơi về CK tay ngoài SDK).
+      let sdkFailed = false;
+      if (order?.sdk_params) {
+        try {
+          const sdkRes = await openCheckout(order.sdk_params);
+          if (sdkRes?.orderId) {
+            api.linkSdkOrder(order.code, sdkRes.orderId).catch((e) => console.warn('Gắn mã đơn SDK lỗi:', e));
+          }
+        } catch (sdkErr) {
+          console.warn('Không mở được Checkout SDK (đơn nhóm):', sdkErr);
+          // Gói vá sau vòng S — Mục 2 (2026-11-12): nối chi tiết lỗi gốc
+          // (chặng/name/message từ checkoutSdk) thay vì nuốt êm như trước.
+          // Spec đồng bộ luồng nhóm (L7): báo trong trang (formErr) thay
+          // alert() — dừng ít giây cho trưởng nhóm đọc rồi mới chuyển màn
+          // như Checkout, thay cho hộp thoại chặn của alert cũ.
+          sdkFailed = true;
+          setFormErr('Không mở được trang thanh toán của Zalo. Đơn của bạn đã được lưu — bạn có thể thanh toán lại trong mục Đơn hàng.' + (sdkErr?.message ? ` [${sdkErr.message}]` : ''));
+        }
+      }
       // Lưu định danh trưởng nhóm + mã đơn gần nhất (như đơn thường)
       const prof = { ...(getProfile() || {}), name: name.trim(), phone: formatPhone(phone) };
       if (order?.customer?.id) prof.customer_id = order.customer.id;
@@ -673,17 +841,46 @@ function GroupCheckout({ group, onDone, onBack }) {
           customer_id: customerId, phone: formatPhone(phone), member_code: getProfile()?.member_code || '',
           label: addrLabel,
           province: provName(), ward: wardName(), street: street.trim(),
+          // Spec đồng bộ luồng nhóm (L3): địa chỉ mới lưu kèm điểm đã dùng
+          // để lần sau khỏi tra lại (như đơn thường).
+          lat: dropoff?.lat ?? null, lng: dropoff?.lng ?? null,
         }).catch(() => {});
       }
-      onDone(order);
+      // Spec đồng bộ luồng nhóm (L3): đơn đặt thành công bằng địa chỉ ĐÃ
+      // CHỌN trong sổ → lưu điểm đã dùng (kèm dòng chữ đã dùng) vào chính
+      // bản ghi đó — gương Checkout, chỉ PATCH khi thật sự khác bản ghi.
+      if (type === 'delivery' && customerId && addrId && dropoff) {
+        const a = addrBook.find((x) => String(x.id) === String(addrId));
+        if (a && (Number(a.lat) !== dropoff.lat || Number(a.lng) !== dropoff.lng
+          || String(a.street || '') !== street.trim()
+          || String(a.ward || '') !== wardName()
+          || String(a.province || '') !== provName())) {
+          api.updateAddress(a.id, {
+            customer_id: customerId, phone: formatPhone(phone), member_code: getProfile()?.member_code || '',
+            label: a.label, province: provName(), ward: wardName(), street: street.trim(),
+            lat: dropoff.lat, lng: dropoff.lng,
+          }).then(() => {
+            setAddrBook((prev) => prev.map((x) => (String(x.id) === String(a.id)
+              ? { ...x, lat: dropoff.lat, lng: dropoff.lng, street: street.trim(), ward: wardName(), province: provName() }
+              : x)));
+          }).catch(() => {});
+        }
+      }
+      if (sdkFailed) {
+        // Chờ khách đọc banner lỗi trong trang rồi mới rời trang (như Checkout)
+        setTimeout(() => onDone(order), 2600);
+      } else {
+        onDone(order);
+      }
     } catch (e) {
       // Spec mật khẩu §5.4 (Q3): server từ chối vì thiếu đồng ý → bật ô đồng ý
       // lên để trưởng nhóm tích lại rồi đặt lại (cùng cơ chế phục hồi như Checkout).
+      // Spec đồng bộ luồng nhóm (L7): lỗi hiện formErr trong trang, không alert().
       if (e.code === 'consent_required') {
         setConsentNeeded(true);
-        alert(e.message || 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
+        setFormErr(e.message || 'Bạn cần đồng ý cho Daybreak xử lý dữ liệu cá nhân để đặt đơn đầu tiên.');
       } else {
-        alert(e.message);
+        setFormErr(e.message || 'Đặt đơn nhóm thất bại. Vui lòng thử lại.');
       }
     }
     finally { setPlacing(false); }
@@ -718,6 +915,169 @@ function GroupCheckout({ group, onDone, onBack }) {
         <input value={phone} onChange={(e) => setPhone(formatPhone(e.target.value))} placeholder="09xx xxx xxx" inputMode="tel" maxLength={12} />
         {phone && !validPhone(phone) && (
           <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>Số điện thoại cần bắt đầu bằng 0 và đủ 10 số.</div>
+        )}
+      </div>
+
+      {type === 'delivery' && (
+        <>
+          {/* Card thông tin nhận hàng — bấm mở popup (như đơn thường) */}
+          <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
+            <div className="zm-deliv-top">
+              <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
+              <div className="zm-deliv-t">Thông tin nhận hàng</div>
+              <div className="zm-deliv-chg">Thay đổi</div>
+            </div>
+            <div className="zm-deliv-mid">
+              <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
+              <div style={{ flex: 1 }}>
+                <div className="zm-deliv-nm">
+                  {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
+                </div>
+                <div className="zm-deliv-ad">
+                  {[street, wards.find((w) => String(w.code) === ward)?.name, provinces.find((pr) => String(pr.code) === province)?.name].filter(Boolean).join(', ') || 'Nhập địa chỉ'}
+                </div>
+                {pointValid && km != null && (
+                  <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>✓ Đã tính phí giao theo địa chỉ — cách quán ~{km}km</div>
+                )}
+              </div>
+              <div className="zm-deliv-arr">›</div>
+            </div>
+          </div>
+
+          {showAddrPop && (
+            <div className="zm-pop-overlay" onClick={() => setShowAddrPop(false)}>
+              <div className="zm-pop-sheet" onClick={(e) => e.stopPropagation()}>
+                <h3>Thông tin nhận hàng</h3>
+                {addrBook.length > 0 && (
+                  <div className="zm-field">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
+                    <select value={addrId} onChange={(e) => {
+                      addrTouched.current = true;
+                      const id = e.target.value;
+                      setAddrId(id);
+                      if (!id) { bumpAddrVer(); setDropoff(null); return; }
+                      const a = addrBook.find((x) => String(x.id) === id);
+                      if (!a) return;
+                      fillFromAddress(a);
+                    }}>
+                      <option value="">— Nhập địa chỉ mới —</option>
+                      {addrBook.map((a) => (
+                        <option key={a.id} value={a.id}>{a.is_default ? '★ ' : ''}{a.label}: {a.full_address}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {/* Spec đồng bộ luồng nhóm (L9): Tỉnh/TP + Phường/Xã MỘT HÀNG HAI CỘT như đơn thường */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <div className="zm-field" style={{ flex: 1, minWidth: 0 }}>
+                    <label>Tỉnh / Thành phố *</label>
+                    <SearchSelect
+                      value={province} placeholder="— Chọn tỉnh/thành —"
+                      options={provinces.map((p) => ({ code: p.code, name: p.name }))}
+                      onChange={(c) => { fillingFromBookRef.current = false; bumpAddrVer(); setProvince(c); setAddrId(''); }}
+                    />
+                  </div>
+                  <div className="zm-field" style={{ flex: 1, minWidth: 0 }}>
+                    <label>Phường / Xã *</label>
+                    <SearchSelect
+                      value={ward} placeholder="— Chọn phường/xã —" disabled={!province}
+                      options={wards.map((w) => ({ code: w.code, name: w.name }))}
+                      onChange={(c) => { bumpAddrVer(); setWard(c); }}
+                    />
+                  </div>
+                </div>
+                <div className="zm-field" style={{ position: 'relative' }}>
+                  <label>Số nhà, tên đường *</label>
+                  <input
+                    value={street}
+                    onChange={(e) => onStreetChange(e.target.value)}
+                    placeholder="VD: 123 Nguyễn Huệ"
+                    autoComplete="off"
+                  />
+                  {(suggestLoading || suggests.length > 0) && (
+                    <div style={{
+                      position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 50,
+                      background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10,
+                      boxShadow: '0 8px 24px rgba(0,0,0,.12)', maxHeight: 220, overflowY: 'auto',
+                    }}>
+                      {suggestLoading && <div style={{ padding: 12, fontSize: 13, color: '#999' }}>Đang tìm địa chỉ...</div>}
+                      {suggests.map((s, i) => (
+                        <div
+                          key={i}
+                          onClick={() => pickSuggest(s)}
+                          style={{ padding: '10px 12px', fontSize: 13, borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}
+                        >
+                          <div style={{ fontWeight: 600 }}>{s.short}</div>
+                          <div style={{ color: '#888', fontSize: 12, marginTop: 2 }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
+                {km != null && shipCfg && (
+                  <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
+                )}
+                {/* Spec đồng bộ luồng nhóm (L1): tra rỗng cả bậc thang → khối
+                    lỗi ĐÚNG CÂU đơn thường + nút Tính lại phí; nút chốt khóa
+                    tới khi có điểm (không còn lời hứa "vẫn đặt được"). */}
+                {geoError && (
+                  <div className="zm-alert" style={{ background: '#fef2f2', borderColor: '#fecaca', color: '#991b1b' }}>
+                    Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.
+                    <button type="button" onClick={resolveDropoff} style={{ display: 'block', marginTop: 8, fontWeight: 700, color: '#b91c1c', textDecoration: 'underline' }}>Tính lại phí</button>
+                  </div>
+                )}
+                <div className="zm-field">
+                  <label>Ghi chú cho shipper</label>
+                  <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
+                </div>
+                {customerId && !addrId && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 14 }}>
+                    <input type="checkbox" checked={saveAddr} onChange={(e) => setSaveAddr(e.target.checked)} style={{ width: 18, height: 18 }} />
+                    Lưu địa chỉ này vào sổ địa chỉ
+                    {saveAddr && (
+                      <select value={addrLabel} onChange={(e) => setAddrLabel(e.target.value)} style={{ marginLeft: 4, padding: '4px 8px', borderRadius: 8, border: '1px solid #e0e0e0' }}>
+                        <option>Nhà</option><option>Công ty</option><option>Khác</option>
+                      </select>
+                    )}
+                  </label>
+                )}
+                <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Spec đồng bộ luồng nhóm (L11): mục thu gọn Email + Mã người giới
+          thiệu gương Checkout — mặc định đóng cho gọn form; mở sẵn khi có
+          mã mời gắn từ link. Giá trị đã nhập vẫn gửi đi kể cả khi mục đóng. */}
+      <div style={{ margin: '0 0 6px' }}>
+        <button type="button" onClick={() => setMoreInfoOpen(!moreInfoOpen)} aria-expanded={moreInfoOpen}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', background: 'none', border: 0, padding: '6px 0', cursor: 'pointer', color: '#24305E', fontSize: 13.5, fontWeight: 700, textAlign: 'left', minHeight: 44 }}>
+          <span style={{ flex: 1 }}>Thêm email / mã giới thiệu (không bắt buộc)</span>
+          <span style={{ fontSize: 12, color: '#888' }}>{moreInfoOpen ? '▾' : '▸'}</span>
+        </button>
+        {moreInfoOpen && (
+          <>
+            <div className="zm-field">
+              <label>Email <span style={{ color: '#888', fontWeight: 400 }}>(không bắt buộc — chỉ dùng cho thông báo bảo mật)</span></label>
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email của bạn" type="email" maxLength={150} />
+            </div>
+            <div className="zm-field">
+              <label>Mã người giới thiệu (nếu có)</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <input value={refCode} onChange={(e) => updateRefCode(e.target.value.toUpperCase())} placeholder="Nhập mã của người giới thiệu" maxLength={20} style={{ flex: 1 }} />
+                {refCode && (
+                  <button type="button" onClick={() => updateRefCode('')} aria-label="Xóa mã người giới thiệu"
+                    style={{ minWidth: 44, minHeight: 44, borderRadius: 10, border: '1px solid #ddd', background: '#fff', fontSize: 15, color: '#888' }}><ZmIcon name="x" size={16} /></button>
+                )}
+              </div>
+              {refFromLink && refCode && (
+                <div style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>Đã gắn từ link mời — kiểm tra đúng người mời của bạn chưa nhé.</div>
+              )}
+            </div>
+          </>
         )}
       </div>
 
@@ -783,108 +1143,6 @@ function GroupCheckout({ group, onDone, onBack }) {
             </div>
           )}
 
-          {/* Card thông tin nhận hàng — bấm mở popup (như đơn thường) */}
-          <div className="zm-deliv-card" onClick={() => setShowAddrPop(true)}>
-            <div className="zm-deliv-top">
-              <div className="zm-deliv-ic"><ZmIcon name="mapPin" size={20} /></div>
-              <div className="zm-deliv-t">Thông tin nhận hàng</div>
-              <div className="zm-deliv-chg">Thay đổi</div>
-            </div>
-            <div className="zm-deliv-mid">
-              <div className="zm-deliv-uic"><ZmIcon name="user" size={20} /></div>
-              <div style={{ flex: 1 }}>
-                <div className="zm-deliv-nm">
-                  {name || 'Nhập tên'} · {phone ? phone : <span className="zm-miss">Nhập số điện thoại</span>}
-                </div>
-                <div className="zm-deliv-ad">
-                  {[street, wards.find((w) => String(w.code) === ward)?.name, provinces.find((pr) => String(pr.code) === province)?.name].filter(Boolean).join(', ') || 'Nhập địa chỉ'}
-                </div>
-              </div>
-              <div className="zm-deliv-arr">›</div>
-            </div>
-          </div>
-
-          {showAddrPop && (
-            <div className="zm-pop-overlay" onClick={() => setShowAddrPop(false)}>
-              <div className="zm-pop-sheet" onClick={(e) => e.stopPropagation()}>
-                <h3>Thông tin nhận hàng</h3>
-                {addrBook.length > 0 && (
-                  <div className="zm-field">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ZmIcon name="book" size={14} />Sổ địa chỉ</label>
-                    <select value={addrId} onChange={(e) => {
-                      addrTouched.current = true;
-                      const id = e.target.value;
-                      setAddrId(id);
-                      if (!id) return;
-                      const a = addrBook.find((x) => String(x.id) === id);
-                      if (!a) return;
-                      fillFromAddress(a);
-                    }}>
-                      <option value="">— Nhập địa chỉ mới —</option>
-                      {addrBook.map((a) => (
-                        <option key={a.id} value={a.id}>{a.is_default ? '★ ' : ''}{a.label}: {a.full_address}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="zm-field">
-                  <label>Tỉnh / Thành phố *</label>
-                  <SearchSelect
-                    value={province} placeholder="— Chọn tỉnh/thành —"
-                    options={provinces.map((p) => ({ code: p.code, name: p.name }))}
-                    onChange={(c) => { setProvince(c); setAddrId(''); setPickedCoord(null); }}
-                  />
-                </div>
-                <div className="zm-field">
-                  <label>Phường / Xã *</label>
-                  <SearchSelect
-                    value={ward} placeholder="— Chọn phường/xã —" disabled={!province}
-                    options={wards.map((w) => ({ code: w.code, name: w.name }))}
-                    onChange={(c) => { setWard(c); setPickedCoord(null); }}
-                  />
-                </div>
-                <div className="zm-field">
-                  <label>Số nhà, tên đường *</label>
-                  <input
-                    value={street}
-                    onChange={(e) => { setStreet(e.target.value); setPickedCoord(null); }}
-                    placeholder="VD: 123 Nguyễn Huệ"
-                    autoComplete="off"
-                  />
-                </div>
-                {geoLoading && <div className="zm-note">Đang tự động tính khoảng cách...</div>}
-                {km != null && shipCfg && (
-                  <div className="zm-alert">Khoảng cách ~{km}km → Phí ship <b>{fmt(shipFee)}đ</b> (tự động tính)</div>
-                )}
-                {geoError && (
-                  <div className="zm-alert" style={{ background: '#fef3c7', borderColor: '#fcd34d' }}>
-                    ⚠️ Không tự tính được khoảng cách. Bạn vẫn đặt được — quán sẽ xác nhận phí ship qua điện thoại.
-                    <button type="button" onClick={calcKm} style={{ marginLeft: 8, textDecoration: 'underline', color: '#b45309' }}>Tính lại</button>
-                  </div>
-                )}
-                <div className="zm-field">
-                  <label>Ghi chú giao hàng</label>
-                  <input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="VD: gọi trước khi tới, để ở bảo vệ..." />
-                </div>
-                {customerId && !addrId && (
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 14 }}>
-                    <input type="checkbox" checked={saveAddr} onChange={(e) => setSaveAddr(e.target.checked)} style={{ width: 18, height: 18 }} />
-                    Lưu địa chỉ này vào sổ địa chỉ
-                    {saveAddr && (
-                      <select value={addrLabel} onChange={(e) => setAddrLabel(e.target.value)} style={{ marginLeft: 4, padding: '4px 8px', borderRadius: 8, border: '1px solid #e0e0e0' }}>
-                        <option>Nhà</option><option>Công ty</option><option>Khác</option>
-                      </select>
-                    )}
-                  </label>
-                )}
-                <button type="button" className="zm-loc-btn" onClick={useCurrentLocation} disabled={locLoading}>
-                  {locLoading ? 'Đang lấy vị trí...' : 'Vị trí hiện tại'}
-                </button>
-                <p className="zm-loc-hint">Bấm "Vị trí hiện tại" để tự điền địa chỉ và tính phí ship chính xác, hoặc nhập tay rồi bấm Lưu.</p>
-                <button className="zm-btn-primary zm-pop-save" onClick={() => setShowAddrPop(false)}>Lưu</button>
-              </div>
-            </div>
-          )}
         </>
       )}
 
@@ -899,51 +1157,54 @@ function GroupCheckout({ group, onDone, onBack }) {
       )}
 
       <div className="zm-field"><label>Phương thức thanh toán</label></div>
-      {(payMethods.length ? payMethods : [
-        { value: 'transfer', label: 'Chuyển khoản / QR', desc: 'Quán xác nhận đã nhận tiền rồi mới làm món' },
-        { value: 'pay_at_store', label: 'Thanh toán tại quán', desc: 'Trả tiền khi nhận món' },
-      ])
-        // Spec phí giao mục 5.2/5.3: đơn giao ở nhánh dự phòng không có trả
-        // tại quán/thu hộ ở cả 2 giai đoạn — ẩn hẳn lựa chọn.
-        .filter((m) => !(m.value === 'pay_at_store' && type === 'delivery'))
-        .map((m) => (
-        <div key={m.value} className={`zm-pay-opt ${payment === m.value ? 'on' : ''}`} onClick={() => setPayment(m.value)}>
-          <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{m.desc}</div></div>
-        </div>
-      ))}
-
-      {promos.length > 0 && (
-        <div className="zm-field">
-          <label>Khuyến mại</label>
-          <select value={promoId} onChange={(e) => setPromoId(e.target.value)}>
-            <option value="">Không dùng</option>
-            {promos.map((p) => (
-              <option key={p.id} value={p.id}>
-                {(p.is_shipping || p.type === 'shipping') ? `🚚 ${p.name} (−${fmt(p.discount)}đ phí ship)` : `${p.name} (−${fmt(p.discount)}đ)`}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Spec đồng bộ luồng nhóm (L6): thanh toán qua Checkout SDK theo
+          cấu hình kênh như đơn thường — BANK chỉ hiện khi sẵn sàng
+          (bank_available); COD của nhóm chỉ cho đơn mang về/hẹn lấy, đơn
+          GIAO nhóm không có COD ở mọi cấu hình (mục 9, L5 đóng). */}
+      <div style={{ fontSize: 12, color: '#888', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <ZmIcon name="lock" size={14} />Thanh toán an toàn qua Zalo
+      </div>
+      {zaloCfg ? (
+        <>
+          {(zaloCfg.bank_available ?? zaloCfg.bank_enabled) && (
+            <div className={`zm-pay-opt ${payChannel === 'BANK' ? 'on' : ''}`} onClick={() => setPayChannel('BANK')}>
+              <div className="dot" /><div><b>Chuyển khoản</b><div style={{ fontSize: 12, color: '#888' }}>Quét QR / chuyển khoản qua Zalo</div></div>
+            </div>
+          )}
+          {zaloCfg.cod_enabled && !codHiddenForGroupDelivery && (
+            <div className={`zm-pay-opt ${payChannel === 'COD' ? 'on' : ''}`} onClick={() => setPayChannel('COD')}>
+              <div className="dot" /><div><b>Trả tại quán</b><div style={{ fontSize: 12, color: '#888' }}>Trả tiền khi nhận món</div></div>
+            </div>
+          )}
+        </>
+      ) : (
+        (payMethods.length ? payMethods : [
+          { value: 'transfer', label: 'Chuyển khoản / QR', desc: 'Quán xác nhận đã nhận tiền rồi mới làm món' },
+          { value: 'pay_at_store', label: 'Thanh toán tại quán', desc: 'Trả tiền khi nhận món' },
+        ])
+          // Spec phí giao mục 5.2/5.3: đơn giao ở nhánh dự phòng không có trả
+          // tại quán/thu hộ ở cả 2 giai đoạn — ẩn hẳn lựa chọn.
+          .filter((m) => !(m.value === 'pay_at_store' && type === 'delivery'))
+          .map((m) => (
+          <div key={m.value} className={`zm-pay-opt ${payment === m.value ? 'on' : ''}`} onClick={() => setPayment(m.value)}>
+            <div className="dot" /><div><b>{m.label}</b><div style={{ fontSize: 12, color: '#888' }}>{m.desc}</div></div>
+          </div>
+        ))
       )}
 
-      <div style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 12, padding: 12, marginBottom: 14 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>🎟️ Mã giảm giá</div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div className="zm-field" style={{ margin: 0, flex: 1, minWidth: 0 }}>
-            <input value={voucher} onChange={(e) => { setVoucher(e.target.value); setVoucherInfo(null); setVoucherErr(''); }} placeholder="NHẬP MÃ NẾU CÓ" style={{ textTransform: 'uppercase' }} />
-          </div>
-          <button type="button" className="zm-btn-inline" style={{ minHeight: 44 }}
-            onClick={() => checkVoucher(voucher)}>
-            Áp dụng
-          </button>
-        </div>
-        {voucherErr && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6, fontWeight: 600 }}>⚠ {voucherErr}</div>}
-        {voucherInfo && (
-          <div style={{ fontSize: 12, color: '#16a34a', marginTop: 6, fontWeight: 700 }}>
-            ✅ {voucherInfo.code}: giảm {fmt(voucherInfo.discount)}đ{voucherWins ? '' : (promoDisc > 0 ? ' — KM hiện tại giảm nhiều hơn nên hệ thống sẽ áp KM (voucher không bị trừ lượt)' : '')}
-          </div>
-        )}
-      </div>
+      {/* ===== Spec panel Ưu đãi (2026-11-14): khối Ưu đãi + panel chọn
+          do component dùng chung PromoPanel đảm nhiệm (dùng chung với
+          Checkout đơn thường). key theo loại đơn: đổi loại → remount,
+          lựa chọn ưu đãi reset như hành vi cũ. ===== */}
+      <PromoPanel
+        key={type}
+        ref={promoRef}
+        offers={offers}
+        subtotal={group.subtotal}
+        shipFee={shipFee}
+        phone={phone}
+        onResolve={setPromoRes}
+      />
 
       {points > 0 && (
         <div style={{ background: '#fff7e6', border: '1px solid #ffe1a8', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
@@ -960,32 +1221,62 @@ function GroupCheckout({ group, onDone, onBack }) {
       {type === 'delivery' && (
         <div className="zm-total-row">
           <span>Phí vận chuyển{km != null ? ` (~${km}km)` : ''}</span>
-          <span>{km != null ? `${fmt(shipFeeGross)}đ` : 'Quán xác nhận'}</span>
+          <span>{pointMissing ? 'Chưa tính được' : (km != null ? `${fmt(shipFeeGross)}đ` : 'Quán xác nhận')}</span>
         </div>
       )}
       {type === 'delivery' && shipShopSupport > 0 && <div className="zm-total-row disc"><span>🏠 Quán hỗ trợ phí ship</span><span>−{fmt(shipShopSupport)}đ</span></div>}
-      {shipDisc > 0 && <div className="zm-total-row disc"><span>🚚 KM phí vận chuyển</span><span>−{fmt(shipDisc)}đ</span></div>}
-      {/* 🟠8: hiển thị theo phía thắng thật giữa KM và voucher */}
-      {voucherWins ? (
-        <div className="zm-total-row disc"><span>🎟️ Voucher {voucherInfo.code}</span><span>−{fmt(voucherDisc)}đ</span></div>
-      ) : (
-        <>
-          {promoDisc > 0 && <div className="zm-total-row disc"><span>🎉 {promo?.name}</span><span>−{fmt(promoDisc)}đ</span></div>}
-          {voucherDisc > 0 && promoDisc > 0 && (
-            <div className="zm-total-row" style={{ color: '#999', fontSize: 12 }}>
-              <span>🎟️ Voucher {voucherInfo.code} (−{fmt(voucherDisc)}đ) không áp vì KM giảm nhiều hơn</span><span></span>
-            </div>
-          )}
-        </>
+      {/* Spec panel Ưu đãi (2026-11-14): các dòng giảm do phân xử §5d của
+          PromoPanel sinh ra — chỉ ưu đãi ĐANG ÁP mới có dòng, gương Checkout */}
+      {promoRes.shipApplied.filter((s) => s.amount > 0).map((s) => (
+        <div key={`${s.kind}-${s.id}`} className="zm-total-row disc"><span>{s.kind === 'wallet_coupon' ? <CouponIcon size={14} /> : '🚚'} {s.name} (phí ship)</span><span>−{fmt(s.amount)}đ</span></div>
+      ))}
+      {promoRes.giftApplied.map((g) => (
+        <div key={`${g.kind}-${g.id}`} className="zm-total-row disc"><span>🎁 {g.name}</span><span>Tặng {g.gift_product_name}</span></div>
+      ))}
+      {promoRes.promoApplied && (
+        <div className="zm-total-row disc">
+          <span>🎉 {promoRes.promoApplied.name}</span>
+          <span>−{fmt(promoRes.promoApplied.amount)}đ</span>
+        </div>
       )}
-      <div className="zm-total-row grand"><span>Tổng cộng</span><span>{fmt(grandTotal)}đ</span></div>
+      {promoRes.couponApplied && (
+        <div className="zm-total-row disc">
+          <span><CouponIcon size={14} /> {promoRes.couponApplied.source === 'voucher' ? 'Voucher' : 'Coupon'} {promoRes.couponApplied.code}{promoRes.couponApplied.state === 'stacked' ? ' (cộng dồn)' : ''}</span>
+          <span>−{fmt(promoRes.couponApplied.amount)}đ</span>
+        </div>
+      )}
+      <div className="zm-total-row grand"><span>Tổng cộng</span><span>{pointMissing ? '—' : `${fmt(grandTotal)}đ`}</span></div>
+
+      {/* Spec đồng bộ luồng nhóm (L10): khối hướng dẫn chuyển khoản —
+          nguyên văn delta đơn thường — đặt tại khu vực chốt đơn của nhóm
+          (ngay trên nút chốt), chỉ hiện khi kênh hiệu dụng là BANK, khách
+          thấy TRƯỚC khi luồng mở SDK. */}
+      {effChannelFor() === 'BANK' && (
+        <div style={{ background: '#f0f4ff', borderRadius: 12, padding: 12, marginTop: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: '#24305E', marginBottom: 4 }}>Thanh toán bằng chuyển khoản</div>
+          <div style={{ fontSize: 13, color: '#444', lineHeight: 1.55 }}>
+            Zalo sẽ hiện mã QR để bạn quét bằng app ngân hàng. Chuyển khoản xong, bạn có thể đóng màn hình QR để tiếp tục theo dõi đơn hàng tại đây.
+          </div>
+        </div>
+      )}
+
+      {/* Spec đồng bộ luồng nhóm (L7): lỗi validate/place hiện trong trang */}
+      {formErr && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginTop: 12, fontWeight: 600 }}>⚠ {formErr}</div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button className="zm-btn-outline" style={{ width: 120 }} onClick={onBack}>← Quay lại</button>
-        <button className="zm-btn-primary" disabled={placing} onClick={place} style={{ flex: 1 }}>
+        <button className="zm-btn-primary" disabled={placing || pointMissing} onClick={place} style={{ flex: 1 }}>
           {placing ? 'Đang đặt...' : 'Xác nhận đặt đơn nhóm'}
         </button>
       </div>
+      {pointMissing && (
+        <div onClick={() => setShowAddrPop(true)}
+          style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#92400e', borderRadius: 12, padding: '10px 12px', fontSize: 13, marginTop: 12, cursor: 'pointer' }}>
+          Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại. (Chạm vào đây để mở lại mục địa chỉ)
+        </div>
+      )}
     </div>
   );
 }

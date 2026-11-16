@@ -247,6 +247,9 @@ class PromotionService
                 return 'Mã chỉ áp dụng ' . ($parts ? implode(' ', $parts) : 'vào thời gian quy định') . '.';
             case 'WRONG_CHANNEL':
                 return 'Mã không áp dụng cho kênh này.';
+            case 'USAGE_LIMIT_PER_CUSTOMER':
+                // RT-03 (2026-11-13): cùng câu chữ với khuôn voucher cho nhất quán.
+                return 'Bạn đã dùng hết lượt của mã khuyến mãi này.';
             case 'TIER_ONLY':
                 $tiers = '';
                 if ($promo && !empty($promo->tier_ids)) {
@@ -340,6 +343,23 @@ class PromotionService
         // Kênh bán
         if (!self::channelAllowed($promo->channels, $channel, self::resolveChannelId($channel))) {
             return $fail('WRONG_CHANNEL');
+        }
+        // Giới hạn lượt dùng theo khách — RT-03 (2026-11-13, gói riêng B):
+        // noi khuôn voucher (chỉ kiểm khi có khách đã định danh trong ctx).
+        // Phạm vi chốt: chỉ đường ONLINE — đếm đơn online (online_channel
+        // 'zalo') CHƯA HỦY của khách mang KM này, gồm cả vai trò KM phí ship
+        // (shipping_promotion_id). Đơn hủy không tính (như VoucherUsage bị
+        // xóa khi hủy). per_customer_limit trống = không giới hạn.
+        if ($channel === 'online' && !empty($promo->per_customer_limit) && $customer) {
+            $usedTimes = \App\Models\Order::where('customer_id', $customer->id)
+                ->where('online_channel', 'zalo')
+                ->where('status', '!=', 'cancelled')
+                ->where(fn ($q) => $q->where('promotion_id', $promo->id)
+                    ->orWhere('shipping_promotion_id', $promo->id))
+                ->count();
+            if ($usedTimes >= (int) $promo->per_customer_limit) {
+                return $fail('USAGE_LIMIT_PER_CUSTOMER');
+            }
         }
         // Đối tượng: hạng thành viên
         if ($promo->target === 'tier') {

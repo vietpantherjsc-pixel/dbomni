@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 // - quickInwardStock(): nhập nhanh = tạo 1 lô (batch) mới, thay vì cộng dồn số tồn.
 class AdminDashboardController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     public function stats(Request $request): JsonResponse
     {
         // Gói 55 p11ad: cache 5 phút theo chi nhánh + ngày (dashboard nhiều query nặng)
@@ -24,9 +25,9 @@ class AdminDashboardController extends Controller
         // theo actor để không rò số liệu CN khác qua cache dùng chung.
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $mine = $actor->allBranchIds();
+            $mine = $this->effectiveBranchScope($actor);
             $reqBranch = (int) ($request->query('branch_id') ?: 0);
-            $effective = ($reqBranch > 0 && in_array($reqBranch, $mine, true)) ? $reqBranch : (int) $actor->branch_id;
+            $effective = ($reqBranch > 0 && in_array($reqBranch, $mine, true)) ? $reqBranch : (int) ($this->sessionBranchId($actor) ?? $actor->branch_id);
             $request->query->set('branch_id', (string) $effective);
             $branchKey = 'emp' . $actor->id . ':' . $effective;
         }

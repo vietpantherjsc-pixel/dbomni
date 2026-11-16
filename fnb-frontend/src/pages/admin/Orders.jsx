@@ -9,6 +9,7 @@ import ImportExcelModal from './ImportExcelModal'; // Gói 23: import đơn từ
 import { fmtDateTime as fmtDateTimeShared } from '../../utils/format';
 import { API } from '../../utils/api';
 import { useSharedCategories, labelMap } from '../../utils/sharedCategories'; // Spec danh mục dùng chung
+import { CANCEL_REASON_OPTIONS } from '../../utils/cancelReasons'; // N-2 (360 đợt 2): 6 mã nguyên nhân hủy/hoàn tác
 
 // =====================================================================
 // Gói 2 (2026-10-04): Trang Hóa đơn theo style Sapo.
@@ -28,12 +29,6 @@ const TABS = [
 const PAYMENT_LABELS_FB = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', debit_card: 'Thẻ ghi nợ', credit_card: 'Thẻ tín dụng', ewallet: 'Ví điện tử', other: 'Khác' };
 // Gói 3: nhãn loại đơn hàng
 const ORDER_TYPE_LABELS_FB = { takeaway: 'Mang đi', delivery: 'Giao hàng', dine_in: 'Tại bàn' };
-const CANCEL_REASONS_FB = [
-    { code: 'customer_cancel', name: 'Khách hủy' },
-    { code: 'out_of_stock', name: 'Hết nguyên liệu' },
-    { code: 'wrong_entry', name: 'Nhập nhầm' },
-    { code: 'other', name: 'Khác' },
-];
 
 const statusPill = (status) => {
     switch (status) {
@@ -59,7 +54,6 @@ const Orders = () => {
     // Spec danh mục dùng chung: nhãn đọc từ API, fallback cứng
     const PAYMENT_LABELS = labelMap(useSharedCategories('payment_types', []), PAYMENT_LABELS_FB);
     const ORDER_TYPE_LABELS = labelMap(useSharedCategories('order_types', []), ORDER_TYPE_LABELS_FB);
-    const cancelReasons = useSharedCategories('cancel_reasons', CANCEL_REASONS_FB);
     // Gói 24: lọc theo chi nhánh từ BranchContext ('0' = tất cả)
     const branchCtx = useBranch();
     const branchId = (branchCtx && branchCtx.branchId) || '0';
@@ -75,6 +69,10 @@ const Orders = () => {
     // Sổ #23: trạng thái "đã lên cò" của nút xác nhận tiền — xác nhận 2 bước ngay
     // trên nút, thay hộp thoại confirm() của trình duyệt. Tự gỡ khi đổi đơn/sau 6s.
     const [confirmPayArmed, setConfirmPayArmed] = useState(false);
+    const [showUndoPay, setShowUndoPay] = useState(false); // Hoàn tác xác nhận thanh toán (spec 2026-11-12)
+    const [undoReason, setUndoReason] = useState('');
+    const [undoReasonCode, setUndoReasonCode] = useState(''); // N-2 (360 đợt 2): mã nguyên nhân hoàn tác
+    const [undoBusy, setUndoBusy] = useState(false);
     useEffect(() => { setConfirmPayArmed(false); }, [selected?.id]);
     useEffect(() => {
         if (!confirmPayArmed) return;
@@ -121,18 +119,18 @@ const Orders = () => {
     const checkedOrders = orders.filter((o) => checkedIds.includes(o.id));
 
     // Gói 33: hủy hàng loạt (tái dùng logic cancel đơn lẻ: hoàn kho + hoàn/thu hồi điểm)
-    // Spec danh mục dùng chung: lý do chọn từ danh mục; chọn "Khác" thì nhập tay. Lưu nhãn để báo cáo nhóm được.
+    // N-2 (360 đợt 2): lý do chọn từ danh mục chuẩn 6 mã; chọn "Khác" thì nhập tay.
     const handleBulkCancel = async () => {
-        const reasonLabel = bulkReason === 'other'
-            ? bulkReasonOther.trim()
-            : (cancelReasons.find((r) => r.code === bulkReason)?.name || '');
-        if (!reasonLabel) return alert(bulkReason === 'other' ? 'Nhập lý do hủy cụ thể.' : 'Chọn lý do hủy.');
+        if (!bulkReason) return alert('Chọn lý do hủy.');
+        if (bulkReason === 'other' && !bulkReasonOther.trim()) return alert('Nhập lý do hủy cụ thể.');
         try {
             const res = await axios.post(API + '/orders/bulk-action', {
-                ids: checkedIds, action: 'cancel', reason: reasonLabel,
+                ids: checkedIds, action: 'cancel',
+                reason_code: bulkReason,
+                reason: bulkReasonOther.trim() || null,
             });
             alert(res.data?.message || 'Đã hủy hàng loạt.');
-            setShowBulkCancel(false); setBulkReason(''); setChecked({});
+            setShowBulkCancel(false); setBulkReason(''); setBulkReasonOther(''); setChecked({});
             fetchOrders();
         } catch (err) { alert(err.response?.data?.message || 'Hủy hàng loạt thất bại'); }
     };
@@ -438,7 +436,15 @@ const Orders = () => {
                                             <td className="px-3 py-3">{o.user?.name || '-'}</td>
                                             <td className="px-3 py-3">{o.branch?.name || '-'}</td>
                                             <td className="px-3 py-3">{o.customer_name || 'Khách lẻ'}</td>
-                                            <td className="px-3 py-3">{PAYMENT_LABELS[o.payment_method] || o.payment_method}</td>
+                                            <td className="px-3 py-3">
+                                                {PAYMENT_LABELS[o.payment_method] || o.payment_method}
+                                                {/* Gói Checkout SDK (2026-11-10): trạng thái phía SDK gần nhất của đơn (created/notified/processing/failed — đối soát kéo về), hiện cạnh trạng thái thanh toán */}
+                                                {o.pay_sdk_status && (
+                                                    <div style={{ marginTop: 2 }}>
+                                                        <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[10px] font-bold rounded">SDK: {o.pay_sdk_status}</span>
+                                                    </div>
+                                                )}
+                                            </td>
                                             <td className="px-3 py-3 text-right font-bold whitespace-nowrap">
                                                 {Number(o.total_amount).toLocaleString('vi-VN')} đ
                                             </td>
@@ -517,6 +523,8 @@ const Orders = () => {
                                         {selected.delivery_tracking_url && <div><a href={selected.delivery_tracking_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">📍 Theo dõi tài xế</a></div>}
                                         {/* Spec KDS book ship mục 5.5: địa chỉ + điểm ghim ĐÃ GỬI HÃNG — căn cứ đối soát khi khiếu nại giao sai điểm */}
                                         {selected.delivery_address && <div className="flex justify-between gap-3"><span>Địa chỉ đã gửi hãng</span><span className="text-right">{selected.delivery_address}</span></div>}
+                                        {/* Gói geocode lai NDAMaps (2026-11-13 mục 3.3): chỉ nguồn ndamaps_forward mới hiện huy hiệu — điểm cứu cánh là điểm cần mắt người soi lại phí nhất (ca CN1 trong hồ sơ đo: bản ghi sai cùng tỉnh vẫn lọt kỷ luật lọc). */}
+                                        {selected.dropoff_source === 'ndamaps_forward' && <div className="flex justify-between gap-3"><span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">⚠ Điểm từ đường dự phòng — kiểm lại phí</span><span /></div>}
                                         {selected.delivery_dropoff_lat && <div className="flex justify-between"><span>Điểm ghim</span><span className="font-mono">{Number(selected.delivery_dropoff_lat).toFixed(5)}, {Number(selected.delivery_dropoff_lng).toFixed(5)}{selected.pin_corrected && <span className="ml-1 text-amber-600 font-bold">· Đã đính chính tại quán</span>}</span></div>}
                                         {selected.delivery_failure_reason && <div className="flex justify-between"><span>Lý do giao thất bại</span><span className="text-red-600 font-semibold">{selected.delivery_failure_reason}</span></div>}
                                     </div>
@@ -602,6 +610,9 @@ const Orders = () => {
                                     );
                                 })()}
                                 <div className="flex justify-between"><span className="text-gray-600">Phí</span><span>{Number(selected.shipping_fee || 0).toLocaleString('vi-VN')}đ</span></div>
+                                {Number(selected.shipping_cod_fee || 0) > 0 && (
+                                    <div className="flex justify-between"><span className="text-gray-600">Trong đó phí thu hộ COD</span><span>{Number(selected.shipping_cod_fee).toLocaleString('vi-VN')}đ</span></div>
+                                )}
                                 <div className="flex justify-between"><span className="text-gray-600">Thuế</span><span className="text-gray-500">Giá đã bao gồm thuế</span></div>
                                 <div className="flex justify-between font-bold text-[14px]"><span>Thanh toán</span><span>{Number(selected.total_amount).toLocaleString('vi-VN')}đ</span></div>
                             </div>
@@ -666,6 +677,31 @@ const Orders = () => {
                                         </div>
                                     )}
                                 </>
+                            )}
+                            {/* Hoàn tác xác nhận thanh toán (spec 2026-11-12): chỉ hiện khi đơn đã qua
+                                xác nhận (paid + đã trừ kho) và chưa kết thúc — đúng điều kiện API. */}
+                            {selected.online_channel === 'zalo' && selected.payment_status === 'paid' && selected.stock_deducted && !['completed', 'cancelled'].includes(selected.status) && (
+                                <button
+                                    onClick={() => { setUndoReason(''); setShowUndoPay(true); }}
+                                    className="w-full py-2.5 mt-4 bg-white rounded text-[13px] font-bold hover:bg-red-50"
+                                    style={{ border: '1.5px solid #dc2626', color: '#b91c1c' }}
+                                >
+                                    ↩️ Hoàn tác xác nhận thanh toán
+                                </button>
+                            )}
+                            {selected.payment_undo_logs && selected.payment_undo_logs.length > 0 && (
+                                <div className="mt-4">
+                                    <div className="text-[12px] font-semibold text-gray-600 mb-1">Lịch sử hoàn tác xác nhận</div>
+                                    {selected.payment_undo_logs.map((log) => (
+                                        <div key={log.id} className="text-[12px] px-3 py-2 rounded-lg mb-1" style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#7c2d12' }}>
+                                            <div><b>{fmtDateTime(log.created_at)}</b> · {log.actor_label || '—'}{log.surface ? ` (${log.surface === 'kds' ? 'KDS' : 'Admin'})` : ''}</div>
+                                            <div>Lý do: {log.reason}</div>
+                                            {log.zalo_result === 'success' && (
+                                                <div>Đã báo hủy giao dịch sang Zalo ✓</div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                             <div className="flex gap-2 pt-4">
                                 {!['cancelled', 'completed'].includes(selected.status) && (
@@ -768,6 +804,52 @@ const Orders = () => {
                 </div>
             )}
 
+            {/* Hoàn tác xác nhận thanh toán (spec 2026-11-12): cảnh báo hậu quả đóng
+                đường Zalo hiện TRƯỚC khi bấm; lý do bắt buộc — rỗng thì khóa nút. */}
+            {showUndoPay && selected && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { if (!undoBusy) setShowUndoPay(false); }}>
+                    <div className="bg-white rounded-xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="font-bold text-[16px] mb-1">Hoàn tác xác nhận thanh toán — đơn {selected.code}</h3>
+                        {selected.pay_channel === 'BANK' && selected.pay_sdk_order_id ? (
+                            <p className="text-[12.5px] text-gray-600 mb-3">
+                                Đơn này đã báo hoàn tất thanh toán sang Zalo. Hoàn tác sẽ báo <b>HỦY giao dịch phía Zalo</b> — sau đó khách <b>KHÔNG thể thanh toán lại qua Zalo</b> cho đơn này, chỉ chuyển khoản trực tiếp cho quán. Điểm đã tích sẽ bị thu hồi, kho sẽ được hoàn lại, đơn trở về trạng thái chờ thanh toán.
+                            </p>
+                        ) : (
+                            <p className="text-[12.5px] text-gray-600 mb-3">
+                                Điểm đã tích sẽ bị thu hồi, kho sẽ được hoàn lại, đơn trở về trạng thái chờ thanh toán để xác nhận lại khi đã nhận được tiền.
+                            </p>
+                        )}
+                        <label className="text-[12px] font-semibold text-gray-600">Nguyên nhân hoàn tác (bắt buộc)</label>
+                        <select value={undoReasonCode} onChange={(e) => setUndoReasonCode(e.target.value)}
+                            className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]">
+                            <option value="">— Chọn nguyên nhân —</option>
+                            {CANCEL_REASON_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+                        </select>
+                        <label className="text-[12px] font-semibold text-gray-600 mt-3 block">Ghi chú {undoReasonCode === 'other' ? '(bắt buộc)' : '(tùy chọn)'}</label>
+                        <textarea value={undoReason} onChange={(e) => setUndoReason(e.target.value)} rows={3}
+                            placeholder="VD: Xác nhận nhầm đơn — sao kê chưa có tiền về..."
+                            className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]" />
+                        <div className="flex justify-end gap-2 mt-4">
+                            <button onClick={() => setShowUndoPay(false)} disabled={undoBusy} className="px-4 py-2 rounded-lg border border-gray-300 text-[13px]">Đóng</button>
+                            <button
+                                disabled={!undoReasonCode || (undoReasonCode === 'other' && !undoReason.trim()) || undoBusy}
+                                onClick={async () => {
+                                    setUndoBusy(true);
+                                    try {
+                                        const res = await axios.post(`${API}/orders/${selected.id}/undo-payment`, { reason: undoReason.trim() || null, reason_code: undoReasonCode, surface: 'admin' });
+                                        if (res.data?.success) { alert(res.data.message); setShowUndoPay(false); setUndoReason(''); setUndoReasonCode(''); setSelected(null); fetchOrders(); }
+                                        else alert(res.data?.message || 'Lỗi');
+                                    } catch (e) { alert(e.response?.data?.message || 'Lỗi'); }
+                                    setUndoBusy(false);
+                                }}
+                                className="px-4 py-2 rounded-lg text-white text-[13px] font-medium disabled:opacity-50"
+                                style={{ background: '#dc2626' }}
+                            >{undoBusy ? 'Đang hoàn tác...' : 'Hoàn tác xác nhận'}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Gói 33: modal lý do hủy hàng loạt */}
             {showBulkCancel && (
                 <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowBulkCancel(false)}>
@@ -781,7 +863,7 @@ const Orders = () => {
                         <select value={bulkReason} onChange={(e) => setBulkReason(e.target.value)}
                             className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-[13px]">
                             <option value="">— Chọn lý do —</option>
-                            {cancelReasons.map((r) => <option key={r.code} value={r.code}>{r.name}</option>)}
+                            {CANCEL_REASON_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
                         </select>
                         {bulkReason === 'other' && (
                             <input value={bulkReasonOther} onChange={(e) => setBulkReasonOther(e.target.value)}

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, getProfile, profileIdentity } from '../api';
+import { CouponIcon } from '../components/ZmIcon';
 import { TabBar } from './Home';
 
 // SPEC-02: Trang "Ưu đãi của tôi" (L13) — ví coupon cá nhân.
@@ -38,7 +39,7 @@ export default function Coupons() {
   if (!customerId) {
     return (
       <div className="zm-page">
-        <div className="zm-header"><button className="zm-back" onClick={() => nav(-1)}>←</button><h1>Ưu đãi của tôi</h1></div>
+        <div className="zm-header"><button className="zm-back" onClick={() => nav(-1)}>←</button><h1><CouponIcon size={22} /> Ưu đãi của tôi</h1></div>
         <div style={{ padding: 24, textAlign: 'center', color: '#888' }}>
           Vui lòng vào Tài khoản để liên kết số điện thoại trước.
         </div>
@@ -49,7 +50,7 @@ export default function Coupons() {
 
   return (
     <div className="zm-page">
-      <div className="zm-header"><button className="zm-back" onClick={() => nav(-1)}>←</button><h1>Ưu đãi của tôi</h1></div>
+      <div className="zm-header"><button className="zm-back" onClick={() => nav(-1)}>←</button><h1><CouponIcon size={22} /> Ưu đãi của tôi</h1></div>
 
       <div style={{ display: 'flex', gap: 8, padding: '12px 16px 0' }}>
         {[
@@ -87,7 +88,7 @@ export default function Coupons() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <div style={{ fontWeight: 800, fontSize: 15 }}>{c.promotion?.name}</div>
+                  <div style={{ fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', gap: 7 }}><CouponIcon size={17} /><span>{c.promotion?.name}</span></div>
                   <div style={{ fontSize: 13, color: '#b26a00', fontWeight: 700, marginTop: 4 }}> {/* UX: cam đậm đủ tương phản trên trắng */}
                     {discountText(c.promotion)}
                   </div>

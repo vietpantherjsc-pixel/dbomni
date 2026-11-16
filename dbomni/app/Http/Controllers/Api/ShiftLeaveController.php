@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 // - Quản lý: tạo trực tiếp (bỏ qua 48h), duyệt → tự động gỡ ca khỏi lịch xếp.
 class ShiftLeaveController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Ca sắp tới của NV (đã xếp hoặc đã duyệt đăng ký), chưa có yêu cầu nghỉ.
     public function myShifts(Request $request): JsonResponse
     {
@@ -145,7 +146,7 @@ class ShiftLeaveController extends Controller
         $actor = $request->user();
         if ($actor instanceof Employee) {
             $empBranch = (int) (Employee::where('id', $lr->employee_id)->value('branch_id') ?? 0);
-            if (!in_array($empBranch, $actor->allBranchIds(), true)) {
+            if (!in_array($empBranch, $this->effectiveBranchScope($actor), true)) {
                 return response()->json(['success' => false, 'message' => 'Yêu cầu thuộc chi nhánh bạn không được phân công.'], 403);
             }
         }
@@ -161,7 +162,7 @@ class ShiftLeaveController extends Controller
         // Audit 2026-10-23 A1-2: quản lý là Employee chỉ thấy yêu cầu của CN mình
         $actor = $request->user();
         if ($actor instanceof Employee) {
-            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $actor->allBranchIds()));
+            $q->whereHas('employee', fn ($qq) => $qq->whereIn('branch_id', $this->effectiveBranchScope($actor)));
         }
         $items = $q->get()->map(function ($m) {
             // Sổ #28 (bản làm lại): mảng thuần + ép 'date' Y-m-d (xem myList).
@@ -236,7 +237,7 @@ class ShiftLeaveController extends Controller
         }
         // Audit 2026-10-23 A1-10: ghi vết người từ chối
         [$handledUserId, $handledEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
-        $lr->update(['status' => 'rejected', 'reject_reason' => $v['reason'] ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
+        $lr->update(['status' => 'rejected', 'reject_reason' => ($v['reason'] ?? null) ?: 'Quản lý từ chối', 'handled_by' => $handledUserId, 'handled_by_employee_id' => $handledEmployeeId]);
         return response()->json(['success' => true, 'message' => 'Đã từ chối yêu cầu.']);
     }
 }

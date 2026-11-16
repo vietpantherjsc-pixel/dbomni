@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import AdminLayout from '../../components/layout/AdminLayout';
+import { useAuth } from '../../contexts/AuthContext'; // Dải tab dùng chung: lọc tab theo lá view
 import DateInput from '../../components/DateInput';
 import { useBranch } from '../../contexts/BranchContext'; // C3: trạng thái CN dùng chung
 import { API } from '../../utils/api';
 import {
     REPORT_CSS, fmtInt, fmtVND, trimN, fmtD, todayStr, deltaBadge,
-    PERIOD_NAMES,
+    PERIOD_NAMES, ReportNavTabs, EstTag,
 } from './reportShared';
 
 // =====================================================================
@@ -31,6 +32,7 @@ const wastePill = (pct, threshold, overThreshold) => {
 };
 
 export default function ReportsInventory() {
+    const { can } = useAuth();
     const [branches, setBranches] = useState([]);
     // C3 (2026-10-21): CN của báo cáo = TRẠNG THÁI CHUNG BranchContext, đồng bộ 2 chiều
     // với dropdown sidebar ('0' = Tất cả ở cả hai nơi).
@@ -42,6 +44,28 @@ export default function ReportsInventory() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [errMsg, setErrMsg] = useState('');
+    const [quickMsg, setQuickMsg] = useState('');
+
+    // §6.2: tạo phiếu kiểm kê nhanh tuần từ danh sách hệ sinh (đúng luồng
+    // phiếu kiểm kê hiện có — phiếu draft, NV vào phiếu nhập số đếm thật).
+    const createQuick = async (list) => {
+        setQuickMsg('');
+        try {
+            const res = await axios.post(API + '/stocktakes', {
+                branch_id: list.branch_id,
+                type: 'quick_weekly',
+                note: 'Kiểm kê nhanh tuần — danh sách giá trị cao do hệ thống sinh',
+                material_ids: (list.items || []).map((i) => i.material_id),
+            });
+            if (res.data?.success) {
+                setQuickMsg('Đã tạo phiếu kiểm kê nhanh cho ' + list.branch_name + ' (' + (list.items || []).length + ' nguyên liệu). Vào trang Kho → Kiểm kê để nhập số đếm.');
+            } else {
+                setQuickMsg('Không tạo được phiếu: ' + (res.data?.message || 'lỗi không rõ'));
+            }
+        } catch (e) {
+            setQuickMsg('Không tạo được phiếu: ' + (e?.response?.data?.message || e?.message || 'lỗi mạng'));
+        }
+    };
 
     useEffect(() => {
         axios.get(API + '/branches')
@@ -128,6 +152,9 @@ export default function ReportsInventory() {
                         <b>{meta.branch_name}</b> · Kỳ {PERIOD_NAMES[meta.period]}: <b>{rangeTxt}</b>
                     </div>
                 )}
+
+                {/* Dải tab điều hướng danh mục dùng chung (Phương án B, 2026-11-15) */}
+                <ReportNavTabs active="waste" can={can} />
 
                 <main className="wrap" style={{ paddingTop: 12 }}>
                     {loading && !data && <div className="card">Đang tải số liệu…</div>}
@@ -270,6 +297,146 @@ export default function ReportsInventory() {
                         </table></div>
                         )}
                     </div>
+
+                    {/* ===== Chỉ số 360 đợt 1: KHO-1/2/3/4a + kiểm kê nhanh §6 ===== */}
+                    {data.turnover && (
+                    <div className="card">
+                        <h3>Vòng quay tồn kho (KHO-1)</h3>
+                        {data.turnover.data_ok ? (
+                        <div className="kpis">
+                            <div className="kpi"><div className="lb">Vòng quay kỳ</div><div className="v">{data.turnover.turnover !== null ? trimN(data.turnover.turnover) + ' vòng' : '—'}</div><span className="delta flat">giá vốn {fmtVND(data.turnover.cogs)}</span></div>
+                            <div className="kpi"><div className="lb">Số ngày tồn</div><div className="v">{data.turnover.days !== null ? trimN(data.turnover.days) + ' ngày' : '—'}</div><span className="delta flat">tồn BQ {fmtVND(data.turnover.avg_value)}</span></div>
+                            <div className="kpi"><div className="lb">Tồn đầu kỳ</div><div className="v" style={{ fontSize: 18 }}>{fmtVND(data.turnover.opening_value)}</div><span className="delta flat">cuối kỳ {fmtVND(data.turnover.closing_value)}</span></div>
+                        </div>
+                        ) : (
+                        <div className="sub">{data.turnover.note}</div>
+                        )}
+                    </div>
+                    )}
+
+                    {data.avt && (
+                    <div className="card">
+                        <h3>Chênh lệch lý thuyết – thực tế (KHO-2) {data.avt.is_estimate && <EstTag note="Còn nguyên liệu chưa có số kiểm kê trong kỳ — phần thực tế chỉ tính trên nguyên liệu đã kiểm." />}</h3>
+                        <div className="sub">Food cost lý thuyết (định lượng × lượng bán): <b>{data.avt.theoretical_pct !== null ? trimN(data.avt.theoretical_pct) + '%' : '—'}</b> · Food cost thực tế (đầu + nhập − cuối đếm được): <b>{data.avt.actual_pct !== null ? trimN(data.avt.actual_pct) + '%' : 'chưa có số kiểm kê trong kỳ'}</b> · AvT: <b>{data.avt.avt_points !== null ? (data.avt.avt_points > 0 ? '+' : '') + trimN(data.avt.avt_points) + ' điểm %' : '—'}</b> · Đã kiểm {data.avt.counted_materials}/{data.avt.total_materials} nguyên liệu có tiêu thụ.</div>
+                        {(data.avt.top_diffs || []).length > 0 && (
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Nguyên liệu lệch nhất</th><th className="num">Lệch (lượng)</th><th className="num">Quy ra tiền</th><th>Loại số</th></tr>
+                            {data.avt.top_diffs.map((d) => (
+                                <tr key={d.material_id}>
+                                    <td className="prod">{d.material}</td>
+                                    <td className="num">{trimN(d.diff_qty)}</td>
+                                    <td className="num" style={{ fontWeight: 700 }}>{fmtVND(d.diff_value)}</td>
+                                    <td>{d.is_estimate ? <EstTag /> : 'thực tế'}</td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table></div>
+                        )}
+                    </div>
+                    )}
+
+                    {data.quick_stocktake && (
+                    <div className="card">
+                        <h3>Kiểm kê nhanh tuần — nguyên liệu giá trị cao (§6)</h3>
+                        <div className="sub">Danh sách hệ thống sinh từ nhóm nguyên liệu chiếm phần lớn giá trị kho đang quay (tối đa {data.quick_stocktake.limit} dòng/CN). Tuần có phiếu kiểm kê nhanh đã chốt thì food cost tuần của các nguyên liệu trong danh sách là số THẬT; chưa kiểm thì mang nhãn ước tính.</div>
+                        {quickMsg && <div className="explain">{quickMsg}</div>}
+                        {(data.quick_stocktake.lists || []).map((list) => (
+                            <div key={list.branch_id} style={{ marginBottom: 14 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+                                    <b>{list.branch_name}</b>
+                                    {list.counted_in_period
+                                        ? <span className="pill g">Đã kiểm kê nhanh trong kỳ</span>
+                                        : <span className="pill y">Chưa kiểm kê nhanh trong kỳ</span>}
+                                    <button className="m-btn m-btn-primary" onClick={() => createQuick(list)}>Tạo phiếu kiểm kê nhanh</button>
+                                </div>
+                                <div className="tbl-wrap"><table className="tbl">
+                                    <tbody>
+                                    <tr><th>Nguyên liệu</th><th className="num">Tồn</th><th className="num">Giá trị tồn</th><th className="num">Tiêu thụ kỳ</th></tr>
+                                    {(list.items || []).map((i) => (
+                                        <tr key={i.material_id}>
+                                            <td className="prod">{i.material}</td>
+                                            <td className="num">{trimN(i.stock_qty)}</td>
+                                            <td className="num">{fmtVND(i.stock_value)}</td>
+                                            <td className="num">{trimN(i.consumption_qty)}</td>
+                                        </tr>
+                                    ))}
+                                    </tbody>
+                                </table></div>
+                            </div>
+                        ))}
+                    </div>
+                    )}
+
+                    {data.dead_stock && (
+                    <div className="card">
+                        <h3>Hàng chậm luân chuyển / hàng chết (KHO-3)</h3>
+                        <div className="sub">Không phát sinh xuất dùng quá {data.dead_stock.warn_days} ngày: cảnh báo · quá {data.dead_stock.dead_days} ngày và có hạn dùng: hàng chết. Tổng giá trị nhóm: <b>{fmtVND(data.dead_stock.total_value)}</b> ({trimN(data.dead_stock.pct_of_stock)}% giá trị kho).</div>
+                        {(data.dead_stock.items || []).length === 0 ? (
+                            <div className="sub">Không có nguyên liệu nào chậm luân chuyển trong kỳ.</div>
+                        ) : (
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Nguyên liệu</th><th className="num">Tồn</th><th className="num">Giá trị</th><th className="num">Ngày chưa xuất</th><th>Trạng thái</th></tr>
+                            {data.dead_stock.items.map((i) => (
+                                <tr key={i.material_id}>
+                                    <td className="prod">{i.material}</td>
+                                    <td className="num">{trimN(i.qty)}</td>
+                                    <td className="num">{fmtVND(i.value)}</td>
+                                    <td className="num">{i.days_since_out === null ? 'chưa từng xuất' : i.days_since_out + ' ngày'}</td>
+                                    <td>{i.status === 'dead' ? <span className="pill r">Hàng chết</span> : <span className="pill y">Chậm luân chuyển</span>}</td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table></div>
+                        )}
+                    </div>
+                    )}
+
+                    {data.price_variance && (
+                    <div className="card">
+                        <h3>Biến động giá nhập theo NCC (KHO-4a)</h3>
+                        <div className="sub">Giá nhập bình quân gia quyền theo nguyên liệu × nhà cung cấp; lệch % giữa 2 lần nhập liên tiếp gần nhất.</div>
+                        {(data.price_variance || []).length === 0 ? (
+                            <div className="sub">Chưa có lô nhập nào.</div>
+                        ) : (
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Nguyên liệu</th><th>Nhà cung cấp</th><th className="num">Giá BQ gia quyền</th><th className="num">Số lần nhập</th><th className="num">Lệch lần nhập gần nhất</th></tr>
+                            {data.price_variance.slice(0, 30).map((v, i) => (
+                                <tr key={i}>
+                                    <td className="prod">{v.material}</td>
+                                    <td>{v.partner || '—'}</td>
+                                    <td className="num">{fmtVND(v.weighted_avg_cost)}</td>
+                                    <td className="num">{v.lots}</td>
+                                    <td className="num" style={{ color: v.last_change_pct === null ? undefined : (v.last_change_pct > 0 ? 'var(--red)' : 'var(--green)'), fontWeight: 700 }}>{v.last_change_pct === null ? '—' : (v.last_change_pct > 0 ? '+' : '') + trimN(v.last_change_pct) + '%'}</td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table></div>
+                        )}
+                    </div>
+                    )}
+
+                    {data.supplier_delivery && (
+                    <div className="card">
+                        <h3>Giao đủ / đúng hẹn của NCC (KHO-4b)</h3>
+                        <div className="sub">Phiếu đặt có ngày hẹn giao (N-1), kỳ neo theo ngày đặt. Đủ lượng = Σ nhận ÷ Σ đặt quy đổi, tối đa 100%; đúng hẹn = phiếu nhập xác nhận đầu tiên về không muộn hơn ngày hẹn.</div>
+                        {data.supplier_delivery.total_pos === 0 ? (
+                            <div className="sub">Kỳ này chưa có phiếu đặt hàng nào.</div>
+                        ) : (
+                        <div className="tbl-wrap"><table className="tbl">
+                            <tbody>
+                            <tr><th>Chỉ số</th><th className="num">Giá trị</th></tr>
+                            <tr><td className="prod">Tỉ lệ đúng hẹn</td><td className="num"><b>{data.supplier_delivery.on_time_rate === null ? '—' : trimN(data.supplier_delivery.on_time_rate) + '%'}</b>{' '}({data.supplier_delivery.on_time_count}/{data.supplier_delivery.total_with_expected} phiếu có hẹn đã nhận)</td></tr>
+                            <tr><td className="prod">Tỉ lệ giao đủ lượng (bình quân)</td><td className="num"><b>{data.supplier_delivery.avg_fulfillment_pct === null ? '—' : trimN(data.supplier_delivery.avg_fulfillment_pct) + '%'}</b></td></tr>
+                            <tr><td className="prod">Phiếu chưa có hẹn giao</td><td className="num">{data.supplier_delivery.no_expected_count}</td></tr>
+                            <tr><td className="prod">Phiếu có hẹn nhưng chưa nhận</td><td className="num">{data.supplier_delivery.not_received_count}</td></tr>
+                            </tbody>
+                        </table></div>
+                        )}
+                    </div>
+                    )}
 
                     <div className="foot">
                         <h4>Ghi chú về số liệu</h4>

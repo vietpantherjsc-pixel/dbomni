@@ -78,6 +78,9 @@ class PermissionTree
                 ['key' => 'transactions', 'label' => 'Phiếu thu/chi (gồm công nợ)', 'actions' => ['view', 'create', 'edit', 'delete', 'approve', 'pay'], 'scope' => 'branch'],
                 ['key' => 'categories', 'label' => 'Danh mục thu/chi', 'actions' => ['view', 'create', 'edit', 'delete'], 'scope' => 'system'],
                 ['key' => 'channels', 'label' => 'Điều chỉnh kênh (Sapo)', 'actions' => ['view', 'create', 'edit'], 'scope' => 'system'],
+                // Chỉ số 360 đợt 2 (N-3): mục tiêu doanh thu tháng — lá thật
+                // mới, không dùng alias finance.manage (chỉ nở lúc migrate).
+                ['key' => 'targets', 'label' => 'Mục tiêu doanh thu tháng', 'actions' => ['edit'], 'scope' => 'branch'],
             ],
         ],
         [
@@ -102,6 +105,12 @@ class PermissionTree
                 ['key' => 'operations', 'label' => 'Vận hành', 'actions' => ['view'], 'scope' => 'branch'],
                 ['key' => 'menu', 'label' => 'Menu engineering', 'actions' => ['view'], 'scope' => 'branch'],
                 ['key' => 'cancelled', 'label' => 'Đơn hủy theo nhân viên', 'actions' => ['view'], 'scope' => 'branch'],
+                // Chỉ số 360 (spec 2026-11-15 §0.8): tab Khách hàng + khối
+                // Marketing — lá cấp được bình thường (không tier_only),
+                // KHÔNG đưa vào mẫu Quản lý/Thu ngân; Chủ CN được cấp mặc
+                // định qua BRANCH_OWNER_REPORT_LEAVES (CheckPermission).
+                ['key' => 'customers', 'label' => 'Khách hàng', 'actions' => ['view'], 'scope' => 'branch'],
+                ['key' => 'marketing', 'label' => 'Marketing (hiệu quả KM · điểm · referral)', 'actions' => ['view'], 'scope' => 'branch'],
             ],
         ],
         [
@@ -153,6 +162,17 @@ class PermissionTree
 
     // Các khóa lá lương của tầng tài khoản (CheckPermission cho Chủ Chi Nhánh
     // đi qua đúng 7 năng lực này trong CN mình — spec §3.3/§8.3).
+    // Chỉ số 360 §0.8 (phán Q4 2026-11-15): Chủ Chi Nhánh được cấp mặc định
+    // 2 lá báo cáo khách — CheckPermission cho qua đúng 2 lá này ngoài cụm
+    // lương; phạm vi CN ép tại ReportController::customers (CN của chính họ).
+    public const BRANCH_OWNER_REPORT_LEAVES = [
+        'reports.customers.view',
+        'reports.marketing.view',
+        // Chỉ số 360 đợt 2 (N-3, Phụ lục khóa): Chủ CN được ghi mục tiêu
+        // tháng của đúng CN mình (phạm vi CN ép tại controller).
+        'finance.targets.edit',
+    ];
+
     public const SALARY_LEAVES = [
         'staff.salary.summary.view',
         'staff.salary.detail.view',

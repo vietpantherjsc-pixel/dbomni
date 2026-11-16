@@ -23,7 +23,7 @@ class StocktakeController extends Controller
     protected function denyStocktakeBranch(Request $request, $branchId): ?JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Không tìm thấy phiếu kiểm kê.'], 404);
         }
         return null;
@@ -39,7 +39,7 @@ class StocktakeController extends Controller
             ->orderByDesc('id');
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
-            $query->whereIn('branch_id', $actor->allBranchIds());
+            $query->whereIn('branch_id', $this->effectiveBranchScope($actor));
         }
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->query('branch_id'));
@@ -69,7 +69,9 @@ class StocktakeController extends Controller
     {
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
-            'type' => 'nullable|in:daily,weekly,monthly,spontaneous',
+            // Chỉ số 360 §6.2 (2026-11-15): thêm loại 'quick_weekly' — phiếu
+            // kiểm kê nhanh tuần cho nhóm NL giá trị cao (danh sách hệ sinh).
+            'type' => 'nullable|in:daily,weekly,monthly,spontaneous,quick_weekly',
             'note' => 'nullable|string|max:255',
             'material_ids' => 'nullable|array',
             'material_ids.*' => 'exists:materials,id',

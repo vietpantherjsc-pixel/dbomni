@@ -11,10 +11,13 @@ class CustomerAddress extends Model
     // Gói SEC2: fillable显式 — KHÔNG gồm 'phone' (chỉ dùng để xác thực, không phải cột DB)
     protected $fillable = [
         'customer_id', 'label', 'province', 'ward', 'street', 'is_default',
+        'lat', 'lng', // Gói bắt buộc ghim vị trí 2026-11-12: tọa độ đã ghim của địa chỉ lưu
     ];
 
     protected $casts = [
         'is_default' => 'boolean',
+        'lat' => 'decimal:8', // Gói bắt buộc ghim vị trí 2026-11-12
+        'lng' => 'decimal:8',
     ];
 
     public function customer(): BelongsTo

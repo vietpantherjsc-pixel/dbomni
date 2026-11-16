@@ -16,13 +16,16 @@ use App\Models\Voucher;
 use App\Models\VoucherUsage;
 use App\Services\InventoryService;
 use App\Services\LoyaltyService;
+use App\Services\NdamapsService;
 use App\Services\PromotionService;
+use App\Support\CancelReasonCodes;
 use App\Support\CatalogCache;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 // Gói 6 (2026-10-05): API public cho Zalo Mini App đặt món.
 // - Không cần đăng nhập: định danh KH bằng SĐT.
@@ -30,6 +33,7 @@ use Illuminate\Support\Str;
 //   nhân viên xác nhận thanh toán -> trừ kho, vào KDS, in tem, tích điểm.
 class OnlineOrderController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Danh sách chi nhánh (kèm địa chỉ + tọa độ để tính ship)
     public function branches(): JsonResponse
     {
@@ -226,38 +230,241 @@ class OnlineOrderController extends Controller
             // giảm trên phí bảng, cùng nguồn cấu hình với applySupport).
             'support_threshold' => $deliveryService->supportThreshold(),
             'support_amount' => $deliveryService->supportAmount(),
+            // Gói mở COD giao hàng (2026-11-11): phí thu hộ COD phẳng do
+            // quán tự đặt — client hiển thị dòng gợi ý + gộp dòng tổng kết
+            // (phương án B). Số chốt lấy từ snapshot trên đơn, không tính
+            // lại từ giá trị này.
+            'ship_cod_fee' => (float) Setting::get('ship_cod_fee', 0),
         ]]);
     }
 
     // Gói 50e: geocode qua backend (Zalo WebView chặn domain lạ, backend gọi OSM với User-Agent chuẩn)
+    // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (Đại Vương phán 2026-11-12
+    // ~23:28, spec-dia-chi-don-giao-tra-tu-chu-bo-ghim.md mục 2): endpoint
+    // này chạy TRUY VẤN BẬC THANG, dừng ở kết quả dùng được đầu tiên và đáp
+    // kèm ladder_step (1/2/3) để TESTER/PM đo tỉ lệ rơi xuống mức đoạn
+    // đường:
+    //   Bậc 1: chuỗi đầy đủ client gửi (số nhà + đường + phường + tỉnh).
+    //   Bậc 2: ghép lại từ 3 trường cấu trúc (số nhà + đường, phường, tỉnh)
+    //          — cấp quận/huyện nếu khách gõ lẫn trong ô đường bị cắt bỏ.
+    //   Bậc 3: chỉ số nhà + tên đường (đoạn trước dấu phẩy đầu tiên của ô
+    //          đường) kèm khung ưu tiên quanh chi nhánh đang chọn. Trong
+    //          bậc này, nếu số nhà dạng hẻm kép "212B/C79" tra rỗng thì
+    //          thử lại với phần trước dấu "/" ("212B") — Nominatim không
+    //          hiểu số nhà kép (đo sống 2026-11-12: "212B/C79 Nguyễn
+    //          Trãi" rỗng mọi dạng truy vấn, "212B Nguyễn Trãi" trúng
+    //          đúng cụm hẻm); vẫn tính là bậc 3, không thêm bậc mới.
+    // Cả thang rỗng → 422 mã dropoff_geocode_failed (mã lỗi DUY NHẤT của
+    // gói — dùng chung với chốt store()).
+    // Khoanh vùng (2026-11-13): mỗi bậc lấy tối đa 5 ứng viên kèm
+    // addressdetails, cả 3 bậc đều kèm khung ưu tiên quanh chi nhánh, rồi
+    // pickDropoffCandidate LỌC CỨNG theo tỉnh khách đã chọn và lấy điểm
+    // gần chi nhánh nhất — không còn lấy mù top-1 (top-1 đổi theo lần gọi
+    // và có lần nhảy tỉnh, sự cố §HI).
     public function geocode(Request $request): JsonResponse
     {
         $q = trim((string) $request->query('q', ''));
-        if (mb_strlen($q) < 5) {
-            return response()->json(['success' => false, 'message' => 'Địa chỉ quá ngắn'], 422);
+        $street = trim((string) $request->query('street', ''));
+        $ward = trim((string) $request->query('ward', ''));
+        $province = trim((string) $request->query('province', ''));
+        $branchLat = (float) $request->query('branch_lat', 0);
+        $branchLng = (float) $request->query('branch_lng', 0);
+
+        // Khung ưu tiên ~3km quanh chi nhánh đang chọn — tính MỘT lần dùng
+        // cho cả 3 bậc (khoanh vùng 2026-11-13: trước đây chỉ bậc 3 có;
+        // bậc 1-2 trần nên top-1 của Nominatim có lần nhảy sang tỉnh khác,
+        // xem pickDropoffCandidate). bounded = 0: chỉ thiên vị thứ hạng,
+        // vẫn trả kết quả ngoài khung khi trong khung rỗng — TUYỆT ĐỐI
+        // không để bounded = 1 (khách xa chi nhánh sẽ tra rỗng cả thang).
+        $viewbox = [];
+        if ($branchLat && $branchLng) {
+            $d = 0.03;
+            $viewbox = [
+                'viewbox' => ($branchLng - $d) . ',' . ($branchLat + $d) . ',' . ($branchLng + $d) . ',' . ($branchLat - $d),
+                'bounded' => 0,
+            ];
         }
+
+        $steps = [];
+        if (mb_strlen($q) >= 5) {
+            $steps[1] = array_merge(['q' => $q], $viewbox);
+        }
+        if ($street !== '' && $ward !== '') {
+            // Cắt đoạn cấp quận/huyện/thành phố trực thuộc nếu khách gõ lẫn
+            // vào ô số nhà + đường (vd "35 Nguyễn Thái Học, Quận 1").
+            $streetCore = preg_replace('/,\s*(quận|huyện|thị xã|thành phố|tp\.?)\b.*$/iu', '', $street);
+            $q2 = implode(', ', array_filter([$streetCore, $ward, $province]));
+            if (mb_strlen($q2) >= 5 && $q2 !== $q) {
+                $steps[2] = array_merge(['q' => $q2], $viewbox);
+            }
+        }
+        if ($street !== '') {
+            $streetOnly = trim(explode(',', $street)[0]);
+            if (mb_strlen($streetOnly) >= 5) {
+                $candidates = [$streetOnly];
+                // Số nhà hẻm kép "212B/C79 ..." → thử thêm dạng cắt tại "/".
+                if (preg_match('/^(\S+)\//', $streetOnly, $mSlash)) {
+                    $truncated = preg_replace('/^\S+/', $mSlash[1], $streetOnly, 1);
+                    if ($truncated !== $streetOnly && mb_strlen($truncated) >= 5) {
+                        $candidates[] = $truncated;
+                    }
+                }
+                foreach ($candidates as $cand) {
+                    if (($steps[1]['q'] ?? null) === $cand || ($steps[2]['q'] ?? null) === $cand) continue;
+                    $steps[3][] = array_merge(['q' => $cand], $viewbox);
+                }
+            }
+        }
+
+        foreach ($steps as $stepNo => $paramSets) {
+            // Bậc 1/2: một bộ tham số duy nhất. Bậc 3: có thể thêm biến thể
+            // cắt số hẻm — vẫn cùng một bậc, trúng biến thể nào cũng là 3.
+            if (isset($paramSets['q'])) $paramSets = [$paramSets];
+            foreach ($paramSets as $params) {
+                $hit = $this->pickDropoffCandidate(
+                    $this->nominatimSearchList($params),
+                    $province, $branchLat, $branchLng
+                );
+                if ($hit !== null) {
+                    // Vá §HP (2026-11-13): điểm trúng thang phải trả
+                    // source 'ladder' — từ vựng của cột dropoff_source
+                    // (store() chỉ chấp nhận ladder|ndamaps_place|
+                    // ndamaps_forward|saved). Trả 'nominatim' (tên nhà
+                    // cung cấp) thì client gửi nguyên văn làm dropoff_source
+                    // → store() 422, mọi đơn giao đường thang đều chết ở
+                    // chốt đơn. 'nominatim' CHỈ còn là từ vựng của đường
+                    // gợi ý geocodeSuggest (spec §2.4), không đụng tới.
+                    return response()->json(['success' => true, 'data' => [
+                        'lat' => $hit['lat'],
+                        'lng' => $hit['lng'],
+                        'label' => $hit['label'],
+                        'ladder_step' => $stepNo,
+                        'source' => 'ladder',
+                    ]]);
+                }
+            }
+        }
+        // Gói geocode lai NDAMaps (spec 2026-11-13 mục 3.2) — CỨU CÁNH:
+        // chỉ gọi khi thang đã chạy hết 3 bậc và rỗng hẳn (khoảnh khắc
+        // hiện tại sẽ trả 422). Ngoài điều kiện này không gọi forward ở
+        // bất kỳ đâu trong đường chốt đơn. Cứu cánh có điểm → trả điểm đó
+        // kèm source 'ndamaps_forward', ladder_step null (không thuộc bậc
+        // nào); cứu cánh cũng rỗng/hỏng → giữ 422 hiện hành, nguyên văn.
+        $rescueText = $q !== '' ? $q : implode(', ', array_filter([$street, $ward, $province]));
+        if (mb_strlen($rescueText) >= 5) {
+            $rescue = (new NdamapsService())->forwardRescue($rescueText, $province, $branchLat, $branchLng);
+            if ($rescue !== null) {
+                return response()->json(['success' => true, 'data' => [
+                    'lat' => $rescue['lat'],
+                    'lng' => $rescue['lng'],
+                    'label' => $rescue['label'],
+                    'ladder_step' => null,
+                    'source' => 'ndamaps_forward',
+                ]]);
+            }
+        }
+        return response()->json([
+            'success' => false,
+            'code' => 'dropoff_geocode_failed',
+            'message' => 'Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.',
+        ], 422);
+    }
+
+    // Một lượt tra Nominatim lấy tối đa 5 ứng viên kèm chi tiết địa chỉ
+    // (addressdetails) — nguyên liệu cho khoanh vùng ở
+    // pickDropoffCandidate(). Lỗi kết nối cũng tính là không có kết quả
+    // để bậc thang còn cơ hội rơi xuống bậc dưới.
+    private function nominatimSearchList(array $params): array
+    {
         try {
-            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query([
-                'format' => 'json', 'limit' => 1, 'countrycodes' => 'vn', 'q' => $q,
-            ]);
+            $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query(array_merge([
+                'format' => 'json', 'limit' => 5, 'countrycodes' => 'vn', 'addressdetails' => 1,
+            ], $params));
             $ctx = stream_context_create(['http' => [
                 'timeout' => 8,
                 'header' => "User-Agent: CoffeePOS-ZaloMiniApp/1.0\r\nAccept: application/json\r\n",
             ]]);
             $raw = @file_get_contents($url, false, $ctx);
-            if ($raw === false) throw new \RuntimeException('Không kết nối được bản đồ');
+            if ($raw === false) return [];
             $data = json_decode($raw, true);
-            if (empty($data[0]['lat']) || empty($data[0]['lon'])) {
-                throw new \RuntimeException('Không tìm thấy địa chỉ');
+            if (!is_array($data)) return [];
+            $out = [];
+            foreach ($data as $row) {
+                if (empty($row['lat']) || empty($row['lon'])) continue;
+                $addr = $row['address'] ?? [];
+                $out[] = [
+                    'lat' => (float) $row['lat'],
+                    'lng' => (float) $row['lon'],
+                    'label' => $row['display_name'] ?? '',
+                    'province' => (string) ($addr['state'] ?? $addr['city'] ?? ''),
+                ];
             }
-            return response()->json(['success' => true, 'data' => [
-                'lat' => (float) $data[0]['lat'],
-                'lng' => (float) $data[0]['lon'],
-                'label' => $data[0]['display_name'] ?? '',
-            ]]);
+            return $out;
         } catch (\Throwable $e) {
-            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
+            return [];
         }
+    }
+
+    // Khoanh vùng theo dữ liệu khách đã chọn (Đại Vương chốt 2026-11-13,
+    // sau sự cố §HI: bậc 1 có lần trả điểm ở tỉnh khác làm phí ship của
+    // đơn 3556 nhảy 25.000đ → 61.000đ):
+    //   1. LỌC CỨNG theo tỉnh/thành khách chọn ở form — ứng viên khác
+    //      tỉnh loại hết, dù đứng đầu danh sách (top-1 của Nominatim đổi
+    //      theo từng lần gọi và có thể nhảy tỉnh; vd "35 Nguyễn Thái
+    //      Học" có lần rơi về Thủ Dầu Một). Ứng viên không đọc được tỉnh
+    //      trong addressdetails cũng loại — không kiểm chứng được thì
+    //      không chốt. Bậc lọc xong còn 0 ứng viên thì coi như bậc đó
+    //      rỗng, thang rơi tiếp như luật cũ; cả thang rỗng → 422 như cũ.
+    //   2. Trong số còn lại chọn điểm GẦN CHI NHÁNH NHẤT (không còn lấy
+    //      mù top-1). Thiếu tọa độ chi nhánh → lấy ứng viên đầu tiên còn
+    //      lại sau lọc.
+    // Khách không gửi tỉnh (target rỗng) → không lọc, giữ hành vi cũ.
+    // Phường KHÔNG lọc cứng: đoạn đường cắt qua phường là thường; phường
+    // vẫn nằm trong câu truy vấn như cũ.
+    private function pickDropoffCandidate(array $candidates, string $province, float $branchLat, float $branchLng): ?array
+    {
+        if (!$candidates) return null;
+        $target = $this->normProvinceName($province);
+        if ($target !== '') {
+            $candidates = array_values(array_filter($candidates, function ($c) use ($target) {
+                return $this->normProvinceName($c['province'] ?? '') === $target;
+            }));
+            if (!$candidates) return null;
+        }
+        if (!$branchLat || !$branchLng) {
+            $first = $candidates[0];
+            return ['lat' => $first['lat'], 'lng' => $first['lng'], 'label' => $first['label']];
+        }
+        $best = null;
+        $bestKm = null;
+        foreach ($candidates as $c) {
+            $km = $this->haversineKm($branchLat, $branchLng, $c['lat'], $c['lng']);
+            if ($bestKm === null || $km < $bestKm) {
+                $bestKm = $km;
+                $best = $c;
+            }
+        }
+        return ['lat' => $best['lat'], 'lng' => $best['lng'], 'label' => $best['label']];
+    }
+
+    // Chuẩn hóa tên tỉnh/thành để so khớp: bỏ dấu tiếng Việt, thường
+    // hóa, bỏ ký tự lạ và tiền tố "Thành phố"/"Tỉnh"/"TP" — "TP. Hồ Chí
+    // Minh" của form, "Thành phố Hồ Chí Minh" trong addressdetails của
+    // Nominatim đều về một dạng "ho chi minh". Ủy quyền về
+    // NdamapsService để thang và đường cứu cánh dùng đúng 1 bộ chuẩn hóa.
+    private function normProvinceName(?string $name): string
+    {
+        return NdamapsService::normalizeProvince($name);
+    }
+
+    // Khoảng cách chim bay km (cùng công thức haversine ở
+    // pinnedDistanceKm).
+    private function haversineKm(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLon / 2) ** 2;
+        return 2 * 6371 * asin(sqrt($a));
     }
 
     // Gói 55 p11ac: proxy danh sách tỉnh/thành (Zalo WebView chặn domain lạ)
@@ -290,15 +497,28 @@ class OnlineOrderController extends Controller
     }
 
     // Gói 50f: gợi ý địa chỉ khi user gõ (trả tối đa 5 kết quả để chọn nhanh)
+    // Gói geocode lai NDAMaps (spec 2026-11-13 mục 2): đường CHÍNH là
+    // NDAMaps autocomplete khoanh 5km quanh chi nhánh + place; gặp bất kỳ
+    // tín hiệu hỏng nào → cùng request này chạy geocodeSuggest Nominatim
+    // nguyên hành vi hiện tại (đường dự phòng). Hợp đồng đáp sau gói:
+    // data = {source: 'ndamaps' | 'nominatim', items: [...]}; item
+    // NDAMaps = {place_id, label, short} (chưa có tọa độ), item Nominatim
+    // = {lat, lng, label, short} như hiện tại. Client phân biệt theo
+    // source + có/không place_id.
     public function geocodeSuggest(Request $request): JsonResponse
     {
         $q = trim((string) $request->query('q', ''));
         if (mb_strlen($q) < 5) {
-            return response()->json(['success' => true, 'data' => []]);
+            return response()->json(['success' => true, 'data' => ['source' => 'nominatim', 'items' => []]]);
         }
         // Gói 55 p3: ưu tiên kết quả gần vị trí user (nếu có lat/lon)
         $lat = (float) $request->query('lat', 0);
         $lon = (float) $request->query('lon', 0);
+        $session = $request->query('session');
+        $items = (new NdamapsService())->autocomplete($q, $lat, $lon, is_string($session) ? $session : null);
+        if ($items !== null) {
+            return response()->json(['success' => true, 'data' => ['source' => 'ndamaps', 'items' => $items]]);
+        }
         try {
             $params = [
                 'format' => 'json', 'limit' => 5, 'countrycodes' => 'vn',
@@ -339,10 +559,42 @@ class OnlineOrderController extends Controller
                     'short' => $streetLine ?: mb_substr($label, 0, 60),
                 ];
             }
-            return response()->json(['success' => true, 'data' => $out]);
+            return response()->json(['success' => true, 'data' => ['source' => 'nominatim', 'items' => $out]]);
         } catch (\Throwable $e) {
-            return response()->json(['success' => true, 'data' => []]);
+            return response()->json(['success' => true, 'data' => ['source' => 'nominatim', 'items' => []]]);
         }
+    }
+
+    // Gói geocode lai NDAMaps (spec 2026-11-13 mục 2.2): tọa độ bản ghi
+    // khi khách chọn 1 gợi ý NDAMaps. Server đối chiếu điểm trước khi trả
+    // (tỉnh khớp tỉnh khách đã chọn + cách chi nhánh ≤ 30km); điểm không
+    // dùng được (lệch tỉnh / quá xa / place lỗi — mọi tín hiệu mục 4) →
+    // data null: client chỉ điền chữ như chọn gợi ý Nominatim, điểm chốt
+    // do đường B quyết ở bước tính phí. Khách không thấy lỗi gì.
+    public function geocodePlace(Request $request): JsonResponse
+    {
+        $placeId = trim((string) $request->query('place_id', ''));
+        if ($placeId === '') {
+            return response()->json(['success' => false, 'message' => 'Thiếu place_id', 'data' => null], 422);
+        }
+        $session = $request->query('session');
+        $province = trim((string) $request->query('province', ''));
+        $branchLat = (float) $request->query('lat', 0);
+        $branchLng = (float) $request->query('lon', 0);
+        $hit = (new NdamapsService())->place(
+            $placeId,
+            is_string($session) ? $session : null,
+            $province, $branchLat, $branchLng
+        );
+        if ($hit === null) {
+            return response()->json(['success' => true, 'data' => null, 'usable' => false]);
+        }
+        return response()->json(['success' => true, 'data' => [
+            'lat' => $hit['lat'],
+            'lng' => $hit['lng'],
+            'label' => $hit['label'],
+            'place_id' => $placeId,
+        ], 'usable' => true]);
     }
 
     // Gói 55 p3: reverse geocode — từ GPS (lat/lon) ra địa chỉ để điền vào form
@@ -381,16 +633,6 @@ class OnlineOrderController extends Controller
         }
     }
 
-    // Tính phí ship theo khoảng cách (server tính lại, không tin client)
-    public function shippingFee(Request $request): JsonResponse
-    {
-        $validated = $request->validate(['distance_km' => 'required|numeric|min:0|max:100']);
-        return response()->json([
-            'success' => true,
-            'data' => ['fee' => $this->calcShipFee((float) $validated['distance_km'])],
-        ]);
-    }
-
     private function calcShipFee(float $km): float
     {
         $baseFee = (float) Setting::get('ship_base_fee', 20000);
@@ -400,6 +642,23 @@ class OnlineOrderController extends Controller
             return $baseFee;
         }
         return $baseFee + ceil($km - $baseKm) * $perKm;
+    }
+
+    // Gói mở COD giao hàng (spec 2026-11-11): NGUỒN DUY NHẤT của khoản phí
+    // thu hộ COD — trả về số cộng thêm vào phí giao khi ĐỦ 4 điều kiện:
+    // đơn giao hàng + kênh COD + công tắc delivery_cod_enabled BẬT +
+    // setting ship_cod_fee > 0. Ngữ cảnh (giao/COD) do caller suy từ dữ
+    // kiện đơn; helper này chỉ đọc cấu hình — không nơi nào khác được tự
+    // cộng khoản này, không nhận số phí từ client.
+    private function codFeeFor(bool $isDelivery, bool $isCod): float
+    {
+        if (!$isDelivery || !$isCod) {
+            return 0;
+        }
+        if (!(bool) Setting::get('delivery_cod_enabled', '0')) {
+            return 0;
+        }
+        return max(0, (float) Setting::get('ship_cod_fee', 0));
     }
 
     // Sổ #95: gương openStatus() của Mini App (utils/openingHours.js) — trả
@@ -438,8 +697,9 @@ class OnlineOrderController extends Controller
     }
 
     // Spec phí giao MỘT NGUỒN (2026-11-06): khoảng cách = haversine giữa tọa
-    // độ chi nhánh và tọa độ điểm giao ĐÃ GHIM tại checkout (client gửi kèm
-    // đơn) — làm tròn 0,1 km như công thức ở mọi tầng. Server KHÔNG geocode
+    // độ chi nhánh và tọa độ điểm giao trên đơn (client gửi kèm — nguồn điểm
+    // từ 2026-11-12 là tra địa chỉ chữ ở checkout, spec bỏ ghim) — làm tròn
+    // 0,1 km như công thức ở mọi tầng. Server KHÔNG geocode
     // lại chuỗi địa chỉ (hàm serverDistanceKm cũ đã xóa hẳn theo spec mục 3).
     // Trả về null khi thiếu tọa độ ở một trong hai đầu -> phí để quán xác nhận.
     private function pinnedDistanceKm($branch, array $validated): ?float
@@ -786,8 +1046,12 @@ class OnlineOrderController extends Controller
                 return response()->json(['success' => true, 'data' => null]);
             }
             // Đăng nhập bằng mã lần đầu mà chưa có mốc đồng ý → ghi mốc
-            // 'code_login' (chỉ ghi khi đang trống).
-            if (empty($customer->consent_agreed_at)) {
+            // 'code_login' (chỉ ghi khi đang trống). Vá dứt điểm NĐ13
+            // (2026-11-13): chỉ ghi khi request mang cờ consent_agreed =
+            // true — lượt tra cứu hồ sơ tự động theo cặp mã không phải
+            // thời điểm đồng ý; khách đặt đơn đóng dấu qua cổng cờ ở
+            // store() (nguồn 'checkout').
+            if ($request->boolean('consent_agreed') && empty($customer->consent_agreed_at)) {
                 $customer->consent_agreed_at = now();
                 $customer->consent_source = 'code_login';
                 $customer->save();
@@ -892,9 +1156,18 @@ class OnlineOrderController extends Controller
             'delivery_package' => 'nullable|in:nhanh,sieu_toc',
             'delivery_quoted_fee' => 'nullable|numeric|min:0',
             'delivery_provider' => 'nullable|in:ahamove,lalamove',
-            // Gói 61b: tọa độ điểm giao (từ GPS/gợi ý địa chỉ ở checkout)
-            'delivery_dropoff_lat' => 'nullable|numeric|between:-90,90',
-            'delivery_dropoff_lng' => 'nullable|numeric|between:-180,180',
+            // Gói 61b: tọa độ điểm giao (từ GPS/gợi ý địa chỉ ở checkout).
+            // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (2026-11-12): rule ở
+            // đây CHỈ để nullable qua — toàn bộ kiểm hợp lệ cho đơn giao
+            // nằm ở chốt cứng dropoff_geocode_failed ngay dưới (để mọi ca
+            // sai đều trả đúng một mã lỗi thay vì lỗi validate rời rạc).
+            'delivery_dropoff_lat' => 'nullable',
+            'delivery_dropoff_lng' => 'nullable',
+            // Gói geocode lai NDAMaps (2026-11-13 mục 3.3): nguồn điểm giao
+            // của đơn — chỉ validate thuộc tập 4 giá trị rồi lưu; cổng,
+            // phí, trạng thái không đổi hành vi (cờ là thông tin cho nhân
+            // viên). Thiếu trường → null (tương thích ngược).
+            'dropoff_source' => 'nullable|in:ladder,ndamaps_place,ndamaps_forward,saved',
             'items' => 'required|array|min:1|max:50',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.product_option_id' => 'nullable|exists:product_options,id',
@@ -930,6 +1203,34 @@ class OnlineOrderController extends Controller
             }
         }
 
+        // Spec bỏ ghim — tra tọa độ từ địa chỉ chữ (Đại Vương phán
+        // 2026-11-12 ~23:28; thay cổng ghim của Phương án 1 cùng ngày):
+        // đơn GIAO HÀNG online bắt buộc có tọa độ điểm giao HỢP LỆ —
+        // LUẬT CỨNG, không công tắc cấu hình; chỉ đổi NGUỒN tọa độ: điểm
+        // tra từ địa chỉ chữ ở checkout (bậc thang ở geocode()) hoặc điểm
+        // đã lưu của địa chỉ trong sổ. Thiếu/rỗng/không phải số/ngoài
+        // miền (lat −90..90, lng −180..180)/cặp (0,0)
+        // → 422 dropoff_geocode_failed, KHÔNG tạo đơn. Chốt đặt tại store()
+        // duy nhất: PaymentController::checkoutOrders ủy quyền store() tạo
+        // đơn trước khi phát tham số SDK nên đường SDK thừa hưởng — đơn bị
+        // chặn ở đây thì không phát sinh giao dịch SDK nào. Đơn mang về/
+        // tại quán không qua chốt này; đơn nhóm đi controller riêng.
+        if (($validated['order_type'] ?? null) === 'delivery') {
+            $pinLat = $validated['delivery_dropoff_lat'] ?? null;
+            $pinLng = $validated['delivery_dropoff_lng'] ?? null;
+            $pinValid = is_numeric($pinLat) && is_numeric($pinLng)
+                && (float) $pinLat >= -90 && (float) $pinLat <= 90
+                && (float) $pinLng >= -180 && (float) $pinLng <= 180
+                && !((float) $pinLat === 0.0 && (float) $pinLng === 0.0);
+            if (!$pinValid) {
+                return response()->json([
+                    'success' => false,
+                    'code' => 'dropoff_geocode_failed',
+                    'message' => 'Chưa tra được vị trí từ địa chỉ này — kiểm tra lại số nhà / tên đường rồi thử lại.',
+                ], 422);
+            }
+        }
+
         // Sổ #95 (2026-11-05): chốt giờ đóng cửa ở SERVER — trước đây chỉ UI
         // khóa, gọi API trực tiếp ngoài giờ vẫn tạo được đơn tức thời (mẫu vật
         // HD20261105000906 lúc 06:30, quán mở 07:00). Gương luật Mini App:
@@ -960,10 +1261,21 @@ class OnlineOrderController extends Controller
         }
 
         try {
+            // Gói mở COD giao hàng (2026-11-11): khoản thu hộ COD suy TỪ DỮ
+            // KIỆN ĐƠN đã validate (giao hàng + pay_at_store + kênh COD của
+            // đường SDK — cùng định nghĩa với chốt chặn COD ở trên), KHÔNG
+            // nhận cờ/số phí từ client gửi lên. Số tiền qua codFeeFor() —
+            // nguồn duy nhất, đã gồm cổng công tắc + setting.
+            $shippingCodFee = (int) $this->codFeeFor(
+                ($validated['order_type'] ?? null) === 'delivery',
+                ($validated['payment_method'] ?? null) === 'pay_at_store'
+                    && $request->input('pay_channel') === 'COD'
+            );
+
             // Sổ #92 (2026-11-05): việc tạo đơn đóng vào một callable để vòng thử
             // lại bên dưới gọi lại được — thân transaction giữ nguyên từng dòng.
-            $createOrder = function () use ($validated, $promotionService, $loyaltyService) {
-                return DB::transaction(function () use ($validated, $promotionService, $loyaltyService) {
+            $createOrder = function () use ($validated, $promotionService, $loyaltyService, $shippingCodFee) {
+                return DB::transaction(function () use ($validated, $promotionService, $loyaltyService, $shippingCodFee) {
                 $subtotal = 0;
                 $orderItemsData = [];
                 $promoItems = [];
@@ -1052,7 +1364,7 @@ class OnlineOrderController extends Controller
                 // 3. Phí ship (đơn giao hàng) — Spec phí giao MỘT NGUỒN
                 // (2026-11-06): bảng phí nội bộ là nguồn DUY NHẤT ở mọi bề mặt.
                 // Khoảng cách = haversine giữa tọa độ chi nhánh và tọa độ điểm
-                // giao ĐÃ GHIM tại checkout (delivery_dropoff_lat/lng do client
+                // giao trên đơn (delivery_dropoff_lat/lng do client
                 // gửi) — server KHÔNG geocode lại chuỗi địa chỉ, KHÔNG gọi báo
                 // giá hãng để chốt phí (báo giá hãng chỉ còn cho Admin/điều
                 // phối). Thiếu tọa độ (hoặc chi nhánh chưa có tọa độ) → phí 0đ
@@ -1126,11 +1438,16 @@ class OnlineOrderController extends Controller
                 $shippingPromotion = null; // Gói 10c
                 $giftLinePending = null;
                 // SPEC-02: coupon từ ví cá nhân (quy tắc 1 hóa đơn = 1 coupon)
-                // Nếu có customer_coupon_id thì dùng coupon ví thay promotion_id
+                // Panel Ưu đãi §4 (2026-11-14, Đại Vương duyệt): coupon ví đi
+                // MỘT MÌNH thì đứng vào phía KM như cũ; đi CÙNG promotion_id
+                // thì đứng ở PHÍA COUPON (biến $couponDiscount/$couponSourcePromo
+                // ở dưới) để §5d xét cặp (KM + coupon ví).
                 $appliedCoupon = null;
                 $couponStackPromo = null; // chương trình nguồn của phía KM để xét cờ chồng mã
                 $couponIsShipping = false; // coupon KM phí ship: không tham gia so sánh tiền hàng
                 $couponIsMoney = false; // coupon giảm tiền hàng: thua chồng mã thì không bị trừ lượt
+                $couponDiscount = 0; // giảm tiền hàng của coupon ví ở vai PHÍA COUPON (chỉ khi đi cùng promotion_id)
+                $couponSourcePromo = null; // chương trình nguồn của coupon ví ở vai phía coupon (xét cờ chồng phía coupon)
                 if (!empty($validated['customer_coupon_id'])) {
                     // Phần B: coupon ví là quyền lợi cá nhân — chỉ cấp khi định danh đã xác thực
                     if (!$identityVerified) {
@@ -1193,12 +1510,30 @@ class OnlineOrderController extends Controller
                         $appliedPromotion = $promo;
                     } else {
                         $couponIsMoney = true;
-                        $promotionDiscount = min((float) $calc['discount'], $subtotal);
-                        $appliedPromotion = $promo;
+                        if (!empty($validated['promotion_id'])) {
+                            // Panel Ưu đãi §4: đi cùng promotion_id → coupon ví
+                            // ở PHÍA COUPON, không chiếm phía KM; cặp được
+                            // §5d phân xử theo cờ chồng của cả hai phía.
+                            $couponDiscount = min((float) $calc['discount'], $subtotal);
+                            $couponSourcePromo = $promo;
+                        } else {
+                            $promotionDiscount = min((float) $calc['discount'], $subtotal);
+                            $appliedPromotion = $promo;
+                        }
                     }
                     $appliedCoupon = $coupon;
-                    $couponStackPromo = $promo;
-                } elseif (!empty($validated['promotion_id'])) {
+                    // coupon ví chỉ đứng vào phía KM (nguồn cờ $couponStackPromo)
+                    // khi đi một mình; ở vai phía coupon, nguồn cờ của nó là
+                    // $couponSourcePromo.
+                    if (empty($validated['promotion_id'])) {
+                        $couponStackPromo = $promo;
+                    }
+                }
+                // Panel Ưu đãi §4: phía KM chạy ĐỘC LẬP với khối coupon ví ở
+                // trên (trước đây là nhánh elseif loại trừ nhau — gửi cả
+                // promotion_id + customer_coupon_id thì coupon ví nuốt mất
+                // phía KM). Payload chỉ gửi một phía thì hành vi y như cũ.
+                if (!empty($validated['promotion_id'])) {
                     $eligible = $promotionService->eligiblePromotions([
                         'subtotal' => $subtotal,
                         'items' => $promoItems,
@@ -1256,12 +1591,67 @@ class OnlineOrderController extends Controller
                 $promoSingle = $promotionDiscount > 0 ? min($promotionDiscount, $capAmount) : 0;
                 $voucherSingle = $voucherDiscount > 0 ? min($voucherDiscount, $capAmount) : 0;
                 $pairTotal = $pairAllowed ? min($voucherDiscount + $promotionDiscount, $capAmount) : 0;
-                if ($pairAllowed && $pairTotal > $promoSingle && $pairTotal > $voucherSingle) {
+                // Panel Ưu đãi §4 (Đại Vương duyệt 2026-11-14 ~23:44): cặp
+                // (phía KM + coupon ví) — cùng luật với cặp voucher: cả hai
+                // phía cùng bật cờ chồng phía mình, cả hai phần giảm > 0,
+                // xét cùng trần; cặp chỉ áp khi lợi hơn HẲN mọi lựa chọn
+                // còn lại. Payload có cả 2 phía coupon (coupon ví + voucher
+                // gõ tay): cặp coupon ví xét trước theo thứ tự ưu tiên của
+                // spec; không thắng thì rơi về luật cũ nguyên vẹn ở dưới.
+                $walletPairAllowed = $couponDiscount > 0 && $promotionDiscount > 0
+                    && $appliedPromotion && $couponSourcePromo
+                    && (bool) $appliedPromotion->stack_with_coupon
+                    && (bool) $couponSourcePromo->stack_with_coupon;
+                $couponSingle = $couponDiscount > 0 ? min($couponDiscount, $capAmount) : 0;
+                $walletPairTotal = $walletPairAllowed ? min($promotionDiscount + $couponDiscount, $capAmount) : 0;
+                $walletPairWins = false;
+                if ($walletPairAllowed) {
+                    $walletPairWins = $appliedVoucher
+                        ? $walletPairTotal > ($pairAllowed ? $pairTotal : max($promoSingle, $voucherSingle))
+                        : ($walletPairTotal > $promoSingle && $walletPairTotal > $couponSingle);
+                }
+                if ($walletPairWins) {
+                    // Cặp KM + coupon ví thắng: áp tổng cặp sau trần. Voucher
+                    // gõ tay (nếu có) là phía coupon thua theo thứ tự ưu
+                    // tiên → giữ nguyên không trừ lượt; coupon ví tiêu thụ
+                    // qua $appliedCoupon ở bước sau như khi áp đơn lẻ;
+                    // phía KM giữ nguyên ghi nhận.
+                    $discountAmount = $walletPairTotal;
+                    $appliedVoucher = null;
+                } elseif ($pairAllowed && $pairTotal > $promoSingle && $pairTotal > $voucherSingle) {
                     // Cặp thắng hẳn cả hai lựa chọn đơn lẻ → áp cặp, voucher bị trừ lượt;
                     // phía KM (KM thường hoặc coupon ví) giữ nguyên ghi nhận như cũ.
                     $discountAmount = $pairTotal;
                     $appliedVoucher->increment('used_count');
+                    // Coupon ví ở vai phía coupon (nếu có) không thuộc cặp
+                    // này → không tiêu thụ, ở lại ví.
+                    if ($couponDiscount > 0) {
+                        $appliedCoupon = null;
+                    }
                 } else {
+                    // Panel Ưu đãi §4: không có voucher gõ tay mà có coupon
+                    // ví ở phía coupon → coupon đấu ĐƠN LẺ với phía KM:
+                    // thắng hẳn mới áp (ghi nhận chương trình nguồn như
+                    // coupon đi một mình); hòa/thua → phía KM thắng, coupon
+                    // ở lại ví (tiền lệ C3.5). Có voucher gõ tay → rơi về
+                    // luật cũ ở khối dưới; coupon ví không thuộc đường đó
+                    // nên không tiêu thụ.
+                    $walletSingleHandled = false;
+                    if (!$appliedVoucher && $couponDiscount > 0) {
+                        $walletSingleHandled = true;
+                        if ($couponDiscount > $promotionDiscount) {
+                            $discountAmount = $couponDiscount;
+                            $appliedPromotion = $couponSourcePromo;
+                            $promotionDiscount = $couponDiscount;
+                        } else {
+                            $discountAmount = $promotionDiscount;
+                            $appliedCoupon = null;
+                        }
+                    }
+                    if (!$walletSingleHandled) {
+                    if ($couponDiscount > 0) {
+                        $appliedCoupon = null;
+                    }
                     $discountAmount = max($voucherDiscount, $promotionDiscount);
                     // TESTER duyệt spec 3 — điểm hòa (2026-10-21, PM chốt): HÒA → KM thắng.
                     // Voucher chỉ thắng khi LỚN HƠN HẲN (>); hòa thì voucher/coupon GIỮ NGUYÊN
@@ -1285,6 +1675,7 @@ class OnlineOrderController extends Controller
                             $appliedCoupon = null;
                         }
                     }
+                    }
                 }
                 if ($giftLinePending) {
                     $orderItemsData[] = $giftLinePending;
@@ -1301,6 +1692,16 @@ class OnlineOrderController extends Controller
 
                 $discountAmount = min($discountAmount, $subtotal + $shippingFee);
                 $finalAmount = $subtotal + $shippingFee - $discountAmount;
+
+                // Gói mở COD giao hàng (2026-11-11): cộng phí thu hộ COD SAU
+                // mọi lớp hỗ trợ phí + KM phí ship ở trên — khoản này là chi
+                // phí thu hộ chuyển tiếp, KHÔNG bị freeship/KM nuốt (kể cả
+                // khi phí khoảng cách về 0 hoặc đơn không có tọa độ).
+                // Snapshot vào cột shipping_cod_fee lúc tạo đơn ở bước 7.
+                if ($shippingCodFee > 0) {
+                    $shippingFee += $shippingCodFee;
+                    $finalAmount += $shippingCodFee;
+                }
 
                 // 6b. Gói 10c: dòng "Phí dịch vụ" — CHỈ thêm khi giao hàng và phí (sau KM) > 0
                 if ($validated['order_type'] === 'delivery' && $shippingFee > 0) {
@@ -1348,6 +1749,7 @@ class OnlineOrderController extends Controller
                     'distance_km' => $distanceKm, // Gói 55 p11ac: server tự tính
                     'delivery_note' => trim(($validated['delivery_note'] ?? '') . ($shipNote ? (!empty($validated['delivery_note']) ? ' | ' : '') . $shipNote : '')), // FIX #43: điều kiện trong từng dùng $validated['delivery_note'] không ?? — thiếu trường + có ghi chú ship là nổ lỗi, chặn cả đơn giao
                     'shipping_fee' => $shippingFee,
+                    'shipping_cod_fee' => $shippingCodFee, // Gói mở COD giao hàng 2026-11-11: snapshot trong shipping_fee
                     'shipping_discount' => $shippingDiscount, // Gói 10c
                     'shipping_promotion_id' => $shippingPromotion?->id, // Gói 10c
                     'scheduled_at' => $validated['scheduled_at'] ?? null,
@@ -1383,6 +1785,8 @@ class OnlineOrderController extends Controller
                     // Gói 61b: tọa độ điểm giao để hãng báo giá/tạo đơn chính xác
                     'delivery_dropoff_lat' => $validated['delivery_dropoff_lat'] ?? null,
                     'delivery_dropoff_lng' => $validated['delivery_dropoff_lng'] ?? null,
+                    // Gói geocode lai NDAMaps (2026-11-13): nguồn điểm giao
+                    'dropoff_source' => $validated['dropoff_source'] ?? null,
                 ]);
 
                 foreach ($orderItemsData as $itemData) {
@@ -1496,7 +1900,7 @@ class OnlineOrderController extends Controller
 
     public function track(Request $request, string $code): JsonResponse
     {
-        $order = Order::with(['items.product'])
+        $order = Order::with(['items.product', 'promotion'])
             ->where('code', $code)
             ->where('online_channel', 'zalo')
             ->firstOrFail();
@@ -1530,6 +1934,83 @@ class OnlineOrderController extends Controller
             && in_array($order->payment_status, ['pending_payment', 'transfer_notified'], true)
             && $order->status !== 'cancelled';
 
+        // Khối phân rã giá cho màn Theo dõi (Đại Vương lệnh 2026-11-14): mọi
+        // số lấy từ chính các cột đã lưu trên đơn lúc tạo (phân xử §5d) —
+        // tiền hàng + phí ship − giảm KM − phần voucher = total_amount.
+        // subtotal_amount lưu = tiền hàng + phí ship CUỐI (đã trừ KM phí
+        // ship, đã gồm phí thu hộ COD trong shipping_fee).
+        $shipFeeVal = (float) $order->shipping_fee;
+        $itemsTotalVal = (float) $order->items->sum(fn($i) => (float) $i->unit_price * (float) $i->quantity);
+        $goodsSubtotal = ((float) $order->subtotal_amount > 0
+            ? (float) $order->subtotal_amount
+            : $itemsTotalVal) - $shipFeeVal;
+        $promoDiscountVal = (float) $order->promotion_discount;
+        $discountTotalVal = (float) $order->discount_amount;
+        // Coupon ví đã dùng cho đơn này (nếu có): lấy mã cá nhân để màn
+        // Theo dõi gọi đúng "Coupon {mã}" như Checkout.
+        $usedCoupon = \App\Models\CustomerCoupon::where('used_order_id', $order->id)->first();
+        // Điểm nối price (PM phán 2026-11-15, từ 🟡 của TESTER): đơn thắng
+        // CẶP KM + coupon ví phải phơi phần giảm của coupon ví thành dòng
+        // riêng — tách bạch 3 nguồn: KM · coupon ví · voucher gõ tay, và
+        // KM + coupon + voucher = discount_amount. Nhận diện cặp: coupon
+        // đã tiêu thụ cho đơn này, chương trình nguồn của coupon KHÁC
+        // promotion_id của đơn (khi coupon đi một mình thắng, nó đứng ở
+        // chính phía KM — khối promotion kèm coupon_code đã đại diện đủ)
+        // và khác shipping_promotion_id (coupon phí ship đã nằm ở cụm
+        // shipping). Phần giảm của coupon không lưu cột riêng lúc tạo đơn
+        // → suy ra = discount_amount − phần KM − phần voucher (phần
+        // voucher theo đúng quy ước suy diễn hiện hành của khối voucher).
+        $couponBlock = null;
+        if ($usedCoupon && $order->promotion_id) {
+            $couponPromo = $usedCoupon->promotion;
+            if ($couponPromo
+                && (int) $order->promotion_id !== (int) $couponPromo->id
+                && (int) ($order->shipping_promotion_id ?? 0) !== (int) $couponPromo->id) {
+                $voucherPart = $order->voucher_code
+                    ? max(0, $discountTotalVal - $promoDiscountVal)
+                    : 0;
+                $couponPart = $discountTotalVal
+                    - min($promoDiscountVal, $discountTotalVal)
+                    - $voucherPart;
+                if ($couponPart > 0) {
+                    $couponBlock = [
+                        'code' => $usedCoupon->code,
+                        'name' => $couponPromo->name,
+                        'discount' => $couponPart,
+                    ];
+                }
+            }
+        }
+        $price = [
+            'goods_subtotal' => $goodsSubtotal,
+            // Cụm phí giao lồng theo spec màn Chờ thanh toán phương án C
+            // mục 3 (khóa 2026-11-14): fee khách trả · cod_fee đã gộp trong
+            // fee · discount giảm phí giao · promotion_name chương trình.
+            'shipping' => [
+                'fee' => $shipFeeVal,
+                'cod_fee' => (float) $order->shipping_cod_fee,
+                'discount' => (float) $order->shipping_discount,
+                'promotion_name' => $order->shipping_promotion_id
+                    ? Promotion::find($order->shipping_promotion_id)?->name
+                    : null,
+            ],
+            'promotion' => $order->promotion_id ? [
+                'name' => $order->promotion?->name,
+                'discount' => $promoDiscountVal,
+                'coupon_code' => $usedCoupon?->code,
+            ] : null,
+            // Coupon ví ở vai PHÍA COUPON của cặp thắng (xem ghi chú suy
+            // diễn phía trên); null ở mọi trường hợp còn lại.
+            'coupon' => $couponBlock,
+            'voucher' => $order->voucher_code ? [
+                'code' => $order->voucher_code,
+                'name' => Voucher::where('code', $order->voucher_code)->first()?->name,
+                'discount' => max(0, $discountTotalVal - $promoDiscountVal),
+            ] : null,
+            'discount_amount' => $discountTotalVal,
+            'total_amount' => (float) $order->total_amount,
+        ];
+
         return response()->json(['success' => true, 'data' => [
             'code' => $order->code,
             'status' => $order->status,
@@ -1547,6 +2028,7 @@ class OnlineOrderController extends Controller
             'order_type' => $order->order_type,
             'total_amount' => (float) $order->total_amount,
             'shipping_fee' => (float) $order->shipping_fee,
+            'price' => $price,
             'scheduled_at' => $order->scheduled_at,
             'created_at' => $order->created_at,
             // Gói 60: thông tin giao hàng cho trang theo dõi đơn (poll 5s)
@@ -1583,11 +2065,18 @@ class OnlineOrderController extends Controller
         ]]);
     }
 
-    // Spec QR 2026-10-21 — phương án A: khách bấm "Tôi đã chuyển khoản" trên Mini App.
-    // Chỉ ĐÁNH DẤU đã báo CK (customer_notified_at + transfer_notified) — tiền vẫn do NV
-    // đối chiếu sao kê rồi bấm "Xác nhận đã nhận tiền" ở Admin/KDS. Yêu cầu SĐT khớp đơn
-    // (giống cơ chế hủy đơn SEC2) để người lạ không gắn cờ bừa.
-    public function transferNotified(Request $request, string $code): JsonResponse
+    // Gói vá sau vòng S — Mục 4 (PM phán Phương án A 2026-11-12, trong khuôn
+    // phán quyết "nút Đã chuyển khoản" 2026-11-11 ~17:30): khách bấm "Đã
+    // chuyển khoản" trên màn chờ MỚI (sau khi gỡ TransferGuide) — CHỈ ghi
+    // mốc giờ khách bấm vào customer_notified_at để NV ưu tiên đối chiếu
+    // sao kê (Admin/KDS đã có chỗ hiển thị mốc này), TUYỆT ĐỐI không đổi
+    // payment_status: tiền chỉ ghi nhận qua notify Zalo + NV xác nhận.
+    // Khác đường báo CK cũ trong TransferGuide (lật cả trạng thái — đã gỡ
+    // ở gói dọn mồ côi 2026-11-13; luật hủy 2026-10-26 đọc payment_status
+    // + mốc customer_notified_at nên không đổi).
+    // Idempotent: đã có mốc thì giữ nguyên mốc đầu. Chỉ ghi khi đơn BANK
+    // còn pending_payment. Gác SĐT khớp đơn như cancel.
+    public function transferMark(Request $request, string $code): JsonResponse
     {
         $validated = $request->validate([
             'phone' => 'required|string|max:20',
@@ -1604,29 +2093,23 @@ class OnlineOrderController extends Controller
         if ($norm($validated['phone']) !== $norm($order->customer_phone)) {
             return response()->json(['success' => false, 'message' => 'Số điện thoại không khớp với đơn hàng.'], 403);
         }
-        // Audit bổ sung F17 (2026-10-21): IDEMPOTENT — đơn đã ghi nhận báo CK rồi thì
-        // bấm lại (kể cả sau khi NV đã xác nhận tiền) vẫn trả success, không lỗi 422;
-        // khách bấm lặp vô hại, không cần biết trạng thái nội bộ.
         if ($order->customer_notified_at) {
             return response()->json([
                 'success' => true,
-                'message' => 'Đã ghi nhận bạn báo chuyển khoản. Quán sẽ đối chiếu và xác nhận trong ít phút.',
+                'message' => 'Đã ghi nhận mốc bạn bấm Đã chuyển khoản.',
                 'data' => ['code' => $order->code, 'customer_notified_at' => $order->customer_notified_at, 'already' => true],
             ]);
         }
-        if ($order->pay_channel !== 'BANK' || !in_array($order->payment_status, ['pending_payment', 'transfer_notified'], true)
+        if ($order->pay_channel !== 'BANK' || $order->payment_status !== 'pending_payment'
             || in_array($order->status, ['cancelled', 'completed'], true)) {
-            return response()->json(['success' => false, 'message' => 'Đơn không còn ở trạng thái chờ chuyển khoản.'], 422);
+            return response()->json(['success' => false, 'message' => 'Đơn không còn ở trạng thái chờ thanh toán.'], 422);
         }
 
-        $order->update([
-            'customer_notified_at' => $order->customer_notified_at ?? now(),
-            'payment_status' => 'transfer_notified',
-        ]);
+        $order->update(['customer_notified_at' => now()]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Đã ghi nhận bạn báo chuyển khoản. Quán sẽ đối chiếu và xác nhận trong ít phút.',
+            'message' => 'Đã ghi nhận mốc bạn bấm Đã chuyển khoản.',
             'data' => ['code' => $order->code, 'customer_notified_at' => $order->customer_notified_at],
         ]);
     }
@@ -1662,7 +2145,11 @@ class OnlineOrderController extends Controller
                 // Chính sách Đại Vương chốt 2026-10-26: đơn khách ĐÃ BÁO CHUYỂN
                 // KHOẢN (transfer_notified) KHÔNG cho hủy online nữa — quán phải
                 // đối soát tiền thật trước khi hoàn, khách cần hủy thì gọi quán.
-                if ($order->payment_status === 'transfer_notified') {
+                // Vá A4 (2026-11-12, TESTER §GL): cổng phải nhận CẢ HAI dấu hiệu
+                // báo CK — nút "Đã chuyển khoản" MỚI (transferMark) chỉ ghi mốc
+                // customer_notified_at, giữ nguyên pending_payment, nên chỉ nhìn
+                // trạng thái là lọt. Có mốc báo CK → chặn như transfer_notified.
+                if ($order->payment_status === 'transfer_notified' || !empty($order->customer_notified_at)) {
                     throw new Exception('Đơn đã chuyển khoản, không thể hủy online. Vui lòng gọi quán để được hỗ trợ hoàn tiền.');
                 }
                 $awaitingPay = in_array($order->payment_status, ['pending', 'pending_payment', 'confirmed'], true);
@@ -1671,6 +2158,9 @@ class OnlineOrderController extends Controller
                 }
                 $order->status = 'cancelled';
                 $order->cancel_reason = 'Khách hủy trên Mini App';
+                // N-2 (360 đợt 2): hủy online map mặc định sang mã khách đổi ý
+                // (chuỗi cứng trên chỉ ghi tại đúng 1 đường này — Phụ lục khóa).
+                $order->cancel_reason_code = CancelReasonCodes::CUSTOMER_CHANGED_MIND;
                 $order->cancelled_at = now();
                 // Gói 55 p11ag: truy vết người hủy (khách tự hủy online)
                 $order->cancelled_by = 'customer:' . $reqPhone;
@@ -1727,7 +2217,11 @@ class OnlineOrderController extends Controller
                 if ($order->claim_expires_at && $order->claim_expires_at->isPast()) {
                     throw new Exception('Mã QR đã hết hạn. Nhờ thu ngân tạo mã mới.');
                 }
-                if (in_array($order->status, ['completed', 'cancelled'])) {
+                // Spec dời mốc tích điểm (2026-11-13 mục 9 + M-08): đơn
+                // COMPLETED vẫn gán được — đơn hoàn thành khi chưa gắn
+                // khách thì claim là điểm kích hoạt earn (N4); chỉ đơn đã
+                // HỦY mới chặn (câu lỗi giữ nguyên văn bản cũ).
+                if ($order->status === 'cancelled') {
                     throw new Exception('Đơn đã hoàn thành/hủy, không gán được.');
                 }
 
@@ -1753,16 +2247,17 @@ class OnlineOrderController extends Controller
                 // → leo hạng thành viên gian lận.
                 $justAssigned = empty($order->customer_id);
                 $order->customer_id = $customer->id;
-                // Đơn đã thanh toán mà chưa tích điểm → tích bù ngay
-                // Gói SEC: token đã null sau lần claim đầu nên không thể claim 2 lần
-                if ($order->payment_status === 'paid' && $justAssigned && !$order->points_earned) {
-                    $order->points_earned = $loyaltyService->earnForOrder(
-                        $customer, $order, (float) $order->total_amount
-                    );
-                }
                 $order->claim_token = null;
                 $order->claim_expires_at = null;
                 $order->save();
+                // Spec dời mốc tích điểm (2026-11-13, điểm gọi N4): thay
+                // tích bù trực tiếp bằng ĐIỂM CHỐT DUY NHẤT — đơn paid +
+                // completed vừa gán khách → earn ngay tại claim; đơn chưa
+                // completed → no-op êm, earn chờ funnel hoàn thành (N1).
+                // Gói SEC: token đã null sau lần claim đầu nên không thể claim 2 lần.
+                if ($justAssigned) {
+                    $loyaltyService->earnWhenSettled($order);
+                }
             });
 
             $order = Order::where('code', $code)->first();
@@ -1794,7 +2289,7 @@ class OnlineOrderController extends Controller
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee) {
             $orderBranch = Order::where('id', $id)->value('branch_id');
-            if ($orderBranch !== null && !in_array((int) $orderBranch, $actor->allBranchIds(), true)) {
+            if ($orderBranch !== null && !in_array((int) $orderBranch, $this->effectiveBranchScope($actor), true)) {
                 return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
             }
         }
@@ -1806,6 +2301,14 @@ class OnlineOrderController extends Controller
             $order = Order::findOrFail($id);
             $order = app(\App\Services\OnlinePaymentConfirmer::class)->confirm($order);
 
+            // Gói Checkout SDK (spec §2.5): NV xác nhận tiền BANK đã về →
+            // báo 'paid' về Checkout SDK. Fail-soft trong service (chưa
+            // cấu hình endpoint thì chỉ ghi log) — không chặn luồng đơn.
+            // OnlinePaymentConfirmer giữ nguyên, chỉ thêm điểm gọi ở đây.
+            if ($order->pay_channel === 'BANK' && !empty($order->pay_sdk_order_id)) {
+                app(\App\Services\ZaloPaymentService::class)->updateOrderStatus($order, 'paid');
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Đã xác nhận đơn. Đơn đã vào KDS.',
@@ -1814,6 +2317,140 @@ class OnlineOrderController extends Controller
         } catch (Exception $e) {
             return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 400);
         }
+    }
+
+    // Nút hoàn tác xác nhận thanh toán (spec-hoan-tac-xac-nhan, Đại Vương
+    // chốt 2026-11-12): phép đảo của confirm() tại ĐÚNG điểm xác nhận này —
+    // đơn VẪN SỐNG, chỉ lùi phần xác nhận tiền (khác hẳn hủy đơn). Quyền
+    // dùng chung orders.edit với nút xác nhận (ngài chốt phân quyền
+    // 2026-11-12, loại phương án lá riêng) + gác CN NV như confirmPayment.
+    // Chuỗi đảo 4 trục trong 1 transaction khóa dòng; điểm/kho tái dùng
+    // revokeEarn + restock của đường hủy, không dựng cơ chế đảo thứ hai.
+    public function undoPayment(Request $request, int $id, InventoryService $inventoryService, LoyaltyService $loyaltyService): JsonResponse
+    {
+        $validated = $request->validate([
+            'reason' => 'nullable|string|max:500|required_if:reason_code,other', // lý do rỗng → 422 ngay ở API (spec T-03) khi mã other
+            'reason_code' => ['required', Rule::in(CancelReasonCodes::ALL)], // N-2 (360 đợt 2): cùng danh mục 6 mã với hủy đơn
+            'surface' => 'nullable|string|in:admin,kds',
+        ]);
+        $actor = $request->user();
+        if ($actor instanceof \App\Models\Employee) {
+            $orderBranch = Order::where('id', $id)->value('branch_id');
+            if ($orderBranch !== null && !in_array((int) $orderBranch, $this->effectiveBranchScope($actor), true)) {
+                return response()->json(['success' => false, 'message' => 'Đơn hàng không thuộc chi nhánh bạn được phân công.'], 403);
+            }
+        }
+        $order = Order::findOrFail($id);
+        // Điều kiện hoàn tác (spec mục 1 + 5): đã qua confirm() (paid +
+        // stock_deducted) và đơn chưa kết thúc. Kiểm trước để quyết đường
+        // Zalo, kiểm LẠI trong transaction khóa dòng làm chốt idempotent —
+        // bấm lần 2/bấm trùng → 422, không đảo hai lần.
+        $undoable = fn (Order $o) => $o->online_channel === 'zalo'
+            && $o->payment_status === 'paid'
+            && (bool) $o->stock_deducted
+            && !in_array($o->status, ['completed', 'cancelled'], true);
+        if (!$undoable($order)) {
+            return response()->json(['success' => false, 'message' => 'Đơn không ở trạng thái đã xác nhận thanh toán.'], 422);
+        }
+
+        // Trục Zalo (spec mục 2): đơn SDK BANK — gọi updateOrderStatus −1
+        // TRƯỚC khi đảo nội bộ; Zalo không xác nhận err 0 (hoặc lỗi gọi)
+        // → HỦY toàn bộ hoàn tác (422, không đổi gì) để 2 phía không lệch.
+        // updateOrderStatus vốn fail-soft nên ở đây phải đọc kết quả trả
+        // về thật. Đơn SDK COD: KHÔNG báo — các điểm nối COD hiện hành chỉ
+        // báo ở trạng thái CUỐI (completed/cancelled), hoàn tác không
+        // phải trạng thái cuối, đơn sống tiếp và báo đúng kết cục thật
+        // sau này. Đơn thường: chỉ đảo nội bộ.
+        $zaloResult = 'not_applicable';
+        if ($order->pay_channel === 'BANK' && !empty($order->pay_sdk_order_id)) {
+            $res = app(\App\Services\ZaloPaymentService::class)->updateOrderStatus($order, 'failed');
+            if (!is_array($res) || (int) ($res['err'] ?? -1) !== 0) {
+                return response()->json(['success' => false, 'message' => 'Không báo được trạng thái sang Zalo — hoàn tác bị hủy, đơn không thay đổi. Vui lòng thử lại.'], 422);
+            }
+            $zaloResult = 'success';
+        }
+
+        [$actorUserId, $actorEmployeeId] = \App\Support\ApprovalActor::ids($request->user());
+        $actorLabel = $actor instanceof \App\Models\Employee
+            ? ($actor->full_name ?: ('NV#' . $actor->id))
+            : ($actor->name ?? null);
+        $surface = $validated['surface'] ?? 'admin';
+
+        try {
+            $order = DB::transaction(function () use ($id, $validated, $inventoryService, $loyaltyService, $zaloResult, $actorUserId, $actorEmployeeId, $actorLabel, $surface, $undoable) {
+                $order = Order::with('items')->lockForUpdate()->findOrFail($id);
+                if (!$undoable($order)) {
+                    throw new Exception('Đơn không ở trạng thái đã xác nhận thanh toán.');
+                }
+                // Ảnh chụp trước đảo cho nhật ký (spec mục 6)
+                $snapshot = [
+                    'prev_payment_status' => $order->payment_status,
+                    'prev_paid_at' => $order->paid_at,
+                    'prev_pay_channel' => $order->pay_channel,
+                    'prev_pay_sdk_status' => $order->pay_sdk_status,
+                ];
+                // Trục tồn kho: hoàn theo đúng khuôn performCancel (chỉ
+                // khi đã trừ kho) — restock tự đối chiếu nhật ký xuất của
+                // đơn và chỉ hoàn phần chưa hoàn.
+                if ($order->stock_deducted) {
+                    $inventoryService->restock(
+                        $order->branch_id ?? 1,
+                        $order->items->map(fn($item) => [
+                            'product_id' => $item->product_id,
+                            'product_option_id' => $item->product_option_id,
+                            'option_ids' => $item->options ? array_keys((array) $item->options) : [],
+                            'quantity' => $item->quantity,
+                        ])->toArray(),
+                        $order->id
+                    );
+                }
+                // Trục tiền/điểm: thu hồi qua ĐÚNG revokeEarn của đường
+                // hủy (note ngữ cảnh 'undo' phân biệt nguồn thu hồi). Phải
+                // gọi TRƯỚC khi xóa points_earned ở trục trạng thái.
+                $loyaltyService->revokeEarn($order, true, 'undo');
+                // Trục trạng thái (spec mục 2): trục giao hàng đứng yên —
+                // chỉ lùi processing-chưa-ready về pending; đã ready giữ
+                // nguyên (đơn COD paid ở bước Đang Giao giữ cả status).
+                $order->payment_status = 'pending_payment';
+                $order->paid_at = null;
+                $order->stock_deducted = false;
+                $order->points_earned = 0;
+                if ($order->pay_channel === 'BANK' && !empty($order->pay_sdk_order_id)) {
+                    // Từ vựng SDK hiện hành: 'failed' — đồng thời là chốt
+                    // khóa repayParams không cấp lại tham số SDK cho đơn
+                    // này (đường trả qua Zalo đã đóng, spec mục 3).
+                    $order->pay_sdk_status = 'failed';
+                }
+                if ($order->status === 'processing' && empty($order->ready_at)) {
+                    $order->status = 'pending';
+                }
+                $order->save();
+
+                \App\Models\OrderPaymentUndoLog::create([
+                    'order_id' => $order->id,
+                    'user_id' => $actorUserId,
+                    'employee_id' => $actorEmployeeId,
+                    'actor_label' => $actorLabel,
+                    'surface' => $surface,
+                    'branch_id' => $order->branch_id,
+                    // N-2 (360 đợt 2): ghi chú mặc định = nhãn mã khi NV không gõ tay.
+                    'reason' => $validated['reason'] ?? CancelReasonCodes::label($validated['reason_code']),
+                    'reason_code' => $validated['reason_code'],
+                    ...$snapshot,
+                    'zalo_result' => $zaloResult,
+                ]);
+
+                return $order->load(['items.product', 'customer']);
+            });
+        } catch (Exception $e) {
+            return response()->json(['success' => false, 'message' => $this->clientErrorMessage($e)], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã hoàn tác xác nhận thanh toán. Đơn trở về trạng thái chờ thanh toán.',
+            'data' => $order,
+        ]);
     }
 
     private function generateMemberCode(): string

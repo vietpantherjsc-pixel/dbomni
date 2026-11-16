@@ -27,6 +27,9 @@ export default function HolidayPolicy() {
     const [holidays, setHolidays] = useState([]);
     const [form, setForm] = useState({ date: '', name: '', multiplier: 2 });
     const [editing, setEditing] = useState(null);
+    // Bố cục B (2026-11-15): năm lễ nào đang xổ — null = mặc định (năm hiện tại mở, năm khác thu);
+    // một khi đã có thao tác thì giữ nguyên qua các lần tải lại dữ kiện.
+    const [openYears, setOpenYears] = useState(null);
     // Gói 40: danh mục lỗi vi phạm 3 Chuyên
     const [types, setTypes] = useState([]);
     const [typeForm, setTypeForm] = useState({ category: 'chuyen_can', name: '', default_points: 1 });
@@ -66,13 +69,27 @@ export default function HolidayPolicy() {
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
     };
 
+    // §JZ S-04 (2026-11-15): ngày địa phương yyyy-mm-dd của 1 giá trị API — đi qua
+    // fmtDate (chuỗi ISO có Z được convert về giờ địa phương như tầng hiển thị vẫn
+    // làm). CẤM slice(0,10) trên chuỗi ISO thô: mốc nửa đêm ICT serialize thành
+    // 17:00Z hôm trước → lùi 1 ngày/năm (lệ HD-3 §JR).
+    const localYmd = (v) => {
+        const s = fmtDate(v); // dd/mm/yyyy theo giờ địa phương
+        if (!s) return '';
+        const [d, m, y] = s.split('/');
+        return `${y}-${m}-${d}`;
+    };
     const openAdd = () => { setEditing(null); setForm({ date: '', name: '', multiplier: 2 }); };
-    const openEdit = (h) => { setEditing(h); setForm({ date: h.date?.slice(0, 10) || '', name: h.name || '', multiplier: h.multiplier ?? 2 }); };
+    const openEdit = (h) => { setEditing(h); setForm({ date: localYmd(h.date), name: h.name || '', multiplier: h.multiplier ?? 2 }); };
     const saveHoliday = async () => {
         if (!form.date || !form.name.trim()) return alert('Nhập ngày và tên ngày lễ');
         try {
             if (editing) await axios.patch(API + '/holidays/' + editing.id, { date: form.date, name: form.name.trim(), multiplier: Number(form.multiplier) || 2 });
             else await axios.post(API + '/holidays', { date: form.date, name: form.name.trim(), multiplier: Number(form.multiplier) || 2 });
+            // Bố cục B: nhóm năm của ngày vừa lưu tự mở để thấy dòng (kể cả khi
+            // nhóm đang thu gọn, năm mới sinh, hay sửa ngày sang năm khác).
+            const savedYear = String(form.date || '').slice(0, 4);
+            if (savedYear) setOpenYears((prev) => ({ ...(prev || {}), [savedYear]: true }));
             openAdd(); fetchAll();
         } catch (e) { alert(e.response?.data?.message || 'Lưu thất bại'); }
     };
@@ -118,6 +135,18 @@ export default function HolidayPolicy() {
 
     const eff = Math.max(0, Number(pol.resp_base_per_hour) - Math.min(2, Number(pol.resp_max_violations)) * Number(pol.resp_deduction_per_violation));
 
+    // Bố cục B (2026-11-15): gom ngày lễ theo năm — suy ra thuần từ mảng
+    // holidays đã tải (năm giảm dần; trong năm ngày tăng dần). Trạng thái
+    // xổ/thu sống ở openYears, fetchAll không đặt lại được.
+    const curYear = String(new Date().getFullYear());
+    const holYears = [...new Set(holidays.map((h) => localYmd(h.date).slice(0, 4)).filter((y) => y.length === 4))].sort().reverse();
+    const rowsOfYear = (y) => holidays.filter((h) => localYmd(h.date).slice(0, 4) === y).slice().sort((a, b) => localYmd(a.date).localeCompare(localYmd(b.date)));
+    const isYearOpen = (y) => (openYears && Object.prototype.hasOwnProperty.call(openYears, y) ? openYears[y] : y === curYear);
+    const toggleYear = (y) => setOpenYears((prev) => {
+        const cur = prev && Object.prototype.hasOwnProperty.call(prev, y) ? prev[y] : y === curYear;
+        return { ...(prev || {}), [y]: !cur };
+    });
+
     return (
         <AdminLayout>
             <div className="p-5">
@@ -154,11 +183,11 @@ export default function HolidayPolicy() {
                         </p>
                         {editable && saveRow(dirtyMeal)}
                     </div>
-                    {/* Gói 54: BHXH — chuyển từ Thiết lập sang đây */}
-                    <div className="m-card p-4">
+                    {/* Gói 54: BHXH — chuyển từ Thiết lập sang đây · Bố cục B (2026-11-15): full hàng, 4 ô một hàng ở desktop */}
+                    <div className="m-card p-4 lg:col-span-2">
                         <h3 className="font-bold mb-1">Bảo hiểm xã hội (BHXH)</h3>
                         <p className="text-[12px] text-gray-500 mb-3">Tỷ lệ đóng của người lao động và doanh nghiệp. Áp dụng khi tính bảng lương.</p>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                             <label className="text-[12px] text-gray-500">BHXH NLĐ đóng (%)
                                 <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_emp_bhxh} onChange={(e) => setPol({ ...pol, bhxh_emp_bhxh: e.target.value })} className={inp + ' mt-1'} /></label>
                             <label className="text-[12px] text-gray-500">BHYT NLĐ đóng (%)
@@ -169,46 +198,6 @@ export default function HolidayPolicy() {
                                 <input disabled={!editable} type="number" step="0.1" min="0" max="100" value={pol.bhxh_employer_rate} onChange={(e) => setPol({ ...pol, bhxh_employer_rate: e.target.value })} className={inp + ' mt-1'} /></label>
                         </div>
                         {editable && saveRow(dirtyBhxh)}
-                    </div>
-                    <div className="m-card p-4">
-                        <h3 className="font-bold mb-1">Ngày lễ, Tết</h3>
-                        <p className="text-[12px] text-gray-500 mb-3">Ai đi làm ngày lễ được nhân hệ số. Bảng lương đánh dấu ngày áp dụng hệ số.</p>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-[13px] min-w-[420px]">
-                                <thead><tr className="text-left text-gray-500 border-b border-gray-100">
-                                    <th className="py-2 font-medium">Ngày</th><th className="py-2 font-medium">Tên</th>
-                                    <th className="py-2 font-medium text-center">Hệ số</th>{editable && <th className="py-2"></th>}
-                                </tr></thead>
-                                <tbody>
-                                    {holidays.map((h) => (
-                                        <tr key={h.id} className="border-b border-gray-50">
-                                            <td className="py-2.5">{fmtDate(h.date)}</td>
-                                            <td className="py-2.5 font-medium">{h.name}</td>
-                                            <td className="py-2.5 text-center"><span className="inline-block bg-red-50 text-red-600 border border-red-200 rounded-full px-2 py-0.5 text-[11px] font-bold">x{h.multiplier}</span></td>
-                                            {editable && <td className="py-2.5 text-right whitespace-nowrap">
-                                                <button onClick={() => openEdit(h)} className="text-[#24305E] text-[12px] mr-3">Sửa</button>
-                                                <button onClick={() => delHoliday(h.id)} className="text-red-500 text-[12px]">Xóa</button>
-                                            </td>}
-                                        </tr>
-                                    ))}
-                                    {holidays.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-gray-400">Chưa có ngày lễ nào.</td></tr>}
-                                </tbody>
-                            </table>
-                        </div>
-                        {editable && (
-                            <div className="mt-3">
-                                <h4 className="text-[13px] font-bold mb-2">{editing ? 'Sửa ngày lễ' : 'Thêm ngày lễ'}</h4>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <DateInput value={form.date} onChange={(v) => setForm({ ...form, date: v })} className={inp} />
-                                    <input placeholder="Tên ngày lễ *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inp} />
-                                    <input type="number" step="0.5" min="1" max="10" value={form.multiplier} onChange={(e) => setForm({ ...form, multiplier: e.target.value })} className={inp} title="Hệ số nhân lương" />
-                                    <div className="flex gap-2">
-                                        <button onClick={saveHoliday} className={btn + 'bg-[#24305E] text-white flex-1'}>{editing ? 'Cập nhật' : 'Thêm'}</button>
-                                        {editing && <button onClick={openAdd} className={btn + 'border border-gray-300'}>Hủy</button>}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
                     </div>
                     {/* Gói 40: Danh mục lỗi vi phạm 3 Chuyên */}
                     <div className="m-card p-4 lg:col-span-2">
@@ -257,6 +246,62 @@ export default function HolidayPolicy() {
                                 </div>
                             </div>
                         )}
+                    </div>
+                    {/* Bố cục B (2026-11-15): Ngày lễ, Tết xuống cuối trang, full hàng — form nhập lên trên, danh sách gom theo năm ở dưới */}
+                    <div className="m-card p-4 lg:col-span-2">
+                        <h3 className="font-bold mb-1">Ngày lễ, Tết</h3>
+                        <p className="text-[12px] text-gray-500 mb-3">Ai đi làm ngày lễ được nhân hệ số. Bảng lương đánh dấu ngày áp dụng hệ số.</p>
+                        {editable && (
+                            <div>
+                                <h4 className="text-[13px] font-bold mb-2">{editing ? 'Sửa ngày lễ' : 'Thêm ngày lễ'}</h4>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <DateInput value={form.date} onChange={(v) => setForm({ ...form, date: v })} className={inp} />
+                                    <input placeholder="Tên ngày lễ *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inp} />
+                                    <input type="number" step="0.5" min="1" max="10" value={form.multiplier} onChange={(e) => setForm({ ...form, multiplier: e.target.value })} className={inp} title="Hệ số nhân lương" />
+                                    <div className="flex gap-2">
+                                        <button onClick={saveHoliday} className={btn + 'bg-[#24305E] text-white flex-1'}>{editing ? 'Cập nhật' : 'Thêm'}</button>
+                                        {editing && <button onClick={openAdd} className={btn + 'border border-gray-300'}>Hủy</button>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        <div className="overflow-x-auto mt-4">
+                            <table className="w-full text-[13px] min-w-[420px]">
+                                <thead><tr className="text-left text-gray-500 border-b border-gray-100">
+                                    <th className="py-2 font-medium">Ngày</th><th className="py-2 font-medium">Tên</th>
+                                    <th className="py-2 font-medium text-center">Hệ số</th>{editable && <th className="py-2"></th>}
+                                </tr></thead>
+                                <tbody>
+                                    {holYears.map((y) => {
+                                        const rows = rowsOfYear(y);
+                                        const open = isYearOpen(y);
+                                        return (
+                                            <React.Fragment key={y}>
+                                                <tr onClick={() => toggleYear(y)} className="cursor-pointer select-none" style={{ background: '#EEF1F7' }}>
+                                                    <td colSpan={editable ? 4 : 3} className="py-2 px-2">
+                                                        <span className="font-extrabold text-[#24305E]">Năm {y}</span>
+                                                        <span className="ml-2 font-semibold text-[12.5px]" style={{ color: '#5B6B96' }}>— {rows.length} ngày lễ</span>
+                                                        <span className="float-right text-[12px] text-gray-400">{open ? '▾ Thu gọn' : '▸ Xem'}</span>
+                                                    </td>
+                                                </tr>
+                                                {open && rows.map((h) => (
+                                                    <tr key={h.id} className="border-b border-gray-50">
+                                                        <td className="py-2.5">{fmtDate(h.date)}</td>
+                                                        <td className="py-2.5 font-medium">{h.name}</td>
+                                                        <td className="py-2.5 text-center"><span className="inline-block bg-red-50 text-red-600 border border-red-200 rounded-full px-2 py-0.5 text-[11px] font-bold">x{h.multiplier}</span></td>
+                                                        {editable && <td className="py-2.5 text-right whitespace-nowrap">
+                                                            <button onClick={() => openEdit(h)} className="text-[#24305E] text-[12px] mr-3">Sửa</button>
+                                                            <button onClick={() => delHoliday(h.id)} className="text-red-500 text-[12px]">Xóa</button>
+                                                        </td>}
+                                                    </tr>
+                                                ))}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                    {holidays.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-gray-400">Chưa có ngày lễ nào.</td></tr>}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>

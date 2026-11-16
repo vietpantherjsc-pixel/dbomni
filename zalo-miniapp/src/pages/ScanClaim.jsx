@@ -4,6 +4,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { api, getProfile } from '../api';
 import { TabBar } from './Home';
 import ZmIcon from '../components/ZmIcon';
+import TierIcon from '../components/TierIcon'; // Bộ icon hạng V2 (2026-11-14)
 
 // Gói 11: quét QR tích điểm tại quầy — khách quét mã trên màn hình POS
 // để gán đơn vào tài khoản thành viên (cần đăng nhập Tài khoản trước).
@@ -68,7 +69,10 @@ export default function ScanClaim() {
           <div className="zm-note" style={{ textAlign: 'center', padding: 24 }}>
             <div style={{ color: '#16a34a', display: 'flex', justifyContent: 'center' }}><ZmIcon name="checkCircle" size={40} /></div>
             <div style={{ fontWeight: 800, margin: '8px 0' }}>Đã gán đơn vào tài khoản!</div>
-            <div>{done.name} · {done.member_code}{done.tier ? ` · Hạng ${done.tier}` : ''}</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, flexWrap: 'wrap' }}>
+              <span>{done.name} · {done.member_code}</span>
+              {done.tier && (<><span>·</span><TierIcon tier={done.tier} size={16} /><span>Hạng {done.tier}</span></>)}
+            </div>
             <div style={{ fontSize: 13, color: '#888', marginTop: 8 }}>Điểm sẽ được cộng khi đơn hoàn tất.</div>
           </div>
         ) : (

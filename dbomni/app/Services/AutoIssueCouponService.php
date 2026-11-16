@@ -31,6 +31,21 @@ class AutoIssueCouponService
 
         $cfg = $promo->auto_config ?? [];
 
+        // Chốt chống phát trùng THEO ĐƠN (2026-11-12, spec hoàn tác xác
+        // nhận thanh toán mục 2): cùng (khách · chương trình · trigger ·
+        // đơn nguồn) chỉ phát đúng 1 lần — xác nhận lại sau hoàn tác chạy
+        // lại các trigger trong confirm() mà không sinh coupon thứ hai
+        // cho cùng 1 đơn. Khóa gồm customer_id vì CP-02 phát cho 2 khách
+        // khác nhau (người mời + bạn mới) từ cùng 1 đơn nguồn.
+        if ($sourceOrderId !== null) {
+            $alreadyIssued = CustomerCoupon::where('customer_id', $customer->id)
+                ->where('promotion_id', $promo->id)
+                ->where('issue_trigger', $trigger)
+                ->where('source_order_id', $sourceOrderId)
+                ->exists();
+            if ($alreadyIssued) return null;
+        }
+
         // Giới hạn số lần cấp/khách (mặc định 1).
         // Loyalty 2.0: trigger 'points_exchange' NGOẠI LỆ — trần lượt đổi do
         // point_exchange_items (daily_limit/per_customer_limit) quản ở tầng đổi
@@ -172,6 +187,10 @@ class AutoIssueCouponService
         $cupCount = $order->items->sum('quantity');
         if ($cupCount < $minCups) return;
 
+        // Chốt theo đơn (2026-11-12): 1 đơn chỉ đóng tem 1 lần — xác nhận
+        // lại sau hoàn tác xác nhận không đóng tem lần hai cho cùng đơn.
+        if (Stamp::where('customer_id', $customer->id)->where('order_id', $order->id)->exists()) return;
+
         Stamp::create([
             'customer_id' => $customer->id,
             'order_id' => $order->id,
@@ -255,7 +274,12 @@ class AutoIssueCouponService
         // Chỉ cho đơn online (Mini App)
         if ($order->online_channel !== 'zalo') return;
 
-        $this->issue($customer, $promo, 'next_order');
+        // 2026-11-12: truyền đơn nguồn để chốt chống phát trùng theo đơn
+        // trong issue() phủ cả CP-10 (trước đây để null nên xác nhận lại
+        // sau hoàn tác sẽ phát trùng). Hệ quả phụ đúng hướng: coupon
+        // CP-10 nay có source_order_id nên đường hủy phía quán thu hồi
+        // được như CP-01/02/03 (vá lỗ hổng thu hồi 2026-10-28).
+        $this->issue($customer, $promo, 'next_order', $order->id);
     }
 
     /**

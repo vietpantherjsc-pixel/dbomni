@@ -29,6 +29,7 @@ class Order extends Model
         'delivery_address', // Gói 6
         'distance_km', // Gói 6
         'shipping_fee', // Gói 6
+        'shipping_cod_fee', // Gói mở COD giao hàng 2026-11-11: snapshot phí thu hộ COD trong shipping_fee
         'shipping_discount', // Gói 10c: KM giảm phí ship
         'shipping_promotion_id', // Gói 10c
         'scheduled_at', // Gói 6: hẹn giờ lấy
@@ -44,11 +45,15 @@ class Order extends Model
         'payment_method',
         // SPEC-01: thanh toán Zalo Mini App
         'pay_channel', 'pay_trans_id', 'pay_notified_at', 'pay_needs_review',
+        // Gói Checkout SDK (migration 000108): mã đơn phía SDK + trạng thái SDK gần nhất
+        'pay_sdk_order_id', 'pay_sdk_status',
+        'points_earned_at', // Spec dời mốc tích điểm (2026-11-13): dấu earn đã chạy tại điểm chốt
         'customer_notified_at', // Spec QR 2026-10-21: khách bấm "Tôi đã chuyển khoản"
         'payment_status',
         'stock_deducted',
         'note',
         'cancel_reason',
+        'cancel_reason_code', // N-2 (360 đợt 2): mã nguyên nhân hủy chuẩn hóa
         'cancelled_at',
         'cancelled_by', // Gói 55 p11ag: người hủy (tên NV/admin hoặc customer:SĐT)
         'cancelled_by_type', // Gói 55 p11ag: user|employee|customer
@@ -77,6 +82,8 @@ class Order extends Model
         'delivery_searching_since',
         // Gói 61b: tọa độ điểm giao + cờ hàng trả về
         'delivery_dropoff_lat', 'delivery_dropoff_lng', 'delivery_returned',
+        // Gói geocode lai NDAMaps (2026-11-13): nguồn điểm giao của đơn
+        'dropoff_source',
         // Cầu nối Sapo (2026-10-21): định danh đơn import từ Sapo
         'sapo_invoice_code', 'sapo_created_at', 'paid_at', 'source',
     ];
@@ -86,6 +93,7 @@ class Order extends Model
         'discount_amount' => 'decimal:2',
         'promotion_discount' => 'decimal:2',
         'shipping_fee' => 'decimal:2',
+        'shipping_cod_fee' => 'decimal:2', // Gói mở COD giao hàng 2026-11-11
         'shipping_discount' => 'decimal:2', // Gói 10c
         'distance_km' => 'decimal:2',
         'total_amount' => 'decimal:2',
@@ -113,6 +121,7 @@ class Order extends Model
         // Cầu nối Sapo (2026-10-21)
         'sapo_created_at' => 'datetime',
         'paid_at' => 'datetime',
+        'points_earned_at' => 'datetime', // Spec dời mốc tích điểm (2026-11-13)
     ];
 
     /**
@@ -137,6 +146,12 @@ class Order extends Model
     public function items(): HasMany
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    // Nhật ký hoàn tác xác nhận thanh toán (spec-hoan-tac-xac-nhan mục 6)
+    public function paymentUndoLogs(): HasMany
+    {
+        return $this->hasMany(OrderPaymentUndoLog::class)->orderByDesc('id');
     }
 
     // Một đơn hàng được tạo bởi một nhân viên

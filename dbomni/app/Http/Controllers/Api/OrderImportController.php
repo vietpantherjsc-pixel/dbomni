@@ -438,14 +438,14 @@ class OrderImportController extends Controller
                     }
                 }
 
-                // Cộng điểm thành viên
+                // Cộng điểm thành viên — Spec dời mốc tích điểm (2026-11-13,
+                // điểm gọi N5): qua ĐIỂM CHỐT DUY NHẤT như mọi đường khác.
+                // Đơn nhập vào đã paid + completed → earn ngay tại import
+                // kèm đóng dấu points_earned_at (chặn mọi hook sau đó cộng
+                // trùng); điểm chốt tự đọc customer_id trên đơn.
                 if ($addPoints && $customerId) {
                     try {
-                        $customer = Customer::find($customerId);
-                        if ($customer) {
-                            $earned = app(LoyaltyService::class)->earnForOrder($customer, $order, (float) $order->total_amount);
-                            $order->update(['points_earned' => $earned]);
-                        }
+                        app(LoyaltyService::class)->earnWhenSettled($order);
                     } catch (\Throwable $e) {
                         \Illuminate\Support\Facades\Log::warning("Import đơn {$code}: không cộng được điểm: " . $e->getMessage());
                         $warnings[] = "Đơn {$code}: không cộng được điểm (chi tiết đã ghi log).";

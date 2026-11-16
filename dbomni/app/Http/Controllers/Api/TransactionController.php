@@ -22,7 +22,7 @@ class TransactionController extends Controller
     {
         $actor = $request->user();
         if ($actor instanceof \App\Models\Employee && $branchId !== null
-            && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+            && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Phiếu không thuộc chi nhánh bạn được phân công.'], 403);
         }
         return null;
@@ -49,7 +49,7 @@ class TransactionController extends Controller
             ->when($request->filled('category_id'), fn($qq) => $qq->where('category_id', $request->category_id))
             ->when($request->filled('partner_id'), fn($qq) => $qq->where('partner_id', $request->partner_id))
             ->when($request->filled('account_id'), fn($qq) => $qq->where('account_id', $request->account_id)) // Gói 57
-            ->when($request->user() instanceof \App\Models\Employee, fn($qq) => $qq->where(fn($w) => $w->whereIn('branch_id', $request->user()->allBranchIds())->orWhereNull('branch_id')))
+            ->when($request->user() instanceof \App\Models\Employee, fn($qq) => $qq->where(fn($w) => $w->whereIn('branch_id', $this->effectiveBranchScope($request->user()))->orWhereNull('branch_id')))
             ->when($request->filled('date_from'), fn($qq) => $qq->whereDate('paid_at', '>=', $request->date_from))
             ->when($request->filled('date_to'), fn($qq) => $qq->whereDate('paid_at', '<=', $request->date_to))
             ->when($request->filled('search'), function ($qq) use ($request) {
@@ -424,6 +424,9 @@ class TransactionController extends Controller
         $v = $request->validate([
             'name' => 'sometimes|string|max:100',
             'type' => 'sometimes|in:income,expense',
+            // Chỉ số 360 TC-1: phân loại Cố định/Biến đổi (chỉ có nghĩa với
+            // danh mục chi; gửi null = gỡ phân loại về "chưa phân loại").
+            'cost_type' => 'sometimes|nullable|in:fixed,variable',
         ]);
         if (isset($v['type']) && $v['type'] !== $cat->type && $cat->transactions()->exists()) {
             return response()->json(['success' => false, 'message' => 'Danh mục đã có phiếu, không được đổi loại thu/chi.'], 422);
@@ -462,10 +465,11 @@ class TransactionController extends Controller
         $v = $request->validate([
             'name' => 'required|string|max:100',
             'type' => 'required|in:income,expense',
+            'cost_type' => 'sometimes|nullable|in:fixed,variable',
         ]);
         $cat = TransactionCategory::firstOrCreate(
             ['name' => $v['name'], 'type' => $v['type']],
-            ['is_system' => false]
+            ['is_system' => false, 'cost_type' => $v['cost_type'] ?? null]
         );
         return response()->json(['success' => true, 'data' => $cat], 201);
     }

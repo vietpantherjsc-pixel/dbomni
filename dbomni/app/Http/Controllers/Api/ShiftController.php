@@ -11,11 +11,12 @@ use Illuminate\Support\Facades\DB;
 
 class ShiftController extends Controller
 {
+    use \App\Traits\ValidatesEmployeeBranch;
     // Audit 2026-10-23 B-8: NV chỉ thao tác/xem ca thuộc CN phân công.
     protected function denyShiftBranch(Request $request, $branchId): ?\Illuminate\Http\JsonResponse
     {
         $actor = $request->user();
-        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $actor->allBranchIds(), true)) {
+        if ($actor instanceof \App\Models\Employee && !in_array((int) $branchId, $this->effectiveBranchScope($actor), true)) {
             return response()->json(['success' => false, 'message' => 'Chi nhánh không thuộc phạm vi của bạn.'], 403);
         }
         return null;

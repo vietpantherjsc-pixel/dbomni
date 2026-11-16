@@ -19,7 +19,7 @@ const loadApis = () => {
 // thiếu nó thì phiên không bao giờ được nạp lại sau reload.
 // 'zm_cover_diag' (2026-11-09): châm chẩn đoán của riêng khóa cover —
 // ghi kết quả persist gần nhất {ok, size, at} để vòng máy thật đối chiếu.
-export const KEYS = ['zm_branch', 'zm_profile', 'zm_zalo_profile', 'zm_account_cover', 'zm_cart', 'zm_ref', 'zm_groups', 'zm_last_order', 'zm_oa_followed', 'zm_session', 'zm_cover_diag'];
+export const KEYS = ['zm_branch', 'zm_profile', 'zm_zalo_profile', 'zm_account_cover', 'zm_cart', 'zm_ref', 'zm_groups', 'zm_last_order', 'zm_oa_followed', 'zm_session', 'zm_cover_diag', 'zm_customer'];
 
 const hasBridge = () => {
     try { return typeof window !== 'undefined' && (!!window.ZaloJSBridge || !!window.ZaloJavaScriptInterface); } catch { return false; }

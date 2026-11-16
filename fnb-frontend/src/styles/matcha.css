@@ -144,6 +144,9 @@ body.m-theme {
   padding: 2px 10px;
   border-radius: 999px;
   letter-spacing: 0.02em;
+  /* Trị gốc gãy dòng chip toàn hệ (ngài phán 2026-11-15, từ vụ PriceLists):
+     nhãn badge không bao giờ xuống dòng giữa chữ. */
+  white-space: nowrap;
 }
 .m-badge-green { background: var(--m-accent-soft); color: var(--m-primary-deep); }
 .m-badge-amber { background: #FBF3E2; color: var(--m-warning); }
